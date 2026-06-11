@@ -354,6 +354,10 @@ public:
 	AABB get_aabb() const override;
 
 	BakeError bake(Node *p_from_node, String p_image_data_path = "", Lightmapper::BakeStepFunc p_bake_step = nullptr, void *p_bake_userdata = nullptr);
+	// Script-facing wrapper: bake() itself is unbindable (BakeStepFunc / void* tail params), which is
+	// why the upstream binding stayed commented out. Exposed for editor tooling (map bake pipelines);
+	// outside the editor there is no lightmapper and this returns BAKE_ERROR_NO_LIGHTMAPPER.
+	BakeError _bake_from_script(Node *p_from_node = nullptr, const String &p_image_data_path = "");
 
 	virtual PackedStringArray get_configuration_warnings() const override;
 
