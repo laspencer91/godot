@@ -1746,7 +1746,13 @@ void Control::update_maximum_size() {
 	}
 
 	// Keep minimum size propagation in sync so parent containers can relayout correctly.
-	callable_mp(this, &Control::_update_minimum_size).call_deferred();
+	// Must go through update_minimum_size(): it invalidates the cache upwards and the
+	// updating_last_minimum_size guard ensures only one deferred update is ever queued.
+	// Calling _update_minimum_size directly here queued one message per call with no
+	// guard, which let min/max relayout feedback grow the message queue unboundedly
+	// (editor crash via message queue OOM when a container's minimum size depends on
+	// its children's sizes, e.g. Terrain3D's asset dock).
+	update_minimum_size();
 
 	if (!is_visible_in_tree()) {
 		// Invalidate the last maximum size so it will update when made visible.
