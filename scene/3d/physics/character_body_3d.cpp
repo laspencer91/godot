@@ -436,6 +436,13 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 	}
 
 	// Try stepping at decreasing heights (full, then half, etc.)
+	// `up_path_clear` lets a shorter iteration skip the upward clearance test once a TALLER
+	// colinear up-sweep from the same origin has already come back ceiling-free: the shorter
+	// sweep covers a strict subset of that vertical range, so it cannot hit a ceiling the taller
+	// one missed. Behavior is identical; it just drops one body_test_motion per retry in the
+	// common no-ceiling case (e.g. a body wedged against a tall wall, the hot path), where the
+	// upward column is open and only the forward/down sweeps can fail.
+	bool up_path_clear = false;
 	for (int i = 0; i < STEP_CHECK_COUNT; i++) {
 		Vector3 current_step_height = up_direction * (step_height - (step_height / STEP_CHECK_COUNT) * i);
 
@@ -444,14 +451,20 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 
 		// Step 1: Test moving UP
 		Transform3D test_transform = start_transform;
-		params = PhysicsServer3D::MotionParameters(test_transform, current_step_height, margin);
-		params.recovery_as_collision = true;
+		if (!up_path_clear) {
+			params = PhysicsServer3D::MotionParameters(test_transform, current_step_height, margin);
+			params.recovery_as_collision = true;
 
-		bool hit_ceiling = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);
+			bool hit_ceiling = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);
 
-		// If we hit a ceiling (normal pointing down), try smaller step
-		if (hit_ceiling && result.collision_count > 0 && result.collisions[0].normal.dot(up_direction) < 0) {
-			continue;
+			// If we hit a ceiling (normal pointing down), try smaller step
+			if (hit_ceiling && result.collision_count > 0 && result.collisions[0].normal.dot(up_direction) < 0) {
+				continue;
+			}
+
+			// Column is open up to the tallest step height tried so far; every later (shorter)
+			// iteration rises through a subset of it, so the up-test need not run again.
+			up_path_clear = true;
 		}
 
 		// Move test position up
