@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  editor_main_screen.h                                                  */
+/*  editor_workspace.h                                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,65 +30,46 @@
 
 #pragma once
 
-#include "scene/gui/panel_container.h"
+#include "scene/gui/box_container.h"
 
-class Button;
-class ConfigFile;
-class EditorPlugin;
-class EditorWorkspace;
-class HBoxContainer;
-class VBoxContainer;
+// Workspace layer for the dividable multi-document editor (G2).
+//
+// EditorWorkspace replaces the single fixed main-screen area with a tree of
+// WorkspacePanes. A WorkspacePane is one splittable region that hosts editor
+// content (in v1: the shared main-screen editor stack; later: per-pane tabs of
+// DocumentViews). This first increment establishes the structure only — a single
+// root pane wrapping the existing main-screen area, so behavior is unchanged —
+// and gives later increments the seams for splitting, tabs, and drag-drop.
 
-class EditorMainScreen : public PanelContainer {
-	GDCLASS(EditorMainScreen, PanelContainer);
+class WorkspacePane : public VBoxContainer {
+	GDCLASS(WorkspacePane, VBoxContainer);
 
-public:
-	enum EditorTable {
-		EDITOR_2D = 0,
-		EDITOR_3D,
-		EDITOR_SCRIPT,
-		EDITOR_GAME,
-		EDITOR_ASSETLIB,
-	};
-
-private:
-	EditorWorkspace *workspace = nullptr;
-	VBoxContainer *main_screen_vbox = nullptr;
-	EditorPlugin *selected_plugin = nullptr;
-
-	HBoxContainer *button_hb = nullptr;
-	Vector<Button *> buttons;
-	Vector<EditorPlugin *> editor_table;
-	HashMap<String, EditorPlugin *> main_editor_plugins;
-
-	int _get_current_main_editor() const;
+	// The content this pane displays (fills the pane). Reparented in via set_content().
+	Control *content = nullptr;
 
 protected:
-	void _notification(int p_what);
+	static void _bind_methods() {}
 
 public:
-	void set_button_container(HBoxContainer *p_button_hb);
+	void set_content(Control *p_content);
+	Control *get_content() const { return content; }
 
-	void save_layout_to_config(Ref<ConfigFile> p_config_file, const String &p_section) const;
-	void load_layout_from_config(Ref<ConfigFile> p_config_file, const String &p_section);
+	WorkspacePane();
+};
 
-	void set_button_enabled(int p_index, bool p_enabled);
-	bool is_button_enabled(int p_index) const;
+class EditorWorkspace : public VBoxContainer {
+	GDCLASS(EditorWorkspace, VBoxContainer);
 
-	void select_next();
-	void select_prev();
-	void select_by_name(const String &p_name);
-	void select(int p_index);
-	int get_selected_index() const;
-	int get_plugin_index(EditorPlugin *p_editor) const;
-	EditorPlugin *get_selected_plugin() const;
-	EditorPlugin *get_plugin_by_name(const String &p_plugin_name) const;
-	bool can_auto_switch_screens() const;
+	WorkspacePane *root_pane = nullptr;
+	WorkspacePane *focused_pane = nullptr;
 
-	VBoxContainer *get_control() const;
+protected:
+	static void _bind_methods() {}
 
-	void add_main_plugin(EditorPlugin *p_editor);
-	void remove_main_plugin(EditorPlugin *p_editor);
+public:
+	WorkspacePane *get_root_pane() const { return root_pane; }
+	WorkspacePane *get_focused_pane() const { return focused_pane; }
+	void set_focused_pane(WorkspacePane *p_pane) { focused_pane = p_pane; }
 
-	EditorMainScreen();
+	EditorWorkspace();
 };

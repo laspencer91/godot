@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  editor_main_screen.h                                                  */
+/*  editor_workspace.cpp                                                  */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,67 +28,38 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#pragma once
+#include "editor_workspace.h"
 
-#include "scene/gui/panel_container.h"
+void WorkspacePane::set_content(Control *p_content) {
+	if (content == p_content) {
+		return;
+	}
+	if (content && content->get_parent() == this) {
+		remove_child(content);
+	}
+	content = p_content;
+	if (content) {
+		if (content->get_parent()) {
+			content->get_parent()->remove_child(content);
+		}
+		add_child(content);
+		content->set_h_size_flags(SIZE_EXPAND_FILL);
+		content->set_v_size_flags(SIZE_EXPAND_FILL);
+	}
+}
 
-class Button;
-class ConfigFile;
-class EditorPlugin;
-class EditorWorkspace;
-class HBoxContainer;
-class VBoxContainer;
+WorkspacePane::WorkspacePane() {
+	set_h_size_flags(SIZE_EXPAND_FILL);
+	set_v_size_flags(SIZE_EXPAND_FILL);
+	add_theme_constant_override("separation", 0);
+}
 
-class EditorMainScreen : public PanelContainer {
-	GDCLASS(EditorMainScreen, PanelContainer);
+EditorWorkspace::EditorWorkspace() {
+	set_h_size_flags(SIZE_EXPAND_FILL);
+	set_v_size_flags(SIZE_EXPAND_FILL);
+	add_theme_constant_override("separation", 0);
 
-public:
-	enum EditorTable {
-		EDITOR_2D = 0,
-		EDITOR_3D,
-		EDITOR_SCRIPT,
-		EDITOR_GAME,
-		EDITOR_ASSETLIB,
-	};
-
-private:
-	EditorWorkspace *workspace = nullptr;
-	VBoxContainer *main_screen_vbox = nullptr;
-	EditorPlugin *selected_plugin = nullptr;
-
-	HBoxContainer *button_hb = nullptr;
-	Vector<Button *> buttons;
-	Vector<EditorPlugin *> editor_table;
-	HashMap<String, EditorPlugin *> main_editor_plugins;
-
-	int _get_current_main_editor() const;
-
-protected:
-	void _notification(int p_what);
-
-public:
-	void set_button_container(HBoxContainer *p_button_hb);
-
-	void save_layout_to_config(Ref<ConfigFile> p_config_file, const String &p_section) const;
-	void load_layout_from_config(Ref<ConfigFile> p_config_file, const String &p_section);
-
-	void set_button_enabled(int p_index, bool p_enabled);
-	bool is_button_enabled(int p_index) const;
-
-	void select_next();
-	void select_prev();
-	void select_by_name(const String &p_name);
-	void select(int p_index);
-	int get_selected_index() const;
-	int get_plugin_index(EditorPlugin *p_editor) const;
-	EditorPlugin *get_selected_plugin() const;
-	EditorPlugin *get_plugin_by_name(const String &p_plugin_name) const;
-	bool can_auto_switch_screens() const;
-
-	VBoxContainer *get_control() const;
-
-	void add_main_plugin(EditorPlugin *p_editor);
-	void remove_main_plugin(EditorPlugin *p_editor);
-
-	EditorMainScreen();
-};
+	root_pane = memnew(WorkspacePane);
+	add_child(root_pane);
+	focused_pane = root_pane;
+}

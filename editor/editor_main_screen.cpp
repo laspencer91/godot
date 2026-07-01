@@ -34,6 +34,7 @@
 #include "core/object/callable_mp.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/gui/editor_workspace.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/settings/editor_settings.h"
 #include "scene/gui/box_container.h"
@@ -321,5 +322,12 @@ EditorMainScreen::EditorMainScreen() {
 	main_screen_vbox->set_name("MainScreen");
 	main_screen_vbox->set_v_size_flags(Control::SIZE_EXPAND_FILL);
 	main_screen_vbox->add_theme_constant_override("separation", 0);
-	add_child(main_screen_vbox);
+
+	// G2: the main editor area is now the workspace tree. In this first increment a
+	// single root pane hosts the existing main-screen stack (main_screen_vbox), so
+	// get_control() and behavior are unchanged; later increments split panes and host
+	// editors per-pane. Plugins/addons still parent into get_control() == main_screen_vbox.
+	workspace = memnew(EditorWorkspace);
+	add_child(workspace);
+	workspace->get_root_pane()->set_content(main_screen_vbox);
 }
