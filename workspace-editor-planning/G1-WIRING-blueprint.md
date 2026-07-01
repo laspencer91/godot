@@ -96,11 +96,24 @@ This supersedes the higher-level steps in `G1-multiple-scenes.md` with exact edi
   two scenes are independently editable on tab-switch (full simultaneous side-by-side
   3D remains G2).
 
-### Step E — Selection/history/undo/title/session
-- `editor_history`/`editor_selection` now per-doc; verify `save/restore_edited_scene_state`
-  (`editor_data.cpp`) operate on the doc's selection+history.
+### Step E — undo/title/session
 - Undo/redo keyed by doc `history_id` (already stable). Title/tabs reflect active doc.
 - Session restore instantiates a DocumentContext per saved scene.
+
+## SCOPE REFINEMENT (verified): selection/history stay SINGLE in v1
+
+`save_edited_scene_state`/`restore_edited_scene_state` (`editor_data.cpp:945-971`)
+**already** persist selection + history into each `EditedScene` (es.selection,
+es.history_current, es.history_stored) and swap the single live
+`editor_selection`/`editor_history` on every scene switch. That mechanism is
+orthogonal to where scene nodes are parented, so **v1 does NOT demote
+editor_selection/editor_history** and does NOT touch the ~76 selection call sites.
+The `EditorDocumentContext::selection` / `selection_history` members are reserved
+for **G3** (per-pane docks); in v1 they are allocated but unused. This removes
+the highest-churn part of Step B. DocumentContext's v1 contribution is purely the
+**per-scene scene_root SubViewport + own World3D/World2D** that lets every open
+scene render live simultaneously (the actual GDStudio-differentiating capability),
+plus activate/deactivate visibility + 2D/3D world binding.
 
 ## Build invocation (this machine)
 
