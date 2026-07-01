@@ -97,14 +97,16 @@ many panes are looking at it (including zero).
 
 4. **Isolation across documents is free; only disambiguate within a world.**
    Each document has its own scenario, so cross-document render state cannot
-   collide. Anything that today uses a *global* budget to disambiguate views
-   (e.g. the gizmo cull-mask freelist, currently 5 layers total) should instead
-   be keyed **per-world** — the budget becomes "N views of the *same* document"
-   (never hit) instead of "N panes total" (a dual-monitor user hits it). This
-   is Step-④-coupled: the layer is baked at viewport construction *before* the
-   world is bound, so the correct fix lives in the world-binding lifecycle
-   (`set_editor_world`: free the old world's layer, claim one from the new
-   world's), not at construction.
+   collide. Anything that uses a *global* budget to disambiguate views should be
+   keyed **per-world** — the budget becomes "N views of the *same* document"
+   (never hit) instead of "N panes total" (a dual-monitor user hits it).
+   **DONE for the gizmo cull-mask freelist** (Step④ commit): `Node3DEditor`
+   now holds a `HashMap<scenario-id, mask>` and `allocate/free_gizmo_layer` take
+   the world; the layer is claimed in the world-binding lifecycle
+   (`set_editor_world`: free the old world's layer, claim from the new world's,
+   rewrite the camera cull mask + gizmo-instance layer masks) rather than at
+   viewport construction. Apply the same per-world keying to any future
+   global-budget disambiguation.
 
 ---
 

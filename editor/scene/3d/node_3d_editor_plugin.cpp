@@ -4787,6 +4787,21 @@ void Node3DEditorViewport::_init_gizmo_instance() {
 }
 
 void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
+	// Re-key this viewport's transform-gizmo cull-mask layer to the new world's freelist, so
+	// the 5-layer budget is per-document. Only on an actual world change: rebinding to the same
+	// world is a no-op (no churn). The camera cull mask is rewritten to see the new layer; the
+	// gizmo instances' layer masks are updated below alongside their scenario migration.
+	if (p_world != gizmo_layer_world) {
+		if (gizmo_layer_world.is_valid()) {
+			spatial_editor->free_gizmo_layer(gizmo_layer_world, gizmo_layer);
+		}
+		gizmo_layer_world = p_world;
+		gizmo_layer = p_world.is_valid() ? spatial_editor->allocate_gizmo_layer(p_world) : GIZMO_BASE_LAYER;
+		if (camera) {
+			camera->set_cull_mask(((1 << 20) - 1) | (1 << gizmo_layer) | (1 << GIZMO_EDIT_LAYER) | (1 << GIZMO_GRID_LAYER) | (1 << MISC_TOOL_LAYER));
+		}
+	}
+
 	// Render this viewport through the active document's world, and migrate this
 	// viewport's own gizmo instances into that world's scenario so transform gizmos
 	// keep showing over the switched-to scene.
@@ -4796,17 +4811,25 @@ void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
 		return; // Gizmo instances not created yet (viewport not in tree); nothing to migrate.
 	}
 	const RID scenario = p_world.is_valid() ? p_world->get_scenario() : RID();
+	const uint32_t layer = 1 << gizmo_layer;
 	for (int i = 0; i < 3; i++) {
 		RS::get_singleton()->instance_set_scenario(move_gizmo_instance[i], scenario);
 		RS::get_singleton()->instance_set_scenario(move_plane_gizmo_instance[i], scenario);
 		RS::get_singleton()->instance_set_scenario(scale_gizmo_instance[i], scenario);
 		RS::get_singleton()->instance_set_scenario(scale_plane_gizmo_instance[i], scenario);
 		RS::get_singleton()->instance_set_scenario(axis_gizmo_instance[i], scenario);
+		RS::get_singleton()->instance_set_layer_mask(move_gizmo_instance[i], layer);
+		RS::get_singleton()->instance_set_layer_mask(move_plane_gizmo_instance[i], layer);
+		RS::get_singleton()->instance_set_layer_mask(scale_gizmo_instance[i], layer);
+		RS::get_singleton()->instance_set_layer_mask(scale_plane_gizmo_instance[i], layer);
+		RS::get_singleton()->instance_set_layer_mask(axis_gizmo_instance[i], layer);
 	}
 	for (int i = 0; i < 4; i++) {
 		RS::get_singleton()->instance_set_scenario(rotate_gizmo_instance[i], scenario);
+		RS::get_singleton()->instance_set_layer_mask(rotate_gizmo_instance[i], layer);
 	}
 	RS::get_singleton()->instance_set_scenario(trackball_sphere_instance, scenario);
+	RS::get_singleton()->instance_set_layer_mask(trackball_sphere_instance, layer);
 }
 
 void Node3DEditorViewport::_finish_gizmo_instances() {
@@ -6689,8 +6712,9 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	zoom_indicator_delay = 0.0;
 
 	spatial_editor = p_spatial_editor;
-	// G2: claim a distinct transform-gizmo cull-mask layer (freed in the destructor).
-	gizmo_layer = spatial_editor->allocate_gizmo_layer();
+	// G2: the transform-gizmo cull-mask layer is claimed from the bound world's freelist in
+	// set_editor_world (not here), so the 5-layer budget is per-document. Until this viewport
+	// binds a world it keeps the default GIZMO_BASE_LAYER (no gizmos render without a scene).
 	SubViewportContainer *c = memnew(SubViewportContainer);
 	subviewport_container = c;
 	c->set_stretch(true);
@@ -7140,8 +7164,9 @@ Node3DEditorViewport::~Node3DEditorViewport() {
 		// Freed here rather than on EXIT_TREE so instances survive reparenting between panes.
 		_finish_gizmo_instances();
 	}
-	if (spatial_editor) {
-		spatial_editor->free_gizmo_layer(gizmo_layer);
+	if (spatial_editor && gizmo_layer_world.is_valid()) {
+		// Return the layer to the world it was claimed from (no-op if never bound a world).
+		spatial_editor->free_gizmo_layer(gizmo_layer_world, gizmo_layer);
 	}
 	memdelete(ruler);
 }
@@ -8318,24 +8343,37 @@ void Node3DEditorView::_deferred_first_bind() {
 	_reconcile_decorations();
 }
 
-int Node3DEditor::allocate_gizmo_layer() {
+int Node3DEditor::allocate_gizmo_layer(const Ref<World3D> &p_world) {
 	const int layer_count = 32 - Node3DEditorViewport::GIZMO_BASE_LAYER; // Bits 27..31 => 5.
+	// Key on the world's scenario: layers only need to be unique within a scenario, so each
+	// document gets its own independent 5-layer budget. Key 0 = the no-world/unbound bucket.
+	const uint64_t key = p_world.is_valid() ? p_world->get_scenario().get_id() : 0;
+	uint32_t &mask = gizmo_layer_used_masks[key]; // Inserts a 0 mask for a new world.
 	for (int offset = 0; offset < layer_count; offset++) {
-		if (!(gizmo_layer_used_mask & (1u << offset))) {
-			gizmo_layer_used_mask |= (1u << offset);
+		if (!(mask & (1u << offset))) {
+			mask |= (1u << offset);
 			return Node3DEditorViewport::GIZMO_BASE_LAYER + offset;
 		}
 	}
-	// All 5 per-view gizmo layers are in use: degrade by sharing the base layer (gizmos of
-	// the extra views overlap but stay functional). Reached only past 5 simultaneous 3D views.
-	WARN_PRINT_ONCE("More than 5 simultaneous 3D views: transform gizmos share a cull-mask layer and may overlap.");
+	// All 5 layers for THIS world are in use: degrade by sharing the base layer (gizmos of the
+	// extra views overlap but stay functional). Reached only past 5 simultaneous views of the
+	// SAME document — different documents each have their own budget.
+	WARN_PRINT_ONCE("More than 5 simultaneous 3D views of the same document: transform gizmos share a cull-mask layer and may overlap.");
 	return Node3DEditorViewport::GIZMO_BASE_LAYER;
 }
 
-void Node3DEditor::free_gizmo_layer(int p_layer) {
+void Node3DEditor::free_gizmo_layer(const Ref<World3D> &p_world, int p_layer) {
 	const int offset = p_layer - Node3DEditorViewport::GIZMO_BASE_LAYER;
-	if (offset >= 0 && offset < 32 - Node3DEditorViewport::GIZMO_BASE_LAYER) {
-		gizmo_layer_used_mask &= ~(1u << offset);
+	if (offset < 0 || offset >= 32 - Node3DEditorViewport::GIZMO_BASE_LAYER) {
+		return;
+	}
+	const uint64_t key = p_world.is_valid() ? p_world->get_scenario().get_id() : 0;
+	HashMap<uint64_t, uint32_t>::Iterator it = gizmo_layer_used_masks.find(key);
+	if (it) {
+		it->value &= ~(1u << offset);
+		if (it->value == 0) {
+			gizmo_layer_used_masks.remove(it); // Drop the bucket once this world has no views.
+		}
 	}
 }
 

@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/math/dynamic_bvh.h"
+#include "core/templates/hash_map.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/scene/3d/node_3d_editor_gizmos.h"
 #include "editor/themes/editor_scale.h"
@@ -417,8 +418,12 @@ private:
 	bool gizmo_instances_initialized = false;
 
 	// G2: transform-gizmo cull-mask layer, allocated from Node3DEditor rather than derived
-	// from the quad-slot index, so this viewport is not tied to a fixed 0..3 slot.
+	// from the quad-slot index, so this viewport is not tied to a fixed 0..3 slot. Claimed
+	// from the BOUND WORLD's freelist in set_editor_world (not the ctor), so the 5-layer
+	// budget is per-document; gizmo_layer_world records which world's freelist to return it
+	// to when this viewport rebinds or is destroyed.
 	int gizmo_layer = GIZMO_BASE_LAYER;
+	Ref<World3D> gizmo_layer_world;
 
 	String last_message;
 	String message;
@@ -671,11 +676,13 @@ private:
 	bool gizmos_registered = false;
 	bool indicators_initialized = false;
 
-	// G2: freelist over the per-view transform-gizmo cull-mask layers (GIZMO_BASE_LAYER..31,
-	// max 5). Each Node3DEditorViewport allocates one so its gizmos are isolated from other
-	// views' — decoupling a viewport's gizmo layer from its fixed quad-slot index, so viewports
-	// can live outside the quad (in workspace panes). One bit per offset 0..4.
-	uint32_t gizmo_layer_used_mask = 0;
+	// G2: PER-WORLD freelists over the transform-gizmo cull-mask layers (GIZMO_BASE_LAYER..31,
+	// max 5). A cull-mask layer only needs to be unique among viewports rendering the SAME
+	// world (scenario) — across documents, separate scenarios make layer reuse safe for free.
+	// So the budget is "5 views of the same document" (never hit) instead of "5 panes total"
+	// (a dual-monitor user hits it). Keyed on the world's scenario RID id; one bit per offset
+	// 0..4; empty buckets are removed on free. See ARCHITECTURE.md seam rule #4.
+	HashMap<uint64_t, uint32_t> gizmo_layer_used_masks;
 
 	Ref<ArrayMesh> move_gizmo[3], move_plane_gizmo[3], rotate_gizmo[4], scale_gizmo[3], scale_plane_gizmo[3], axis_gizmo[3];
 	Ref<ArrayMesh> trackball_sphere_gizmo;
@@ -957,11 +964,12 @@ public:
 	// G1: bind all 3D viewports + grid/origin to the given (active document's) world.
 	void set_active_world(const Ref<World3D> &p_world);
 
-	// G2: allocate/free a per-view transform-gizmo cull-mask layer (GIZMO_BASE_LAYER..31).
-	// Returns a distinct layer while any of the 5 are free; degrades to sharing the base
-	// layer past 5 simultaneous views (gizmos overlap but remain functional).
-	int allocate_gizmo_layer();
-	void free_gizmo_layer(int p_layer);
+	// G2: allocate/free a transform-gizmo cull-mask layer (GIZMO_BASE_LAYER..31) FROM p_world's
+	// freelist. Returns a distinct layer while any of the 5 are free within that world; degrades
+	// to sharing the base layer past 5 simultaneous views OF THE SAME world (gizmos overlap but
+	// remain functional). Different worlds reuse the same layer bits safely (separate scenarios).
+	int allocate_gizmo_layer(const Ref<World3D> &p_world);
+	void free_gizmo_layer(const Ref<World3D> &p_world, int p_layer);
 
 	static Size2i get_camera_viewport_size(Camera3D *p_camera);
 
