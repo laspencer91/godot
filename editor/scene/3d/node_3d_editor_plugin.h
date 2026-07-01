@@ -663,12 +663,6 @@ private:
 
 	ToolMode tool_mode = TOOL_MODE_TRANSFORM;
 
-	// G1/G2: the world this editor is currently bound to render/pick against. Set by the
-	// workspace when it activates a document in this pane (v1: the single active document).
-	// The resolver reads THIS, not the globally-active document, so N panes can each bind
-	// their own world without touching consumers.
-	Ref<World3D> bound_world;
-
 	// Reparent-tolerance (G2): the gizmo-plugin registry and grid/origin indicators are
 	// one-time setup that stock Godot builds on the single ENTER_TREE. The workspace moves
 	// this control between panes, so guard both against re-running, and free the indicators
@@ -1101,12 +1095,19 @@ public:
 // will own one per workspace pane later. Holds only view-local presentation state.
 class Node3DEditorView : public MarginContainer {
 	GDCLASS(Node3DEditorView, MarginContainer);
+	friend class Node3DEditor; // Services reads/writes this view's bound world (Step③a.1b).
 
 	Node3DEditor *editor = nullptr; // Services singleton this view belongs to.
 	Node3DEditorViewportContainer *viewport_base = nullptr;
 	Node3DEditorViewport *viewports[Node3DEditor::VIEWPORTS_COUNT] = {};
 	int last_used_viewport = 0;
 	Node3DEditorViewport *freelook_viewport = nullptr;
+
+	// The World3D this view renders/picks against (Step③a.1b, was Node3DEditor::bound_world).
+	// Set when the workspace activates a document in this view; Node3DEditor's resolver reads
+	// THIS, not the globally-active document, so N views can each bind their own world. The
+	// grid/origin decoration stays created by the services for now (it moves here with Step①).
+	Ref<World3D> bound_world;
 
 protected:
 	static void _bind_methods() {}
