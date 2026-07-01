@@ -8226,13 +8226,14 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 }
 
 Ref<World3D> Node3DEditor::get_editor_world_3d() const {
-	// G1: render/pick in the active document's isolated world so each live scene
-	// stays separate. Falls back to the root-window world when no document is
-	// active yet (e.g. during editor startup before the first scene is opened),
-	// so gizmo/grid/origin instances always init into a valid scenario.
-	EditorDocumentContext *doc = EditorNode::get_singleton()->get_editor_data().get_active_document();
-	if (doc && doc->get_world_3d().is_valid()) {
-		return doc->get_world_3d();
+	// Resolve against THIS editor's bound world (set via set_active_world() when the
+	// workspace activates a document in this pane), NOT the globally-active document.
+	// In v1 there is one Node3DEditor rebound on scene switch, so bound_world tracks the
+	// active document — but the per-view binding is the contract that generalizes to N
+	// simultaneous panes. Falls back to the root-window world before the first bind (e.g.
+	// early startup) so gizmo/grid/origin instances always init into a valid scenario.
+	if (bound_world.is_valid()) {
+		return bound_world;
 	}
 	return get_tree()->get_root()->get_world_3d();
 }
@@ -8248,9 +8249,10 @@ PhysicsDirectSpaceState3D *Node3DEditor::get_editor_space_state() const {
 }
 
 void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
-	// G1 flip: re-point every 3D editor viewport at the active document's world and
-	// migrate the shared grid/origin instances into its scenario, so the switched-to
-	// scene (and only it) is what the 3D views render.
+	// Bind this editor to p_world: re-point every 3D editor viewport at it and migrate the
+	// shared grid/origin instances into its scenario, so the bound document (and only it) is
+	// what the 3D views render/pick. bound_world is what get_editor_world_3d() resolves to.
+	bound_world = p_world;
 	const RID scenario = p_world.is_valid() ? p_world->get_scenario() : RID();
 	if (origin_instance.is_valid()) {
 		RS::get_singleton()->instance_set_scenario(origin_instance, scenario);

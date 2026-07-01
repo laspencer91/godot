@@ -4632,11 +4632,14 @@ void EditorNode::_display_scene_root(SubViewport *p_scene_root) {
 }
 
 void EditorNode::_activate_scene_views() {
-	// Point both the 2D and 3D editors at the active document's isolated world.
+	// Acting as the (proto) workspace: bind both the 2D and 3D editors to the active
+	// document's isolated world. The world is passed explicitly (the editor no longer
+	// reaches into the global active document itself — see get_editor_world_3d()).
 	_display_scene_root(get_scene_root());
 	Node3DEditor *spatial_editor = Node3DEditor::get_singleton();
 	if (spatial_editor) {
-		spatial_editor->set_active_world(spatial_editor->get_editor_world_3d());
+		EditorDocumentContext *doc = editor_data.get_active_document();
+		spatial_editor->set_active_world(doc ? doc->get_world_3d() : Ref<World3D>());
 	}
 }
 

@@ -649,6 +649,12 @@ private:
 
 	ToolMode tool_mode = TOOL_MODE_TRANSFORM;
 
+	// G1/G2: the world this editor is currently bound to render/pick against. Set by the
+	// workspace when it activates a document in this pane (v1: the single active document).
+	// The resolver reads THIS, not the globally-active document, so N panes can each bind
+	// their own world without touching consumers.
+	Ref<World3D> bound_world;
+
 	RID origin_mesh;
 	RID origin_multimesh;
 	RID origin_instance;

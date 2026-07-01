@@ -56,8 +56,10 @@ private:
 	// EditorData/EditorNode (the scene tree), NOT freed here.
 	Node *root = nullptr;
 
-	// Per-document selection state (mirrors EditorNode::editor_selection /
-	// editor_history, which become active-document delegates).
+	// RESERVED (G3): per-document selection + selection history. NOT wired in v1 —
+	// the live selection is still EditorNode::editor_selection / editor_history,
+	// snapshotted per-scene and swapped on switch. These become the real per-pane
+	// selection when panes render co-visibly; kept here as the intended home.
 	EditorSelection *selection = nullptr;
 	EditorSelectionHistory selection_history;
 
@@ -65,6 +67,10 @@ private:
 	int history_id = 0;
 
 	String path;
+
+	// NOTE (view/model split): editor_states (3D camera, 2D pan/zoom, 2D/3D toggle,
+	// gizmo mode) and `active` are per-VIEW presentation state, temporarily living on
+	// the document. They migrate to DocumentView as the workspace (G2) introduces it.
 	Dictionary editor_states;
 	uint64_t time_opened = 0;
 	bool active = false;
