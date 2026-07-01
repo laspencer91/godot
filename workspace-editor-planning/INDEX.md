@@ -16,6 +16,14 @@ This package reconciles the per-goal plans into one buildable sequence. Each goa
 | **G4** | Bottom drawer slideout for file exploration with drag-drop into panes | M | [G4-bottom-drawer.md](./G4-bottom-drawer.md) |
 | **G5** | Faster scene/resource open and editor startup (investigation + optimization) | M–L | [G5-faster-load.md](./G5-faster-load.md) |
 
+## Cross-cutting references
+
+| Doc | Purpose |
+|---|---|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | The service / view-state / document-state taxonomy + seam rules — the tiebreaker for where any editor member belongs. |
+| [DIVERGENCE-LEDGER.md](./DIVERGENCE-LEDGER.md) | Per-file record of stock-file edits (ours-by-design vs upstreamable) + the rebase-cadence policy. |
+| [smoke/](./smoke/run_smoke.sh) | Headless regression harness (`bash workspace-editor-planning/smoke/run_smoke.sh`): open-3d / open-2d / restore-3-scenes, assert exit 0 + zero error-class lines. |
+
 ## Dependency graph
 
 ```
