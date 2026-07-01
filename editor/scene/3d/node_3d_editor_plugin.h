@@ -1051,6 +1051,13 @@ public:
 	// Forward to the 3D view that owns the viewport quad (Step③). Out-of-line so the
 	// forwarding can reach Node3DEditorView, which is only forward-declared here.
 	Node3DEditorView *get_main_view() const { return main_view; }
+
+	// SPIKE (④-spike, TEMPORARY): mint a second, fully independent Node3DEditorView --
+	// its own viewport quad and grid/origin decoration -- bound to the same world as the
+	// main view, so two live 3D views can coexist in split panes. Proves the view is truly
+	// instanceable before the DocumentView/tab layer is built on top. Returns it as a
+	// Control for the workspace to host. Removed once real per-pane document views exist.
+	Control *create_secondary_debug_view();
 	Node3DEditorViewport *get_editor_viewport(int p_idx) const;
 	Node3DEditorViewport *get_last_used_viewport();
 

@@ -31,6 +31,7 @@
 #include "editor_workspace.h"
 
 #include "core/input/input_event.h"
+#include "editor/scene/3d/node_3d_editor_plugin.h" // SPIKE (④-spike): secondary 3D view factory.
 #include "scene/gui/label.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/split_container.h"
@@ -120,6 +121,10 @@ void EditorWorkspace::unhandled_key_input(const Ref<InputEvent> &p_event) {
 	} else if (k->get_keycode() == Key::MINUS) {
 		_debug_split_focused(true);
 		accept_event();
+	} else if (k->get_keycode() == Key::KEY_3) {
+		// SPIKE (④-spike): drop a second live 3D view into a side-by-side split.
+		_debug_split_focused_with_3d_view(false);
+		accept_event();
 	}
 }
 
@@ -140,6 +145,25 @@ void EditorWorkspace::_debug_split_focused(bool p_vertical) {
 	placeholder->add_child(label);
 
 	WorkspacePane *new_pane = target->split(p_vertical, placeholder);
+	if (new_pane) {
+		focused_pane = new_pane;
+	}
+}
+
+void EditorWorkspace::_debug_split_focused_with_3d_view(bool p_vertical) {
+	WorkspacePane *target = get_focused_pane();
+	if (!target || !target->is_leaf()) {
+		return;
+	}
+	Node3DEditor *spatial = Node3DEditor::get_singleton();
+	if (!spatial) {
+		return;
+	}
+	Control *second_view = spatial->create_secondary_debug_view();
+	if (!second_view) {
+		return;
+	}
+	WorkspacePane *new_pane = target->split(p_vertical, second_view);
 	if (new_pane) {
 		focused_pane = new_pane;
 	}

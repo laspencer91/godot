@@ -108,6 +108,11 @@ protected:
 	// before real per-pane content exists. Removed once tabs host real content.
 	void _debug_split_focused(bool p_vertical);
 
+	// SPIKE (④-spike, TEMPORARY): split the focused pane and drop a SECOND live
+	// 3D view (bound to the same document world) into the new side, to prove two
+	// Node3DEditorViews can coexist. Removed once real per-pane document views exist.
+	void _debug_split_focused_with_3d_view(bool p_vertical);
+
 public:
 	WorkspacePane *make_pane();
 

@@ -9952,6 +9952,30 @@ Node3DEditorView::~Node3DEditorView() {
 	}
 }
 
+Control *Node3DEditor::create_secondary_debug_view() {
+	// SPIKE (④-spike): build a second Node3DEditorView exactly like the main one in the ctor --
+	// its own quad of viewports (each with a distinct gizmo layer via the viewport ctor) -- and
+	// bind it to the same world the main view currently renders. When this view enters the tree
+	// it builds and reconciles its own decoration through its own lifecycle, so nothing here has
+	// to be ordered against the main view.
+	Node3DEditorView *view = memnew(Node3DEditorView(this));
+	Node3DEditorViewportContainer *vp_base = view->get_viewport_base();
+	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+		Node3DEditorViewport *vp = memnew(Node3DEditorViewport(this, i));
+		vp->connect("toggle_maximize_view", callable_mp(this, &Node3DEditor::_toggle_maximize_view));
+		vp->connect("clicked", callable_mp(this, &Node3DEditor::_viewport_clicked).bind(i));
+		vp->assign_pending_data_pointers(preview_node, &preview_bounds, accept);
+		vp->set_h_size_flags(SIZE_EXPAND_FILL);
+		vp->set_v_size_flags(SIZE_EXPAND_FILL);
+		vp->set_custom_minimum_size(Size2(39, 39));
+		vp_base->add_viewport(vp, i);
+		view->register_viewport(i, vp);
+	}
+	// Share the main view's currently-bound world (the active document).
+	view->set_active_world(main_view->bound_world);
+	return view;
+}
+
 void Node3DEditorView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
