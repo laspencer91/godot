@@ -205,6 +205,7 @@ private:
 	Control *viewport = nullptr;
 	Control *viewport_scrollable = nullptr;
 	SubViewportContainer *scene_view_container = nullptr; // Displays the active document's scene_root SubViewport.
+	bool tree_signals_connected = false; // Reparent-tolerance: connect permanent signals only on first ENTER_TREE.
 
 	HScrollBar *h_scroll = nullptr;
 	VScrollBar *v_scroll = nullptr;
