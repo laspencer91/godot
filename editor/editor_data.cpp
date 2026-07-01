@@ -811,6 +811,12 @@ Node *EditorData::get_edited_scene_root(int p_idx) {
 void EditorData::set_edited_scene_root(Node *p_root) {
 	ERR_FAIL_INDEX(current_edited_scene, edited_scene.size());
 	edited_scene.write[current_edited_scene].root = p_root;
+	// Mirror the root onto the document and classify it, so a DocumentView can route to the
+	// right per-pane editor surface (2D vs 3D).
+	if (EditorDocument *doc = edited_scene[current_edited_scene].document) {
+		doc->set_root(p_root);
+		doc->set_type(EditorDocument::classify_scene_type(p_root));
+	}
 	if (p_root) {
 		if (p_root->is_instance()) {
 			edited_scene.write[current_edited_scene].path = p_root->get_scene_file_path();

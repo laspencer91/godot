@@ -8,9 +8,26 @@
 
 #include "editor/editor_document.h"
 
+#include "scene/2d/node_2d.h"
+#include "scene/3d/node_3d.h"
+#include "scene/gui/control.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/3d/world_3d.h"
 #include "scene/resources/world_2d.h"
+
+EditorDocument::Type EditorDocument::classify_scene_type(Node *p_root) {
+	if (!p_root) {
+		return TYPE_UNKNOWN;
+	}
+	if (Object::cast_to<Node3D>(p_root)) {
+		return TYPE_SCENE_3D;
+	}
+	if (Object::cast_to<Node2D>(p_root) || Object::cast_to<Control>(p_root)) {
+		return TYPE_SCENE_2D;
+	}
+	// A plain Node root (or other) could hold either 2D or 3D children; treat as mixed.
+	return TYPE_SCENE_MIXED;
+}
 
 SceneDocument::SceneDocument() {
 	type = TYPE_SCENE_MIXED;

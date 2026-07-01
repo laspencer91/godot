@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  document_view.cpp                                                     */
+/*  canvas_view_2d.h                                                      */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,52 +28,40 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "document_view.h"
+#pragma once
 
-#include "editor/editor_document.h"
-#include "editor/gui/canvas_view_2d.h"
-#include "editor/scene/3d/node_3d_editor_plugin.h"
+#include "scene/gui/control.h"
 
-DocumentView::DocumentView(EditorDocument *p_document) {
-	set_h_size_flags(SIZE_EXPAND_FILL);
-	set_v_size_flags(SIZE_EXPAND_FILL);
-	add_theme_constant_override("margin_left", 0);
-	add_theme_constant_override("margin_right", 0);
-	add_theme_constant_override("margin_top", 0);
-	add_theme_constant_override("margin_bottom", 0);
+class EditorDocument;
+class SubViewport;
+class SubViewportContainer;
 
-	// Bind the model side: this view presents p_document.
-	doc_view = memnew(EditorDocumentView);
-	doc_view->set_document(p_document);
+// CanvasView2D is the per-pane 2D editor surface (Step ⑤a), the 2D analog of
+// Node3DEditorView. It owns its OWN SubViewport bound to the document's World2D
+// (via set_world_2d), so it renders that document's 2D scene independently of any
+// other view -- multiple panes can show the same or different documents' 2D
+// content at once, WITHOUT reparenting the document's scene_root (the v1 shim's
+// limitation). CanvasItems render into the World2D's shared canvas RID, so simply
+// pointing a viewport at that world displays them.
+//
+// ⑤a scope: RENDER + view transform only (the scene renders, origin centered).
+// The editing overlay (selection/handles/rulers/grid), interactive pan/zoom, and
+// input are the CanvasItemEditor services/view split (⑤b) -- not here yet.
+class CanvasView2D : public Control {
+	GDCLASS(CanvasView2D, Control);
 
-	// Host the editor surface for this document's kind, pointed at THIS document's isolated
-	// world so the pane renders p_document's scene independently of the globally-active one.
-	// 2D scenes get a CanvasView2D; 3D (and mixed/unknown, until the ⑤b 2D/3D toggle) get a
-	// Node3DEditorView.
-	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
-	if (type == EditorDocument::TYPE_SCENE_2D) {
-		editor_surface = memnew(CanvasView2D(p_document));
-		add_child(editor_surface);
-		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-	} else {
-		Node3DEditor *spatial = Node3DEditor::get_singleton();
-		if (spatial) {
-			editor_surface = spatial->create_view_bound_to(p_document ? p_document->get_world_3d() : Ref<World3D>());
-			if (editor_surface) {
-				add_child(editor_surface);
-				editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-				editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-			}
-		}
-	}
-}
+	EditorDocument *document = nullptr; // The document this view renders (not owned).
+	SubViewportContainer *container = nullptr;
+	SubViewport *view_viewport = nullptr; // Own viewport, bound to the document's World2D.
 
-DocumentView::~DocumentView() {
-	// editor_surface is a child Control freed by the scene tree; doc_view is a plain
-	// C++ object we own, so free it here.
-	if (doc_view) {
-		memdelete(doc_view);
-		doc_view = nullptr;
-	}
-}
+	void _update_view_transform(); // Position the canvas in the viewport (⑤a: center origin).
+
+protected:
+	void _notification(int p_what);
+	static void _bind_methods() {}
+
+public:
+	SubViewport *get_view_viewport() const { return view_viewport; }
+
+	CanvasView2D(EditorDocument *p_document);
+};

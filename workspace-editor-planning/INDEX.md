@@ -98,6 +98,14 @@ This package reconciles the per-goal plans into one buildable sequence. Each goa
 2. **[G1/G2] v1 side-by-side fidelity — RESOLVED: single live 3D pane first.** v1 binds one `Node3DEditor`/`CanvasItemEditor` to the focused pane (rebind-on-activate); true per-pane 3D-editor instancing is deferred to G2 convergence. This concerns active *editing/gizmos*, not rendering — see decision 3.
 3. **[G1/G5] Background-document liveness — RESOLVED: keep all documents live.** Every open document keeps its own World3D SubViewport ticking scripts/physics/live-edit simultaneously; **no suspension in v1**. This *overrides* G1 step 8's suspension consideration and makes G5 WIN B (lazy restore) optional rather than required. Memory/CPU scales with open-tab count — accepted; revisit only if it becomes a problem. Net effect with decision 2: all panes *render* their own world live, but only the focused pane gets active editor gizmos/manipulation in v1.
 
+**Resolved 2026-07-01 (logan) — product direction:**
+
+6. **[G2] In-tab doc reordering is NOT a required feature.** Organization happens via panes + splits, not by dragging tabs within a pane. Keep tab reorder only if the `TabBar` gives it for free; don't build it.
+7. **[G2] Splits must be resizable** (already true — `WorkspacePane` uses a draggable `SplitContainer`; keep it that way).
+8. **[G3] Scene-tree + inspector are PER-PANE / in-the-tab, not global docks.** Each scene `DocumentView` grows to host its editing surface + its scene-tree + its inspector. This reinforces G3's per-pane-dock direction and is the intended end-state (not a rebound global dock).
+9. **[G4] File system = a small bottom button that opens a slide-out drawer dock** (not per-pane).
+10. **[G3] The stock dock drag-rearrange may be unnecessary entirely** once docks live in panes — revisit after G3; do not invest in preserving it prematurely.
+
 **Still open (not blocking; decide when the goal starts):**
 4. **[G5 — gating] Representative target project + cold-vs-warm:** what real project (size, asset count, scene complexity) reproduces the perceived 7s open, how many scenes are typically kept open on restore, and is 7s→3s measured cold or warm? **No optimization can begin without this** — the GDStudio 7s→3s figure is unverified hearsay (a goal, not a spec).
 5. **[G4 — scope] Bottom drawer relationship to the existing bottom panel:** does the file drawer coexist with the current `bottom_panel` (Log/Audio), or eventually replace it? And does it span the center column only or the whole client area? (Recommendation: center column, FileSystem-only v1, coexist for now.)

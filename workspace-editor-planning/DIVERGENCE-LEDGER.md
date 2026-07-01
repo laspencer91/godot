@@ -40,6 +40,7 @@ surface. **Risk** = expected rebase pain.
 - `editor/gui/editor_workspace.{cpp,h}` — `EditorWorkspace` + `WorkspacePane` (the dividable pane tree).
 - `editor/gui/document_view.{cpp,h}` — `DocumentView`: the per-pane presentation of one open document (owns the `EditorDocumentView` binding + hosts a `Node3DEditorView` on the document's world). Depends on `node_3d_editor_plugin.h` (gui→scene/3d, confined to this TU) — the permanent form of the ④-spike's temporary include.
 - `editor/gui/tabbed_document_host.{cpp,h}` — `TabbedDocumentHost`: a pane's tabbed content (`TabBar` + lazily-created `DocumentView`s; selecting a tab swaps the rendered document). The first non-debug workspace UI.
+- `editor/gui/canvas_view_2d.{cpp,h}` — `CanvasView2D` (Step ⑤a): the per-pane 2D editor surface (own SubViewport bound to the document's World2D). Render-only so far; the editing overlay/input is the ⑤b CanvasItemEditor services/view split.
 - `workspace-editor-planning/**` — all planning docs, `ARCHITECTURE.md`, and the `smoke/` regression harness. Non-engine; zero rebase risk.
 
 ---

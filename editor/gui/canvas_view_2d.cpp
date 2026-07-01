@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  document_view.cpp                                                     */
+/*  canvas_view_2d.cpp                                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,52 +28,57 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "document_view.h"
+#include "canvas_view_2d.h"
 
 #include "editor/editor_document.h"
-#include "editor/gui/canvas_view_2d.h"
-#include "editor/scene/3d/node_3d_editor_plugin.h"
+#include "scene/gui/subviewport_container.h"
+#include "scene/main/viewport.h"
+#include "scene/resources/world_2d.h"
 
-DocumentView::DocumentView(EditorDocument *p_document) {
+CanvasView2D::CanvasView2D(EditorDocument *p_document) {
+	document = p_document;
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
-	add_theme_constant_override("margin_left", 0);
-	add_theme_constant_override("margin_right", 0);
-	add_theme_constant_override("margin_top", 0);
-	add_theme_constant_override("margin_bottom", 0);
+	set_clip_contents(true);
 
-	// Bind the model side: this view presents p_document.
-	doc_view = memnew(EditorDocumentView);
-	doc_view->set_document(p_document);
+	// A SubViewportContainer draws its child SubViewport's texture, stretched to fill.
+	container = memnew(SubViewportContainer);
+	container->set_stretch(true);
+	container->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
+	add_child(container);
 
-	// Host the editor surface for this document's kind, pointed at THIS document's isolated
-	// world so the pane renders p_document's scene independently of the globally-active one.
-	// 2D scenes get a CanvasView2D; 3D (and mixed/unknown, until the ⑤b 2D/3D toggle) get a
-	// Node3DEditorView.
-	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
-	if (type == EditorDocument::TYPE_SCENE_2D) {
-		editor_surface = memnew(CanvasView2D(p_document));
-		add_child(editor_surface);
-		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-	} else {
-		Node3DEditor *spatial = Node3DEditor::get_singleton();
-		if (spatial) {
-			editor_surface = spatial->create_view_bound_to(p_document ? p_document->get_world_3d() : Ref<World3D>());
-			if (editor_surface) {
-				add_child(editor_surface);
-				editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-				editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-			}
+	// Our own viewport, pointed at the document's World2D so it renders that scene's canvas.
+	// disable_3d: this is a 2D surface; disable_input: ⑤a is render-only (editing input is ⑤b).
+	view_viewport = memnew(SubViewport);
+	view_viewport->set_disable_3d(true);
+	view_viewport->set_disable_input(true);
+	container->add_child(view_viewport);
+
+	if (document) {
+		Ref<World2D> world = document->get_world_2d();
+		if (world.is_valid()) {
+			view_viewport->set_world_2d(world);
 		}
 	}
 }
 
-DocumentView::~DocumentView() {
-	// editor_surface is a child Control freed by the scene tree; doc_view is a plain
-	// C++ object we own, so free it here.
-	if (doc_view) {
-		memdelete(doc_view);
-		doc_view = nullptr;
+void CanvasView2D::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_ENTER_TREE:
+		case NOTIFICATION_RESIZED: {
+			_update_view_transform();
+		} break;
 	}
+}
+
+void CanvasView2D::_update_view_transform() {
+	if (!view_viewport) {
+		return;
+	}
+	// ⑤a: place the canvas origin at the center of the view (no interactive pan/zoom yet).
+	// The transform is per-(viewport, canvas), so this does not affect any other view of the
+	// same World2D. Interactive pan/zoom + overlay come with the ⑤b services/view split.
+	Transform2D xform;
+	xform.columns[2] = get_size() * 0.5;
+	view_viewport->set_global_canvas_transform(xform);
 }

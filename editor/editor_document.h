@@ -65,6 +65,11 @@ public:
 	Type get_type() const { return type; }
 	void set_type(Type p_type) { type = p_type; }
 
+	// Classify a scene by its root node kind (Node3D -> 3D, Node2D/Control -> 2D, else MIXED),
+	// matching how the editor picks a default view. Used to route a DocumentView to the right
+	// per-pane editor surface. Null root -> UNKNOWN.
+	static Type classify_scene_type(Node *p_root);
+
 	Node *get_root() const { return root; }
 	void set_root(Node *p_root) { root = p_root; }
 
