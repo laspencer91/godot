@@ -17,11 +17,11 @@
 #include "core/templates/rid.h"
 #include "core/variant/dictionary.h"
 #include "editor/editor_data.h" // EditorSelectionHistory (value member) + EditorSelection (fwd).
+#include "scene/resources/3d/world_3d.h" // Ref<World3D> member + by-value getter need complete type.
+#include "scene/resources/world_2d.h" // Ref<World2D> member + by-value getter need complete type.
 
 class Node;
 class SubViewport;
-class World2D;
-class World3D;
 
 // Owns everything that, in stock Godot, is a single global on EditorNode:
 // the scene-root SubViewport, the render/physics world, the selection and the

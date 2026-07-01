@@ -101,6 +101,7 @@ public:
 };
 
 class EditorSelection;
+class EditorDocumentContext;
 
 class EditorData {
 public:
@@ -123,6 +124,13 @@ public:
 		int history_id = 0;
 		uint64_t last_checked_version = 0;
 		uint64_t time_opened = 0;
+
+		// Per-document container (own render/physics world + scene_root SubViewport).
+		// Owned raw pointer: EditedScene has no destructor, so shallow copies of the
+		// struct (get_edited_scenes, Vector reallocation) never free it; the single
+		// canonical owner in `edited_scene` is freed in remove_scene/clear_edited_scenes,
+		// mirroring how `root` is managed. See editor/editor_document_context.h.
+		EditorDocumentContext *document = nullptr;
 	};
 
 private:
@@ -209,6 +217,10 @@ public:
 	Node *get_edited_scene_root(int p_idx = -1);
 	int get_edited_scene_count() const;
 	Vector<EditedScene> get_edited_scenes() const;
+
+	// Per-document context accessors (own render/physics world per open scene).
+	EditorDocumentContext *get_document(int p_idx = -1) const;
+	EditorDocumentContext *get_active_document() const;
 
 	String get_scene_title(int p_idx, bool p_always_strip_extension = false) const;
 	String get_scene_path(int p_idx) const;
