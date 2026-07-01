@@ -57,11 +57,13 @@ class Node3DEditor;
 class Node3DEditorViewport;
 class OptionButton;
 class PanelContainer;
+class PhysicsDirectSpaceState3D;
 class ProceduralSkyMaterial;
 class RichTextLabel;
 class SplitContainer;
 class SubViewport;
 class SubViewportContainer;
+class World3D;
 class VSeparator;
 class VSplitContainer;
 class ViewportNavigationControl;
@@ -928,6 +930,14 @@ protected:
 
 public:
 	static Node3DEditor *get_singleton() { return singleton; }
+
+	// Single source of truth for which World3D the 3D editor renders gizmos/grid/
+	// origin into and picks against. v1 returns the root-window world (unchanged);
+	// the G1 flip makes these return the active document's world/scenario/space so
+	// each live scene is isolated. All hardcoded root-window sites route through here.
+	Ref<World3D> get_editor_world_3d() const;
+	RID get_editor_scenario() const;
+	PhysicsDirectSpaceState3D *get_editor_space_state() const;
 
 	static Size2i get_camera_viewport_size(Camera3D *p_camera);
 
