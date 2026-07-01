@@ -819,6 +819,10 @@ private:
 	void _toggle_maximize_view(Object *p_viewport);
 	void _viewport_clicked(int p_viewport_idx);
 
+	// Build this view's quad of viewports (wire signals, inject the ctor-scoped preview/accept
+	// pointers, register into the view). Shared by the ctor's main_view and create_secondary_debug_view.
+	void _build_view_viewports(Node3DEditorView *p_view);
+
 	Node *custom_camera = nullptr;
 
 	Object *_get_editor_data(Object *p_what);
