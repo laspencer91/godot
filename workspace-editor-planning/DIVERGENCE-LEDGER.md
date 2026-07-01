@@ -36,7 +36,7 @@ surface. **Risk** = expected rebase pain.
 
 ## Added files (no conflict surface — additive only)
 
-- `editor/editor_document_context.{cpp,h}` — the per-document world/selection model (NEW; the Step ④ split reshapes it into EditorDocument/SceneDocument + EditorDocumentView).
+- `editor/editor_document.{cpp,h}` — the open-document model, split by state kind into `EditorDocument` (slim base) / `SceneDocument` (owns the world) / `EditorDocumentView` (per-pane view state). Renamed from `editor_document_context.{cpp,h}` in Step④ (2/n).
 - `editor/gui/editor_workspace.{cpp,h}` — `EditorWorkspace` + `WorkspacePane` (the dividable pane tree).
 - `workspace-editor-planning/**` — all planning docs, `ARCHITECTURE.md`, and the `smoke/` regression harness. Non-engine; zero rebase risk.
 
