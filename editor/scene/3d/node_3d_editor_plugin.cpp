@@ -3795,18 +3795,26 @@ void Node3DEditorViewport::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_ENTER_TREE: {
-			surface->connect(SceneStringName(draw), callable_mp(this, &Node3DEditorViewport::_draw));
-			surface->connect(SceneStringName(gui_input), callable_mp(this, &Node3DEditorViewport::_sinput));
-			surface->connect(SceneStringName(mouse_entered), callable_mp(this, &Node3DEditorViewport::_surface_mouse_enter));
-			surface->connect(SceneStringName(mouse_exited), callable_mp(this, &Node3DEditorViewport::_surface_mouse_exit));
-			surface->connect(SceneStringName(focus_entered), callable_mp(this, &Node3DEditorViewport::_surface_focus_enter));
-			surface->connect(SceneStringName(focus_exited), callable_mp(this, &Node3DEditorViewport::_surface_focus_exit));
+			// One-time setup, guarded so moving this viewport between panes (which re-fires
+			// ENTER_TREE) does not re-connect the surface signals or rebuild gizmo instances.
+			if (!viewport_signals_connected) {
+				surface->connect(SceneStringName(draw), callable_mp(this, &Node3DEditorViewport::_draw));
+				surface->connect(SceneStringName(gui_input), callable_mp(this, &Node3DEditorViewport::_sinput));
+				surface->connect(SceneStringName(mouse_entered), callable_mp(this, &Node3DEditorViewport::_surface_mouse_enter));
+				surface->connect(SceneStringName(mouse_exited), callable_mp(this, &Node3DEditorViewport::_surface_mouse_exit));
+				surface->connect(SceneStringName(focus_entered), callable_mp(this, &Node3DEditorViewport::_surface_focus_enter));
+				surface->connect(SceneStringName(focus_exited), callable_mp(this, &Node3DEditorViewport::_surface_focus_exit));
+				viewport_signals_connected = true;
+			}
 
-			_init_gizmo_instance(index);
+			if (!gizmo_instances_initialized) {
+				_init_gizmo_instance(index);
+				gizmo_instances_initialized = true;
+			}
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
-			_finish_gizmo_instances();
+			// Gizmo instances persist across reparenting; they are freed in the destructor.
 		} break;
 
 		case NOTIFICATION_THEME_CHANGED: {
@@ -7124,6 +7132,10 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 }
 
 Node3DEditorViewport::~Node3DEditorViewport() {
+	if (gizmo_instances_initialized) {
+		// Freed here rather than on EXIT_TREE so instances survive reparenting between panes.
+		_finish_gizmo_instances();
+	}
 	memdelete(ruler);
 }
 

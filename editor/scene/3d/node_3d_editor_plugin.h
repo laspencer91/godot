@@ -409,6 +409,12 @@ private:
 	RID move_gizmo_instance[3], move_plane_gizmo_instance[3], rotate_gizmo_instance[4], scale_gizmo_instance[3], scale_plane_gizmo_instance[3], axis_gizmo_instance[3];
 	RID trackball_sphere_instance;
 
+	// Reparent-tolerance (G2): a viewport is the per-pane 3D view unit and gets moved between
+	// panes, re-firing ENTER_TREE. Guard the one-time surface-signal connects and gizmo-
+	// instance creation, and free the instances in the destructor instead of on EXIT_TREE.
+	bool viewport_signals_connected = false;
+	bool gizmo_instances_initialized = false;
+
 	String last_message;
 	String message;
 	double message_time;
