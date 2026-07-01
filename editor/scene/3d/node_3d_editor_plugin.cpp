@@ -4962,7 +4962,10 @@ void Node3DEditorViewport::switch_preview_camera(Camera3D *p_new_camera) {
 }
 
 void Node3DEditorViewport::update_transform_gizmo_view() {
-	if (!is_visible_in_tree()) {
+	// The camera can be momentarily out of the tree while the viewport is reparented
+	// between workspace panes (its ENTER_TREE arrives before the camera child's), and
+	// unproject_position() requires an in-tree camera. Nothing to compute until then.
+	if (!is_visible_in_tree() || !camera->is_inside_tree()) {
 		return;
 	}
 

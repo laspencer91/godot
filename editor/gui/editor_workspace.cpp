@@ -30,6 +30,11 @@
 
 #include "editor_workspace.h"
 
+#include "core/input/input_event.h"
+#include "scene/gui/label.h"
+#include "scene/gui/panel_container.h"
+#include "scene/gui/split_container.h"
+
 void WorkspacePane::set_content(Control *p_content) {
 	if (content == p_content) {
 		return;
@@ -48,10 +53,96 @@ void WorkspacePane::set_content(Control *p_content) {
 	}
 }
 
+WorkspacePane *WorkspacePane::split(bool p_vertical, Control *p_new_content, bool p_new_on_second) {
+	if (!is_leaf()) {
+		return nullptr;
+	}
+
+	// Detach current content; it will move into one of the two new child panes.
+	Control *existing = content;
+	if (existing && existing->get_parent() == this) {
+		remove_child(existing);
+	}
+	content = nullptr;
+
+	split_container = memnew(SplitContainer);
+	split_container->set_vertical(p_vertical);
+	split_container->set_h_size_flags(SIZE_EXPAND_FILL);
+	split_container->set_v_size_flags(SIZE_EXPAND_FILL);
+	add_child(split_container);
+
+	first = workspace ? workspace->make_pane() : memnew(WorkspacePane);
+	second = workspace ? workspace->make_pane() : memnew(WorkspacePane);
+	split_container->add_child(first);
+	split_container->add_child(second);
+
+	WorkspacePane *existing_pane = p_new_on_second ? first : second;
+	WorkspacePane *new_pane = p_new_on_second ? second : first;
+	existing_pane->set_content(existing);
+	new_pane->set_content(p_new_content);
+	return new_pane;
+}
+
 WorkspacePane::WorkspacePane() {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
 	add_theme_constant_override("separation", 0);
+}
+
+WorkspacePane *EditorWorkspace::make_pane() {
+	WorkspacePane *pane = memnew(WorkspacePane);
+	pane->set_workspace(this);
+	return pane;
+}
+
+void EditorWorkspace::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_ENTER_TREE: {
+			set_process_unhandled_key_input(true);
+		} break;
+	}
+}
+
+void EditorWorkspace::unhandled_key_input(const Ref<InputEvent> &p_event) {
+	// TEMPORARY (G2 scaffolding): Alt+Shift+Backslash splits the focused pane side
+	// by side, Alt+Shift+Minus stacks it. Handled here (unhandled input) so normal
+	// editor shortcuts always win; removed once panes host real tabbed content.
+	Ref<InputEventKey> k = p_event;
+	if (k.is_null() || !k->is_pressed() || k->is_echo()) {
+		return;
+	}
+	if (!(k->is_alt_pressed() && k->is_shift_pressed())) {
+		return;
+	}
+	if (k->get_keycode() == Key::BACKSLASH) {
+		_debug_split_focused(false);
+		accept_event();
+	} else if (k->get_keycode() == Key::MINUS) {
+		_debug_split_focused(true);
+		accept_event();
+	}
+}
+
+void EditorWorkspace::_debug_split_focused(bool p_vertical) {
+	WorkspacePane *target = get_focused_pane();
+	if (!target || !target->is_leaf()) {
+		return;
+	}
+
+	debug_pane_counter++;
+	PanelContainer *placeholder = memnew(PanelContainer);
+	Label *label = memnew(Label);
+	label->set_text(vformat("Pane %d", debug_pane_counter));
+	label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	label->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
+	label->set_h_size_flags(SIZE_EXPAND_FILL);
+	label->set_v_size_flags(SIZE_EXPAND_FILL);
+	placeholder->add_child(label);
+
+	WorkspacePane *new_pane = target->split(p_vertical, placeholder);
+	if (new_pane) {
+		focused_pane = new_pane;
+	}
 }
 
 EditorWorkspace::EditorWorkspace() {
@@ -59,7 +150,7 @@ EditorWorkspace::EditorWorkspace() {
 	set_v_size_flags(SIZE_EXPAND_FILL);
 	add_theme_constant_override("separation", 0);
 
-	root_pane = memnew(WorkspacePane);
+	root_pane = make_pane();
 	add_child(root_pane);
 	focused_pane = root_pane;
 }
