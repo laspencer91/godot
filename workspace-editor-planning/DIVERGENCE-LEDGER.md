@@ -38,6 +38,7 @@ surface. **Risk** = expected rebase pain.
 
 - `editor/editor_document.{cpp,h}` — the open-document model, split by state kind into `EditorDocument` (slim base) / `SceneDocument` (owns the world) / `EditorDocumentView` (per-pane view state). Renamed from `editor_document_context.{cpp,h}` in Step④ (2/n).
 - `editor/gui/editor_workspace.{cpp,h}` — `EditorWorkspace` + `WorkspacePane` (the dividable pane tree).
+- `editor/gui/document_view.{cpp,h}` — `DocumentView`: the per-pane presentation of one open document (owns the `EditorDocumentView` binding + hosts a `Node3DEditorView` on the document's world). Depends on `node_3d_editor_plugin.h` (gui→scene/3d, confined to this TU) — the permanent form of the ④-spike's temporary include.
 - `workspace-editor-planning/**` — all planning docs, `ARCHITECTURE.md`, and the `smoke/` regression harness. Non-engine; zero rebase risk.
 
 ---
