@@ -1,0 +1,155 @@
+/**************************************************************************/
+/*  editor_document.h                                                     */
+/**************************************************************************/
+/*  Part of the workspace-editor effort (feature/workspace-editor).       */
+/*  The open-document model, split into three by kind of state (see       */
+/*  workspace-editor-planning/ARCHITECTURE.md):                           */
+/*                                                                        */
+/*    EditorDocument      — DOCUMENT STATE: the slim, world-agnostic      */
+/*                          identity/model of one open document.          */
+/*    SceneDocument       — a scene document: owns the isolated           */
+/*                          render/physics world (SubViewport+World3D/2D). */
+/*    EditorDocumentView  — VIEW STATE: per-pane presentation of a        */
+/*                          document (mirrors Node3DEditorView at the doc  */
+/*                          layer). Minted per pane; not the model.        */
+/*                                                                        */
+/*  This replaces the earlier single EditorDocumentContext, which         */
+/*  unconditionally owned a World3D even for script/resource documents    */
+/*  and carried per-view state (editor_states/active) on the model.       */
+/**************************************************************************/
+
+#pragma once
+
+#include "core/string/ustring.h"
+#include "core/templates/rid.h"
+#include "core/variant/dictionary.h"
+#include "editor/editor_data.h" // EditorSelectionHistory (value member) + EditorSelection (fwd).
+#include "scene/resources/3d/world_3d.h" // Ref<World3D> by-value getters need the complete type.
+#include "scene/resources/world_2d.h" // Ref<World2D> by-value getters need the complete type.
+
+class Node;
+class SubViewport;
+class WorkspacePane;
+
+// DOCUMENT STATE — the model of one open document, independent of how many panes
+// (including zero) are looking at it. Deliberately world-agnostic: a script or
+// resource document has no render world. World accessors default to "none" and
+// are overridden by SceneDocument, so generic "active document" code stays
+// cast-free while ownership of a world lives only where a world exists.
+// Not an Object: pure C++ infrastructure, consumed only from the editor in C++.
+class EditorDocument {
+public:
+	enum Type {
+		TYPE_UNKNOWN,
+		TYPE_SCENE_2D,
+		TYPE_SCENE_3D,
+		TYPE_SCENE_MIXED,
+		TYPE_SCRIPT,
+		TYPE_RESOURCE,
+	};
+
+protected:
+	Type type = TYPE_UNKNOWN;
+
+	// The edited content's root node; its lifetime is owned by EditorData/the
+	// scene tree (NOT freed here).
+	Node *root = nullptr;
+
+	// Stable per-document undo/redo history id (matches EditedScene::history_id).
+	int history_id = 0;
+	uint64_t time_opened = 0;
+	String path;
+	bool dirty = false; // RESERVED: unsaved-changes flag (not yet wired).
+
+public:
+	Type get_type() const { return type; }
+	void set_type(Type p_type) { type = p_type; }
+
+	Node *get_root() const { return root; }
+	void set_root(Node *p_root) { root = p_root; }
+
+	int get_history_id() const { return history_id; }
+	void set_history_id(int p_history_id) { history_id = p_history_id; }
+
+	uint64_t get_time_opened() const { return time_opened; }
+	void set_time_opened(uint64_t p_time) { time_opened = p_time; }
+
+	String get_path() const { return path; }
+	void set_path(const String &p_path) { path = p_path; }
+
+	bool is_dirty() const { return dirty; }
+	void set_dirty(bool p_dirty) { dirty = p_dirty; }
+
+	// World accessors — default to "no world" (a script/resource document has
+	// none). SceneDocument overrides these; consumers never cast.
+	virtual SubViewport *get_scene_root() const { return nullptr; }
+	virtual Ref<World3D> get_world_3d() const { return Ref<World3D>(); }
+	virtual Ref<World2D> get_world_2d() const { return Ref<World2D>(); }
+	virtual RID get_scenario() const { return RID(); }
+	virtual RID get_space() const { return RID(); }
+
+	EditorDocument() {}
+	virtual ~EditorDocument() {}
+};
+
+// A scene document: owns the isolated render/physics world its scene renders
+// into, so multiple open scenes are live at once without bleeding into each
+// other. scene_root is the per-document SubViewport the scene's nodes parent
+// under; it carries an explicit World3D so child Node3Ds register into THIS
+// document's scenario, and its own World2D isolates 2D.
+class SceneDocument : public EditorDocument {
+	SubViewport *scene_root = nullptr;
+	Ref<World3D> world_3d;
+	Ref<World2D> world_2d;
+
+	// RESERVED (per-document selection, ARCHITECTURE.md #6): the live selection is
+	// still EditorNode::editor_selection / editor_history in v1, snapshotted per
+	// scene and swapped on switch. This is the intended home for when panes render
+	// co-visibly and the active pane's document owns the selection.
+	EditorSelection *selection = nullptr;
+	EditorSelectionHistory selection_history;
+
+public:
+	virtual SubViewport *get_scene_root() const override { return scene_root; }
+	virtual Ref<World3D> get_world_3d() const override { return world_3d; }
+	virtual Ref<World2D> get_world_2d() const override { return world_2d; }
+	virtual RID get_scenario() const override;
+	virtual RID get_space() const override;
+
+	EditorSelection *get_selection() const { return selection; }
+	EditorSelectionHistory *get_selection_history() { return &selection_history; }
+
+	// Document-level activation side effects (only the focused document drives the
+	// audio listener in v1). The per-pane "is this view active" bit lives on
+	// EditorDocumentView, not here.
+	void activate();
+	void deactivate();
+
+	SceneDocument();
+	virtual ~SceneDocument();
+};
+
+// VIEW STATE — one per pane that presents a document. Holds the presentation
+// state that must differ between two panes showing the same document (camera,
+// pan/zoom, 2D/3D toggle, gizmo mode) plus which document/pane it binds. Mirrors
+// Node3DEditorView at the document layer. Reserved scaffolding: minted per pane
+// once the workspace hosts real per-pane documents (Step ④ wiring); not the model.
+class EditorDocumentView {
+	EditorDocument *document = nullptr; // Presented document (not owned).
+	WorkspacePane *pane = nullptr; // Hosting pane (not owned).
+	Dictionary editor_states; // 3D camera, 2D pan/zoom, 2D/3D toggle, gizmo mode.
+	bool active = false; // Is this the active view (drives which doc is "current").
+
+public:
+	EditorDocument *get_document() const { return document; }
+	void set_document(EditorDocument *p_document) { document = p_document; }
+
+	WorkspacePane *get_pane() const { return pane; }
+	void set_pane(WorkspacePane *p_pane) { pane = p_pane; }
+
+	Dictionary &get_editor_states() { return editor_states; }
+	void set_editor_states(const Dictionary &p_states) { editor_states = p_states; }
+
+	bool is_active() const { return active; }
+	void set_active(bool p_active) { active = p_active; }
+};

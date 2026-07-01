@@ -101,7 +101,7 @@ public:
 };
 
 class EditorSelection;
-class EditorDocumentContext;
+class EditorDocument;
 
 class EditorData {
 public:
@@ -129,8 +129,10 @@ public:
 		// Owned raw pointer: EditedScene has no destructor, so shallow copies of the
 		// struct (get_edited_scenes, Vector reallocation) never free it; the single
 		// canonical owner in `edited_scene` is freed in remove_scene/clear_edited_scenes,
-		// mirroring how `root` is managed. See editor/editor_document_context.h.
-		EditorDocumentContext *document = nullptr;
+		// mirroring how `root` is managed. See editor/editor_document.h. Holds a
+		// SceneDocument in v1 (every open document is a scene); typed as the base
+		// EditorDocument so script/resource documents can slot in later.
+		EditorDocument *document = nullptr;
 	};
 
 private:
@@ -218,9 +220,10 @@ public:
 	int get_edited_scene_count() const;
 	Vector<EditedScene> get_edited_scenes() const;
 
-	// Per-document context accessors (own render/physics world per open scene).
-	EditorDocumentContext *get_document(int p_idx = -1) const;
-	EditorDocumentContext *get_active_document() const;
+	// Per-document accessors (own render/physics world per open scene). Returns the
+	// base EditorDocument; in v1 every document is a SceneDocument.
+	EditorDocument *get_document(int p_idx = -1) const;
+	EditorDocument *get_active_document() const;
 
 	String get_scene_title(int p_idx, bool p_always_strip_extension = false) const;
 	String get_scene_path(int p_idx) const;

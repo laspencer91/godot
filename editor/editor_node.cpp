@@ -65,7 +65,7 @@
 #include "editor/docks/scene_tree_dock.h"
 #include "editor/docks/signals_dock.h"
 #include "editor/editor_data.h"
-#include "editor/editor_document_context.h"
+#include "editor/editor_document.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_log.h"
 #include "editor/editor_main_screen.h"
@@ -4580,7 +4580,7 @@ void EditorNode::_remove_scene(int index, bool p_change_tab) {
 	}
 }
 
-void EditorNode::register_document_context(EditorDocumentContext *p_doc) {
+void EditorNode::register_document_context(EditorDocument *p_doc) {
 	if (!p_doc || !documents_holder) {
 		return;
 	}
@@ -4593,7 +4593,7 @@ void EditorNode::register_document_context(EditorDocumentContext *p_doc) {
 SubViewport *EditorNode::get_scene_root() {
 	// G1: the active document owns the live SubViewport that its scene renders into.
 	// Before any document exists (early editor startup), fall back to the placeholder.
-	EditorDocumentContext *doc = editor_data.get_active_document();
+	EditorDocument *doc = editor_data.get_active_document();
 	if (doc && doc->get_scene_root()) {
 		return doc->get_scene_root();
 	}
@@ -4638,7 +4638,7 @@ void EditorNode::_activate_scene_views() {
 	_display_scene_root(get_scene_root());
 	Node3DEditor *spatial_editor = Node3DEditor::get_singleton();
 	if (spatial_editor) {
-		EditorDocumentContext *doc = editor_data.get_active_document();
+		EditorDocument *doc = editor_data.get_active_document();
 		spatial_editor->set_active_world(doc ? doc->get_world_3d() : Ref<World3D>());
 	}
 }

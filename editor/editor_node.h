@@ -862,7 +862,7 @@ public:
 	bool is_changing_scene() const;
 
 	SubViewport *get_scene_root(); // Active document's scene_root (placeholder when none is active).
-	void register_document_context(EditorDocumentContext *p_doc); // Parents a document's scene_root into the live tree.
+	void register_document_context(EditorDocument *p_doc); // Parents a document's scene_root into the live tree.
 
 	void set_edited_scene(Node *p_scene);
 	void set_edited_scene_root(Node *p_scene, bool p_auto_add);

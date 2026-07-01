@@ -37,7 +37,7 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/time.h"
-#include "editor/editor_document_context.h"
+#include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
@@ -624,10 +624,10 @@ int EditorData::add_edited_scene(int p_at_pos) {
 	es.history_id = last_created_scene++;
 	es.time_opened = Time::get_singleton()->get_unix_time_from_system();
 
-	// Each open scene gets its own document context: an isolated SubViewport with
-	// its own World3D scenario/space + World2D, so multiple scenes can render live
-	// at once. Constructed eagerly; not yet wired into the editor tree (Step B).
-	es.document = memnew(EditorDocumentContext);
+	// Each open scene gets its own SceneDocument: an isolated SubViewport with its
+	// own World3D scenario/space + World2D, so multiple scenes can render live at
+	// once. Constructed eagerly; not yet wired into the editor tree (Step B).
+	es.document = memnew(SceneDocument);
 	es.document->set_history_id(es.history_id);
 	es.document->set_time_opened(es.time_opened);
 	// Parent the document's scene_root into the live tree so the scene stays alive.
@@ -838,7 +838,7 @@ Vector<EditorData::EditedScene> EditorData::get_edited_scenes() const {
 	return out_edited_scenes_list;
 }
 
-EditorDocumentContext *EditorData::get_document(int p_idx) const {
+EditorDocument *EditorData::get_document(int p_idx) const {
 	if (p_idx < 0) {
 		p_idx = current_edited_scene;
 	}
@@ -846,7 +846,7 @@ EditorDocumentContext *EditorData::get_document(int p_idx) const {
 	return edited_scene[p_idx].document;
 }
 
-EditorDocumentContext *EditorData::get_active_document() const {
+EditorDocument *EditorData::get_active_document() const {
 	if (current_edited_scene < 0 || current_edited_scene >= edited_scene.size()) {
 		return nullptr;
 	}

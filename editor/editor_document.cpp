@@ -1,18 +1,20 @@
 /**************************************************************************/
-/*  editor_document_context.cpp                                           */
+/*  editor_document.cpp                                                   */
 /**************************************************************************/
 /*  Part of the workspace-editor effort (feature/workspace-editor).       */
-/*  See editor_document_context.h and                                     */
+/*  See editor_document.h, workspace-editor-planning/ARCHITECTURE.md and   */
 /*  workspace-editor-planning/G1-multiple-scenes.md.                      */
 /**************************************************************************/
 
-#include "editor/editor_document_context.h"
+#include "editor/editor_document.h"
 
 #include "scene/main/viewport.h"
 #include "scene/resources/3d/world_3d.h"
 #include "scene/resources/world_2d.h"
 
-EditorDocumentContext::EditorDocumentContext() {
+SceneDocument::SceneDocument() {
+	type = TYPE_SCENE_MIXED;
+
 	// Mirror EditorNode's stock scene_root configuration (editor_node.cpp
 	// ~8820), but give this document its OWN render/physics world so it is
 	// isolated from every other live document. disable_3d stays true: the
@@ -38,7 +40,7 @@ EditorDocumentContext::EditorDocumentContext() {
 	selection = memnew(EditorSelection);
 }
 
-EditorDocumentContext::~EditorDocumentContext() {
+SceneDocument::~SceneDocument() {
 	if (selection) {
 		memdelete(selection);
 		selection = nullptr;
@@ -55,24 +57,22 @@ EditorDocumentContext::~EditorDocumentContext() {
 	// world_3d / world_2d are released via Ref<> refcounting.
 }
 
-RID EditorDocumentContext::get_scenario() const {
+RID SceneDocument::get_scenario() const {
 	return world_3d.is_valid() ? world_3d->get_scenario() : RID();
 }
 
-RID EditorDocumentContext::get_space() const {
+RID SceneDocument::get_space() const {
 	return world_3d.is_valid() ? world_3d->get_space() : RID();
 }
 
-void EditorDocumentContext::activate() {
-	active = true;
+void SceneDocument::activate() {
 	if (scene_root) {
 		// Only the focused document drives the audio listener in v1.
 		scene_root->set_as_audio_listener_2d(true);
 	}
 }
 
-void EditorDocumentContext::deactivate() {
-	active = false;
+void SceneDocument::deactivate() {
 	if (scene_root) {
 		scene_root->set_as_audio_listener_2d(false);
 	}
