@@ -7726,7 +7726,7 @@ void Node3DEditor::set_state(const Dictionary &p_state) {
 
 		if (use != view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_ORIGIN))) {
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_ORIGIN), use);
-			RenderingServer::get_singleton()->instance_set_visible(origin_instance, use);
+			RenderingServer::get_singleton()->instance_set_visible(main_view->origin_instance, use);
 		}
 	}
 
@@ -8121,28 +8121,30 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 		case MENU_VIEW_ORIGIN: {
 			bool is_checked = view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(p_option));
 
-			origin_enabled = !is_checked;
-			RenderingServer::get_singleton()->instance_set_visible(origin_instance, origin_enabled);
+			main_view->origin_enabled = !is_checked;
+			RenderingServer::get_singleton()->instance_set_visible(main_view->origin_instance, main_view->origin_enabled);
 			// Update the grid since its appearance depends on whether the origin is enabled
-			_finish_grid();
-			_init_grid();
+			main_view->_finish_grid();
+			main_view->_init_grid();
+			main_view->_reconcile_decorations();
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), origin_enabled);
+			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), main_view->origin_enabled);
 		} break;
 		case MENU_VIEW_GRID: {
 			bool is_checked = view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(p_option));
 
-			grid_enabled = !is_checked;
+			main_view->grid_enabled = !is_checked;
 
 			for (int i = 0; i < 3; ++i) {
-				if (grid_enable[i]) {
-					grid_visible[i] = grid_enabled;
+				if (main_view->grid_enable[i]) {
+					main_view->grid_visible[i] = main_view->grid_enabled;
 				}
 			}
-			_finish_grid();
-			_init_grid();
+			main_view->_finish_grid();
+			main_view->_init_grid();
+			main_view->_reconcile_decorations();
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), grid_enabled);
+			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), main_view->grid_enabled);
 
 		} break;
 		case MENU_VIEW_CAMERA_SETTINGS: {
@@ -8245,35 +8247,63 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 	}
 }
 
+// Step①: the world binding + grid/origin decoration live on Node3DEditorView; the Node3DEditor
+// singleton forwards so its ~21 internal and external callers are unchanged.
 Ref<World3D> Node3DEditor::get_editor_world_3d() const {
-	// Resolve against the active view's bound world (set via set_active_world() when the
-	// workspace activates a document in this pane), NOT the globally-active document. In v1
-	// there is one view rebound on scene switch, so bound_world tracks the active document —
-	// but the per-view binding is the contract that generalizes to N simultaneous panes. Falls
-	// back to the root-window world before the first bind (early startup) so gizmo/grid/origin
-	// instances always init into a valid scenario.
-	if (main_view->bound_world.is_valid()) {
-		return main_view->bound_world;
-	}
-	return get_tree()->get_root()->get_world_3d();
+	return main_view->get_editor_world_3d();
 }
 
 RID Node3DEditor::get_editor_scenario() const {
+	return main_view->get_editor_scenario();
+}
+
+PhysicsDirectSpaceState3D *Node3DEditor::get_editor_space_state() const {
+	return main_view->get_editor_space_state();
+}
+
+void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
+	main_view->set_active_world(p_world);
+}
+
+Ref<World3D> Node3DEditorView::get_editor_world_3d() const {
+	// Resolve against THIS view's bound world (set via set_active_world() when the workspace
+	// activates a document in this pane), NOT the globally-active document. Falls back to the
+	// root-window world before the first bind. Via the editor (reliably in-tree): this can run
+	// while the view itself is mid-reparent.
+	if (bound_world.is_valid()) {
+		return bound_world;
+	}
+	return editor->get_tree()->get_root()->get_world_3d();
+}
+
+RID Node3DEditorView::get_editor_scenario() const {
 	Ref<World3D> world = get_editor_world_3d();
 	return world.is_valid() ? world->get_scenario() : RID();
 }
 
-PhysicsDirectSpaceState3D *Node3DEditor::get_editor_space_state() const {
+PhysicsDirectSpaceState3D *Node3DEditorView::get_editor_space_state() const {
 	Ref<World3D> world = get_editor_world_3d();
 	return world.is_valid() ? world->get_direct_space_state() : nullptr;
 }
 
-void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
-	// Bind this editor to p_world: re-point every 3D editor viewport at it and migrate the
-	// shared grid/origin instances into its scenario, so the bound document (and only it) is
-	// what the 3D views render/pick. bound_world is what get_editor_world_3d() resolves to.
-	main_view->bound_world = p_world;
-	const RID scenario = p_world.is_valid() ? p_world->get_scenario() : RID();
+void Node3DEditorView::set_active_world(const Ref<World3D> &p_world) {
+	// Bind this view to p_world: re-point every viewport at it, and reconcile the grid/origin
+	// decoration into its scenario. bound_world is what get_editor_world_3d() resolves to.
+	bound_world = p_world;
+	for (uint32_t i = 0; i < Node3DEditor::VIEWPORTS_COUNT; i++) {
+		get_editor_viewport(i)->set_editor_world(p_world);
+	}
+	_reconcile_decorations();
+}
+
+void Node3DEditorView::_reconcile_decorations() {
+	// Attach the (detached-on-create) decoration instances to the bound world's scenario. Gated
+	// on decorations_bindable so nothing is attached to a live scenario until the deferred first
+	// bind has let the freshly-created materials register with the renderer.
+	if (!decorations_bindable) {
+		return;
+	}
+	const RID scenario = get_editor_scenario();
 	if (origin_instance.is_valid()) {
 		RS::get_singleton()->instance_set_scenario(origin_instance, scenario);
 	}
@@ -8282,9 +8312,11 @@ void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
 			RS::get_singleton()->instance_set_scenario(grid_instance[i], scenario);
 		}
 	}
-	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		get_editor_viewport(i)->set_editor_world(p_world);
-	}
+}
+
+void Node3DEditorView::_deferred_first_bind() {
+	decorations_bindable = true;
+	_reconcile_decorations();
 }
 
 int Node3DEditor::allocate_gizmo_layer() {
@@ -8308,7 +8340,7 @@ void Node3DEditor::free_gizmo_layer(int p_layer) {
 	}
 }
 
-void Node3DEditor::_init_indicators() {
+void Node3DEditorView::init_decorations() {
 	{
 		origin_enabled = true;
 		grid_enabled = true;
@@ -8431,7 +8463,9 @@ void fragment() {
 			}
 		}
 
-		origin_instance = RenderingServer::get_singleton()->instance_create2(origin_multimesh, Node3DEditor::get_singleton()->get_editor_scenario());
+		// Created detached (no scenario); _reconcile_decorations() attaches it to the world once
+		// the material has registered, avoiding a same-frame "material is null" in a live scene.
+		origin_instance = RenderingServer::get_singleton()->instance_create2(origin_multimesh, RID());
 		RS::get_singleton()->instance_set_layer_mask(origin_instance, 1 << Node3DEditorViewport::GIZMO_GRID_LAYER);
 		RS::get_singleton()->instance_geometry_set_flag(origin_instance, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
 		RS::get_singleton()->instance_geometry_set_flag(origin_instance, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
@@ -8485,9 +8519,14 @@ void fragment() {
 		grid_visible[1] = grid_enable[1];
 		grid_visible[2] = grid_enable[2];
 
-		_init_grid();
+		// The grid mesh itself is built by the first update_grid() (driven by the viewport
+		// camera), not here. Attach the decoration to the world one frame from now, once these
+		// materials have registered with the renderer (see _reconcile_decorations()).
+		callable_mp(this, &Node3DEditorView::_deferred_first_bind).call_deferred();
 	}
+}
 
+void Node3DEditor::_init_indicators() {
 	{
 		//move gizmo
 
@@ -8992,7 +9031,7 @@ void Node3DEditor::_update_gizmos_menu_theme() {
 	}
 }
 
-void Node3DEditor::_init_grid() {
+void Node3DEditorView::_init_grid() {
 	if (!grid_enabled) {
 		return;
 	}
@@ -9170,7 +9209,8 @@ void Node3DEditor::_init_grid() {
 		d[RSE::ARRAY_NORMAL] = (Vector<Vector3>)grid_normals[c];
 		RenderingServer::get_singleton()->mesh_add_surface_from_arrays(grid[c], RSE::PRIMITIVE_LINES, d);
 		RenderingServer::get_singleton()->mesh_surface_set_material(grid[c], 0, grid_mat[c]->get_rid());
-		grid_instance[c] = RenderingServer::get_singleton()->instance_create2(grid[c], Node3DEditor::get_singleton()->get_editor_scenario());
+		// Created detached; _reconcile_decorations() (called by update_grid) attaches to the world.
+		grid_instance[c] = RenderingServer::get_singleton()->instance_create2(grid[c], RID());
 
 		// Yes, the end of this line is supposed to be a.
 		RenderingServer::get_singleton()->instance_set_visible(grid_instance[c], grid_visible[a]);
@@ -9182,22 +9222,40 @@ void Node3DEditor::_init_grid() {
 }
 
 void Node3DEditor::_finish_indicators() {
-	RenderingServer::get_singleton()->free_rid(origin_instance);
-	RenderingServer::get_singleton()->free_rid(origin_multimesh);
-	RenderingServer::get_singleton()->free_rid(origin_mesh);
+	// Grid/origin decoration is owned and freed by Node3DEditorView (its destructor); the gizmo
+	// meshes/materials are Refs and free themselves. Nothing to free here.
+}
 
+void Node3DEditorView::finish_decorations() {
+	if (origin_instance.is_valid()) {
+		RenderingServer::get_singleton()->free_rid(origin_instance);
+	}
+	if (origin_multimesh.is_valid()) {
+		RenderingServer::get_singleton()->free_rid(origin_multimesh);
+	}
+	if (origin_mesh.is_valid()) {
+		RenderingServer::get_singleton()->free_rid(origin_mesh);
+	}
 	_finish_grid();
 }
 
-void Node3DEditor::_finish_grid() {
+void Node3DEditorView::_finish_grid() {
+	// grid[]/grid_instance[] may be empty on the first update_grid() (init_decorations() does
+	// not pre-build the grid), so free only what exists.
 	for (int i = 0; i < 3; i++) {
-		RenderingServer::get_singleton()->free_rid(grid_instance[i]);
-		RenderingServer::get_singleton()->free_rid(grid[i]);
+		if (grid_instance[i].is_valid()) {
+			RenderingServer::get_singleton()->free_rid(grid_instance[i]);
+			grid_instance[i] = RID();
+		}
+		if (grid[i].is_valid()) {
+			RenderingServer::get_singleton()->free_rid(grid[i]);
+			grid[i] = RID();
+		}
 	}
 }
 
 void Node3DEditor::update_gizmo_opacity() {
-	if (!origin_instance.is_valid()) {
+	if (!main_view->origin_instance.is_valid()) {
 		return;
 	}
 
@@ -9223,6 +9281,10 @@ void Node3DEditor::update_gizmo_opacity() {
 }
 
 void Node3DEditor::update_grid() {
+	main_view->update_grid();
+}
+
+void Node3DEditorView::update_grid() {
 	const Camera3D::ProjectionType current_projection = get_editor_viewport(0)->camera->get_projection();
 
 	if (current_projection != grid_camera_last_update_perspective) {
@@ -9236,6 +9298,9 @@ void Node3DEditor::update_grid() {
 	if (!grid_init_draw || grid_camera_last_update_position.distance_squared_to(camera_position) >= 100.0f) {
 		_finish_grid();
 		_init_grid();
+		// Grid instances are created detached; attach them to the bound world (no-op until the
+		// deferred first bind has made decorations bindable).
+		_reconcile_decorations();
 		grid_init_draw = true;
 		grid_camera_last_update_position = camera_position;
 	}
@@ -9729,8 +9794,9 @@ void Node3DEditor::_notification(int p_what) {
 				gizmo_view_rotation_scale = GIZMO_CIRCLE_SIZE * (float)EDITOR_GET("editors/3d/view_plane_rotation_gizmo_scale");
 
 				// Update grid color by rebuilding grid.
-				_finish_grid();
-				_init_grid();
+				main_view->_finish_grid();
+				main_view->_init_grid();
+				main_view->_reconcile_decorations();
 
 				for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
 					get_editor_viewport(i)->update_transform_gizmo_view();
@@ -9876,6 +9942,32 @@ Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 	viewport_base = memnew(Node3DEditorViewportContainer);
 	viewport_base->set_v_size_flags(SIZE_EXPAND_FILL);
 	add_child(viewport_base);
+}
+
+Node3DEditorView::~Node3DEditorView() {
+	// Resource lifetime = object lifetime, not tree membership: freeing here (rather than on
+	// EXIT_TREE) keeps decoration alive across reparenting between workspace panes.
+	if (decorations_initialized) {
+		finish_decorations();
+	}
+}
+
+void Node3DEditorView::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_ENTER_TREE: {
+			// The view owns its resource lifecycle. Build the grid/origin once, when THIS view is
+			// actually in the tree (theme/world ready) -- not when the services enter -- and guard
+			// against re-running when the workspace reparents the view between panes.
+			if (!decorations_initialized) {
+				init_decorations();
+				decorations_initialized = true;
+			}
+		} break;
+
+		case NOTIFICATION_EXIT_TREE: {
+			// Decoration persists across reparenting; it is freed in the destructor.
+		} break;
+	}
 }
 
 void Node3DEditor::add_control_to_left_panel(Control *p_control) {
@@ -10170,14 +10262,14 @@ void Node3DEditor::clear() {
 		get_editor_viewport(i)->reset();
 	}
 
-	if (origin_instance.is_valid()) {
-		RenderingServer::get_singleton()->instance_set_visible(origin_instance, true);
+	if (main_view->origin_instance.is_valid()) {
+		RenderingServer::get_singleton()->instance_set_visible(main_view->origin_instance, true);
 	}
 
 	view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_ORIGIN), true);
 	for (int i = 0; i < 3; ++i) {
-		if (grid_enable[i]) {
-			grid_visible[i] = true;
+		if (main_view->grid_enable[i]) {
+			main_view->grid_visible[i] = true;
 		}
 	}
 
@@ -10188,8 +10280,8 @@ void Node3DEditor::clear() {
 	}
 
 	view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_GRID), true);
-	grid_enabled = true;
-	grid_init_draw = false;
+	main_view->grid_enabled = true;
+	main_view->grid_init_draw = false;
 }
 
 void Node3DEditor::_sun_direction_draw() {

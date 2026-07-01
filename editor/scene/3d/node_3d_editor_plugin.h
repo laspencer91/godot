@@ -115,6 +115,7 @@ public:
 class Node3DEditorViewport : public Control {
 	GDCLASS(Node3DEditorViewport, Control);
 	friend class Node3DEditor;
+	friend class Node3DEditorView;
 	friend class ViewportNavigationControl;
 	friend class ViewportRotationControl;
 	enum {
@@ -670,24 +671,11 @@ private:
 	bool gizmos_registered = false;
 	bool indicators_initialized = false;
 
-	RID origin_mesh;
-	RID origin_multimesh;
-	RID origin_instance;
-	bool origin_enabled = false;
-	RID grid[3];
-	RID grid_instance[3];
-
 	// G2: freelist over the per-view transform-gizmo cull-mask layers (GIZMO_BASE_LAYER..31,
 	// max 5). Each Node3DEditorViewport allocates one so its gizmos are isolated from other
 	// views' — decoupling a viewport's gizmo layer from its fixed quad-slot index, so viewports
 	// can live outside the quad (in workspace panes). One bit per offset 0..4.
 	uint32_t gizmo_layer_used_mask = 0;
-	bool grid_visible[3] = { false, false, false }; //currently visible
-	bool grid_enable[3] = { false, false, false }; //should be always visible if true
-	bool grid_enabled = false;
-	bool grid_init_draw = false;
-	Camera3D::ProjectionType grid_camera_last_update_perspective = Camera3D::PROJECTION_PERSPECTIVE;
-	Vector3 grid_camera_last_update_position;
 
 	Ref<ArrayMesh> move_gizmo[3], move_plane_gizmo[3], rotate_gizmo[4], scale_gizmo[3], scale_plane_gizmo[3], axis_gizmo[3];
 	Ref<ArrayMesh> trackball_sphere_gizmo;
@@ -724,8 +712,6 @@ private:
 	RID indicators_instance;
 	RID cursor_mesh;
 	RID cursor_instance;
-	Ref<ShaderMaterial> origin_mat;
-	Ref<ShaderMaterial> grid_mat[3];
 	Ref<StandardMaterial3D> cursor_material;
 
 	// Scene drag and drop support
@@ -828,9 +814,7 @@ private:
 	void _init_indicators();
 	void _update_gizmos_menu();
 	void _update_gizmos_menu_theme();
-	void _init_grid();
 	void _finish_indicators();
-	void _finish_grid();
 
 	void _toggle_maximize_view(Object *p_viewport);
 	void _viewport_clicked(int p_viewport_idx);
@@ -1103,16 +1087,56 @@ class Node3DEditorView : public MarginContainer {
 	int last_used_viewport = 0;
 	Node3DEditorViewport *freelook_viewport = nullptr;
 
-	// The World3D this view renders/picks against (Step③a.1b, was Node3DEditor::bound_world).
-	// Set when the workspace activates a document in this view; Node3DEditor's resolver reads
-	// THIS, not the globally-active document, so N views can each bind their own world. The
-	// grid/origin decoration stays created by the services for now (it moves here with Step①).
+	// The World3D this view renders/picks against (was Node3DEditor::bound_world). Set when the
+	// workspace activates a document in this view; the resolver reads THIS, not the globally-
+	// active document, so N views can each bind their own world.
 	Ref<World3D> bound_world;
+
+	// Per-view grid/origin decoration (Step①). The view owns its own resource lifecycle: it
+	// builds these on ITS OWN NOTIFICATION_ENTER_TREE (not the services' -- so they're created
+	// when this view is genuinely in the tree, theme/world ready) and frees them in the dtor,
+	// tolerant of reparenting between panes. Instances are created DETACHED and attached to
+	// bound_world's scenario by _reconcile_decorations(), deferred one frame the first time so
+	// the freshly-created materials register with the renderer before anything renders them.
+	bool decorations_initialized = false;
+	bool decorations_bindable = false; // Set by the deferred first reconcile; gates attaching.
+	RID origin_mesh;
+	RID origin_multimesh;
+	RID origin_instance;
+	bool origin_enabled = false;
+	RID grid[3];
+	RID grid_instance[3];
+	bool grid_visible[3] = { false, false, false }; // currently visible
+	bool grid_enable[3] = { false, false, false }; // should be always visible if true
+	bool grid_enabled = false;
+	bool grid_init_draw = false;
+	Camera3D::ProjectionType grid_camera_last_update_perspective = Camera3D::PROJECTION_PERSPECTIVE;
+	Vector3 grid_camera_last_update_position;
+	Ref<ShaderMaterial> origin_mat;
+	Ref<ShaderMaterial> grid_mat[3];
+
+	void _init_grid();
+	void _finish_grid();
+	void _reconcile_decorations(); // Attach origin/grid instances to bound_world's scenario.
+	void _deferred_first_bind(); // Deferred: mark bindable, then reconcile (breaks the material race).
 
 protected:
 	static void _bind_methods() {}
+	void _notification(int p_what);
 
 public:
+	// World binding + per-view grid/origin decoration. Node3DEditor forwards its same-named
+	// methods here so external/internal callers are unchanged. get_editor_world_3d() falls
+	// back to the root-window world before the first bind.
+	Ref<World3D> get_editor_world_3d() const;
+	RID get_editor_scenario() const;
+	PhysicsDirectSpaceState3D *get_editor_space_state() const;
+	void set_active_world(const Ref<World3D> &p_world);
+
+	void init_decorations();
+	void finish_decorations();
+	void update_grid();
+
 	Node3DEditorViewportContainer *get_viewport_base() const { return viewport_base; }
 
 	// Store a viewport built by the editor (which has the ctor-scoped preview/accept
@@ -1134,6 +1158,7 @@ public:
 	Node3DEditorViewport *get_freelook_viewport() const { return freelook_viewport; }
 
 	Node3DEditorView(Node3DEditor *p_editor);
+	~Node3DEditorView();
 };
 
 class Node3DEditorPlugin : public EditorPlugin {
