@@ -10,8 +10,7 @@
 /*  workspace-editor-planning/G1-multiple-scenes.md.                      */
 /**************************************************************************/
 
-#ifndef EDITOR_DOCUMENT_CONTEXT_H
-#define EDITOR_DOCUMENT_CONTEXT_H
+#pragma once
 
 #include "core/string/ustring.h"
 #include "core/templates/rid.h"
@@ -114,5 +113,3 @@ public:
 	EditorDocumentContext();
 	~EditorDocumentContext();
 };
-
-#endif // EDITOR_DOCUMENT_CONTEXT_H
