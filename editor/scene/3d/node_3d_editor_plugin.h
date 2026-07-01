@@ -608,6 +608,8 @@ public:
 	Node3DEditorViewportContainer();
 };
 
+class Node3DEditorView;
+
 class Node3DEditor : public VBoxContainer {
 	GDCLASS(Node3DEditor, VBoxContainer);
 
@@ -647,9 +649,11 @@ public:
 private:
 	EditorSelection *editor_selection = nullptr;
 
-	Node3DEditorViewportContainer *viewport_base = nullptr;
-	Node3DEditorViewport *viewports[VIEWPORTS_COUNT];
-	int last_used_viewport = 0;
+	// G2/Step③: the instanceable 3D VIEW (quad of viewports) is owned by this separate
+	// class; Node3DEditor keeps the shared SERVICES (tool state, gizmo registry, toolbar).
+	// v1: exactly one, created in the ctor; later: one per workspace pane. The viewport
+	// accessors below forward to it. viewport_base/viewports/last_used/freelook moved here.
+	Node3DEditorView *main_view = nullptr;
 
 	VSplitContainer *shader_split = nullptr;
 	HSplitContainer *left_panel_split = nullptr;
@@ -844,8 +848,6 @@ private:
 	Ref<Environment> viewport_environment;
 
 	Node3D *selected = nullptr;
-
-	Node3DEditorViewport *freelook_viewport = nullptr;
 
 	void _request_gizmo(Object *p_obj);
 	void _request_gizmo_for_id(ObjectID p_id);
@@ -1068,14 +1070,14 @@ public:
 	void set_preview_material_surface(int p_surface) { preview_material_surface = p_surface; }
 	int get_preview_material_surface() const { return preview_material_surface; }
 
-	Node3DEditorViewport *get_editor_viewport(int p_idx) {
-		ERR_FAIL_INDEX_V(p_idx, static_cast<int>(VIEWPORTS_COUNT), nullptr);
-		return viewports[p_idx];
-	}
+	// Forward to the 3D view that owns the viewport quad (Step③). Out-of-line so the
+	// forwarding can reach Node3DEditorView, which is only forward-declared here.
+	Node3DEditorView *get_main_view() const { return main_view; }
+	Node3DEditorViewport *get_editor_viewport(int p_idx) const;
 	Node3DEditorViewport *get_last_used_viewport();
 
-	void set_freelook_viewport(Node3DEditorViewport *p_viewport) { freelook_viewport = p_viewport; }
-	Node3DEditorViewport *get_freelook_viewport() const { return freelook_viewport; }
+	void set_freelook_viewport(Node3DEditorViewport *p_viewport);
+	Node3DEditorViewport *get_freelook_viewport() const;
 
 	void add_gizmo_plugin(Ref<EditorNode3DGizmoPlugin> p_plugin);
 	void remove_gizmo_plugin(Ref<EditorNode3DGizmoPlugin> p_plugin);
@@ -1091,6 +1093,46 @@ public:
 
 	Node3DEditor();
 	~Node3DEditor();
+};
+
+// One 3D editing view: the quad of Node3DEditorViewports for a single pane (Step③).
+// The instanceable half of the old Node3DEditor -- shared tool/gizmo/toolbar state
+// stays on the Node3DEditor singleton (services), which owns one of these today and
+// will own one per workspace pane later. Holds only view-local presentation state.
+class Node3DEditorView : public MarginContainer {
+	GDCLASS(Node3DEditorView, MarginContainer);
+
+	Node3DEditor *editor = nullptr; // Services singleton this view belongs to.
+	Node3DEditorViewportContainer *viewport_base = nullptr;
+	Node3DEditorViewport *viewports[Node3DEditor::VIEWPORTS_COUNT] = {};
+	int last_used_viewport = 0;
+	Node3DEditorViewport *freelook_viewport = nullptr;
+
+protected:
+	static void _bind_methods() {}
+
+public:
+	Node3DEditorViewportContainer *get_viewport_base() const { return viewport_base; }
+
+	// Store a viewport built by the editor (which has the ctor-scoped preview/accept
+	// pointers) into this view's slot; the view owns the quad from then on.
+	void register_viewport(int p_idx, Node3DEditorViewport *p_viewport) {
+		ERR_FAIL_INDEX(p_idx, static_cast<int>(Node3DEditor::VIEWPORTS_COUNT));
+		viewports[p_idx] = p_viewport;
+	}
+
+	Node3DEditorViewport *get_editor_viewport(int p_idx) const {
+		ERR_FAIL_INDEX_V(p_idx, static_cast<int>(Node3DEditor::VIEWPORTS_COUNT), nullptr);
+		return viewports[p_idx];
+	}
+	Node3DEditorViewport *get_last_used_viewport() const { return viewports[last_used_viewport]; }
+	int get_last_used_viewport_index() const { return last_used_viewport; }
+	void set_last_used_viewport_index(int p_idx) { last_used_viewport = p_idx; }
+
+	void set_freelook_viewport(Node3DEditorViewport *p_viewport) { freelook_viewport = p_viewport; }
+	Node3DEditorViewport *get_freelook_viewport() const { return freelook_viewport; }
+
+	Node3DEditorView(Node3DEditor *p_editor);
 };
 
 class Node3DEditorPlugin : public EditorPlugin {

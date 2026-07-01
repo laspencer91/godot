@@ -7401,7 +7401,7 @@ void Node3DEditor::update_transform_gizmo() {
 	gizmo.transform.basis = gizmo_basis;
 
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		viewports[i]->update_transform_gizmo_view();
+		get_editor_viewport(i)->update_transform_gizmo_view();
 	}
 }
 
@@ -7573,10 +7573,10 @@ Dictionary Node3DEditor::get_state() const {
 	}
 
 	d["viewport_mode"] = vc;
-	d["viewport_splits"] = viewport_base->get_split_state();
+	d["viewport_splits"] = main_view->get_viewport_base()->get_split_state();
 	Array vpdata;
 	for (int i = 0; i < 4; i++) {
-		vpdata.push_back(viewports[i]->get_state());
+		vpdata.push_back(get_editor_viewport(i)->get_state());
 	}
 
 	d["viewports"] = vpdata;
@@ -7697,7 +7697,7 @@ void Node3DEditor::set_state(const Dictionary &p_state) {
 		settings_fov->set_value(double(d["fov"]));
 	}
 	if (d.has("viewport_splits")) {
-		viewport_base->set_split_state(d["viewport_splits"]);
+		main_view->get_viewport_base()->set_split_state(d["viewport_splits"]);
 	}
 
 	if (d.has("viewports")) {
@@ -7709,7 +7709,7 @@ void Node3DEditor::set_state(const Dictionary &p_state) {
 		}
 
 		for (uint32_t i = 0; i < vp_size; i++) {
-			viewports[i]->set_state(vp[i]);
+			get_editor_viewport(i)->set_state(vp[i]);
 		}
 	}
 
@@ -7915,7 +7915,7 @@ void Node3DEditor::_menu_item_toggled(bool pressed, int p_option) {
 			tool_option_button[TOOL_OPT_USE_TRACKBALL]->set_pressed(pressed);
 			trackball_enabled = pressed;
 			for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-				viewports[i]->update_transform_gizmo_highlight();
+				get_editor_viewport(i)->update_transform_gizmo_highlight();
 			}
 		} break;
 
@@ -7995,8 +7995,8 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 		case MENU_TOOL_SELECT:
 		case MENU_TOOL_LIST_SELECT: {
 			for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-				if (viewports[i]->_edit.mode != Node3DEditorViewport::TRANSFORM_NONE) {
-					viewports[i]->commit_transform();
+				if (get_editor_viewport(i)->_edit.mode != Node3DEditorViewport::TRANSFORM_NONE) {
+					get_editor_viewport(i)->commit_transform();
 				}
 			}
 
@@ -8007,7 +8007,7 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 			update_transform_gizmo();
 
 			for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-				viewports[i]->update_transform_gizmo_highlight();
+				get_editor_viewport(i)->update_transform_gizmo_highlight();
 			}
 		} break;
 		case MENU_TRANSFORM_CONFIGURE_SNAP: {
@@ -8038,9 +8038,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 
 		} break;
 		case MENU_VIEW_USE_1_VIEWPORT: {
-			viewport_base->set_view(Node3DEditorViewportContainer::VIEW_USE_1_VIEWPORT);
-			if (last_used_viewport > 0) {
-				last_used_viewport = 0;
+			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_1_VIEWPORT);
+			if (main_view->get_last_used_viewport_index() > 0) {
+				main_view->set_last_used_viewport_index(0);
 			}
 
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), true);
@@ -8052,9 +8052,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 
 		} break;
 		case MENU_VIEW_USE_2_VIEWPORTS: {
-			viewport_base->set_view(Node3DEditorViewportContainer::VIEW_USE_2_VIEWPORTS);
-			if (last_used_viewport > 1) {
-				last_used_viewport = 0;
+			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_2_VIEWPORTS);
+			if (main_view->get_last_used_viewport_index() > 1) {
+				main_view->set_last_used_viewport_index(0);
 			}
 
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
@@ -8066,9 +8066,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 
 		} break;
 		case MENU_VIEW_USE_2_VIEWPORTS_ALT: {
-			viewport_base->set_view(Node3DEditorViewportContainer::VIEW_USE_2_VIEWPORTS_ALT);
-			if (last_used_viewport > 1) {
-				last_used_viewport = 0;
+			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_2_VIEWPORTS_ALT);
+			if (main_view->get_last_used_viewport_index() > 1) {
+				main_view->set_last_used_viewport_index(0);
 			}
 
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
@@ -8080,9 +8080,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 
 		} break;
 		case MENU_VIEW_USE_3_VIEWPORTS: {
-			viewport_base->set_view(Node3DEditorViewportContainer::VIEW_USE_3_VIEWPORTS);
-			if (last_used_viewport > 2) {
-				last_used_viewport = 0;
+			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_3_VIEWPORTS);
+			if (main_view->get_last_used_viewport_index() > 2) {
+				main_view->set_last_used_viewport_index(0);
 			}
 
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
@@ -8094,9 +8094,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 
 		} break;
 		case MENU_VIEW_USE_3_VIEWPORTS_ALT: {
-			viewport_base->set_view(Node3DEditorViewportContainer::VIEW_USE_3_VIEWPORTS_ALT);
-			if (last_used_viewport > 2) {
-				last_used_viewport = 0;
+			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_3_VIEWPORTS_ALT);
+			if (main_view->get_last_used_viewport_index() > 2) {
+				main_view->set_last_used_viewport_index(0);
 			}
 
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
@@ -8108,7 +8108,7 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 
 		} break;
 		case MENU_VIEW_USE_4_VIEWPORTS: {
-			viewport_base->set_view(Node3DEditorViewportContainer::VIEW_USE_4_VIEWPORTS);
+			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_4_VIEWPORTS);
 
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), false);
@@ -8283,7 +8283,7 @@ void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
 		}
 	}
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		viewports[i]->set_editor_world(p_world);
+		get_editor_viewport(i)->set_editor_world(p_world);
 	}
 }
 
@@ -9223,7 +9223,7 @@ void Node3DEditor::update_gizmo_opacity() {
 }
 
 void Node3DEditor::update_grid() {
-	const Camera3D::ProjectionType current_projection = viewports[0]->camera->get_projection();
+	const Camera3D::ProjectionType current_projection = get_editor_viewport(0)->camera->get_projection();
 
 	if (current_projection != grid_camera_last_update_perspective) {
 		grid_init_draw = false; // redraw
@@ -9733,7 +9733,7 @@ void Node3DEditor::_notification(int p_what) {
 				_init_grid();
 
 				for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-					viewports[i]->update_transform_gizmo_view();
+					get_editor_viewport(i)->update_transform_gizmo_view();
 				}
 				update_gizmo_opacity();
 			}
@@ -9837,18 +9837,45 @@ void Node3DEditor::_update_context_toolbar() {
 
 void Node3DEditor::set_can_preview(Camera3D *p_preview) {
 	for (int i = 0; i < 4; i++) {
-		viewports[i]->set_can_preview(p_preview);
+		get_editor_viewport(i)->set_can_preview(p_preview);
 	}
 
-	viewports[last_used_viewport]->switch_preview_camera(p_preview);
+	get_last_used_viewport()->switch_preview_camera(p_preview);
 }
 
 VSplitContainer *Node3DEditor::get_shader_split() {
 	return shader_split;
 }
 
+Node3DEditorViewport *Node3DEditor::get_editor_viewport(int p_idx) const {
+	return main_view->get_editor_viewport(p_idx);
+}
+
 Node3DEditorViewport *Node3DEditor::get_last_used_viewport() {
-	return viewports[last_used_viewport];
+	return main_view->get_last_used_viewport();
+}
+
+void Node3DEditor::set_freelook_viewport(Node3DEditorViewport *p_viewport) {
+	main_view->set_freelook_viewport(p_viewport);
+}
+
+Node3DEditorViewport *Node3DEditor::get_freelook_viewport() const {
+	return main_view->get_freelook_viewport();
+}
+
+Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
+	editor = p_editor;
+	set_h_size_flags(SIZE_EXPAND_FILL);
+	set_v_size_flags(SIZE_EXPAND_FILL);
+	// Fill the split slot with the viewport quad, no inset (matches the old direct child).
+	add_theme_constant_override("margin_left", 0);
+	add_theme_constant_override("margin_right", 0);
+	add_theme_constant_override("margin_top", 0);
+	add_theme_constant_override("margin_bottom", 0);
+
+	viewport_base = memnew(Node3DEditorViewportContainer);
+	viewport_base->set_v_size_flags(SIZE_EXPAND_FILL);
+	add_child(viewport_base);
 }
 
 void Node3DEditor::add_control_to_left_panel(Control *p_control) {
@@ -9987,9 +10014,9 @@ void Node3DEditor::_toggle_maximize_view(Object *p_viewport) {
 	int index = -1;
 	bool maximized = false;
 	for (int i = 0; i < 4; i++) {
-		if (viewports[i] == current_viewport) {
+		if (get_editor_viewport(i) == current_viewport) {
 			index = i;
-			if (current_viewport->get_global_rect() == viewport_base->get_global_rect()) {
+			if (current_viewport->get_global_rect() == main_view->get_viewport_base()->get_global_rect()) {
 				maximized = true;
 			}
 			break;
@@ -10002,14 +10029,14 @@ void Node3DEditor::_toggle_maximize_view(Object *p_viewport) {
 	if (!maximized) {
 		for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
 			if (i == (uint32_t)index) {
-				viewports[i]->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
+				get_editor_viewport(i)->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
 			} else {
-				viewports[i]->hide();
+				get_editor_viewport(i)->hide();
 			}
 		}
 	} else {
 		for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-			viewports[i]->show();
+			get_editor_viewport(i)->show();
 		}
 
 		if (view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT))) {
@@ -10029,7 +10056,7 @@ void Node3DEditor::_toggle_maximize_view(Object *p_viewport) {
 }
 
 void Node3DEditor::_viewport_clicked(int p_viewport_idx) {
-	last_used_viewport = p_viewport_idx;
+	main_view->set_last_used_viewport_index(p_viewport_idx);
 }
 
 void Node3DEditor::_node_added(Node *p_node) {
@@ -10140,7 +10167,7 @@ void Node3DEditor::clear() {
 	_snap_update();
 
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		viewports[i]->reset();
+		get_editor_viewport(i)->reset();
 	}
 
 	if (origin_instance.is_valid()) {
@@ -10155,8 +10182,9 @@ void Node3DEditor::clear() {
 	}
 
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		viewports[i]->view_display_menu->get_popup()->set_item_checked(viewports[i]->view_display_menu->get_popup()->get_item_index(Node3DEditorViewport::VIEW_AUDIO_LISTENER), i == 0);
-		viewports[i]->viewport->set_as_audio_listener_3d(i == 0);
+		Node3DEditorViewport *vp = get_editor_viewport(i);
+		vp->view_display_menu->get_popup()->set_item_checked(vp->view_display_menu->get_popup()->get_item_index(Node3DEditorViewport::VIEW_AUDIO_LISTENER), i == 0);
+		vp->viewport->set_as_audio_listener_3d(i == 0);
 	}
 
 	view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_GRID), true);
@@ -10784,18 +10812,19 @@ Node3DEditor::Node3DEditor() {
 	shader_split = memnew(VSplitContainer);
 	shader_split->set_h_size_flags(SIZE_EXPAND_FILL);
 	right_panel_split->add_child(shader_split);
-	viewport_base = memnew(Node3DEditorViewportContainer);
-	shader_split->add_child(viewport_base);
-	viewport_base->set_v_size_flags(SIZE_EXPAND_FILL);
+	main_view = memnew(Node3DEditorView(this));
+	shader_split->add_child(main_view);
+	Node3DEditorViewportContainer *viewport_base = main_view->get_viewport_base();
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		viewports[i] = memnew(Node3DEditorViewport(this, i));
-		viewports[i]->connect("toggle_maximize_view", callable_mp(this, &Node3DEditor::_toggle_maximize_view));
-		viewports[i]->connect("clicked", callable_mp(this, &Node3DEditor::_viewport_clicked).bind(i));
-		viewports[i]->assign_pending_data_pointers(preview_node, &preview_bounds, accept);
-		viewports[i]->set_h_size_flags(SIZE_EXPAND_FILL);
-		viewports[i]->set_v_size_flags(SIZE_EXPAND_FILL);
-		viewports[i]->set_custom_minimum_size(Size2(39, 39));
-		viewport_base->add_viewport(viewports[i], i);
+		Node3DEditorViewport *vp = memnew(Node3DEditorViewport(this, i));
+		vp->connect("toggle_maximize_view", callable_mp(this, &Node3DEditor::_toggle_maximize_view));
+		vp->connect("clicked", callable_mp(this, &Node3DEditor::_viewport_clicked).bind(i));
+		vp->assign_pending_data_pointers(preview_node, &preview_bounds, accept);
+		vp->set_h_size_flags(SIZE_EXPAND_FILL);
+		vp->set_v_size_flags(SIZE_EXPAND_FILL);
+		vp->set_custom_minimum_size(Size2(39, 39));
+		viewport_base->add_viewport(vp, i);
+		main_view->register_viewport(i, vp);
 	}
 
 	/* SNAP DIALOG */
@@ -10872,7 +10901,7 @@ Node3DEditor::Node3DEditor() {
 	settings_vbc->add_margin_child(TTRC("View Z-Far:"), settings_zfar);
 
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; ++i) {
-		settings_dialog->connect(SceneStringName(confirmed), callable_mp(viewports[i], &Node3DEditorViewport::_view_settings_confirmed).bind(0.0));
+		settings_dialog->connect(SceneStringName(confirmed), callable_mp(get_editor_viewport(i), &Node3DEditorViewport::_view_settings_confirmed).bind(0.0));
 	}
 
 	/* XFORM DIALOG */
