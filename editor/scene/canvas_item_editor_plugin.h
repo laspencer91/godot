@@ -42,6 +42,7 @@ class EditorData;
 class EditorSelection;
 class EditorZoomWidget;
 class HScrollBar;
+class SubViewportContainer;
 class HSplitContainer;
 class MenuButton;
 class PanelContainer;
@@ -203,6 +204,7 @@ private:
 	Tool tool = TOOL_SELECT;
 	Control *viewport = nullptr;
 	Control *viewport_scrollable = nullptr;
+	SubViewportContainer *scene_view_container = nullptr; // Displays the active document's scene_root SubViewport.
 
 	HScrollBar *h_scroll = nullptr;
 	VScrollBar *v_scroll = nullptr;
@@ -605,6 +607,8 @@ public:
 	VSplitContainer *get_bottom_split();
 
 	Control *get_viewport_control() { return viewport; }
+
+	SubViewportContainer *get_scene_view_container() { return scene_view_container; }
 
 	Control *get_controls_container() { return controls_vb; }
 

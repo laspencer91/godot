@@ -510,6 +510,9 @@ public:
 	void update_transform_gizmo_view();
 	void update_transform_gizmo_highlight();
 
+	// G1: re-point this viewport (and its gizmo instances) at the active document's world.
+	void set_editor_world(const Ref<World3D> &p_world);
+
 	void set_can_preview(Camera3D *p_preview);
 	void switch_preview_camera(Camera3D *p_new_camera);
 	void set_state(const Dictionary &p_state);
@@ -938,6 +941,8 @@ public:
 	Ref<World3D> get_editor_world_3d() const;
 	RID get_editor_scenario() const;
 	PhysicsDirectSpaceState3D *get_editor_space_state() const;
+	// G1: bind all 3D viewports + grid/origin to the given (active document's) world.
+	void set_active_world(const Ref<World3D> &p_world);
 
 	static Size2i get_camera_viewport_size(Camera3D *p_camera);
 

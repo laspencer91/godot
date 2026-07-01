@@ -46,6 +46,7 @@
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/docks/scene_tree_dock.h"
 #include "editor/editor_main_screen.h"
+#include "editor/editor_document_context.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
@@ -4778,6 +4779,29 @@ void Node3DEditorViewport::_init_gizmo_instance(int p_idx) {
 	RS::get_singleton()->instance_geometry_set_flag(trackball_sphere_instance, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
 }
 
+void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
+	// Render this viewport through the active document's world, and migrate this
+	// viewport's own gizmo instances into that world's scenario so transform gizmos
+	// keep showing over the switched-to scene.
+	viewport->set_world_3d(p_world);
+
+	if (!move_gizmo_instance[0].is_valid()) {
+		return; // Gizmo instances not created yet (viewport not in tree); nothing to migrate.
+	}
+	const RID scenario = p_world.is_valid() ? p_world->get_scenario() : RID();
+	for (int i = 0; i < 3; i++) {
+		RS::get_singleton()->instance_set_scenario(move_gizmo_instance[i], scenario);
+		RS::get_singleton()->instance_set_scenario(move_plane_gizmo_instance[i], scenario);
+		RS::get_singleton()->instance_set_scenario(scale_gizmo_instance[i], scenario);
+		RS::get_singleton()->instance_set_scenario(scale_plane_gizmo_instance[i], scenario);
+		RS::get_singleton()->instance_set_scenario(axis_gizmo_instance[i], scenario);
+	}
+	for (int i = 0; i < 4; i++) {
+		RS::get_singleton()->instance_set_scenario(rotate_gizmo_instance[i], scenario);
+	}
+	RS::get_singleton()->instance_set_scenario(trackball_sphere_instance, scenario);
+}
+
 void Node3DEditorViewport::_finish_gizmo_instances() {
 	ERR_FAIL_NULL(RenderingServer::get_singleton());
 	for (int i = 0; i < 3; i++) {
@@ -8202,8 +8226,14 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 }
 
 Ref<World3D> Node3DEditor::get_editor_world_3d() const {
-	// v1: the root-window world (unchanged behavior). The G1 flip returns the
-	// active document's world so each live scene renders/picks in isolation.
+	// G1: render/pick in the active document's isolated world so each live scene
+	// stays separate. Falls back to the root-window world when no document is
+	// active yet (e.g. during editor startup before the first scene is opened),
+	// so gizmo/grid/origin instances always init into a valid scenario.
+	EditorDocumentContext *doc = EditorNode::get_singleton()->get_editor_data().get_active_document();
+	if (doc && doc->get_world_3d().is_valid()) {
+		return doc->get_world_3d();
+	}
 	return get_tree()->get_root()->get_world_3d();
 }
 
@@ -8215,6 +8245,24 @@ RID Node3DEditor::get_editor_scenario() const {
 PhysicsDirectSpaceState3D *Node3DEditor::get_editor_space_state() const {
 	Ref<World3D> world = get_editor_world_3d();
 	return world.is_valid() ? world->get_direct_space_state() : nullptr;
+}
+
+void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
+	// G1 flip: re-point every 3D editor viewport at the active document's world and
+	// migrate the shared grid/origin instances into its scenario, so the switched-to
+	// scene (and only it) is what the 3D views render.
+	const RID scenario = p_world.is_valid() ? p_world->get_scenario() : RID();
+	if (origin_instance.is_valid()) {
+		RS::get_singleton()->instance_set_scenario(origin_instance, scenario);
+	}
+	for (int i = 0; i < 3; i++) {
+		if (grid_instance[i].is_valid()) {
+			RS::get_singleton()->instance_set_scenario(grid_instance[i], scenario);
+		}
+	}
+	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+		viewports[i]->set_editor_world(p_world);
+	}
 }
 
 void Node3DEditor::_init_indicators() {

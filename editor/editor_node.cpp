@@ -163,12 +163,14 @@
 #include "scene/gui/popup.h"
 #include "scene/gui/rich_text_label.h"
 #include "scene/gui/split_container.h"
+#include "scene/gui/subviewport_container.h"
 #include "scene/gui/tab_container.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/timer.h"
 #include "scene/main/window.h"
 #include "scene/property_utils.h"
 #include "scene/resources/3d/mesh_library.h"
+#include "scene/resources/3d/world_3d.h"
 #include "scene/resources/dpi_texture.h"
 #include "scene/resources/image_texture.h"
 #include "scene/resources/packed_scene.h"
@@ -4588,6 +4590,56 @@ void EditorNode::register_document_context(EditorDocumentContext *p_doc) {
 	}
 }
 
+SubViewport *EditorNode::get_scene_root() {
+	// G1: the active document owns the live SubViewport that its scene renders into.
+	// Before any document exists (early editor startup), fall back to the placeholder.
+	EditorDocumentContext *doc = editor_data.get_active_document();
+	if (doc && doc->get_scene_root()) {
+		return doc->get_scene_root();
+	}
+	return scene_root;
+}
+
+void EditorNode::_display_scene_root(SubViewport *p_scene_root) {
+	// Reparent p_scene_root into the 2D editor's SubViewportContainer so it becomes the
+	// visible/interactive 2D surface. The previously-shown document scene_root is parked
+	// back under documents_holder so it stays live (ticking, still in its own World3D).
+	if (!p_scene_root || !documents_holder) {
+		return;
+	}
+	CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
+	SubViewportContainer *container = canvas_editor ? canvas_editor->get_scene_view_container() : nullptr;
+	if (!container) {
+		return;
+	}
+	if (p_scene_root->get_parent() == container) {
+		return; // Already shown.
+	}
+	for (int i = container->get_child_count() - 1; i >= 0; i--) {
+		SubViewport *current = Object::cast_to<SubViewport>(container->get_child(i));
+		if (!current || current == p_scene_root) {
+			continue;
+		}
+		// Park the previously-shown SubViewport back under documents_holder so it stays
+		// live and tree-owned (this covers both document scene_roots and the placeholder).
+		container->remove_child(current);
+		documents_holder->add_child(current);
+	}
+	if (p_scene_root->get_parent()) {
+		p_scene_root->get_parent()->remove_child(p_scene_root);
+	}
+	container->add_child(p_scene_root);
+}
+
+void EditorNode::_activate_scene_views() {
+	// Point both the 2D and 3D editors at the active document's isolated world.
+	_display_scene_root(get_scene_root());
+	Node3DEditor *spatial_editor = Node3DEditor::get_singleton();
+	if (spatial_editor) {
+		spatial_editor->set_active_world(spatial_editor->get_editor_world_3d());
+	}
+}
+
 void EditorNode::set_edited_scene(Node *p_scene) {
 	set_edited_scene_root(p_scene, true);
 }
@@ -4596,8 +4648,11 @@ void EditorNode::set_edited_scene_root(Node *p_scene, bool p_auto_add) {
 	Node *old_edited_scene_root = get_editor_data().get_edited_scene_root();
 	ERR_FAIL_COND_MSG(p_scene && p_scene != old_edited_scene_root && p_scene->get_parent(), "Non-null nodes that are set as edited scene should not have a parent node.");
 
-	if (p_auto_add && old_edited_scene_root && old_edited_scene_root->get_parent() == scene_root) {
-		scene_root->remove_child(old_edited_scene_root);
+	// G1: parent the root under the active document's own scene_root (get_scene_root()),
+	// so it lives in that document's isolated world for the document's lifetime.
+	SubViewport *active_scene_root = get_scene_root();
+	if (p_auto_add && old_edited_scene_root && old_edited_scene_root->get_parent() == active_scene_root) {
+		active_scene_root->remove_child(old_edited_scene_root);
 	}
 	get_editor_data().set_edited_scene_root(p_scene);
 
@@ -4610,7 +4665,7 @@ void EditorNode::set_edited_scene_root(Node *p_scene, bool p_auto_add) {
 	}
 
 	if (p_auto_add && p_scene) {
-		scene_root->add_child(p_scene, true);
+		active_scene_root->add_child(p_scene, true);
 	}
 }
 
@@ -4715,8 +4770,6 @@ void EditorNode::_set_current_scene_nocheck(int p_idx) {
 	changing_scene = true;
 	editor_data.save_edited_scene_state(editor_selection, &editor_history, _get_main_scene_state());
 
-	Node *old_scene = get_editor_data().get_edited_scene_root();
-
 	resource_count.clear();
 	editor_selection->clear();
 	SceneTreeDock::get_singleton()->clear_previous_node_selection();
@@ -4724,10 +4777,9 @@ void EditorNode::_set_current_scene_nocheck(int p_idx) {
 
 	Node *new_scene = editor_data.get_edited_scene_root();
 
-	// Remove the scene only if it's a new scene, preventing performance issues when adding and removing scenes.
-	if (old_scene && new_scene != old_scene && old_scene->get_parent() == scene_root) {
-		scene_root->remove_child(old_scene);
-	}
+	// G1: scenes no longer share one scene_root — each document's root stays parented
+	// under its own scene_root permanently, so switching tabs does NOT reparent nodes.
+	// Instead we rebind the 2D/3D editors to the now-active document's world (below).
 
 	if (Popup *p = Object::cast_to<Popup>(new_scene)) {
 		p->show();
@@ -4738,11 +4790,7 @@ void EditorNode::_set_current_scene_nocheck(int p_idx) {
 		get_tree()->set_edited_scene_root(new_scene);
 	}
 
-	if (new_scene) {
-		if (new_scene->get_parent() != scene_root) {
-			scene_root->add_child(new_scene, true);
-		}
-	}
+	_activate_scene_views();
 
 	if (editor_data.check_and_update_scene(p_idx)) {
 		if (!editor_data.get_scene_path(p_idx).is_empty()) {
@@ -7266,15 +7314,9 @@ void EditorNode::reload_instances_with_path_in_edited_scenes() {
 		editor_data.set_edited_scene(current_scene_idx);
 		Node *current_edited_scene = editor_data.get_edited_scene_root(current_scene_idx);
 
-		// Make sure the node is in the tree so that editor_selection can add node smoothly.
-		if (original_edited_scene_idx != current_scene_idx) {
-			// Prevent scene roots with the same name from being in the tree at the same time.
-			Node *original_edited_scene_root = editor_data.get_edited_scene_root(original_edited_scene_idx);
-			if (original_edited_scene_root && original_edited_scene_root->get_name() == current_edited_scene->get_name()) {
-				scene_root->remove_child(original_edited_scene_root);
-			}
-			scene_root->add_child(current_edited_scene);
-		}
+		// G1: every document's root already lives permanently under its own scene_root
+		// (in its own isolated world), so no reparenting into a shared scene_root is needed
+		// here, and there is no same-name collision since roots have distinct parents.
 
 		// Restore the state so that the selection can be updated.
 		editor_state = editor_data.restore_edited_scene_state(editor_selection, &editor_history);
@@ -7573,17 +7615,8 @@ void EditorNode::reload_instances_with_path_in_edited_scenes() {
 		// Cleanup the history of the changes.
 		editor_history.cleanup_history();
 
-		if (original_edited_scene_idx != current_scene_idx) {
-			scene_root->remove_child(current_edited_scene);
-
-			// Ensure the current edited scene is re-added if removed earlier because it has the same name
-			// as the reimported scene. The editor could crash when reloading SceneTreeDock if the current
-			// edited scene is not in the scene tree.
-			Node *original_edited_scene_root = editor_data.get_edited_scene_root(original_edited_scene_idx);
-			if (original_edited_scene_root && !original_edited_scene_root->get_parent()) {
-				scene_root->add_child(original_edited_scene_root);
-			}
-		}
+		// G1: no per-scene reparenting to undo — each document's root stays under its own
+		// scene_root throughout, and any root replacement was done in place via replace_by().
 	}
 
 	// For the whole editor, call the _notify_nodes_scene_reimported with a list of replaced nodes.
@@ -9558,6 +9591,9 @@ EditorNode::EditorNode() {
 
 	editor_data.add_edited_scene(-1);
 	editor_data.set_edited_scene(0);
+	// G1: display the initial document's scene_root (bootstrap sets the index directly,
+	// bypassing _set_current_scene, so bind the editor views here explicitly).
+	_activate_scene_views();
 	scene_tabs->update_scene_tabs();
 
 	ImportDock::get_singleton()->initialize_import_options();

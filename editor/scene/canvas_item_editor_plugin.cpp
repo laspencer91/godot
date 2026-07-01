@@ -5647,11 +5647,13 @@ CanvasItemEditor::CanvasItemEditor() {
 	viewport_scrollable->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	viewport_scrollable->connect(SceneStringName(draw), callable_mp(this, &CanvasItemEditor::_update_scrollbars));
 
-	SubViewportContainer *scene_tree = memnew(SubViewportContainer);
-	viewport_scrollable->add_child(scene_tree);
-	scene_tree->set_stretch(true);
-	scene_tree->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
-	scene_tree->add_child(EditorNode::get_singleton()->get_scene_root());
+	scene_view_container = memnew(SubViewportContainer);
+	viewport_scrollable->add_child(scene_view_container);
+	scene_view_container->set_stretch(true);
+	scene_view_container->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
+	// G1: display the active document's scene_root here; EditorNode rebinds this on scene switch.
+	// At construction no document is active yet, so get_scene_root() returns the placeholder root.
+	scene_view_container->add_child(EditorNode::get_singleton()->get_scene_root());
 
 	controls_vb = memnew(VBoxContainer);
 	controls_vb->set_begin(Point2(5, 5));
