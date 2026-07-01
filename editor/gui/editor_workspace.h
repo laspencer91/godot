@@ -108,11 +108,11 @@ protected:
 	// before real per-pane content exists. Removed once tabs host real content.
 	void _debug_split_focused(bool p_vertical);
 
-	// TEMPORARY (G2 scaffolding): split the focused pane and drop a DocumentView for a
-	// DIFFERENT open document into the new side, so two panes render two different live
-	// documents at once. Exercises the per-pane DocumentView/EditorDocumentView path
-	// before real tabs + drag-to-open exist. Removed once tabs host DocumentViews.
-	void _debug_split_focused_with_document(bool p_vertical);
+	// TEMPORARY (G2 scaffolding): split the focused pane and drop a TabbedDocumentHost with a
+	// tab per open document into the new side, so the new pane has a working tab bar that
+	// switches which document it renders. Stand-in trigger until documents open into panes via
+	// the menu / file explorer drag-drop. Removed once that real open path exists.
+	void _debug_split_focused_with_tabs(bool p_vertical);
 
 public:
 	WorkspacePane *make_pane();

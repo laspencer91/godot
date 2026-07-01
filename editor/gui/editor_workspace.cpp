@@ -34,7 +34,7 @@
 #include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
-#include "editor/gui/document_view.h"
+#include "editor/gui/tabbed_document_host.h"
 #include "scene/gui/label.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/split_container.h"
@@ -125,8 +125,8 @@ void EditorWorkspace::unhandled_key_input(const Ref<InputEvent> &p_event) {
 		_debug_split_focused(true);
 		accept_event();
 	} else if (k->get_keycode() == Key::KEY_3) {
-		// Drop a DocumentView for a different open document into a side-by-side split.
-		_debug_split_focused_with_document(false);
+		// Drop a tabbed host of all open documents into a side-by-side split.
+		_debug_split_focused_with_tabs(false);
 		accept_event();
 	}
 }
@@ -153,7 +153,7 @@ void EditorWorkspace::_debug_split_focused(bool p_vertical) {
 	}
 }
 
-void EditorWorkspace::_debug_split_focused_with_document(bool p_vertical) {
+void EditorWorkspace::_debug_split_focused_with_tabs(bool p_vertical) {
 	WorkspacePane *target = get_focused_pane();
 	if (!target || !target->is_leaf()) {
 		return;
@@ -164,28 +164,29 @@ void EditorWorkspace::_debug_split_focused_with_document(bool p_vertical) {
 	}
 	EditorData &ed = en->get_editor_data();
 
-	// Pick a document to show in the new pane: prefer one OTHER than the active
-	// document (so the split visibly renders two different scenes); fall back to the
-	// active document if only one is open.
+	// Build a tabbed host with a tab per open document, so the new pane can switch which
+	// document it renders. The active document's tab is selected first.
+	TabbedDocumentHost *host = memnew(TabbedDocumentHost);
 	EditorDocument *active = ed.get_active_document();
-	EditorDocument *pick = nullptr;
+	int active_tab = 0;
 	const int count = ed.get_edited_scene_count();
 	for (int i = 0; i < count; i++) {
 		EditorDocument *d = ed.get_document(i);
-		if (d && d != active) {
-			pick = d;
-			break;
+		if (!d) {
+			continue;
+		}
+		const int tab = host->add_document(d, ed.get_scene_title(i));
+		if (d == active) {
+			active_tab = tab;
 		}
 	}
-	if (!pick) {
-		pick = active;
-	}
-	if (!pick) {
+	if (host->get_document_count() == 0) {
+		memdelete(host);
 		return;
 	}
+	host->set_current(active_tab);
 
-	DocumentView *doc_view = memnew(DocumentView(pick));
-	WorkspacePane *new_pane = target->split(p_vertical, doc_view);
+	WorkspacePane *new_pane = target->split(p_vertical, host);
 	if (new_pane) {
 		focused_pane = new_pane;
 	}
