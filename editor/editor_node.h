@@ -460,6 +460,7 @@ private:
 	int current_menu_option = 0;
 
 	SubViewport *scene_root = nullptr; // Root of the scene being edited.
+	Node *documents_holder = nullptr; // Persistent in-tree parent for every open document's scene_root, so all stay live.
 
 	Ref<Resource> saving_resource;
 	HashSet<Ref<Resource>> saving_resources_in_path;
@@ -858,6 +859,7 @@ public:
 	bool is_changing_scene() const;
 
 	SubViewport *get_scene_root() { return scene_root; } // Root of the scene being edited.
+	void register_document_context(EditorDocumentContext *p_doc); // Parents a document's scene_root into the live tree.
 
 	void set_edited_scene(Node *p_scene);
 	void set_edited_scene_root(Node *p_scene, bool p_auto_add);

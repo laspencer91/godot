@@ -65,6 +65,7 @@
 #include "editor/docks/scene_tree_dock.h"
 #include "editor/docks/signals_dock.h"
 #include "editor/editor_data.h"
+#include "editor/editor_document_context.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_log.h"
 #include "editor/editor_main_screen.h"
@@ -4577,6 +4578,16 @@ void EditorNode::_remove_scene(int index, bool p_change_tab) {
 	}
 }
 
+void EditorNode::register_document_context(EditorDocumentContext *p_doc) {
+	if (!p_doc || !documents_holder) {
+		return;
+	}
+	SubViewport *doc_scene_root = p_doc->get_scene_root();
+	if (doc_scene_root && !doc_scene_root->get_parent()) {
+		documents_holder->add_child(doc_scene_root);
+	}
+}
+
 void EditorNode::set_edited_scene(Node *p_scene) {
 	set_edited_scene_root(p_scene, true);
 }
@@ -8824,6 +8835,13 @@ EditorNode::EditorNode() {
 	scene_root->set_disable_3d(true);
 	scene_root->set_disable_input(true);
 	scene_root->set_as_audio_listener_2d(true);
+
+	// Persistent in-tree home for every open document's scene_root SubViewport, so
+	// all open scenes stay live (processing). Only the active document's scene_root
+	// is shown by the 2D/3D editors; the rest tick here without rendering.
+	documents_holder = memnew(Node);
+	documents_holder->set_name("DocumentsHolder");
+	add_child(documents_holder);
 
 	accept = memnew(AcceptDialog);
 	accept->set_autowrap(true);

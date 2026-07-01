@@ -630,6 +630,10 @@ int EditorData::add_edited_scene(int p_at_pos) {
 	es.document = memnew(EditorDocumentContext);
 	es.document->set_history_id(es.history_id);
 	es.document->set_time_opened(es.time_opened);
+	// Parent the document's scene_root into the live tree so the scene stays alive.
+	if (EditorNode::get_singleton()) {
+		EditorNode::get_singleton()->register_document_context(es.document);
+	}
 
 	if (p_at_pos == edited_scene.size()) {
 		edited_scene.push_back(es);
