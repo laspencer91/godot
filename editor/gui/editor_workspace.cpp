@@ -31,7 +31,10 @@
 #include "editor_workspace.h"
 
 #include "core/input/input_event.h"
-#include "editor/scene/3d/node_3d_editor_plugin.h" // SPIKE (④-spike): secondary 3D view factory.
+#include "editor/editor_data.h"
+#include "editor/editor_document.h"
+#include "editor/editor_node.h"
+#include "editor/gui/document_view.h"
 #include "scene/gui/label.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/split_container.h"
@@ -122,8 +125,8 @@ void EditorWorkspace::unhandled_key_input(const Ref<InputEvent> &p_event) {
 		_debug_split_focused(true);
 		accept_event();
 	} else if (k->get_keycode() == Key::KEY_3) {
-		// SPIKE (④-spike): drop a second live 3D view into a side-by-side split.
-		_debug_split_focused_with_3d_view(false);
+		// Drop a DocumentView for a different open document into a side-by-side split.
+		_debug_split_focused_with_document(false);
 		accept_event();
 	}
 }
@@ -150,20 +153,39 @@ void EditorWorkspace::_debug_split_focused(bool p_vertical) {
 	}
 }
 
-void EditorWorkspace::_debug_split_focused_with_3d_view(bool p_vertical) {
+void EditorWorkspace::_debug_split_focused_with_document(bool p_vertical) {
 	WorkspacePane *target = get_focused_pane();
 	if (!target || !target->is_leaf()) {
 		return;
 	}
-	Node3DEditor *spatial = Node3DEditor::get_singleton();
-	if (!spatial) {
+	EditorNode *en = EditorNode::get_singleton();
+	if (!en) {
 		return;
 	}
-	Control *second_view = spatial->create_secondary_debug_view();
-	if (!second_view) {
+	EditorData &ed = en->get_editor_data();
+
+	// Pick a document to show in the new pane: prefer one OTHER than the active
+	// document (so the split visibly renders two different scenes); fall back to the
+	// active document if only one is open.
+	EditorDocument *active = ed.get_active_document();
+	EditorDocument *pick = nullptr;
+	const int count = ed.get_edited_scene_count();
+	for (int i = 0; i < count; i++) {
+		EditorDocument *d = ed.get_document(i);
+		if (d && d != active) {
+			pick = d;
+			break;
+		}
+	}
+	if (!pick) {
+		pick = active;
+	}
+	if (!pick) {
 		return;
 	}
-	WorkspacePane *new_pane = target->split(p_vertical, second_view);
+
+	DocumentView *doc_view = memnew(DocumentView(pick));
+	WorkspacePane *new_pane = target->split(p_vertical, doc_view);
 	if (new_pane) {
 		focused_pane = new_pane;
 	}

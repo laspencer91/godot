@@ -9966,16 +9966,15 @@ void Node3DEditor::_build_view_viewports(Node3DEditorView *p_view) {
 	}
 }
 
-Control *Node3DEditor::create_secondary_debug_view() {
-	// SPIKE (④-spike): build a second Node3DEditorView exactly like the main one in the ctor --
-	// its own quad of viewports (each with a distinct gizmo layer via the viewport ctor) -- and
-	// bind it to the same world the main view currently renders. When this view enters the tree
-	// it builds and reconciles its own decoration through its own lifecycle, so nothing here has
-	// to be ordered against the main view.
+Control *Node3DEditor::create_view_bound_to(const Ref<World3D> &p_world) {
+	// Build an independent Node3DEditorView like the main one in the ctor -- its own quad of
+	// viewports (each with a distinct gizmo layer via the viewport ctor) -- and bind it to
+	// p_world. When this view enters the tree it builds and reconciles its own decoration
+	// through its own lifecycle, so nothing here has to be ordered against the main view.
 	Node3DEditorView *view = memnew(Node3DEditorView(this));
 	_build_view_viewports(view);
-	// Share the main view's currently-bound world (the active document).
-	view->set_active_world(main_view->bound_world);
+	// Bind to the requested document's world; fall back to the main view's if none given.
+	view->set_active_world(p_world.is_valid() ? p_world : main_view->bound_world);
 	return view;
 }
 

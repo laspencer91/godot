@@ -1,0 +1,71 @@
+/**************************************************************************/
+/*  document_view.h                                                       */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
+
+#pragma once
+
+#include "scene/gui/margin_container.h"
+
+class EditorDocument;
+class EditorDocumentView;
+
+// DocumentView is the per-pane presentation of one open document (G2). A
+// WorkspacePane hosts a DocumentView; the DocumentView binds to a specific
+// EditorDocument and hosts the editor surface that renders it -- for a scene
+// document, a Node3DEditorView pointed at the document's isolated World3D.
+//
+// This is what makes two panes show two DIFFERENT documents at once: each
+// DocumentView renders its own document's world, independent of the globally
+// "active" document. It owns the model-side per-pane binding (EditorDocumentView)
+// and the editor surface Control.
+//
+// v1 scope: the surface is the 3D view only (the CanvasView2D 2D surface and the
+// 2D/3D toggle arrive with the 2D extraction, Step ⑤). Selection/gizmos are still
+// global, so a non-active DocumentView shows its scene but not live selection.
+class DocumentView : public MarginContainer {
+	GDCLASS(DocumentView, MarginContainer);
+
+	// Model-side per-pane binding (owned; not a Node). Holds which document this
+	// view presents plus per-pane view state (camera/pan/zoom, active flag).
+	EditorDocumentView *doc_view = nullptr;
+
+	// The editor surface rendering the document (a Node3DEditorView in v1). A child
+	// Control, so the scene tree frees it with this node.
+	Control *editor_surface = nullptr;
+
+protected:
+	static void _bind_methods() {}
+
+public:
+	EditorDocumentView *get_document_view() const { return doc_view; }
+	Control *get_editor_surface() const { return editor_surface; }
+
+	DocumentView(EditorDocument *p_document);
+	~DocumentView();
+};

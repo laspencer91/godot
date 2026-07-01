@@ -1056,12 +1056,12 @@ public:
 	// forwarding can reach Node3DEditorView, which is only forward-declared here.
 	Node3DEditorView *get_main_view() const { return main_view; }
 
-	// SPIKE (④-spike, TEMPORARY): mint a second, fully independent Node3DEditorView --
-	// its own viewport quad and grid/origin decoration -- bound to the same world as the
-	// main view, so two live 3D views can coexist in split panes. Proves the view is truly
-	// instanceable before the DocumentView/tab layer is built on top. Returns it as a
-	// Control for the workspace to host. Removed once real per-pane document views exist.
-	Control *create_secondary_debug_view();
+	// Mint a fully independent Node3DEditorView -- its own viewport quad and grid/origin
+	// decoration -- bound to p_world (falls back to the main view's world if p_world is
+	// invalid). This is the 3D editor surface a per-pane DocumentView hosts; N of these
+	// coexist, one per pane, each rendering its document's isolated world. Returned as a
+	// Control for the workspace to host.
+	Control *create_view_bound_to(const Ref<World3D> &p_world);
 	Node3DEditorViewport *get_editor_viewport(int p_idx) const;
 	Node3DEditorViewport *get_last_used_viewport();
 
