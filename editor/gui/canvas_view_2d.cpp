@@ -30,10 +30,18 @@
 
 #include "canvas_view_2d.h"
 
+#include "core/input/input_event.h"
+#include "core/object/callable_mp.h"
 #include "editor/editor_document.h"
 #include "scene/gui/subviewport_container.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/world_2d.h"
+
+namespace {
+constexpr real_t MIN_ZOOM = 0.02;
+constexpr real_t MAX_ZOOM = 100.0;
+constexpr real_t ZOOM_STEP = 1.1;
+} // namespace
 
 CanvasView2D::CanvasView2D(EditorDocument *p_document) {
 	document = p_document;
@@ -60,6 +68,13 @@ CanvasView2D::CanvasView2D(EditorDocument *p_document) {
 			view_viewport->set_world_2d(world);
 		}
 	}
+
+	// Transparent top layer to capture pan/zoom input (the viewport itself has input disabled).
+	input_overlay = memnew(Control);
+	input_overlay->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
+	input_overlay->set_mouse_filter(Control::MOUSE_FILTER_STOP);
+	input_overlay->connect(SceneStringName(gui_input), callable_mp(this, &CanvasView2D::_gui_input_overlay));
+	add_child(input_overlay);
 }
 
 void CanvasView2D::_notification(int p_what) {
@@ -75,10 +90,50 @@ void CanvasView2D::_update_view_transform() {
 	if (!view_viewport) {
 		return;
 	}
-	// ⑤a: place the canvas origin at the center of the view (no interactive pan/zoom yet).
-	// The transform is per-(viewport, canvas), so this does not affect any other view of the
-	// same World2D. Interactive pan/zoom + overlay come with the ⑤b services/view split.
+	// Map canvas -> view pixels: scale by zoom, and place view_offset's canvas point at the view
+	// center. Per-(viewport, canvas), so it never affects another view of the same World2D.
 	Transform2D xform;
-	xform.columns[2] = get_size() * 0.5;
+	xform.scale_basis(Size2(zoom, zoom));
+	xform.columns[2] = get_size() * 0.5 - view_offset * zoom;
 	view_viewport->set_global_canvas_transform(xform);
+}
+
+Point2 CanvasView2D::_screen_to_canvas(const Point2 &p_screen) const {
+	return (p_screen - get_size() * 0.5) / zoom + view_offset;
+}
+
+void CanvasView2D::_zoom_at(const Point2 &p_screen, real_t p_factor) {
+	const real_t new_zoom = CLAMP(zoom * p_factor, MIN_ZOOM, MAX_ZOOM);
+	if (new_zoom == zoom) {
+		return;
+	}
+	const Point2 canvas_point = _screen_to_canvas(p_screen); // Under the cursor, before zooming.
+	zoom = new_zoom;
+	// Re-solve view_offset so canvas_point still lands under p_screen.
+	view_offset = canvas_point - (p_screen - get_size() * 0.5) / zoom;
+	_update_view_transform();
+}
+
+void CanvasView2D::_gui_input_overlay(const Ref<InputEvent> &p_event) {
+	const Ref<InputEventMouseButton> mb = p_event;
+	if (mb.is_valid()) {
+		if (mb->is_pressed() && mb->get_button_index() == MouseButton::WHEEL_UP) {
+			_zoom_at(mb->get_position(), ZOOM_STEP);
+			input_overlay->accept_event();
+		} else if (mb->is_pressed() && mb->get_button_index() == MouseButton::WHEEL_DOWN) {
+			_zoom_at(mb->get_position(), 1.0 / ZOOM_STEP);
+			input_overlay->accept_event();
+		} else if (mb->get_button_index() == MouseButton::MIDDLE) {
+			panning = mb->is_pressed();
+			input_overlay->accept_event();
+		}
+		return;
+	}
+	const Ref<InputEventMouseMotion> mm = p_event;
+	if (mm.is_valid() && panning) {
+		// Drag the view: a screen delta moves the shown canvas point by delta/zoom (opposite sign).
+		view_offset -= mm->get_relative() / zoom;
+		_update_view_transform();
+		input_overlay->accept_event();
+	}
 }

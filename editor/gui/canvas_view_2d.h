@@ -44,17 +44,27 @@ class SubViewportContainer;
 // limitation). CanvasItems render into the World2D's shared canvas RID, so simply
 // pointing a viewport at that world displays them.
 //
-// ⑤a scope: RENDER + view transform only (the scene renders, origin centered).
-// The editing overlay (selection/handles/rulers/grid), interactive pan/zoom, and
-// input are the CanvasItemEditor services/view split (⑤b) -- not here yet.
+// ⑤a: renders the scene (origin centered). ⑤b.1: the view now OWNS its pan/zoom
+// (view-state, per the taxonomy) -- mouse-wheel zoom-at-cursor and middle-drag
+// pan, each view independent. The editing overlay (selection/handles/rulers/grid)
+// and scene manipulation are the remaining CanvasItemEditor services/view split.
 class CanvasView2D : public Control {
 	GDCLASS(CanvasView2D, Control);
 
 	EditorDocument *document = nullptr; // The document this view renders (not owned).
 	SubViewportContainer *container = nullptr;
 	SubViewport *view_viewport = nullptr; // Own viewport, bound to the document's World2D.
+	Control *input_overlay = nullptr; // Transparent top layer that captures pan/zoom input.
 
-	void _update_view_transform(); // Position the canvas in the viewport (⑤a: center origin).
+	// Per-view pan/zoom (view-state). view_offset is the canvas point shown at the view center.
+	real_t zoom = 1.0;
+	Point2 view_offset;
+	bool panning = false;
+
+	void _update_view_transform(); // Push zoom + view_offset onto the viewport's canvas transform.
+	Point2 _screen_to_canvas(const Point2 &p_screen) const;
+	void _zoom_at(const Point2 &p_screen, real_t p_factor); // Zoom keeping p_screen's canvas point fixed.
+	void _gui_input_overlay(const Ref<InputEvent> &p_event);
 
 protected:
 	void _notification(int p_what);
@@ -62,6 +72,7 @@ protected:
 
 public:
 	SubViewport *get_view_viewport() const { return view_viewport; }
+	real_t get_zoom() const { return zoom; }
 
 	CanvasView2D(EditorDocument *p_document);
 };
