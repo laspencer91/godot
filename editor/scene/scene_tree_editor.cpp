@@ -1815,6 +1815,15 @@ void SceneTreeEditor::_selection_changed() {
 		return;
 	}
 
+	// Fired from the global EditorSelection::selection_changed signal, so it can arrive
+	// while this editor's dock is mid-reparent during layout/scene restore (parented but
+	// ENTER_TREE not finished, so data.tree is null). _update_selection() resolves the
+	// items' cached ABSOLUTE node paths via has_node()/get_node(), which errors on an
+	// out-of-tree node. Selection re-syncs on the next stable _update_tree().
+	if (!is_inside_tree()) {
+		return;
+	}
+
 	TreeItem *root = tree->get_root();
 
 	if (!root) {
