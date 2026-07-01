@@ -9646,13 +9646,21 @@ void Node3DEditor::_notification(int p_what) {
 
 		case NOTIFICATION_ENTER_TREE: {
 			_update_theme();
-			_register_all_gizmos();
-			_init_indicators();
+			// One-time setup: guarded so the workspace reparenting this control between panes
+			// does not re-register ~35 gizmo plugins or rebuild the grid/origin every move.
+			if (!gizmos_registered) {
+				_register_all_gizmos();
+				gizmos_registered = true;
+			}
+			if (!indicators_initialized) {
+				_init_indicators();
+				indicators_initialized = true;
+			}
 			update_all_gizmos();
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
-			_finish_indicators();
+			// Indicators/gizmos persist across reparenting; they are freed in the destructor.
 		} break;
 
 		case NOTIFICATION_THEME_CHANGED: {
@@ -11094,6 +11102,10 @@ void fragment() {
 }
 Node3DEditor::~Node3DEditor() {
 	singleton = nullptr;
+	if (indicators_initialized) {
+		// Freed here rather than on EXIT_TREE so indicators survive reparenting between panes.
+		_finish_indicators();
+	}
 	memdelete(preview_node);
 	if (preview_sun_dangling && preview_sun) {
 		memdelete(preview_sun);

@@ -655,6 +655,13 @@ private:
 	// their own world without touching consumers.
 	Ref<World3D> bound_world;
 
+	// Reparent-tolerance (G2): the gizmo-plugin registry and grid/origin indicators are
+	// one-time setup that stock Godot builds on the single ENTER_TREE. The workspace moves
+	// this control between panes, so guard both against re-running, and free the indicators
+	// in the destructor instead of on EXIT_TREE (they persist across reparenting).
+	bool gizmos_registered = false;
+	bool indicators_initialized = false;
+
 	RID origin_mesh;
 	RID origin_multimesh;
 	RID origin_instance;
