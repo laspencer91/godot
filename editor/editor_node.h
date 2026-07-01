@@ -864,6 +864,10 @@ public:
 	SubViewport *get_scene_root(); // Active document's scene_root (placeholder when none is active).
 	void register_document_context(EditorDocument *p_doc); // Parents a document's scene_root into the live tree.
 
+	// G2: make the open scene at p_idx the active edited scene (same path the stock scene-tab
+	// bar uses). Lets a workspace pane's tab selection drive which document the editor edits.
+	void set_edited_scene_index(int p_idx) { _set_current_scene(p_idx); }
+
 	void set_edited_scene(Node *p_scene);
 	void set_edited_scene_root(Node *p_scene, bool p_auto_add);
 	Node *get_edited_scene() { return editor_data.get_edited_scene_root(); }

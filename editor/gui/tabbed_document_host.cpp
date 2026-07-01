@@ -31,6 +31,9 @@
 #include "tabbed_document_host.h"
 
 #include "core/object/callable_mp.h"
+#include "editor/editor_data.h"
+#include "editor/editor_document.h"
+#include "editor/editor_node.h"
 #include "editor/gui/document_view.h"
 #include "scene/gui/margin_container.h"
 #include "scene/gui/tab_bar.h"
@@ -100,8 +103,34 @@ void TabbedDocumentHost::set_current(int p_idx) {
 	}
 }
 
+void TabbedDocumentHost::_activate_document(int p_idx) {
+	// Make this tab's document the editor's active edited scene, so the docks / inspector /
+	// scene-tree follow the pane's selection. Resolve the scene index by document (robust to
+	// tabs/scenes being reordered or closed) rather than caching an index.
+	if (p_idx < 0 || p_idx >= documents.size() || !documents[p_idx]) {
+		return;
+	}
+	EditorNode *en = EditorNode::get_singleton();
+	if (!en) {
+		return;
+	}
+	EditorData &ed = en->get_editor_data();
+	const int count = ed.get_edited_scene_count();
+	for (int i = 0; i < count; i++) {
+		if (ed.get_document(i) == documents[p_idx]) {
+			en->set_edited_scene_index(i);
+			return;
+		}
+	}
+}
+
 void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	_show(p_idx);
+	// Only a genuine, in-tree selection drives the global active scene -- not the programmatic
+	// set_current() done while the host is being built and placed into a pane.
+	if (is_inside_tree()) {
+		_activate_document(p_idx);
+	}
 }
 
 void TabbedDocumentHost::_on_tab_close(int p_idx) {

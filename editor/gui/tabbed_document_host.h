@@ -60,6 +60,7 @@ class TabbedDocumentHost : public VBoxContainer {
 
 	DocumentView *_ensure_view(int p_idx); // Create (hidden) if absent; returns the view.
 	void _show(int p_idx); // Reveal tab p_idx's view, hide the rest.
+	void _activate_document(int p_idx); // Make tab p_idx's document the editor's active edited scene.
 	void _on_tab_selected(int p_idx);
 	void _on_tab_close(int p_idx);
 
