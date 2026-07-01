@@ -415,6 +415,10 @@ private:
 	bool viewport_signals_connected = false;
 	bool gizmo_instances_initialized = false;
 
+	// G2: transform-gizmo cull-mask layer, allocated from Node3DEditor rather than derived
+	// from the quad-slot index, so this viewport is not tied to a fixed 0..3 slot.
+	int gizmo_layer = GIZMO_BASE_LAYER;
+
 	String last_message;
 	String message;
 	double message_time;
@@ -456,7 +460,7 @@ private:
 	void _toggle_camera_preview(bool);
 	void _toggle_pilot_preview(bool);
 	void _toggle_cinema_preview(bool);
-	void _init_gizmo_instance(int p_idx);
+	void _init_gizmo_instance();
 	void _finish_gizmo_instances();
 	void _selection_result_pressed(int);
 	void _selection_menu_hide();
@@ -674,6 +678,12 @@ private:
 	bool origin_enabled = false;
 	RID grid[3];
 	RID grid_instance[3];
+
+	// G2: freelist over the per-view transform-gizmo cull-mask layers (GIZMO_BASE_LAYER..31,
+	// max 5). Each Node3DEditorViewport allocates one so its gizmos are isolated from other
+	// views' — decoupling a viewport's gizmo layer from its fixed quad-slot index, so viewports
+	// can live outside the quad (in workspace panes). One bit per offset 0..4.
+	uint32_t gizmo_layer_used_mask = 0;
 	bool grid_visible[3] = { false, false, false }; //currently visible
 	bool grid_enable[3] = { false, false, false }; //should be always visible if true
 	bool grid_enabled = false;
@@ -962,6 +972,12 @@ public:
 	PhysicsDirectSpaceState3D *get_editor_space_state() const;
 	// G1: bind all 3D viewports + grid/origin to the given (active document's) world.
 	void set_active_world(const Ref<World3D> &p_world);
+
+	// G2: allocate/free a per-view transform-gizmo cull-mask layer (GIZMO_BASE_LAYER..31).
+	// Returns a distinct layer while any of the 5 are free; degrades to sharing the base
+	// layer past 5 simultaneous views (gizmos overlap but remain functional).
+	int allocate_gizmo_layer();
+	void free_gizmo_layer(int p_layer);
 
 	static Size2i get_camera_viewport_size(Camera3D *p_camera);
 

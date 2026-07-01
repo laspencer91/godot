@@ -3808,7 +3808,7 @@ void Node3DEditorViewport::_notification(int p_what) {
 			}
 
 			if (!gizmo_instances_initialized) {
-				_init_gizmo_instance(index);
+				_init_gizmo_instance();
 				gizmo_instances_initialized = true;
 			}
 		} break;
@@ -4712,8 +4712,8 @@ void Node3DEditorViewport::_update_centered_labels() {
 	}
 }
 
-void Node3DEditorViewport::_init_gizmo_instance(int p_idx) {
-	uint32_t layer = 1 << (GIZMO_BASE_LAYER + p_idx);
+void Node3DEditorViewport::_init_gizmo_instance() {
+	uint32_t layer = 1 << gizmo_layer;
 
 	for (int i = 0; i < 3; i++) {
 		move_gizmo_instance[i] = RS::get_singleton()->instance_create();
@@ -6687,6 +6687,8 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	zoom_indicator_delay = 0.0;
 
 	spatial_editor = p_spatial_editor;
+	// G2: claim a distinct transform-gizmo cull-mask layer (freed in the destructor).
+	gizmo_layer = spatial_editor->allocate_gizmo_layer();
 	SubViewportContainer *c = memnew(SubViewportContainer);
 	subviewport_container = c;
 	c->set_stretch(true);
@@ -6703,7 +6705,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	surface->set_clip_contents(true);
 	camera = memnew(Camera3D);
 	camera->set_disable_gizmos(true);
-	camera->set_cull_mask(((1 << 20) - 1) | (1 << (GIZMO_BASE_LAYER + p_index)) | (1 << GIZMO_EDIT_LAYER) | (1 << GIZMO_GRID_LAYER) | (1 << MISC_TOOL_LAYER));
+	camera->set_cull_mask(((1 << 20) - 1) | (1 << gizmo_layer) | (1 << GIZMO_EDIT_LAYER) | (1 << GIZMO_GRID_LAYER) | (1 << MISC_TOOL_LAYER));
 	viewport->add_child(camera);
 	camera->make_current();
 	surface->set_focus_mode(FOCUS_ALL);
@@ -7135,6 +7137,9 @@ Node3DEditorViewport::~Node3DEditorViewport() {
 	if (gizmo_instances_initialized) {
 		// Freed here rather than on EXIT_TREE so instances survive reparenting between panes.
 		_finish_gizmo_instances();
+	}
+	if (spatial_editor) {
+		spatial_editor->free_gizmo_layer(gizmo_layer);
 	}
 	memdelete(ruler);
 }
@@ -8276,6 +8281,27 @@ void Node3DEditor::set_active_world(const Ref<World3D> &p_world) {
 	}
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
 		viewports[i]->set_editor_world(p_world);
+	}
+}
+
+int Node3DEditor::allocate_gizmo_layer() {
+	const int layer_count = 32 - Node3DEditorViewport::GIZMO_BASE_LAYER; // Bits 27..31 => 5.
+	for (int offset = 0; offset < layer_count; offset++) {
+		if (!(gizmo_layer_used_mask & (1u << offset))) {
+			gizmo_layer_used_mask |= (1u << offset);
+			return Node3DEditorViewport::GIZMO_BASE_LAYER + offset;
+		}
+	}
+	// All 5 per-view gizmo layers are in use: degrade by sharing the base layer (gizmos of
+	// the extra views overlap but stay functional). Reached only past 5 simultaneous 3D views.
+	WARN_PRINT_ONCE("More than 5 simultaneous 3D views: transform gizmos share a cull-mask layer and may overlap.");
+	return Node3DEditorViewport::GIZMO_BASE_LAYER;
+}
+
+void Node3DEditor::free_gizmo_layer(int p_layer) {
+	const int offset = p_layer - Node3DEditorViewport::GIZMO_BASE_LAYER;
+	if (offset >= 0 && offset < 32 - Node3DEditorViewport::GIZMO_BASE_LAYER) {
+		gizmo_layer_used_mask &= ~(1u << offset);
 	}
 }
 
