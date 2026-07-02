@@ -52,25 +52,19 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	// mixed/unknown, until the ⑤b 2D/3D toggle) get a Node3DEditorView. Symmetric factory calls.
 	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
 	if (type == EditorDocument::TYPE_SCENE_2D) {
-		CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
-		if (canvas_editor) {
+		if (CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton()) {
 			editor_surface = canvas_editor->create_view_bound_to(p_document);
-			if (editor_surface) {
-				add_child(editor_surface);
-				editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-				editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-			}
 		}
 	} else {
-		Node3DEditor *spatial = Node3DEditor::get_singleton();
-		if (spatial) {
+		if (Node3DEditor *spatial = Node3DEditor::get_singleton()) {
 			editor_surface = spatial->create_view_bound_to(p_document ? p_document->get_world_3d() : Ref<World3D>());
-			if (editor_surface) {
-				add_child(editor_surface);
-				editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-				editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-			}
 		}
+	}
+	// Parent + stretch the minted surface identically regardless of kind.
+	if (editor_surface) {
+		add_child(editor_surface);
+		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
+		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
 	}
 }
 

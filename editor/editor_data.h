@@ -224,6 +224,7 @@ public:
 	// base EditorDocument; in v1 every document is a SceneDocument.
 	EditorDocument *get_document(int p_idx = -1) const;
 	EditorDocument *get_active_document() const;
+	int find_document_index(const EditorDocument *p_document) const;
 
 	String get_scene_title(int p_idx, bool p_always_strip_extension = false) const;
 	String get_scene_path(int p_idx) const;

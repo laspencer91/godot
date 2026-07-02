@@ -2754,7 +2754,7 @@ void CanvasItemEditorView::_gui_input_viewport(const Ref<InputEvent> &p_event) {
 	// edited scene may only pan/zoom -- never manipulate (matches CanvasView2D's active-only
 	// editing). A LMB/RMB press first promotes this document to active, so the next event edits
 	// normally. The shim main view (document == null) skips this entirely and is unaffected.
-	if (document && !_is_active_document()) {
+	if (_edits_gated()) {
 		Ref<InputEventMouseButton> gate_mb = p_event;
 		if (gate_mb.is_valid() && gate_mb->is_pressed() &&
 				(gate_mb->get_button_index() == MouseButton::LEFT || gate_mb->get_button_index() == MouseButton::RIGHT)) {
@@ -4308,7 +4308,7 @@ Viewport *CanvasItemEditorView::_get_transform_sink() {
 	// the shared scene_root (another view may be displaying it). Shim main view (document == null):
 	// the sink is the globally-active document's scene_root. Mirrors Node3DEditorView's
 	// bound-world/root-window fallback split in get_editor_world_3d().
-	if (document && view_viewport) {
+	if (document) {
 		return view_viewport;
 	}
 	return EditorNode::get_singleton()->get_scene_root();
@@ -4320,6 +4320,22 @@ bool CanvasItemEditorView::_is_active_document() const {
 	return en && document && en->get_editor_data().get_active_document() == document;
 }
 
+bool CanvasItemEditorView::_edits_gated() const {
+	// The view-many/edit-active gate in one place: a document-bound view edits (manipulate + draw the
+	// selection/hover/snapping overlay) only while its document is the active edited scene; the shim
+	// main view (document == null) always edits. Input and draw both route through this so they can't
+	// drift apart.
+	return document && !_is_active_document();
+}
+
+void CanvasItemEditorView::_recompute_ruler_metrics() {
+	// Single derivation site for the ruler caches (settings + theme). Idempotent, so calling it on a
+	// reparent ENTER_TREE is harmless; shared with _update_editor_settings() so the formula can't fork.
+	real_t ruler_width_unscaled = EDITOR_GET("editors/2d/ruler_width");
+	ruler_font_size = MAX(get_theme_font_size(SNAME("rulers_size"), EditorStringName(EditorFonts)) * ruler_width_unscaled / 15.0, 8);
+	ruler_width_scaled = MAX(ruler_width_unscaled * EDSCALE, ruler_font_size * 2.0);
+}
+
 void CanvasItemEditorView::_ensure_active() {
 	// Resolve this document's current edited-scene index and make it active (same path as a tab
 	// selection), so the global selection this view edits belongs to THIS document. Ported from
@@ -4328,13 +4344,9 @@ void CanvasItemEditorView::_ensure_active() {
 	if (!en || !document || _is_active_document()) {
 		return;
 	}
-	EditorData &ed = en->get_editor_data();
-	const int count = ed.get_edited_scene_count();
-	for (int i = 0; i < count; i++) {
-		if (ed.get_document(i) == document) {
-			en->set_edited_scene_index(i);
-			return;
-		}
+	const int idx = en->get_editor_data().find_document_index(document);
+	if (idx >= 0) {
+		en->set_edited_scene_index(idx);
 	}
 }
 
@@ -4360,23 +4372,11 @@ void CanvasItemEditorView::bind_document(EditorDocument *p_document) {
 }
 
 void CanvasItemEditorView::_notification(int p_what) {
-	switch (p_what) {
-		case NOTIFICATION_ENTER_TREE: {
-			// Reparent-tolerant, mirroring Node3DEditorView: recompute the settings-derived caches
-			// once, when THIS view is actually in the tree (theme ready), and guard against
-			// re-running when the workspace reparents the view between panes. main_view's caches are
-			// still refreshed by the editor's _update_editor_settings(); minted views rely on this.
-			if (!view_settings_initialized) {
-				real_t ruler_width_unscaled = EDITOR_GET("editors/2d/ruler_width");
-				ruler_font_size = MAX(get_theme_font_size(SNAME("rulers_size"), EditorStringName(EditorFonts)) * ruler_width_unscaled / 15.0, 8);
-				ruler_width_scaled = MAX(ruler_width_unscaled * EDSCALE, ruler_font_size * 2.0);
-				view_settings_initialized = true;
-			}
-		} break;
-
-		case NOTIFICATION_EXIT_TREE: {
-			// Binding persists across reparenting; child nodes are freed by normal Node teardown.
-		} break;
+	if (p_what == NOTIFICATION_ENTER_TREE) {
+		// Reparent-tolerant, mirroring Node3DEditorView: recompute the settings-derived caches once
+		// THIS view is in the tree (theme ready). main_view's caches are also refreshed by the editor's
+		// _update_editor_settings(); minted views rely on this call.
+		_recompute_ruler_metrics();
 	}
 }
 
@@ -4388,7 +4388,7 @@ void CanvasItemEditorView::_draw_viewport() {
 	// static decorations (grid/axis/rulers) -- never the active document's selection/hover/snapping
 	// overlay (matches CanvasView2D's active-only selection). The shim main view (document == null)
 	// always draws the full overlay.
-	const bool draw_edit_overlay = !(document && !_is_active_document());
+	const bool draw_edit_overlay = !_edits_gated();
 
 	_draw_grid();
 	_draw_ruler_tool();
@@ -4483,10 +4483,8 @@ void CanvasItemEditor::_update_editor_settings() {
 	main_view->panner->setup_warped_panning(this, EDITOR_GET("editors/panning/warped_mouse_panning"));
 	main_view->panner->set_zoom_style((ViewPanner::ZoomStyle)EDITOR_GET("editors/panning/zoom_style").operator int());
 
-	// Compute the ruler width here so we can reuse the result throughout the various draw functions.
-	real_t ruler_width_unscaled = EDITOR_GET("editors/2d/ruler_width");
-	main_view->ruler_font_size = MAX(get_theme_font_size(SNAME("rulers_size"), EditorStringName(EditorFonts)) * ruler_width_unscaled / 15.0, 8);
-	main_view->ruler_width_scaled = MAX(ruler_width_unscaled * EDSCALE, main_view->ruler_font_size * 2.0);
+	// Recompute the ruler caches (single derivation site shared with the view's ENTER_TREE init).
+	main_view->_recompute_ruler_metrics();
 
 	grab_distance = EDITOR_GET("editors/polygon_editor/point_grab_radius");
 

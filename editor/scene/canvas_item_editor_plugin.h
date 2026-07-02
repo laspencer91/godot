@@ -580,7 +580,6 @@ class CanvasItemEditorView : public Control {
 	// document's World2D) and edits only while p_document is the active edited scene.
 	EditorDocument *document = nullptr;
 	SubViewport *view_viewport = nullptr; // Child viewport bound to document's World2D (document != null).
-	bool view_settings_initialized = false; // One-time settings-derived cache init on first ENTER_TREE.
 
 	Control *viewport = nullptr;
 	Control *viewport_scrollable = nullptr;
@@ -659,9 +658,15 @@ class CanvasItemEditorView : public Control {
 	Viewport *_get_transform_sink();
 
 	// Step⑤b.4d: document-bound helpers (ported from CanvasView2D). _is_active_document() is true
-	// when this view's document is the editor's active edited scene; _ensure_active() makes it so.
+	// when this view's document is the editor's active edited scene; _ensure_active() makes it so;
+	// _edits_gated() is the single view-many/edit-active gate shared by the input and draw paths.
 	bool _is_active_document() const;
 	void _ensure_active();
+	bool _edits_gated() const;
+
+	// Recompute the settings/theme-derived ruler caches. Called from ENTER_TREE and (per-view) from
+	// CanvasItemEditor::_update_editor_settings(), so the derivation lives in one place.
+	void _recompute_ruler_metrics();
 
 	void _draw_text_at_position(Point2 p_position, const String &p_string, Side p_side);
 	void _draw_margin_at_position(int p_value, Point2 p_position, Side p_side);

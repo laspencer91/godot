@@ -114,13 +114,9 @@ void TabbedDocumentHost::_activate_document(int p_idx) {
 	if (!en) {
 		return;
 	}
-	EditorData &ed = en->get_editor_data();
-	const int count = ed.get_edited_scene_count();
-	for (int i = 0; i < count; i++) {
-		if (ed.get_document(i) == documents[p_idx]) {
-			en->set_edited_scene_index(i);
-			return;
-		}
+	const int idx = en->get_editor_data().find_document_index(documents[p_idx]);
+	if (idx >= 0) {
+		en->set_edited_scene_index(idx);
 	}
 }
 

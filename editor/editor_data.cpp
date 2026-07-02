@@ -859,6 +859,20 @@ EditorDocument *EditorData::get_active_document() const {
 	return edited_scene[current_edited_scene].document;
 }
 
+int EditorData::find_document_index(const EditorDocument *p_document) const {
+	// Inverse of get_document(): resolve an open document to its edited-scene index (robust to
+	// scenes/tabs being reordered or closed). Shared by the workspace tab host and the 2D pane view.
+	if (!p_document) {
+		return -1;
+	}
+	for (int i = 0; i < edited_scene.size(); i++) {
+		if (edited_scene[i].document == p_document) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 uint64_t EditorData::get_scene_time_opened(int p_idx) const {
 	ERR_FAIL_INDEX_V(p_idx, edited_scene.size(), 0);
 	return edited_scene[p_idx].time_opened;
