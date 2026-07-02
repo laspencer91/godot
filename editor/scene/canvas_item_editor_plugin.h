@@ -51,6 +51,7 @@ class RichTextLabel;
 class StyleBoxTexture;
 class Timer;
 class ViewPanner;
+class Viewport;
 class VScrollBar;
 class VSeparator;
 class VSplitContainer;
@@ -221,16 +222,7 @@ private:
 
 	void _update_context_toolbar();
 
-	GridVisibility grid_visibility = GRID_VISIBILITY_SHOW_WHEN_SNAPPING;
-	bool show_rulers = true;
-	bool show_guides = true;
-	bool show_origin = true;
-	bool show_viewport = true;
-	bool show_helpers = false;
-	bool show_position_gizmos = true;
-	bool show_lock_gizmos = true;
-	bool show_group_gizmos = true;
-	bool show_transformation_gizmos = true;
+	// Step⑤b.4b: grid_visibility + the nine show_* toggles now live on CanvasItemEditorView.
 
 	bool auto_resampling_enabled = true;
 	real_t resample_delay = 0.3;
@@ -275,8 +267,7 @@ private:
 
 	bool ruler_tool_active = false;
 	Point2 ruler_tool_origin;
-	real_t ruler_width_scaled = 16.0;
-	int ruler_font_size = 8;
+	// Step⑤b.4b: ruler_width_scaled / ruler_font_size now live on CanvasItemEditorView.
 	Point2 node_create_position;
 	real_t grab_distance = 0.0;
 	bool simple_panning = false;
@@ -462,27 +453,8 @@ private:
 
 	virtual void shortcut_input(const Ref<InputEvent> &p_ev) override;
 
-	void _draw_text_at_position(Point2 p_position, const String &p_string, Side p_side);
-	void _draw_margin_at_position(int p_value, Point2 p_position, Side p_side);
-	void _draw_percentage_at_position(real_t p_value, Point2 p_position, Side p_side);
-	void _draw_straight_line(Point2 p_from, Point2 p_to, Color p_color);
-
-	void _draw_smart_snapping();
-	void _draw_rulers();
-	void _draw_guides();
-	void _draw_focus();
-	void _draw_grid();
-	void _draw_ruler_tool();
-	void _draw_control_anchors(Control *control);
-	void _draw_control_helpers(Control *control);
-	void _draw_selection();
-	void _draw_axis();
-	void _draw_invisible_nodes_positions(Node *p_node, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
-	void _draw_locks_and_groups(Node *p_node, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
-	void _draw_hover();
-	void _draw_message();
-
-	void _draw_viewport();
+	// Step⑤b.4b: the overlay draw path (_draw_viewport + the whole _draw_* family) now lives on
+	// CanvasItemEditorView.
 
 	bool _gui_input_anchors(const Ref<InputEvent> &p_event);
 	bool _gui_input_move(const Ref<InputEvent> &p_event);
@@ -657,6 +629,52 @@ class CanvasItemEditorView : public Control {
 	void _update_zoom(real_t p_zoom);
 	void _shortcut_zoom_set(real_t p_zoom);
 	void _zoom_on_position(real_t p_zoom, Point2 p_position = Point2());
+
+	// Step⑤b.4b: per-view visibility toggles (moved from the editor). The overlay draw path below
+	// reads these directly; the editor's menu/state code reaches them via friendship.
+	CanvasItemEditor::GridVisibility grid_visibility = CanvasItemEditor::GRID_VISIBILITY_SHOW_WHEN_SNAPPING;
+	bool show_rulers = true;
+	bool show_guides = true;
+	bool show_origin = true;
+	bool show_viewport = true;
+	bool show_helpers = false;
+	bool show_position_gizmos = true;
+	bool show_lock_gizmos = true;
+	bool show_group_gizmos = true;
+	bool show_transformation_gizmos = true;
+
+	real_t ruler_width_scaled = 16.0;
+	int ruler_font_size = 8;
+
+	// Step⑤b.4b: the overlay draw path (moved from the editor). Service/selection/scene reads are
+	// routed through `editor->`; the view's own display + pan/zoom state is read directly.
+	// Transform-sink seam: _draw_viewport rebuilds `transform` and pushes it via
+	// _update_display_transform() onto _get_transform_sink() so only the view that displays the
+	// sink writes the shared global_canvas_transform (Phase 4 makes the sink the view's viewport).
+	void _update_display_transform();
+	Viewport *_get_transform_sink();
+
+	void _draw_text_at_position(Point2 p_position, const String &p_string, Side p_side);
+	void _draw_margin_at_position(int p_value, Point2 p_position, Side p_side);
+	void _draw_percentage_at_position(real_t p_value, Point2 p_position, Side p_side);
+	void _draw_straight_line(Point2 p_from, Point2 p_to, Color p_color);
+
+	void _draw_smart_snapping();
+	void _draw_rulers();
+	void _draw_guides();
+	void _draw_focus();
+	void _draw_grid();
+	void _draw_ruler_tool();
+	void _draw_control_anchors(Control *control);
+	void _draw_control_helpers(Control *control);
+	void _draw_selection();
+	void _draw_axis();
+	void _draw_invisible_nodes_positions(Node *p_node, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
+	void _draw_locks_and_groups(Node *p_node, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
+	void _draw_hover();
+	void _draw_message();
+
+	void _draw_viewport();
 
 protected:
 	static void _bind_methods() {}
