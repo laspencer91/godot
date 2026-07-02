@@ -65,12 +65,19 @@ class CanvasView2D : public Control {
 	Point2 view_offset;
 	bool panning = false;
 
-	// Move-drag state (⑤b.3b). Restores each item to its pre-drag state every motion and applies
-	// the total canvas-space delta, so there is no drift; committed as one undo action on release.
-	bool moving = false;
-	Point2 move_from_canvas;
-	List<CanvasItem *> move_selection;
-	HashMap<ObjectID, Dictionary> move_pre_state;
+	// Manipulation-drag state (⑤b.3b move, ⑤b.3c rotate). Each motion restores every item to its
+	// pre-drag state and applies the TOTAL transform from the start, so there is no drift; the
+	// whole drag commits as one undo action on release.
+	enum DragType {
+		DRAG_NONE,
+		DRAG_MOVE,
+		DRAG_ROTATE,
+	};
+	DragType drag_type = DRAG_NONE;
+	Point2 drag_from_canvas;
+	Point2 rotate_center; // Canvas-space pivot for DRAG_ROTATE.
+	List<CanvasItem *> drag_selection;
+	HashMap<ObjectID, Dictionary> drag_pre_state;
 
 	void _update_view_transform(); // Push zoom + view_offset onto the viewport's canvas transform.
 	Point2 _screen_to_canvas(const Point2 &p_screen) const;
@@ -83,9 +90,10 @@ class CanvasView2D : public Control {
 	CanvasItem *_pick_at(const Point2 &p_canvas_pos); // Top-most CanvasItem under a canvas point.
 	bool _is_active_document() const; // True when this view's document is the active edited scene.
 
-	void _begin_move(const Point2 &p_canvas_pos); // Snapshot the selection for a move drag.
+	void _begin_drag(DragType p_type, const Point2 &p_canvas_pos); // Snapshot selection for a drag.
 	void _update_move(const Point2 &p_canvas_pos); // Live move: restore + apply total delta.
-	void _commit_move(); // Commit the move as one undo action (no-op if nothing moved).
+	void _update_rotate(const Point2 &p_canvas_pos); // Live rotate about the pivot.
+	void _commit_drag(); // Commit the drag as one undo action (no-op if nothing changed).
 
 protected:
 	void _notification(int p_what);
