@@ -49,6 +49,7 @@ class ColorPickerButton;
 class ConfirmationDialog;
 class DirectionalLight3D;
 class EditorData;
+class EditorDocument;
 class EditorSelection;
 class EditorSpinSlider;
 class HSplitContainer;
@@ -1065,11 +1066,11 @@ public:
 	Node3DEditorView *get_main_view() const { return main_view; }
 
 	// Mint a fully independent Node3DEditorView -- its own viewport quad and grid/origin
-	// decoration -- bound to p_world (falls back to the main view's world if p_world is
-	// invalid). This is the 3D editor surface a per-pane DocumentView hosts; N of these
+	// decoration -- bound to p_document's world (falls back to the main view's world if the
+	// document is null/unbound). This is the 3D editor surface a per-pane DocumentView hosts; N of these
 	// coexist, one per pane, each rendering its document's isolated world. Returned as a
 	// Control for the workspace to host.
-	Control *create_view_bound_to(const Ref<World3D> &p_world);
+	Control *create_view_bound_to(EditorDocument *p_document);
 	Node3DEditorViewport *get_editor_viewport(int p_idx) const;
 	Node3DEditorViewport *get_last_used_viewport();
 
@@ -1105,6 +1106,7 @@ class Node3DEditorView : public MarginContainer {
 	Node3DEditorViewport *viewports[Node3DEditor::VIEWPORTS_COUNT] = {};
 	int last_used_viewport = 0;
 	Node3DEditorViewport *freelook_viewport = nullptr;
+	EditorDocument *document = nullptr;
 
 	// The World3D this view renders/picks against (was Node3DEditor::bound_world). Set when the
 	// workspace activates a document in this view; the resolver reads THIS, not the globally-
@@ -1138,10 +1140,13 @@ class Node3DEditorView : public MarginContainer {
 	void _finish_grid();
 	void _reconcile_decorations(); // Attach origin/grid instances to bound_world's scenario.
 	void _deferred_first_bind(); // Deferred: mark bindable, then reconcile (breaks the material race).
+	bool _is_active_document() const;
+	void _ensure_active();
 
 protected:
 	static void _bind_methods() {}
 	void _notification(int p_what);
+	virtual void input(const Ref<InputEvent> &p_event) override;
 
 public:
 	// World binding + per-view grid/origin decoration. Node3DEditor forwards its same-named
@@ -1150,6 +1155,7 @@ public:
 	Ref<World3D> get_editor_world_3d() const;
 	RID get_editor_scenario() const;
 	PhysicsDirectSpaceState3D *get_editor_space_state() const;
+	void bind_document(EditorDocument *p_document);
 	void set_active_world(const Ref<World3D> &p_world);
 
 	void init_decorations();

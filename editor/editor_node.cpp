@@ -419,7 +419,7 @@ void EditorNode::shortcut_input(const Ref<InputEvent> &p_event) {
 		} else if (ED_IS_SHORTCUT("editor/editor_3d", p_event)) {
 			editor_main_screen->select(EditorMainScreen::EDITOR_3D);
 		} else if (ED_IS_SHORTCUT("editor/editor_script", p_event)) {
-			editor_main_screen->select(EditorMainScreen::EDITOR_SCRIPT);
+			editor_main_screen->focus_editor(SNAME("Script"));
 		} else if (ED_IS_SHORTCUT("editor/editor_game", p_event)) {
 			editor_main_screen->select(EditorMainScreen::EDITOR_GAME);
 		} else if (ED_IS_SHORTCUT("editor/editor_help", p_event)) {

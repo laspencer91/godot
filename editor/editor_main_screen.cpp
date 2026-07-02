@@ -156,19 +156,15 @@ void EditorMainScreen::select_prev() {
 }
 
 void EditorMainScreen::select_by_name(const String &p_name) {
-	ERR_FAIL_COND(p_name.is_empty());
-
-	for (int i = 0; i < buttons.size(); i++) {
-		if (buttons[i]->get_text() == p_name) {
-			select(i);
-			return;
-		}
-	}
-
-	ERR_FAIL_MSG("The editor name '" + p_name + "' was not found.");
+	focus_editor(StringName(p_name));
 }
 
 void EditorMainScreen::select(int p_index) {
+	// G2 D1 shim: platform/mono callers must keep working - do not remove.
+	_select_index(p_index);
+}
+
+void EditorMainScreen::_select_index(int p_index) {
 	if (EditorNode::get_singleton()->is_changing_scene()) {
 		return;
 	}
@@ -206,6 +202,44 @@ void EditorMainScreen::select(int p_index) {
 	}
 
 	EditorNode::get_singleton()->update_distraction_free_mode();
+}
+
+void EditorMainScreen::focus_editor(const StringName &p_name) {
+	ERR_FAIL_COND(String(p_name).is_empty());
+
+	const String plugin_name = String(p_name);
+	ERR_FAIL_COND_MSG(!main_editor_plugins.has(plugin_name), "The editor name '" + plugin_name + "' was not found.");
+
+	EditorPlugin *plugin = main_editor_plugins[plugin_name];
+	_select_index(get_plugin_index(plugin));
+}
+
+void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kind) {
+	ERR_FAIL_NULL(p_document);
+
+	const EditorDocument::Type document_type = p_document->get_type();
+	if (document_type != EditorDocument::TYPE_SCENE_2D && document_type != EditorDocument::TYPE_SCENE_3D && document_type != EditorDocument::TYPE_SCENE_MIXED) {
+		WARN_PRINT_ONCE("EditorMainScreen::reveal() only handles scene documents in this rollout.");
+		return;
+	}
+
+	EditorNode *editor_node = EditorNode::get_singleton();
+	ERR_FAIL_NULL(editor_node);
+
+	const int document_index = editor_node->get_editor_data().find_document_index(p_document);
+	if (document_index >= 0) {
+		editor_node->set_edited_scene_index(document_index);
+	}
+
+	if (p_kind == DocumentViewKind::SCENE_2D) {
+		focus_editor(SNAME("2D"));
+	} else if (p_kind == DocumentViewKind::SCENE_3D) {
+		focus_editor(SNAME("3D"));
+	} else if (document_type == EditorDocument::TYPE_SCENE_2D) {
+		focus_editor(SNAME("2D"));
+	} else {
+		focus_editor(SNAME("3D"));
+	}
 }
 
 int EditorMainScreen::get_selected_index() const {

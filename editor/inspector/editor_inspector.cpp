@@ -1544,7 +1544,7 @@ void EditorProperty::menu_option(int p_option) {
 		} break;
 		case MENU_OPEN_DOCUMENTATION: {
 			ScriptEditor::get_singleton()->goto_help(doc_path);
-			EditorNode::get_singleton()->get_editor_main_screen()->select(EditorMainScreen::EDITOR_SCRIPT);
+			EditorNode::get_singleton()->get_editor_main_screen()->focus_editor(SNAME("Script"));
 		} break;
 		default: {
 			if (p_option >= EditorContextMenuPlugin::BASE_ID) {
@@ -1988,7 +1988,7 @@ void EditorInspectorCategory::_handle_menu_option(int p_option) {
 
 		case MENU_OPEN_DOCS: {
 			ScriptEditor::get_singleton()->goto_help("class:" + doc_class_name);
-			EditorNode::get_singleton()->get_editor_main_screen()->select(EditorMainScreen::EDITOR_SCRIPT);
+			EditorNode::get_singleton()->get_editor_main_screen()->focus_editor(SNAME("Script"));
 		} break;
 
 		case MENU_UNFAVORITE_ALL: {

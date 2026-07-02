@@ -45,6 +45,7 @@
 #include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/docks/scene_tree_dock.h"
+#include "editor/editor_document.h"
 #include "editor/editor_main_screen.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
@@ -8310,6 +8311,28 @@ PhysicsDirectSpaceState3D *Node3DEditorView::get_editor_space_state() const {
 	return world.is_valid() ? world->get_direct_space_state() : nullptr;
 }
 
+bool Node3DEditorView::_is_active_document() const {
+	EditorNode *en = EditorNode::get_singleton();
+	return en && document && en->get_editor_data().get_active_document() == document;
+}
+
+void Node3DEditorView::_ensure_active() {
+	// G2 M1.2: match CanvasItemEditorView's document-promotion path for 3D panes.
+	EditorNode *en = EditorNode::get_singleton();
+	if (!en || !document || _is_active_document()) {
+		return;
+	}
+	const int idx = en->get_editor_data().find_document_index(document);
+	if (idx >= 0) {
+		en->set_edited_scene_index(idx);
+	}
+}
+
+void Node3DEditorView::bind_document(EditorDocument *p_document) {
+	document = p_document;
+	set_process_input(document != nullptr);
+}
+
 void Node3DEditorView::set_active_world(const Ref<World3D> &p_world) {
 	// Bind this view to p_world: re-point every viewport at it, and reconcile the grid/origin
 	// decoration into its scenario. bound_world is what get_editor_world_3d() resolves to.
@@ -10004,15 +10027,17 @@ void Node3DEditor::_build_view_viewports(Node3DEditorView *p_view) {
 	}
 }
 
-Control *Node3DEditor::create_view_bound_to(const Ref<World3D> &p_world) {
+Control *Node3DEditor::create_view_bound_to(EditorDocument *p_document) {
 	// Build an independent Node3DEditorView like the main one in the ctor -- its own quad of
 	// viewports (each with a distinct gizmo layer via the viewport ctor) -- and bind it to
-	// p_world. When this view enters the tree it builds and reconciles its own decoration
+	// p_document's world. When this view enters the tree it builds and reconciles its own decoration
 	// through its own lifecycle, so nothing here has to be ordered against the main view.
 	Node3DEditorView *view = memnew(Node3DEditorView(this));
 	_build_view_viewports(view);
+	view->bind_document(p_document);
 	// Bind to the requested document's world; fall back to the main view's if none given.
-	view->set_active_world(p_world.is_valid() ? p_world : main_view->bound_world);
+	Ref<World3D> world = p_document ? p_document->get_world_3d() : Ref<World3D>();
+	view->set_active_world(world.is_valid() ? world : main_view->bound_world);
 	return view;
 }
 
@@ -10031,6 +10056,21 @@ void Node3DEditorView::_notification(int p_what) {
 		case NOTIFICATION_EXIT_TREE: {
 			// Decoration persists across reparenting; it is freed in the destructor.
 		} break;
+	}
+}
+
+void Node3DEditorView::input(const Ref<InputEvent> &p_event) {
+	if (!document || _is_active_document() || !is_visible_in_tree()) {
+		return;
+	}
+
+	Ref<InputEventMouseButton> mb = p_event;
+	if (mb.is_null() || !mb->is_pressed()) {
+		return;
+	}
+
+	if (get_global_rect().has_point(mb->get_position())) {
+		_ensure_active();
 	}
 }
 

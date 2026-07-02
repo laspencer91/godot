@@ -31,6 +31,14 @@ class Node;
 class SubViewport;
 class WorkspacePane;
 
+enum class DocumentViewKind {
+	DEFAULT,
+	SCENE_2D,
+	SCENE_3D,
+	SCRIPT,
+	HELP,
+}; // G2 D14: view-kind, not main-screen identity.
+
 // DOCUMENT STATE — the model of one open document, independent of how many panes
 // (including zero) are looking at it. Deliberately world-agnostic: a script or
 // resource document has no render world. World accessors default to "none" and

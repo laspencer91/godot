@@ -948,7 +948,7 @@ void ScriptEditor::_file_dialog_action(const String &p_file) {
 		case FILE_MENU_OPEN: {
 			if (!is_visible_in_tree()) {
 				// When created from outside the editor.
-				EditorNode::get_singleton()->get_editor_main_screen()->select(EditorMainScreen::EDITOR_SCRIPT);
+				EditorNode::get_singleton()->get_editor_main_screen()->focus_editor(SNAME("Script"));
 			}
 			open_file(p_file);
 		} break;

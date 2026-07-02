@@ -31,13 +31,17 @@
 #include "editor_workspace.h"
 
 #include "core/input/input_event.h"
+#include "core/object/callable_mp.h"
 #include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
+#include "editor/editor_string_names.h"
 #include "editor/gui/tabbed_document_host.h"
+#include "editor/themes/editor_scale.h"
 #include "scene/gui/label.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/split_container.h"
+#include "scene/main/viewport.h"
 
 void WorkspacePane::set_content(Control *p_content) {
 	if (content == p_content) {
@@ -55,6 +59,7 @@ void WorkspacePane::set_content(Control *p_content) {
 		content->set_h_size_flags(SIZE_EXPAND_FILL);
 		content->set_v_size_flags(SIZE_EXPAND_FILL);
 	}
+	set_process_input(content != nullptr);
 }
 
 WorkspacePane *WorkspacePane::split(bool p_vertical, Control *p_new_content, bool p_new_on_second) {
@@ -68,6 +73,7 @@ WorkspacePane *WorkspacePane::split(bool p_vertical, Control *p_new_content, boo
 		remove_child(existing);
 	}
 	content = nullptr;
+	set_process_input(false);
 
 	split_container = memnew(SplitContainer);
 	split_container->set_vertical(p_vertical);
@@ -87,10 +93,58 @@ WorkspacePane *WorkspacePane::split(bool p_vertical, Control *p_new_content, boo
 	return new_pane;
 }
 
+void WorkspacePane::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_DRAW: {
+			if (!workspace || workspace->get_focused_pane() != this || workspace->get_root_pane()->get_leaf_count() <= 1) {
+				return;
+			}
+
+			// G2 M1.1: workspace focus is a pane-level concept; draw only when multiple panes exist.
+			const Color accent_color = get_theme_color(SNAME("accent_color"), EditorStringName(Editor));
+			draw_rect(Rect2(Vector2(), get_size()).grow(-1), accent_color, false, 2 * EDSCALE);
+		} break;
+	}
+}
+
+void WorkspacePane::input(const Ref<InputEvent> &p_event) {
+	if (!workspace || !is_leaf() || !is_visible_in_tree()) {
+		return;
+	}
+
+	Ref<InputEventMouseButton> mb = p_event;
+	if (mb.is_null() || !mb->is_pressed()) {
+		return;
+	}
+
+	if (get_global_rect().has_point(mb->get_position())) {
+		workspace->set_focused_pane(this);
+	}
+}
+
+int WorkspacePane::get_leaf_count() const {
+	if (is_leaf()) {
+		return 1;
+	}
+
+	int count = 0;
+	if (first) {
+		count += first->get_leaf_count();
+	}
+	if (second) {
+		count += second->get_leaf_count();
+	}
+	return count;
+}
+
 WorkspacePane::WorkspacePane() {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
 	add_theme_constant_override("separation", 0);
+}
+
+void EditorWorkspace::_bind_methods() {
+	ADD_SIGNAL(MethodInfo("focused_pane_changed", PropertyInfo(Variant::OBJECT, "pane", PROPERTY_HINT_NODE_TYPE, "WorkspacePane")));
 }
 
 WorkspacePane *EditorWorkspace::make_pane() {
@@ -104,6 +158,22 @@ void EditorWorkspace::_notification(int p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 			set_process_unhandled_key_input(true);
 		} break;
+		case NOTIFICATION_READY: {
+			Viewport *viewport = get_viewport();
+			if (viewport) {
+				viewport->connect("gui_focus_changed", callable_mp(this, &EditorWorkspace::_on_gui_focus_changed));
+			}
+		} break;
+	}
+}
+
+void EditorWorkspace::_on_gui_focus_changed(Control *p_control) {
+	for (Control *control = p_control; control; control = Object::cast_to<Control>(control->get_parent())) {
+		WorkspacePane *pane = Object::cast_to<WorkspacePane>(control);
+		if (pane && pane->get_workspace() == this && pane->is_leaf()) {
+			set_focused_pane(pane);
+			return;
+		}
 	}
 }
 
@@ -149,7 +219,7 @@ void EditorWorkspace::_debug_split_focused(bool p_vertical) {
 
 	WorkspacePane *new_pane = target->split(p_vertical, placeholder);
 	if (new_pane) {
-		focused_pane = new_pane;
+		set_focused_pane(new_pane);
 	}
 }
 
@@ -188,8 +258,30 @@ void EditorWorkspace::_debug_split_focused_with_tabs(bool p_vertical) {
 
 	WorkspacePane *new_pane = target->split(p_vertical, host);
 	if (new_pane) {
-		focused_pane = new_pane;
+		set_focused_pane(new_pane);
 	}
+}
+
+void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
+	if (!p_pane) {
+		return;
+	}
+
+	WorkspacePane *old_focused = focused_pane;
+	if (old_focused == p_pane) {
+		return;
+	}
+
+	focused_pane = p_pane;
+	if (Object::cast_to<TabbedDocumentHost>(focused_pane->get_content())) {
+		last_tabbed_pane = focused_pane;
+	}
+
+	if (old_focused) {
+		old_focused->queue_redraw();
+	}
+	focused_pane->queue_redraw();
+	emit_signal(SNAME("focused_pane_changed"), focused_pane);
 }
 
 EditorWorkspace::EditorWorkspace() {

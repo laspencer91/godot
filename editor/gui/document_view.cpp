@@ -57,7 +57,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		}
 	} else {
 		if (Node3DEditor *spatial = Node3DEditor::get_singleton()) {
-			editor_surface = spatial->create_view_bound_to(p_document ? p_document->get_world_3d() : Ref<World3D>());
+			editor_surface = spatial->create_view_bound_to(p_document);
 		}
 	}
 	// Parent + stretch the minted surface identically regardless of kind.

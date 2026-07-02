@@ -30,10 +30,12 @@
 
 #pragma once
 
+#include "editor/editor_document.h"
 #include "scene/gui/panel_container.h"
 
 class Button;
 class ConfigFile;
+class EditorDocument;
 class EditorPlugin;
 class EditorWorkspace;
 class HBoxContainer;
@@ -62,6 +64,7 @@ private:
 	HashMap<String, EditorPlugin *> main_editor_plugins;
 
 	int _get_current_main_editor() const;
+	void _select_index(int p_index);
 
 protected:
 	void _notification(int p_what);
@@ -79,6 +82,8 @@ public:
 	void select_prev();
 	void select_by_name(const String &p_name);
 	void select(int p_index);
+	void reveal(EditorDocument *p_document, DocumentViewKind p_kind = DocumentViewKind::DEFAULT);
+	void focus_editor(const StringName &p_name);
 	int get_selected_index() const;
 	int get_plugin_index(EditorPlugin *p_editor) const;
 	EditorPlugin *get_selected_plugin() const;

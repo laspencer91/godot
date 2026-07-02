@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/input/input_event.h"
 #include "scene/gui/box_container.h"
 
 class EditorWorkspace;
@@ -66,6 +67,8 @@ class WorkspacePane : public VBoxContainer {
 
 protected:
 	static void _bind_methods() {}
+	void _notification(int p_what);
+	virtual void input(const Ref<InputEvent> &p_event) override;
 
 public:
 	void set_workspace(EditorWorkspace *p_workspace) { workspace = p_workspace; }
@@ -85,6 +88,7 @@ public:
 
 	WorkspacePane *get_first() const { return first; }
 	WorkspacePane *get_second() const { return second; }
+	int get_leaf_count() const;
 
 	WorkspacePane();
 };
@@ -94,14 +98,16 @@ class EditorWorkspace : public VBoxContainer {
 
 	WorkspacePane *root_pane = nullptr;
 	WorkspacePane *focused_pane = nullptr;
+	WorkspacePane *last_tabbed_pane = nullptr;
 
 	// Running counter so temporary debug placeholder panes get distinct labels.
 	int debug_pane_counter = 0;
 
 protected:
-	static void _bind_methods() {}
+	static void _bind_methods();
 	void _notification(int p_what);
 	virtual void unhandled_key_input(const Ref<InputEvent> &p_event) override;
+	void _on_gui_focus_changed(Control *p_control);
 
 	// TEMPORARY (G2 scaffolding): split the focused pane, dropping a labeled
 	// placeholder into the new side, so the split mechanic can be exercised
@@ -119,7 +125,8 @@ public:
 
 	WorkspacePane *get_root_pane() const { return root_pane; }
 	WorkspacePane *get_focused_pane() const { return focused_pane ? focused_pane : root_pane; }
-	void set_focused_pane(WorkspacePane *p_pane) { focused_pane = p_pane; }
+	WorkspacePane *get_last_tabbed_pane() const { return last_tabbed_pane; }
+	void set_focused_pane(WorkspacePane *p_pane);
 
 	EditorWorkspace();
 };

@@ -51,3 +51,10 @@ surface. **Risk** = expected rebase pain.
   the ledger says *which files*, the tags say *which hunks*.
 - Re-verify the table against `git diff --name-status master...HEAD` at each
   milestone boundary (i.e. right before each rebase).
+
+## Current G2 step notes
+
+- `editor/gui/editor_workspace.{cpp,h}`: G2 M1.1 adds pane focus promotion on pre-GUI mouse-down / GUI focus-in, a multi-pane focus ring, `focused_pane_changed`, and `last_tabbed_pane` tracking for later `reveal()` target resolution.
+- `editor/scene/3d/node_3d_editor_plugin.{cpp,h}`: G2 M1.2 carries the bound `EditorDocument *` into pane `Node3DEditorView`s and promotes that document on 3D mouse-down, mirroring the 2D `_ensure_active` gate.
+- `editor/editor_document.h` and `editor/editor_main_screen.{cpp,h}`: G2 M1.3 adds `DocumentViewKind`, `reveal()`, and `focus_editor()`, while keeping `select()` / `select_by_name()` as compatibility shims.
+- Script-screen intent callers under `editor/`: G2 M1.4 reroutes the documented `EDITOR_SCRIPT` sites to `focus_editor("Script")`; platform and mono callers remain untouched.
