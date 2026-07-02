@@ -33,6 +33,8 @@
 #include "core/input/input_event.h"
 #include "core/object/callable_mp.h"
 #include "editor/editor_document.h"
+#include "editor/editor_string_names.h"
+#include "editor/scene/canvas_item_editor_plugin.h"
 #include "scene/gui/subviewport_container.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/world_2d.h"
@@ -74,6 +76,7 @@ CanvasView2D::CanvasView2D(EditorDocument *p_document) {
 	input_overlay->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
 	input_overlay->set_mouse_filter(Control::MOUSE_FILTER_STOP);
 	input_overlay->connect(SceneStringName(gui_input), callable_mp(this, &CanvasView2D::_gui_input_overlay));
+	input_overlay->connect(SceneStringName(draw), callable_mp(this, &CanvasView2D::_draw_overlay));
 	add_child(input_overlay);
 }
 
@@ -96,10 +99,72 @@ void CanvasView2D::_update_view_transform() {
 	xform.scale_basis(Size2(zoom, zoom));
 	xform.columns[2] = get_size() * 0.5 - view_offset * zoom;
 	view_viewport->set_global_canvas_transform(xform);
+
+	if (input_overlay) {
+		input_overlay->queue_redraw(); // Keep the grid/axis overlay aligned with the new transform.
+	}
 }
 
 Point2 CanvasView2D::_screen_to_canvas(const Point2 &p_screen) const {
 	return (p_screen - get_size() * 0.5) / zoom + view_offset;
+}
+
+Point2 CanvasView2D::_canvas_to_screen(const Point2 &p_canvas) const {
+	return (p_canvas - view_offset) * zoom + get_size() * 0.5;
+}
+
+void CanvasView2D::_draw_overlay() {
+	if (!input_overlay) {
+		return;
+	}
+	const Size2 size = get_size();
+	if (size.x <= 0 || size.y <= 0) {
+		return;
+	}
+
+	// Grid spacing comes from the CanvasItemEditor SERVICE (shared 2D editing policy); adapt it
+	// upward so lines never pack tighter than a few pixels on screen at the current zoom.
+	Vector2 step(8, 8);
+	if (CanvasItemEditor *cie = CanvasItemEditor::get_singleton()) {
+		step = cie->get_grid_step();
+	}
+	if (step.x <= 0) {
+		step.x = 8;
+	}
+	if (step.y <= 0) {
+		step.y = 8;
+	}
+	const real_t min_px = 8.0;
+	while (step.x * zoom < min_px) {
+		step.x *= 2.0;
+	}
+	while (step.y * zoom < min_px) {
+		step.y *= 2.0;
+	}
+
+	const Color grid_color(1, 1, 1, 0.06);
+	const Point2 tl = _screen_to_canvas(Point2());
+	const Point2 br = _screen_to_canvas(size);
+	for (real_t cx = Math::floor(tl.x / step.x) * step.x; cx <= br.x; cx += step.x) {
+		const real_t sx = _canvas_to_screen(Point2(cx, 0)).x;
+		input_overlay->draw_line(Point2(sx, 0), Point2(sx, size.y), grid_color);
+	}
+	for (real_t cy = Math::floor(tl.y / step.y) * step.y; cy <= br.y; cy += step.y) {
+		const real_t sy = _canvas_to_screen(Point2(0, cy)).y;
+		input_overlay->draw_line(Point2(0, sy), Point2(size.x, sy), grid_color);
+	}
+
+	// Origin axes (x = horizontal line at canvas y=0, y = vertical line at canvas x=0), matching
+	// the 2D editor's axis colors.
+	const Point2 o = _canvas_to_screen(Point2());
+	const Color axis_x = get_theme_color(SNAME("axis_x_color"), EditorStringName(Editor)) * Color(1, 1, 1, 0.75);
+	const Color axis_y = get_theme_color(SNAME("axis_y_color"), EditorStringName(Editor)) * Color(1, 1, 1, 0.75);
+	if (o.y >= 0 && o.y <= size.y) {
+		input_overlay->draw_line(Point2(0, o.y), Point2(size.x, o.y), axis_x);
+	}
+	if (o.x >= 0 && o.x <= size.x) {
+		input_overlay->draw_line(Point2(o.x, 0), Point2(o.x, size.y), axis_y);
+	}
 }
 
 void CanvasView2D::_zoom_at(const Point2 &p_screen, real_t p_factor) {

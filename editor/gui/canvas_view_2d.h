@@ -63,8 +63,10 @@ class CanvasView2D : public Control {
 
 	void _update_view_transform(); // Push zoom + view_offset onto the viewport's canvas transform.
 	Point2 _screen_to_canvas(const Point2 &p_screen) const;
+	Point2 _canvas_to_screen(const Point2 &p_canvas) const;
 	void _zoom_at(const Point2 &p_screen, real_t p_factor); // Zoom keeping p_screen's canvas point fixed.
 	void _gui_input_overlay(const Ref<InputEvent> &p_event);
+	void _draw_overlay(); // Grid + origin axes on the overlay, reading grid config from the service.
 
 protected:
 	void _notification(int p_what);
