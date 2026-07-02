@@ -263,10 +263,7 @@ private:
 	bool key_rot = true;
 	bool key_scale = false;
 
-	Vector2 temp_pivot = Vector2(Math::INF, Math::INF);
-
-	bool ruler_tool_active = false;
-	Point2 ruler_tool_origin;
+	// Step⑤b.4c: temp_pivot / ruler_tool_active / ruler_tool_origin now live on CanvasItemEditorView.
 	// Step⑤b.4b: ruler_width_scaled / ruler_font_size now live on CanvasItemEditorView.
 	Point2 node_create_position;
 	real_t grab_distance = 0.0;
@@ -285,7 +282,8 @@ public:
 	};
 
 private:
-	Vector<SelectResult> selection_results;
+	// Step⑤b.4c: selection_results (drag-time cache) moved to CanvasItemEditorView; the
+	// selection_results_menu snapshot stays here (consumed by the editor's popup handlers).
 	Vector<SelectResult> selection_results_menu;
 
 	struct _HoverResult {
@@ -293,7 +291,7 @@ private:
 		Ref<Texture2D> icon;
 		String name;
 	};
-	Vector<_HoverResult> hovering_results;
+	// Step⑤b.4c: hovering_results moved to CanvasItemEditorView.
 
 	struct BoneList {
 		Transform2D xform;
@@ -367,22 +365,10 @@ private:
 	PopupMenu *selection_menu = nullptr;
 	PopupMenu *add_node_menu = nullptr;
 
-	Point2 drag_start_origin;
-	DragType drag_type = DRAG_NONE;
-	Point2 drag_from;
-	Point2 drag_to;
-	Point2 drag_rotation_center;
-	List<CanvasItem *> drag_selection;
-	int dragged_guide_index = -1;
-	Point2 dragged_guide_pos;
-	bool is_hovering_h_guide = false;
-	bool is_hovering_v_guide = false;
-
+	// Step⑤b.4c: the full drag/input machinery (drag_type, drag_from/to, drag_selection,
+	// dragged_guide_*, is_hovering_*_guide, box_selecting_to, original_transform,
+	// cursor_shape_override, etc.) now lives on CanvasItemEditorView.
 	bool updating_value_dialog = false;
-	Transform2D original_transform;
-
-	Point2 box_selecting_to;
-	CursorShape cursor_shape_override = CURSOR_ARROW;
 
 	Ref<StyleBoxTexture> select_sb;
 	Ref<Texture2D> select_handle;
@@ -398,10 +384,8 @@ private:
 
 	bool _is_node_locked(const Node *p_node) const;
 	bool _is_node_movable(const Node *p_node, bool p_popup_warning = false);
-	void _get_canvas_items_at_pos(const Point2 &p_pos, Vector<SelectResult> &r_items, bool p_allow_locked = false);
 	void _find_canvas_items_in_rect(const Rect2 &p_rect, Node *p_node, List<CanvasItem *> *r_items, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
-
-	bool _select_click_on_item(CanvasItem *item, Point2 p_click_pos, bool p_append);
+	// Step⑤b.4c: _get_canvas_items_at_pos / _select_click_on_item (viewport-space wrappers) moved to CanvasItemEditorView.
 
 	ConfirmationDialog *snap_dialog = nullptr;
 
@@ -455,29 +439,13 @@ private:
 
 	// Step⑤b.4b: the overlay draw path (_draw_viewport + the whole _draw_* family) now lives on
 	// CanvasItemEditorView.
+	// Step⑤b.4c: the input/drag machinery (_gui_input_viewport + full chain, _commit_drag,
+	// _reset_drag, _update_cursor, get_cursor_shape logic) now lives on CanvasItemEditorView too.
 
-	bool _gui_input_anchors(const Ref<InputEvent> &p_event);
-	bool _gui_input_move(const Ref<InputEvent> &p_event);
-	bool _gui_input_open_scene_on_double_click(const Ref<InputEvent> &p_event);
-	bool _gui_input_scale(const Ref<InputEvent> &p_event);
-	bool _gui_input_pivot(const Ref<InputEvent> &p_event);
-	bool _gui_input_resize(const Ref<InputEvent> &p_event);
-	bool _gui_input_rotate(const Ref<InputEvent> &p_event);
-	bool _gui_input_select(const Ref<InputEvent> &p_event);
-	bool _gui_input_ruler_tool(const Ref<InputEvent> &p_event);
-	bool _gui_input_zoom_or_pan(const Ref<InputEvent> &p_event, bool p_already_accepted);
-	bool _gui_input_rulers_and_guides(const Ref<InputEvent> &p_event);
-	bool _gui_input_hover(const Ref<InputEvent> &p_event);
-
-	void _commit_drag();
-
-	void _gui_input_viewport(const Ref<InputEvent> &p_event);
-	void _update_cursor();
 	void _update_lock_and_group_button();
 
 	void _selection_changed();
 	void _focus_selection(int p_op);
-	void _reset_drag();
 
 	void _project_settings_changed();
 
@@ -646,6 +614,28 @@ class CanvasItemEditorView : public Control {
 	real_t ruler_width_scaled = 16.0;
 	int ruler_font_size = 8;
 
+	// Step⑤b.4c: the drag/input machinery (moved from the editor). The overlay's gui_input targets
+	// _gui_input_viewport below; the editor reaches this state via friendship for the few remaining
+	// service-side touch points (undo save/restore, popup handlers, focus-out/tool-switch commits).
+	Point2 drag_start_origin;
+	CanvasItemEditor::DragType drag_type = CanvasItemEditor::DRAG_NONE;
+	Point2 drag_from;
+	Point2 drag_to;
+	Point2 drag_rotation_center;
+	List<CanvasItem *> drag_selection;
+	int dragged_guide_index = -1;
+	Point2 dragged_guide_pos;
+	bool is_hovering_h_guide = false;
+	bool is_hovering_v_guide = false;
+	Transform2D original_transform;
+	Point2 box_selecting_to;
+	CursorShape cursor_shape_override = CURSOR_ARROW;
+	Vector2 temp_pivot = Vector2(Math::INF, Math::INF);
+	bool ruler_tool_active = false;
+	Point2 ruler_tool_origin;
+	Vector<CanvasItemEditor::SelectResult> selection_results;
+	Vector<CanvasItemEditor::_HoverResult> hovering_results;
+
 	// Step⑤b.4b: the overlay draw path (moved from the editor). Service/selection/scene reads are
 	// routed through `editor->`; the view's own display + pan/zoom state is read directly.
 	// Transform-sink seam: _draw_viewport rebuilds `transform` and pushes it via
@@ -676,6 +666,29 @@ class CanvasItemEditorView : public Control {
 
 	void _draw_viewport();
 
+	// Step⑤b.4c: the input/drag machinery (moved from the editor). Service reads (snap/undo/menus/
+	// selection/tool) are routed through `editor->`; view-owned drag + display state is read directly.
+	void _get_canvas_items_at_pos(const Point2 &p_pos, Vector<CanvasItemEditor::SelectResult> &r_items, bool p_allow_locked = false);
+	bool _select_click_on_item(CanvasItem *item, Point2 p_click_pos, bool p_append);
+
+	bool _gui_input_anchors(const Ref<InputEvent> &p_event);
+	bool _gui_input_move(const Ref<InputEvent> &p_event);
+	bool _gui_input_open_scene_on_double_click(const Ref<InputEvent> &p_event);
+	bool _gui_input_scale(const Ref<InputEvent> &p_event);
+	bool _gui_input_pivot(const Ref<InputEvent> &p_event);
+	bool _gui_input_resize(const Ref<InputEvent> &p_event);
+	bool _gui_input_rotate(const Ref<InputEvent> &p_event);
+	bool _gui_input_select(const Ref<InputEvent> &p_event);
+	bool _gui_input_ruler_tool(const Ref<InputEvent> &p_event);
+	bool _gui_input_zoom_or_pan(const Ref<InputEvent> &p_event, bool p_already_accepted);
+	bool _gui_input_rulers_and_guides(const Ref<InputEvent> &p_event);
+	bool _gui_input_hover(const Ref<InputEvent> &p_event);
+
+	void _commit_drag();
+	void _reset_drag();
+	void _gui_input_viewport(const Ref<InputEvent> &p_event);
+	void _update_cursor();
+
 protected:
 	static void _bind_methods() {}
 
@@ -685,6 +698,13 @@ public:
 	Control *get_overlay_control() const { return viewport; }
 	SubViewportContainer *get_scene_view_container() const { return scene_view_container; }
 	Control *get_controls_container() const { return controls_vb; }
+
+	// Step⑤b.4c: drag-lifecycle forwarders used by the editor's focus-out / tool-switch handlers.
+	void commit_drag_if_any();
+	void cancel_drag();
+
+	void set_cursor_shape_override(CursorShape p_shape = CURSOR_ARROW);
+	virtual CursorShape get_cursor_shape(const Point2 &p_pos) const override;
 
 	CanvasItemEditorView(CanvasItemEditor *p_editor);
 };
