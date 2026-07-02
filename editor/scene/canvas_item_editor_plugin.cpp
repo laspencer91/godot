@@ -3046,7 +3046,6 @@ void CanvasItemEditor::_update_lock_and_group_button() {
 }
 
 void CanvasItemEditor::set_cursor_shape_override(CursorShape p_shape) {
-	// Step⑤b.4c: cursor override state lives on the view now; forward to the active view.
 	_get_active_view()->set_cursor_shape_override(p_shape);
 }
 
@@ -3059,8 +3058,6 @@ void CanvasItemEditorView::set_cursor_shape_override(CursorShape p_shape) {
 }
 
 Control::CursorShape CanvasItemEditor::get_cursor_shape(const Point2 &p_pos) const {
-	// Step⑤b.4c: the cursor logic reads view-owned drag state; the editor's Control virtual
-	// override forwards to the active view.
 	return _get_active_view()->get_cursor_shape(p_pos);
 }
 

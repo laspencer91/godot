@@ -208,10 +208,9 @@ private:
 
 	// Step⑤b.4a: the instanceable 2D VIEW (display stack + pan/zoom) is owned by this separate
 	// class, mirroring Node3DEditor/Node3DEditorView. CanvasItemEditor keeps the shared SERVICES
-	// (tool state, snap engine, toolbar, dialogs). v1: exactly one, created in the ctor. Draw and
-	// input handlers still live on the editor for now (Phases 2-3) and reach view state via main_view.
+	// (tool state, snap engine, toolbar, dialogs). v1: exactly one view, created in the ctor.
+	// _get_active_view() is the single choke point every editor->view reach goes through.
 	CanvasItemEditorView *main_view = nullptr;
-	CanvasItemEditorView *get_main_view() const { return main_view; }
 	CanvasItemEditorView *_get_active_view() const { return main_view; }
 
 	// Used for secondary menu items which are displayed depending on the currently selected node
