@@ -36,6 +36,7 @@
 class AcceptDialog;
 class Button;
 class ButtonGroup;
+class CanvasItemEditorView;
 class CanvasItemEditorViewport;
 class ConfirmationDialog;
 class EditorData;
@@ -202,13 +203,15 @@ private:
 	bool selection_menu_additive_selection = false;
 
 	Tool tool = TOOL_SELECT;
-	Control *viewport = nullptr;
-	Control *viewport_scrollable = nullptr;
-	SubViewportContainer *scene_view_container = nullptr; // Displays the active document's scene_root SubViewport.
 	bool tree_signals_connected = false; // Reparent-tolerance: connect permanent signals only on first ENTER_TREE.
 
-	HScrollBar *h_scroll = nullptr;
-	VScrollBar *v_scroll = nullptr;
+	// Step⑤b.4a: the instanceable 2D VIEW (display stack + pan/zoom) is owned by this separate
+	// class, mirroring Node3DEditor/Node3DEditorView. CanvasItemEditor keeps the shared SERVICES
+	// (tool state, snap engine, toolbar, dialogs). v1: exactly one, created in the ctor. Draw and
+	// input handlers still live on the editor for now (Phases 2-3) and reach view state via main_view.
+	CanvasItemEditorView *main_view = nullptr;
+	CanvasItemEditorView *get_main_view() const { return main_view; }
+	CanvasItemEditorView *_get_active_view() const { return main_view; }
 
 	// Used for secondary menu items which are displayed depending on the currently selected node
 	// (such as MeshInstance's "Mesh" menu).
@@ -218,7 +221,6 @@ private:
 
 	void _update_context_toolbar();
 
-	Transform2D transform;
 	GridVisibility grid_visibility = GRID_VISIBILITY_SHOW_WHEN_SNAPPING;
 	bool show_rulers = true;
 	bool show_guides = true;
@@ -230,11 +232,6 @@ private:
 	bool show_group_gizmos = true;
 	bool show_transformation_gizmos = true;
 
-	real_t zoom = 1.0;
-	Point2 view_offset;
-	Point2 previous_update_view_offset;
-
-	Timer *resample_timer = nullptr;
 	bool auto_resampling_enabled = true;
 	real_t resample_delay = 0.3;
 
@@ -274,7 +271,6 @@ private:
 	bool key_rot = true;
 	bool key_scale = false;
 
-	bool pan_pressed = false;
 	Vector2 temp_pivot = Vector2(Math::INF, Math::INF);
 
 	bool ruler_tool_active = false;
@@ -380,9 +376,6 @@ private:
 	PopupMenu *selection_menu = nullptr;
 	PopupMenu *add_node_menu = nullptr;
 
-	Control *top_ruler = nullptr;
-	Control *left_ruler = nullptr;
-
 	Point2 drag_start_origin;
 	DragType drag_type = DRAG_NONE;
 	Point2 drag_from;
@@ -412,10 +405,6 @@ private:
 	Ref<Shortcut> reset_transform_rotation_shortcut;
 	Ref<Shortcut> reset_transform_scale_shortcut;
 
-	Ref<ViewPanner> panner;
-	void _pan_callback(Vector2 p_scroll_vec, Ref<InputEvent> p_event);
-	void _zoom_callback(float p_zoom_factor, Vector2 p_origin, Ref<InputEvent> p_event);
-
 	bool _is_node_locked(const Node *p_node) const;
 	bool _is_node_movable(const Node *p_node, bool p_popup_warning = false);
 	void _get_canvas_items_at_pos(const Point2 &p_pos, Vector<SelectResult> &r_items, bool p_allow_locked = false);
@@ -436,9 +425,6 @@ private:
 
 	void _prepare_view_menu();
 	void _popup_callback(int p_op);
-	bool updating_scroll = false;
-	void _update_scroll(real_t);
-	void _update_scrollbars();
 	void _snap_changed();
 	void _selection_result_pressed(int);
 	void _selection_menu_hide();
@@ -449,7 +435,6 @@ private:
 	void _prepare_grid_menu();
 	void _on_grid_menu_id_pressed(int p_id);
 	void _reset_transform(TransformType p_type);
-	void _update_oversampling();
 
 public:
 	enum ThemePreviewMode {
@@ -544,12 +529,6 @@ private:
 			const SnapTarget p_snap_target, List<const CanvasItem *> p_exceptions,
 			const Node *p_current);
 
-	VBoxContainer *controls_vb = nullptr;
-	Button *button_center_view = nullptr;
-	EditorZoomWidget *zoom_widget = nullptr;
-	void _update_zoom(real_t p_zoom);
-	void _shortcut_zoom_set(real_t p_zoom);
-	void _zoom_on_position(real_t p_zoom, Point2 p_position = Point2());
 	void _button_toggle_local_space(bool p_status);
 	void _button_toggle_smart_snap(bool p_status);
 	void _button_toggle_grid_snap(bool p_status);
@@ -562,6 +541,7 @@ private:
 	void _set_owner_for_node_and_children(Node *p_node, Node *p_owner);
 
 	friend class CanvasItemEditorPlugin;
+	friend class CanvasItemEditorView; // Step⑤b.4 promissory note: the view reads editor-owned service state.
 
 protected:
 	void _notification(int p_what);
@@ -589,7 +569,7 @@ public:
 	Point2 snap_point(Point2 p_target, unsigned int p_modes = SNAP_DEFAULT, unsigned int p_forced_modes = 0, const CanvasItem *p_self_canvas_item = nullptr, const List<CanvasItem *> &p_other_nodes_exceptions = List<CanvasItem *>());
 	real_t snap_angle(real_t p_target, real_t p_start = 0) const;
 
-	Transform2D get_canvas_transform() const { return transform; }
+	Transform2D get_canvas_transform() const;
 
 	static CanvasItemEditor *get_singleton() { return singleton; }
 	Dictionary get_state() const;
@@ -607,11 +587,11 @@ public:
 
 	VSplitContainer *get_bottom_split();
 
-	Control *get_viewport_control() { return viewport; }
+	Control *get_viewport_control();
 
-	SubViewportContainer *get_scene_view_container() { return scene_view_container; }
+	SubViewportContainer *get_scene_view_container();
 
-	Control *get_controls_container() { return controls_vb; }
+	Control *get_controls_container();
 
 	void find_canvas_items_at_pos(const Point2 &p_pos, Node *p_node, Vector<SelectResult> &r_items, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
 
@@ -636,6 +616,59 @@ public:
 	EditorSelection *editor_selection = nullptr;
 
 	CanvasItemEditor();
+};
+
+// Step⑤b.4a: instanceable per-pane 2D view. Mirrors Node3DEditorView: owns the display stack
+// (viewport overlay + scene container + scrollbars + zoom widget) and the pan/zoom transform
+// state. CanvasItemEditor (services) owns one as main_view and reaches into it via friendship.
+// The overlay's draw/gui_input still target the editor's handlers (moved in Phases 2-3).
+class CanvasItemEditorView : public Control {
+	GDCLASS(CanvasItemEditorView, Control);
+	friend class CanvasItemEditor; // Step⑤b.4 promissory note: services reads/writes this view's display + pan/zoom state.
+
+	CanvasItemEditor *editor = nullptr; // Services singleton this view belongs to.
+
+	Control *viewport = nullptr;
+	Control *viewport_scrollable = nullptr;
+	SubViewportContainer *scene_view_container = nullptr; // Displays the active document's scene_root SubViewport.
+
+	HScrollBar *h_scroll = nullptr;
+	VScrollBar *v_scroll = nullptr;
+
+	VBoxContainer *controls_vb = nullptr;
+	Button *button_center_view = nullptr;
+	EditorZoomWidget *zoom_widget = nullptr;
+
+	Transform2D transform;
+	real_t zoom = 1.0;
+	Point2 view_offset;
+	Point2 previous_update_view_offset;
+	bool updating_scroll = false;
+
+	Ref<ViewPanner> panner;
+	bool pan_pressed = false;
+	Timer *resample_timer = nullptr;
+
+	void _pan_callback(Vector2 p_scroll_vec, Ref<InputEvent> p_event);
+	void _zoom_callback(float p_zoom_factor, Vector2 p_origin, Ref<InputEvent> p_event);
+	void _update_scroll(real_t);
+	void _update_scrollbars();
+	void _update_oversampling();
+	void _update_zoom(real_t p_zoom);
+	void _shortcut_zoom_set(real_t p_zoom);
+	void _zoom_on_position(real_t p_zoom, Point2 p_position = Point2());
+
+protected:
+	static void _bind_methods() {}
+
+public:
+	void update_viewport();
+	Transform2D get_canvas_transform() const { return transform; }
+	Control *get_overlay_control() const { return viewport; }
+	SubViewportContainer *get_scene_view_container() const { return scene_view_container; }
+	Control *get_controls_container() const { return controls_vb; }
+
+	CanvasItemEditorView(CanvasItemEditor *p_editor);
 };
 
 class CanvasItemEditorPlugin : public EditorPlugin {
