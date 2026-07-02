@@ -36,6 +36,7 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/editor_undo_redo_manager.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "scene/gui/subviewport_container.h"
 #include "scene/main/canvas_item.h"
@@ -233,20 +234,60 @@ void CanvasView2D::_gui_input_overlay(const Ref<InputEvent> &p_event) {
 		} else if (mb->get_button_index() == MouseButton::MIDDLE) {
 			panning = mb->is_pressed();
 			input_overlay->accept_event();
-		} else if (mb->is_pressed() && mb->get_button_index() == MouseButton::LEFT) {
-			// Click-select: make this pane's document active, then pick the item under the cursor.
-			_ensure_active();
-			_select_at(_screen_to_canvas(mb->get_position()), mb->is_shift_pressed() || mb->is_command_or_control_pressed());
+		} else if (mb->get_button_index() == MouseButton::LEFT) {
+			if (mb->is_pressed()) {
+				// Make this pane's document active, pick the item under the cursor, update the
+				// selection, and (if we grabbed something) begin a move drag.
+				_ensure_active();
+				const Point2 canvas = _screen_to_canvas(mb->get_position());
+				const bool additive = mb->is_shift_pressed() || mb->is_command_or_control_pressed();
+				CanvasItem *hit = _pick_at(canvas);
+				EditorNode *en = EditorNode::get_singleton();
+				EditorSelection *selection = en ? en->get_editor_selection() : nullptr;
+				if (selection) {
+					if (additive) {
+						if (hit) {
+							if (selection->is_selected(hit)) {
+								selection->remove_node(hit);
+							} else {
+								selection->add_node(hit);
+							}
+						}
+					} else if (hit) {
+						if (!selection->is_selected(hit)) {
+							// Clicking an unselected item replaces the selection; clicking an already-
+							// selected one keeps it (so a multi-selection can be dragged as a group).
+							selection->clear();
+							selection->add_node(hit);
+						}
+					} else {
+						selection->clear();
+					}
+				}
+				if (hit && !additive) {
+					_begin_move(canvas);
+				}
+				if (input_overlay) {
+					input_overlay->queue_redraw();
+				}
+			} else if (moving) {
+				_commit_move();
+			}
 			input_overlay->accept_event();
 		}
 		return;
 	}
 	const Ref<InputEventMouseMotion> mm = p_event;
-	if (mm.is_valid() && panning) {
-		// Drag the view: a screen delta moves the shown canvas point by delta/zoom (opposite sign).
-		view_offset -= mm->get_relative() / zoom;
-		_update_view_transform();
-		input_overlay->accept_event();
+	if (mm.is_valid()) {
+		if (panning) {
+			// Drag the view: a screen delta moves the shown canvas point by delta/zoom (opposite sign).
+			view_offset -= mm->get_relative() / zoom;
+			_update_view_transform();
+			input_overlay->accept_event();
+		} else if (moving) {
+			_update_move(_screen_to_canvas(mm->get_position()));
+			input_overlay->accept_event();
+		}
 	}
 }
 
@@ -272,23 +313,20 @@ void CanvasView2D::_ensure_active() {
 	}
 }
 
-void CanvasView2D::_select_at(const Point2 &p_canvas_pos, bool p_additive) {
+CanvasItem *CanvasView2D::_pick_at(const Point2 &p_canvas_pos) {
 	CanvasItemEditor *cie = CanvasItemEditor::get_singleton();
 	EditorNode *en = EditorNode::get_singleton();
 	if (!cie || !en) {
-		return;
+		return nullptr;
 	}
 	Node *scene = en->get_edited_scene();
-	EditorSelection *selection = en->get_editor_selection();
-	if (!scene || !selection) {
-		return;
+	if (!scene) {
+		return nullptr;
 	}
-
-	// Hit-test in canvas space (the accumulated node transforms only), reusing the editor's
-	// picker; then take the top-most (highest z-index) result.
+	// Hit-test in canvas space (accumulates only node transforms, so it works with our own view
+	// transform), reusing the editor's picker; take the top-most (highest z-index) result.
 	Vector<CanvasItemEditor::SelectResult> results;
 	cie->find_canvas_items_at_pos(p_canvas_pos, scene, results);
-
 	CanvasItem *hit = nullptr;
 	int best_z = 0;
 	for (int i = 0; i < results.size(); i++) {
@@ -297,22 +335,79 @@ void CanvasView2D::_select_at(const Point2 &p_canvas_pos, bool p_additive) {
 			best_z = results[i].z_index;
 		}
 	}
+	return hit;
+}
 
-	if (!hit) {
-		if (!p_additive) {
-			selection->clear();
+void CanvasView2D::_begin_move(const Point2 &p_canvas_pos) {
+	move_selection.clear();
+	move_pre_state.clear();
+	EditorNode *en = EditorNode::get_singleton();
+	EditorSelection *selection = en ? en->get_editor_selection() : nullptr;
+	if (!selection) {
+		return;
+	}
+	for (Node *n : selection->get_top_selected_node_list()) {
+		CanvasItem *ci = Object::cast_to<CanvasItem>(n);
+		if (!ci || !ci->is_inside_tree()) {
+			continue;
 		}
-	} else if (p_additive) {
-		if (selection->is_selected(hit)) {
-			selection->remove_node(hit);
-		} else {
-			selection->add_node(hit);
+		move_selection.push_back(ci);
+		move_pre_state[ci->get_instance_id()] = ci->_edit_get_state(); // For live restore + undo.
+	}
+	if (move_selection.is_empty()) {
+		return;
+	}
+	moving = true;
+	move_from_canvas = p_canvas_pos;
+}
+
+void CanvasView2D::_update_move(const Point2 &p_canvas_pos) {
+	if (!moving) {
+		return;
+	}
+	const Point2 delta = p_canvas_pos - move_from_canvas; // Total move in canvas space, from start.
+	for (CanvasItem *ci : move_selection) {
+		HashMap<ObjectID, Dictionary>::Iterator it = move_pre_state.find(ci->get_instance_id());
+		if (!it) {
+			continue;
 		}
-	} else {
-		selection->clear();
-		selection->add_node(hit);
+		ci->_edit_set_state(it->value); // Restore to pre-drag pose so the delta never accumulates.
+		// Convert the canvas-space delta into the item's parent space, then offset its position.
+		const Transform2D parent_xform_inv = ci->get_transform() * ci->get_screen_transform().affine_inverse();
+		ci->_edit_set_position(ci->_edit_get_position() + parent_xform_inv.basis_xform(delta));
 	}
 	if (input_overlay) {
 		input_overlay->queue_redraw();
 	}
+}
+
+void CanvasView2D::_commit_move() {
+	moving = false;
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	if (undo_redo) {
+		bool any_moved = false;
+		for (CanvasItem *ci : move_selection) {
+			HashMap<ObjectID, Dictionary>::Iterator it = move_pre_state.find(ci->get_instance_id());
+			if (it && ci->_edit_get_state().hash() != it->value.hash()) {
+				any_moved = true;
+				break;
+			}
+		}
+		if (any_moved) {
+			undo_redo->create_action(TTR("Move CanvasItem"));
+			for (CanvasItem *ci : move_selection) {
+				HashMap<ObjectID, Dictionary>::Iterator it = move_pre_state.find(ci->get_instance_id());
+				if (!it) {
+					continue;
+				}
+				undo_redo->add_do_method(ci, "_edit_set_state", ci->_edit_get_state());
+				undo_redo->add_undo_method(ci, "_edit_set_state", it->value);
+			}
+			undo_redo->add_do_method(input_overlay, "queue_redraw");
+			undo_redo->add_undo_method(input_overlay, "queue_redraw");
+			undo_redo->commit_action();
+		}
+	}
+	move_selection.clear();
+	move_pre_state.clear();
 }
