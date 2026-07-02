@@ -590,7 +590,6 @@ private:
 	void _set_current_scene(int p_idx);
 	void _set_current_scene_nocheck(int p_idx);
 	// G1: bind the 2D/3D editors to the active document's scene_root + world (no node reparenting).
-	void _display_scene_root(SubViewport *p_scene_root);
 	void _activate_scene_views();
 	void _nav_to_selected_scene();
 	bool _validate_scene_recursive(const String &p_filename, Node *p_node);

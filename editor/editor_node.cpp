@@ -4600,45 +4600,20 @@ SubViewport *EditorNode::get_scene_root() {
 	return scene_root;
 }
 
-void EditorNode::_display_scene_root(SubViewport *p_scene_root) {
-	// Reparent p_scene_root into the 2D editor's SubViewportContainer so it becomes the
-	// visible/interactive 2D surface. The previously-shown document scene_root is parked
-	// back under documents_holder so it stays live (ticking, still in its own World3D).
-	if (!p_scene_root || !documents_holder) {
-		return;
-	}
-	CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
-	SubViewportContainer *container = canvas_editor ? canvas_editor->get_scene_view_container() : nullptr;
-	if (!container) {
-		return;
-	}
-	if (p_scene_root->get_parent() == container) {
-		return; // Already shown.
-	}
-	for (int i = container->get_child_count() - 1; i >= 0; i--) {
-		SubViewport *current = Object::cast_to<SubViewport>(container->get_child(i));
-		if (!current || current == p_scene_root) {
-			continue;
-		}
-		// Park the previously-shown SubViewport back under documents_holder so it stays
-		// live and tree-owned (this covers both document scene_roots and the placeholder).
-		container->remove_child(current);
-		documents_holder->add_child(current);
-	}
-	if (p_scene_root->get_parent()) {
-		p_scene_root->get_parent()->remove_child(p_scene_root);
-	}
-	container->add_child(p_scene_root);
-}
-
 void EditorNode::_activate_scene_views() {
-	// Acting as the (proto) workspace: bind both the 2D and 3D editors to the active
-	// document's isolated world. The world is passed explicitly (the editor no longer
-	// reaches into the global active document itself — see get_editor_world_3d()).
-	_display_scene_root(get_scene_root());
+	// Acting as the (proto) workspace: bind both the 2D and 3D editors to the active document's
+	// isolated world. The world is passed explicitly (the editor no longer reaches into the global
+	// active document itself — see get_editor_world_3d()). ⑤c: the 2D main view now renders the
+	// active document through its OWN world-bound viewport (activate_document → main_view rebinds),
+	// exactly like a pane view; the shared scene_root is no longer reparented into a display
+	// container — every document's scene_root stays parked under documents_holder for its lifetime.
+	EditorDocument *doc = editor_data.get_active_document();
+	CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
+	if (canvas_editor) {
+		canvas_editor->activate_document(doc);
+	}
 	Node3DEditor *spatial_editor = Node3DEditor::get_singleton();
 	if (spatial_editor) {
-		EditorDocument *doc = editor_data.get_active_document();
 		spatial_editor->set_active_world(doc ? doc->get_world_3d() : Ref<World3D>());
 	}
 }
@@ -8878,6 +8853,11 @@ EditorNode::EditorNode() {
 	documents_holder = memnew(Node);
 	documents_holder->set_name("DocumentsHolder");
 	add_child(documents_holder);
+
+	// ⑤c: the placeholder scene_root (used only before any document exists) lives here too, so it
+	// stays in-tree without the 2D editor having to host it. Document scene_roots join it via
+	// register_document_context() and are never reparented out again.
+	documents_holder->add_child(scene_root);
 
 	accept = memnew(AcceptDialog);
 	accept->set_autowrap(true);

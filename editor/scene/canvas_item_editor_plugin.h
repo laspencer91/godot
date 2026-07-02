@@ -535,7 +535,9 @@ public:
 	// p_document independently and edits only while p_document is the active edited scene.
 	Control *create_view_bound_to(EditorDocument *p_document);
 
-	SubViewportContainer *get_scene_view_container();
+	// ⑤c: bind the main view to p_document (the active document) so it renders + edits that
+	// document through its own world-bound viewport. Called by EditorNode on every scene switch.
+	void activate_document(EditorDocument *p_document);
 
 	Control *get_controls_container();
 
@@ -727,7 +729,6 @@ public:
 	void update_viewport();
 	Transform2D get_canvas_transform() const { return transform; }
 	Control *get_overlay_control() const { return viewport; }
-	SubViewportContainer *get_scene_view_container() const { return scene_view_container; }
 	Control *get_controls_container() const { return controls_vb; }
 
 	// Step⑤b.4c: drag-lifecycle forwarders used by the editor's focus-out / tool-switch handlers.

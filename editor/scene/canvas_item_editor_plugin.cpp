@@ -5735,7 +5735,7 @@ void CanvasItemEditor::focus_selection() {
 }
 
 void CanvasItemEditor::center_at(const Point2 &p_pos) {
-	Vector2 offset = main_view->viewport->get_size() / 2 - EditorNode::get_singleton()->get_scene_root()->get_global_canvas_transform().xform(p_pos);
+	Vector2 offset = main_view->viewport->get_size() / 2 - main_view->get_canvas_transform().xform(p_pos);
 	main_view->view_offset -= (offset / main_view->zoom).round();
 	update_viewport();
 }
@@ -5768,14 +5768,10 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	viewport_scrollable->add_child(scene_view_container);
 	scene_view_container->set_stretch(true);
 	scene_view_container->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
-	// G1 shim: the MAIN view displays the active document's scene_root here; EditorNode rebinds
-	// this on scene switch. At construction no document is active yet, so get_scene_root() returns
-	// the placeholder root. Step⑤b.4d: minted document-bound views must NOT grab the shared
-	// scene_root (that would steal it from the main view) -- they host their OWN view_viewport,
-	// added by bind_document().
-	if (editor->main_view == this) {
-		scene_view_container->add_child(EditorNode::get_singleton()->get_scene_root());
-	}
+	// ⑤c: EVERY view -- main or minted -- renders its document through its OWN view_viewport, added
+	// to this container by bind_document(). The main view gets bound to the active document by
+	// CanvasItemEditor::activate_document() (EditorNode rebinds it on each scene switch); until then
+	// the container is empty. The shared scene_root is never reparented in here anymore.
 
 	controls_vb = memnew(VBoxContainer);
 	controls_vb->set_begin(Point2(5, 5));
@@ -5879,6 +5875,17 @@ Control *CanvasItemEditor::create_view_bound_to(EditorDocument *p_document) {
 	return view;
 }
 
+void CanvasItemEditor::activate_document(EditorDocument *p_document) {
+	// ⑤c: the main view follows the active document by binding its OWN view_viewport to that
+	// document's World2D -- the same mechanism as a pane view (create_view_bound_to), just rebound
+	// on every scene switch. This replaces the old _display_scene_root shim that reparented the
+	// shared scene_root into the display container; scene_roots now stay parked under
+	// EditorNode::documents_holder for their whole lifetime, like the 3D roots.
+	if (main_view) {
+		main_view->bind_document(p_document);
+	}
+}
+
 void CanvasItemEditorView::update_viewport() {
 	_update_scrollbars();
 	viewport->queue_redraw();
@@ -5890,10 +5897,6 @@ Transform2D CanvasItemEditor::get_canvas_transform() const {
 
 Control *CanvasItemEditor::get_viewport_control() {
 	return main_view->get_overlay_control();
-}
-
-SubViewportContainer *CanvasItemEditor::get_scene_view_container() {
-	return main_view->get_scene_view_container();
 }
 
 Control *CanvasItemEditor::get_controls_container() {
