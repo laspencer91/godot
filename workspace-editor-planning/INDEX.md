@@ -23,6 +23,7 @@ This package reconciles the per-goal plans into one buildable sequence. Each goa
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | The service / view-state / document-state taxonomy + seam rules — the tiebreaker for where any editor member belongs. |
 | [DIVERGENCE-LEDGER.md](./DIVERGENCE-LEDGER.md) | Per-file record of stock-file edits (ours-by-design vs upstreamable) + the rebase-cadence policy. |
 | [STEP5-CANVASVIEW2D-SCOPE.md](./STEP5-CANVASVIEW2D-SCOPE.md) | Scoped design for the per-pane 2D view (CanvasView2D): World2D-share finding, member classification, ⑤a/⑤b/⑤c phasing. The critical path to main-screen replacement. |
+| [STEP5b3-SELECTION-SCOPE.md](./STEP5b3-SELECTION-SCOPE.md) | Scoped design for per-pane 2D editing (selection + manipulation, ~2,200 lines) + #6 per-document selection (Model A already works; Model B deferred). Includes the (A) push-through vs (B) bank-the-milestone decision. |
 | [smoke/](./smoke/run_smoke.sh) | Headless regression harness (`bash workspace-editor-planning/smoke/run_smoke.sh`): open-3d / open-2d / restore-3-scenes, assert exit 0 + zero error-class lines. |
 
 ## Dependency graph
