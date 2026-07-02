@@ -32,10 +32,13 @@
 
 #include "core/input/input_event.h"
 #include "core/object/callable_mp.h"
+#include "editor/editor_data.h"
 #include "editor/editor_document.h"
+#include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "scene/gui/subviewport_container.h"
+#include "scene/main/canvas_item.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/world_2d.h"
 
@@ -78,6 +81,15 @@ CanvasView2D::CanvasView2D(EditorDocument *p_document) {
 	input_overlay->connect(SceneStringName(gui_input), callable_mp(this, &CanvasView2D::_gui_input_overlay));
 	input_overlay->connect(SceneStringName(draw), callable_mp(this, &CanvasView2D::_draw_overlay));
 	add_child(input_overlay);
+
+	// Redraw the overlay when the (global) selection changes, so selection boxes stay current
+	// even when selection is driven from elsewhere (e.g. the scene-tree dock). The connection is
+	// auto-removed when input_overlay is freed.
+	if (EditorNode *en = EditorNode::get_singleton()) {
+		if (EditorSelection *sel = en->get_editor_selection()) {
+			sel->connect("selection_changed", callable_mp((CanvasItem *)input_overlay, &CanvasItem::queue_redraw));
+		}
+	}
 }
 
 void CanvasView2D::_notification(int p_what) {
@@ -165,6 +177,36 @@ void CanvasView2D::_draw_overlay() {
 	if (o.x >= 0 && o.x <= size.x) {
 		input_overlay->draw_line(Point2(o.x, 0), Point2(o.x, size.y), axis_y);
 	}
+
+	// Selection boxes -- only when THIS view's document is the active one, so an inactive split
+	// pane never shows another document's (stale) selection. The global selection belongs to the
+	// active document (per-document selection Model A); per-pane independent selection is later.
+	EditorNode *en = EditorNode::get_singleton();
+	if (!en || !_is_active_document()) {
+		return;
+	}
+	EditorSelection *selection = en->get_editor_selection();
+	if (!selection) {
+		return;
+	}
+	const Color sel_color = get_theme_color(SNAME("accent_color"), EditorStringName(Editor));
+	for (const Node *n : selection->get_top_selected_node_list()) {
+		const CanvasItem *ci = Object::cast_to<CanvasItem>(n);
+		if (!ci || !ci->is_inside_tree() || !ci->is_visible_in_tree()) {
+			continue;
+		}
+		const Rect2 rect = ci->_edit_get_rect();
+		const Transform2D gt = ci->get_global_transform(); // canvas space
+		const Point2 c[4] = {
+			_canvas_to_screen(gt.xform(rect.position)),
+			_canvas_to_screen(gt.xform(rect.position + Vector2(rect.size.x, 0))),
+			_canvas_to_screen(gt.xform(rect.position + rect.size)),
+			_canvas_to_screen(gt.xform(rect.position + Vector2(0, rect.size.y))),
+		};
+		for (int i = 0; i < 4; i++) {
+			input_overlay->draw_line(c[i], c[(i + 1) % 4], sel_color, 2.0);
+		}
+	}
 }
 
 void CanvasView2D::_zoom_at(const Point2 &p_screen, real_t p_factor) {
@@ -191,6 +233,11 @@ void CanvasView2D::_gui_input_overlay(const Ref<InputEvent> &p_event) {
 		} else if (mb->get_button_index() == MouseButton::MIDDLE) {
 			panning = mb->is_pressed();
 			input_overlay->accept_event();
+		} else if (mb->is_pressed() && mb->get_button_index() == MouseButton::LEFT) {
+			// Click-select: make this pane's document active, then pick the item under the cursor.
+			_ensure_active();
+			_select_at(_screen_to_canvas(mb->get_position()), mb->is_shift_pressed() || mb->is_command_or_control_pressed());
+			input_overlay->accept_event();
 		}
 		return;
 	}
@@ -200,5 +247,72 @@ void CanvasView2D::_gui_input_overlay(const Ref<InputEvent> &p_event) {
 		view_offset -= mm->get_relative() / zoom;
 		_update_view_transform();
 		input_overlay->accept_event();
+	}
+}
+
+bool CanvasView2D::_is_active_document() const {
+	EditorNode *en = EditorNode::get_singleton();
+	return en && document && en->get_editor_data().get_active_document() == document;
+}
+
+void CanvasView2D::_ensure_active() {
+	EditorNode *en = EditorNode::get_singleton();
+	if (!en || !document || _is_active_document()) {
+		return;
+	}
+	// Resolve this document's current edited-scene index and make it active (same path as a tab
+	// selection), so the global selection this view edits belongs to THIS document.
+	EditorData &ed = en->get_editor_data();
+	const int count = ed.get_edited_scene_count();
+	for (int i = 0; i < count; i++) {
+		if (ed.get_document(i) == document) {
+			en->set_edited_scene_index(i);
+			return;
+		}
+	}
+}
+
+void CanvasView2D::_select_at(const Point2 &p_canvas_pos, bool p_additive) {
+	CanvasItemEditor *cie = CanvasItemEditor::get_singleton();
+	EditorNode *en = EditorNode::get_singleton();
+	if (!cie || !en) {
+		return;
+	}
+	Node *scene = en->get_edited_scene();
+	EditorSelection *selection = en->get_editor_selection();
+	if (!scene || !selection) {
+		return;
+	}
+
+	// Hit-test in canvas space (the accumulated node transforms only), reusing the editor's
+	// picker; then take the top-most (highest z-index) result.
+	Vector<CanvasItemEditor::SelectResult> results;
+	cie->find_canvas_items_at_pos(p_canvas_pos, scene, results);
+
+	CanvasItem *hit = nullptr;
+	int best_z = 0;
+	for (int i = 0; i < results.size(); i++) {
+		if (!hit || results[i].z_index >= best_z) {
+			hit = results[i].item;
+			best_z = results[i].z_index;
+		}
+	}
+
+	if (!hit) {
+		if (!p_additive) {
+			selection->clear();
+		}
+	} else if (p_additive) {
+		if (selection->is_selected(hit)) {
+			selection->remove_node(hit);
+		} else {
+			selection->add_node(hit);
+		}
+	} else {
+		selection->clear();
+		selection->add_node(hit);
+	}
+	if (input_overlay) {
+		input_overlay->queue_redraw();
 	}
 }

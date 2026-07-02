@@ -66,7 +66,11 @@ class CanvasView2D : public Control {
 	Point2 _canvas_to_screen(const Point2 &p_canvas) const;
 	void _zoom_at(const Point2 &p_screen, real_t p_factor); // Zoom keeping p_screen's canvas point fixed.
 	void _gui_input_overlay(const Ref<InputEvent> &p_event);
-	void _draw_overlay(); // Grid + origin axes on the overlay, reading grid config from the service.
+	void _draw_overlay(); // Grid + origin axes + selection on the overlay.
+
+	void _ensure_active(); // Make this view's document the editor's active edited scene.
+	void _select_at(const Point2 &p_canvas_pos, bool p_additive); // Click-select into the global selection.
+	bool _is_active_document() const; // True when this view's document is the active edited scene.
 
 protected:
 	void _notification(int p_what);
