@@ -40,9 +40,11 @@ class CanvasItemEditorView;
 class CanvasItemEditorViewport;
 class ConfirmationDialog;
 class EditorData;
+class EditorDocument;
 class EditorSelection;
 class EditorZoomWidget;
 class HScrollBar;
+class SubViewport;
 class SubViewportContainer;
 class HSplitContainer;
 class MenuButton;
@@ -528,6 +530,11 @@ public:
 
 	Control *get_viewport_control();
 
+	// Step⑤b.4d: mint a per-pane 2D view bound to p_document's isolated World2D (the 2D analog of
+	// Node3DEditor::create_view_bound_to). DocumentView hosts the returned Control; it renders
+	// p_document independently and edits only while p_document is the active edited scene.
+	Control *create_view_bound_to(EditorDocument *p_document);
+
 	SubViewportContainer *get_scene_view_container();
 
 	Control *get_controls_container();
@@ -566,6 +573,14 @@ class CanvasItemEditorView : public Control {
 	friend class CanvasItemEditor; // Step⑤b.4 promissory note: services reads/writes this view's display + pan/zoom state.
 
 	CanvasItemEditor *editor = nullptr; // Services singleton this view belongs to.
+
+	// Step⑤b.4d: document binding. null = "shim mode": this view displays the globally-active
+	// document via the shared scene_root (the main_view). Non-null = a per-pane view minted by
+	// create_view_bound_to(): it renders p_document through its OWN view_viewport (bound to the
+	// document's World2D) and edits only while p_document is the active edited scene.
+	EditorDocument *document = nullptr;
+	SubViewport *view_viewport = nullptr; // Child viewport bound to document's World2D (document != null).
+	bool view_settings_initialized = false; // One-time settings-derived cache init on first ENTER_TREE.
 
 	Control *viewport = nullptr;
 	Control *viewport_scrollable = nullptr;
@@ -643,6 +658,11 @@ class CanvasItemEditorView : public Control {
 	void _update_display_transform();
 	Viewport *_get_transform_sink();
 
+	// Step⑤b.4d: document-bound helpers (ported from CanvasView2D). _is_active_document() is true
+	// when this view's document is the editor's active edited scene; _ensure_active() makes it so.
+	bool _is_active_document() const;
+	void _ensure_active();
+
 	void _draw_text_at_position(Point2 p_position, const String &p_string, Side p_side);
 	void _draw_margin_at_position(int p_value, Point2 p_position, Side p_side);
 	void _draw_percentage_at_position(real_t p_value, Point2 p_position, Side p_side);
@@ -689,9 +709,16 @@ class CanvasItemEditorView : public Control {
 	void _update_cursor();
 
 protected:
+	void _notification(int p_what);
 	static void _bind_methods() {}
 
 public:
+	// Step⑤b.4d: bind this view to p_document -- build its own SubViewport pointed at the
+	// document's World2D so the pane renders that document independently (mirrors
+	// Node3DEditorView::set_active_world). Called by create_view_bound_to() before the view enters
+	// the tree; main_view stays unbound (document == null).
+	void bind_document(EditorDocument *p_document);
+
 	void update_viewport();
 	Transform2D get_canvas_transform() const { return transform; }
 	Control *get_overlay_control() const { return viewport; }

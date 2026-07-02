@@ -31,8 +31,8 @@
 #include "document_view.h"
 
 #include "editor/editor_document.h"
-#include "editor/gui/canvas_view_2d.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
+#include "editor/scene/canvas_item_editor_plugin.h"
 
 DocumentView::DocumentView(EditorDocument *p_document) {
 	set_h_size_flags(SIZE_EXPAND_FILL);
@@ -48,14 +48,19 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 
 	// Host the editor surface for this document's kind, pointed at THIS document's isolated
 	// world so the pane renders p_document's scene independently of the globally-active one.
-	// 2D scenes get a CanvasView2D; 3D (and mixed/unknown, until the ⑤b 2D/3D toggle) get a
-	// Node3DEditorView.
+	// 2D scenes get a CanvasItemEditorView (the real 2D editor view, minted per-document); 3D (and
+	// mixed/unknown, until the ⑤b 2D/3D toggle) get a Node3DEditorView. Symmetric factory calls.
 	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
 	if (type == EditorDocument::TYPE_SCENE_2D) {
-		editor_surface = memnew(CanvasView2D(p_document));
-		add_child(editor_surface);
-		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
+		CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
+		if (canvas_editor) {
+			editor_surface = canvas_editor->create_view_bound_to(p_document);
+			if (editor_surface) {
+				add_child(editor_surface);
+				editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
+				editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
+			}
+		}
 	} else {
 		Node3DEditor *spatial = Node3DEditor::get_singleton();
 		if (spatial) {

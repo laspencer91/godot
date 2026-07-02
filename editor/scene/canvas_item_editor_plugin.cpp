@@ -41,6 +41,8 @@
 #include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/docks/scene_tree_dock.h"
+#include "editor/editor_data.h"
+#include "editor/editor_document.h"
 #include "editor/editor_main_screen.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
@@ -73,9 +75,11 @@
 #include "scene/main/canvas_layer.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/timer.h"
+#include "scene/main/viewport.h"
 #include "scene/main/window.h"
 #include "scene/resources/packed_scene.h"
 #include "scene/resources/style_box_texture.h"
+#include "scene/resources/world_2d.h"
 #include "servers/rendering/rendering_server.h"
 
 #define DRAG_THRESHOLD (8 * EDSCALE)
@@ -353,7 +357,7 @@ void CanvasItemEditor::_snap_other_nodes(
 	};
 
 	if (ci && !exception) {
-		Transform2D ci_transform = ci->get_screen_transform();
+		Transform2D ci_transform = ci->get_global_transform_with_canvas();
 		if (std::fmod(ci_transform.get_rotation() - p_transform_to_snap.get_rotation(), (real_t)360.0) == 0.0) {
 			if (ci->_edit_use_rect()) {
 				Point2 begin = ci_transform.xform(ci->_edit_get_rect().get_position());
@@ -383,13 +387,13 @@ Point2 CanvasItemEditor::snap_point(Point2 p_target, unsigned int p_modes, unsig
 	real_t rotation = 0.0;
 
 	if (p_self_canvas_item) {
-		rotation = p_self_canvas_item->get_screen_transform().get_rotation();
+		rotation = p_self_canvas_item->get_global_transform_with_canvas().get_rotation();
 
 		// Parent sides and center
 		if ((is_snap_active && snap_node_parent && (p_modes & SNAP_NODE_PARENT)) || (p_forced_modes & SNAP_NODE_PARENT)) {
 			if (const Control *c = Object::cast_to<Control>(p_self_canvas_item)) {
-				Point2 begin = p_self_canvas_item->get_screen_transform().xform(_anchor_to_position(c, Point2(0, 0)));
-				Point2 end = p_self_canvas_item->get_screen_transform().xform(_anchor_to_position(c, Point2(1, 1)));
+				Point2 begin = p_self_canvas_item->get_global_transform_with_canvas().xform(_anchor_to_position(c, Point2(0, 0)));
+				Point2 end = p_self_canvas_item->get_global_transform_with_canvas().xform(_anchor_to_position(c, Point2(1, 1)));
 				_snap_if_closer_point(p_target, output, snap_target, begin, SNAP_TARGET_PARENT, rotation);
 				_snap_if_closer_point(p_target, output, snap_target, (begin + end) / 2.0, SNAP_TARGET_PARENT, rotation);
 				_snap_if_closer_point(p_target, output, snap_target, end, SNAP_TARGET_PARENT, rotation);
@@ -410,8 +414,8 @@ Point2 CanvasItemEditor::snap_point(Point2 p_target, unsigned int p_modes, unsig
 		// Self anchors
 		if ((is_snap_active && snap_node_anchors && (p_modes & SNAP_NODE_ANCHORS)) || (p_forced_modes & SNAP_NODE_ANCHORS)) {
 			if (const Control *c = Object::cast_to<Control>(p_self_canvas_item)) {
-				Point2 begin = p_self_canvas_item->get_screen_transform().xform(_anchor_to_position(c, Point2(c->get_anchor(SIDE_LEFT), c->get_anchor(SIDE_TOP))));
-				Point2 end = p_self_canvas_item->get_screen_transform().xform(_anchor_to_position(c, Point2(c->get_anchor(SIDE_RIGHT), c->get_anchor(SIDE_BOTTOM))));
+				Point2 begin = p_self_canvas_item->get_global_transform_with_canvas().xform(_anchor_to_position(c, Point2(c->get_anchor(SIDE_LEFT), c->get_anchor(SIDE_TOP))));
+				Point2 end = p_self_canvas_item->get_global_transform_with_canvas().xform(_anchor_to_position(c, Point2(c->get_anchor(SIDE_RIGHT), c->get_anchor(SIDE_BOTTOM))));
 				_snap_if_closer_point(p_target, output, snap_target, begin, SNAP_TARGET_SELF_ANCHORS, rotation);
 				_snap_if_closer_point(p_target, output, snap_target, end, SNAP_TARGET_SELF_ANCHORS, rotation);
 			}
@@ -420,8 +424,8 @@ Point2 CanvasItemEditor::snap_point(Point2 p_target, unsigned int p_modes, unsig
 		// Self sides
 		if ((is_snap_active && snap_node_sides && (p_modes & SNAP_NODE_SIDES)) || (p_forced_modes & SNAP_NODE_SIDES)) {
 			if (p_self_canvas_item->_edit_use_rect()) {
-				Point2 begin = p_self_canvas_item->get_screen_transform().xform(p_self_canvas_item->_edit_get_rect().get_position());
-				Point2 end = p_self_canvas_item->get_screen_transform().xform(p_self_canvas_item->_edit_get_rect().get_position() + p_self_canvas_item->_edit_get_rect().get_size());
+				Point2 begin = p_self_canvas_item->get_global_transform_with_canvas().xform(p_self_canvas_item->_edit_get_rect().get_position());
+				Point2 end = p_self_canvas_item->get_global_transform_with_canvas().xform(p_self_canvas_item->_edit_get_rect().get_position() + p_self_canvas_item->_edit_get_rect().get_size());
 				_snap_if_closer_point(p_target, output, snap_target, begin, SNAP_TARGET_SELF, rotation);
 				_snap_if_closer_point(p_target, output, snap_target, end, SNAP_TARGET_SELF, rotation);
 			}
@@ -430,10 +434,10 @@ Point2 CanvasItemEditor::snap_point(Point2 p_target, unsigned int p_modes, unsig
 		// Self center
 		if ((is_snap_active && snap_node_center && (p_modes & SNAP_NODE_CENTER)) || (p_forced_modes & SNAP_NODE_CENTER)) {
 			if (p_self_canvas_item->_edit_use_rect()) {
-				Point2 center = p_self_canvas_item->get_screen_transform().xform(p_self_canvas_item->_edit_get_rect().get_center());
+				Point2 center = p_self_canvas_item->get_global_transform_with_canvas().xform(p_self_canvas_item->_edit_get_rect().get_center());
 				_snap_if_closer_point(p_target, output, snap_target, center, SNAP_TARGET_SELF, rotation);
 			} else {
-				Point2 position = p_self_canvas_item->get_screen_transform().xform(Point2());
+				Point2 position = p_self_canvas_item->get_global_transform_with_canvas().xform(Point2());
 				_snap_if_closer_point(p_target, output, snap_target, position, SNAP_TARGET_SELF, rotation);
 			}
 		}
@@ -448,7 +452,7 @@ Point2 CanvasItemEditor::snap_point(Point2 p_target, unsigned int p_modes, unsig
 		}
 		if (p_self_canvas_item) {
 			exceptions.push_back(p_self_canvas_item);
-			to_snap_transform = p_self_canvas_item->get_screen_transform();
+			to_snap_transform = p_self_canvas_item->get_global_transform_with_canvas();
 		}
 
 		_snap_other_nodes(
@@ -910,7 +914,7 @@ void CanvasItemEditor::_save_canvas_item_state(const List<CanvasItem *> &p_canva
 			}
 
 			se->undo_state = ci->_edit_get_state();
-			se->pre_drag_xform = ci->get_screen_transform();
+			se->pre_drag_xform = ci->get_global_transform_with_canvas();
 			if (ci->_edit_use_rect()) {
 				se->pre_drag_rect = ci->_edit_get_rect();
 			} else {
@@ -1507,7 +1511,7 @@ bool CanvasItemEditorView::_gui_input_pivot(const Ref<InputEvent> &p_event) {
 					new_pos = editor->snap_point(drag_from, CanvasItemEditor::SNAP_OTHER_NODES | CanvasItemEditor::SNAP_GRID | CanvasItemEditor::SNAP_PIXEL, 0, nullptr, drag_selection);
 				}
 				for (CanvasItem *ci : drag_selection) {
-					ci->_edit_set_pivot(ci->get_screen_transform().affine_inverse().xform(new_pos));
+					ci->_edit_set_pivot(ci->get_global_transform_with_canvas().affine_inverse().xform(new_pos));
 				}
 
 				drag_type = CanvasItemEditor::DRAG_PIVOT;
@@ -1528,7 +1532,7 @@ bool CanvasItemEditorView::_gui_input_pivot(const Ref<InputEvent> &p_event) {
 				new_pos = editor->snap_point(drag_to, CanvasItemEditor::SNAP_OTHER_NODES | CanvasItemEditor::SNAP_GRID | CanvasItemEditor::SNAP_PIXEL);
 			}
 			for (CanvasItem *ci : drag_selection) {
-				ci->_edit_set_pivot(ci->get_screen_transform().affine_inverse().xform(new_pos));
+				ci->_edit_set_pivot(ci->get_global_transform_with_canvas().affine_inverse().xform(new_pos));
 			}
 			return true;
 		}
@@ -1598,9 +1602,9 @@ bool CanvasItemEditorView::_gui_input_rotate(const Ref<InputEvent> &p_event) {
 					if (!Math::is_inf(temp_pivot.x) || !Math::is_inf(temp_pivot.y)) {
 						drag_rotation_center = temp_pivot;
 					} else if (ci->_edit_use_pivot()) {
-						drag_rotation_center = ci->get_screen_transform().xform(ci->_edit_get_pivot());
+						drag_rotation_center = ci->get_global_transform_with_canvas().xform(ci->_edit_get_pivot());
 					} else {
-						drag_rotation_center = ci->get_screen_transform().get_origin();
+						drag_rotation_center = ci->get_global_transform_with_canvas().get_origin();
 					}
 					editor->_save_canvas_item_state(drag_selection);
 					return true;
@@ -1627,7 +1631,7 @@ bool CanvasItemEditorView::_gui_input_rotate(const Ref<InputEvent> &p_event) {
 
 				ci->_edit_set_rotation(new_rotation);
 				if (!Math::is_inf(temp_pivot.x) || !Math::is_inf(temp_pivot.y)) {
-					Transform2D xform = ci->get_screen_transform() * ci->get_transform().affine_inverse();
+					Transform2D xform = ci->get_global_transform_with_canvas() * ci->get_transform().affine_inverse();
 					Vector2 radius = xform.xform(ci->_edit_get_position()) - temp_pivot;
 					radius = radius.rotated(new_rotation - prev_rotation);
 					ci->_edit_set_position(xform.affine_inverse().xform(temp_pivot + radius));
@@ -1690,7 +1694,7 @@ bool CanvasItemEditorView::_gui_input_anchors(const Ref<InputEvent> &p_event) {
 
 					Rect2 anchor_rects[4];
 					for (int i = 0; i < 4; i++) {
-						anchor_pos[i] = (transform * control->get_screen_transform()).xform(editor->_anchor_to_position(control, anchor_pos[i]));
+						anchor_pos[i] = (transform * control->get_global_transform_with_canvas()).xform(editor->_anchor_to_position(control, anchor_pos[i]));
 						anchor_rects[i] = Rect2(anchor_pos[i], editor->anchor_handle->get_size());
 						if (control->is_layout_rtl()) {
 							anchor_rects[i].position -= editor->anchor_handle->get_size() * Vector2(real_t(i == 1 || i == 2), real_t(i <= 1));
@@ -1733,7 +1737,7 @@ bool CanvasItemEditorView::_gui_input_anchors(const Ref<InputEvent> &p_event) {
 
 			drag_to = transform.affine_inverse().xform(m->get_position());
 
-			Transform2D xform = control->get_screen_transform().affine_inverse();
+			Transform2D xform = control->get_global_transform_with_canvas().affine_inverse();
 
 			Point2 previous_anchor;
 			previous_anchor.x = (drag_type == CanvasItemEditor::DRAG_ANCHOR_TOP_LEFT || drag_type == CanvasItemEditor::DRAG_ANCHOR_BOTTOM_LEFT) ? control->get_anchor(SIDE_LEFT) : control->get_anchor(SIDE_RIGHT);
@@ -1827,7 +1831,7 @@ bool CanvasItemEditorView::_gui_input_resize(const Ref<InputEvent> &p_event) {
 				CanvasItem *ci = selection.front()->get();
 				if (ci->_edit_use_rect() && editor->_is_node_movable(ci)) {
 					Rect2 rect = ci->_edit_get_rect();
-					Transform2D xform = transform * ci->get_screen_transform();
+					Transform2D xform = transform * ci->get_global_transform_with_canvas();
 
 					const Vector2 endpoints[4] = {
 						xform.xform(rect.position),
@@ -1903,7 +1907,7 @@ bool CanvasItemEditorView::_gui_input_resize(const Ref<InputEvent> &p_event) {
 
 			drag_to = transform.affine_inverse().xform(m->get_position());
 
-			Transform2D xform = ci->get_screen_transform();
+			Transform2D xform = ci->get_global_transform_with_canvas();
 
 			Point2 drag_to_snapped_begin;
 			Point2 drag_to_snapped_end;
@@ -2015,7 +2019,7 @@ bool CanvasItemEditorView::_gui_input_scale(const Ref<InputEvent> &p_event) {
 					edit_transform = ci->_edit_get_transform();
 				}
 
-				Transform2D xform = transform * ci->get_screen_transform();
+				Transform2D xform = transform * ci->get_global_transform_with_canvas();
 				Transform2D unscaled_transform = (xform * ci->get_transform().affine_inverse() * edit_transform).orthonormalized();
 				Transform2D simple_xform;
 				if (editor->use_local_space) {
@@ -2079,7 +2083,7 @@ bool CanvasItemEditorView::_gui_input_scale(const Ref<InputEvent> &p_event) {
 				edit_transform = drag_selection.front()->get()->_edit_get_transform();
 			}
 			for (CanvasItem *ci : drag_selection) {
-				Transform2D parent_xform = ci->get_screen_transform() * ci->get_transform().affine_inverse();
+				Transform2D parent_xform = ci->get_global_transform_with_canvas() * ci->get_transform().affine_inverse();
 				Transform2D unscaled_transform = (transform * parent_xform * edit_transform).orthonormalized();
 				Transform2D simple_xform;
 
@@ -2211,7 +2215,7 @@ bool CanvasItemEditorView::_gui_input_move(const Ref<InputEvent> &p_event) {
 					drag_type = CanvasItemEditor::DRAG_MOVE;
 
 					CanvasItem *ci = selection.front()->get();
-					Transform2D parent_xform = ci->get_screen_transform() * ci->get_transform().affine_inverse();
+					Transform2D parent_xform = ci->get_global_transform_with_canvas() * ci->get_transform().affine_inverse();
 					Transform2D unscaled_transform = (transform * parent_xform * ci->_edit_get_transform()).orthonormalized();
 					Transform2D simple_xform;
 					if (editor->use_local_space) {
@@ -2255,7 +2259,7 @@ bool CanvasItemEditorView::_gui_input_move(const Ref<InputEvent> &p_event) {
 			drag_to = transform.affine_inverse().xform(m->get_position());
 			Point2 previous_pos;
 			if (drag_selection.size() == 1) {
-				Transform2D parent_xform = drag_selection.front()->get()->get_screen_transform() * drag_selection.front()->get()->get_transform().affine_inverse();
+				Transform2D parent_xform = drag_selection.front()->get()->get_global_transform_with_canvas() * drag_selection.front()->get()->get_transform().affine_inverse();
 				previous_pos = parent_xform.xform(drag_selection.front()->get()->_edit_get_position());
 			} else {
 				previous_pos = editor->_get_encompassing_rect_from_list(drag_selection).position;
@@ -2264,7 +2268,7 @@ bool CanvasItemEditorView::_gui_input_move(const Ref<InputEvent> &p_event) {
 			Point2 drag_delta = drag_to - drag_from;
 			if (drag_type == CanvasItemEditor::DRAG_MOVE_X || drag_type == CanvasItemEditor::DRAG_MOVE_Y) {
 				const CanvasItem *selected = drag_selection.front()->get();
-				Transform2D parent_xform = selected->get_screen_transform() * selected->get_transform().affine_inverse();
+				Transform2D parent_xform = selected->get_global_transform_with_canvas() * selected->get_transform().affine_inverse();
 				Transform2D unscaled_transform = (transform * parent_xform * selected->_edit_get_transform()).orthonormalized();
 				Transform2D simple_xform;
 				if (editor->use_local_space) {
@@ -2293,7 +2297,7 @@ bool CanvasItemEditorView::_gui_input_move(const Ref<InputEvent> &p_event) {
 			}
 
 			for (CanvasItem *ci : drag_selection) {
-				Transform2D parent_xform_inv = ci->get_transform() * ci->get_screen_transform().affine_inverse();
+				Transform2D parent_xform_inv = ci->get_transform() * ci->get_global_transform_with_canvas().affine_inverse();
 				ci->_edit_set_position(ci->_edit_get_position() + parent_xform_inv.basis_xform(new_pos - previous_pos));
 			}
 			return true;
@@ -2712,7 +2716,7 @@ bool CanvasItemEditorView::_gui_input_hover(const Ref<InputEvent> &p_event) {
 			}
 
 			CanvasItemEditor::_HoverResult hover_result;
-			hover_result.position = ci->get_screen_transform().get_origin();
+			hover_result.position = ci->get_global_transform_with_canvas().get_origin();
 			hover_result.icon = EditorNode::get_singleton()->get_object_icon(ci);
 			hover_result.name = ci->get_name();
 
@@ -2746,6 +2750,22 @@ bool CanvasItemEditorView::_gui_input_hover(const Ref<InputEvent> &p_event) {
 }
 
 void CanvasItemEditorView::_gui_input_viewport(const Ref<InputEvent> &p_event) {
+	// Step⑤b.4d edit-gating (view-many, edit-active): a document-bound view that is NOT the active
+	// edited scene may only pan/zoom -- never manipulate (matches CanvasView2D's active-only
+	// editing). A LMB/RMB press first promotes this document to active, so the next event edits
+	// normally. The shim main view (document == null) skips this entirely and is unaffected.
+	if (document && !_is_active_document()) {
+		Ref<InputEventMouseButton> gate_mb = p_event;
+		if (gate_mb.is_valid() && gate_mb->is_pressed() &&
+				(gate_mb->get_button_index() == MouseButton::LEFT || gate_mb->get_button_index() == MouseButton::RIGHT)) {
+			_ensure_active();
+		}
+		if (_gui_input_zoom_or_pan(p_event, false)) {
+			accept_event();
+		}
+		return;
+	}
+
 	bool accepted = false;
 
 	Ref<InputEventMouseButton> mb = p_event;
@@ -3556,7 +3576,7 @@ void CanvasItemEditorView::_draw_ruler_tool() {
 }
 
 void CanvasItemEditorView::_draw_control_anchors(Control *control) {
-	Transform2D xform = transform * control->get_screen_transform();
+	Transform2D xform = transform * control->get_global_transform_with_canvas();
 	RID ci = viewport->get_canvas_item();
 	if (editor->tool == CanvasItemEditor::TOOL_SELECT && !Object::cast_to<Container>(control->get_parent())) {
 		// Compute the anchors
@@ -3593,7 +3613,7 @@ void CanvasItemEditorView::_draw_control_anchors(Control *control) {
 }
 
 void CanvasItemEditorView::_draw_control_helpers(Control *control) {
-	Transform2D xform = transform * control->get_screen_transform();
+	Transform2D xform = transform * control->get_global_transform_with_canvas();
 	if (editor->tool == CanvasItemEditor::TOOL_SELECT && show_helpers && !Object::cast_to<Container>(control->get_parent())) {
 		// Draw the helpers
 		Color color_base = Color(0.8, 0.8, 0.8, 0.5);
@@ -3805,7 +3825,7 @@ void CanvasItemEditorView::_draw_selection() {
 		}
 
 		bool item_locked = ci->has_meta("_edit_lock_");
-		Transform2D xform = transform * ci->get_screen_transform();
+		Transform2D xform = transform * ci->get_global_transform_with_canvas();
 
 		// Draw the selected items position / surrounding boxes
 		if (ci->_edit_use_rect()) {
@@ -3899,7 +3919,7 @@ void CanvasItemEditorView::_draw_selection() {
 	if (!selection.is_empty() && transform_tool && show_transformation_gizmos) {
 		CanvasItem *ci = selection.front()->get();
 
-		Transform2D xform = transform * ci->get_screen_transform();
+		Transform2D xform = transform * ci->get_global_transform_with_canvas();
 		bool is_ctrl = Input::get_singleton()->is_key_pressed(Key::CMD_OR_CTRL);
 		bool is_alt = Input::get_singleton()->is_key_pressed(Key::ALT);
 
@@ -4284,14 +4304,91 @@ void CanvasItemEditorView::_update_display_transform() {
 }
 
 Viewport *CanvasItemEditorView::_get_transform_sink() {
-	// Shim main view: the sink is the active document's scene_root. Phase 4 returns the view's own
-	// SubViewport once the view is document-bound.
+	// Document-bound view: the sink is this view's OWN SubViewport, so its pan/zoom never touches
+	// the shared scene_root (another view may be displaying it). Shim main view (document == null):
+	// the sink is the globally-active document's scene_root. Mirrors Node3DEditorView's
+	// bound-world/root-window fallback split in get_editor_world_3d().
+	if (document && view_viewport) {
+		return view_viewport;
+	}
 	return EditorNode::get_singleton()->get_scene_root();
+}
+
+bool CanvasItemEditorView::_is_active_document() const {
+	// True when this view's document is the editor's active edited scene (ported from CanvasView2D).
+	EditorNode *en = EditorNode::get_singleton();
+	return en && document && en->get_editor_data().get_active_document() == document;
+}
+
+void CanvasItemEditorView::_ensure_active() {
+	// Resolve this document's current edited-scene index and make it active (same path as a tab
+	// selection), so the global selection this view edits belongs to THIS document. Ported from
+	// CanvasView2D::_ensure_active().
+	EditorNode *en = EditorNode::get_singleton();
+	if (!en || !document || _is_active_document()) {
+		return;
+	}
+	EditorData &ed = en->get_editor_data();
+	const int count = ed.get_edited_scene_count();
+	for (int i = 0; i < count; i++) {
+		if (ed.get_document(i) == document) {
+			en->set_edited_scene_index(i);
+			return;
+		}
+	}
+}
+
+void CanvasItemEditorView::bind_document(EditorDocument *p_document) {
+	// Port of CanvasView2D's render core: give this view its own SubViewport pointed at the
+	// document's World2D so the pane renders that document's canvas independently of any other
+	// view (no scene_root reparenting). disable_3d: 2D surface; disable_input: editing input flows
+	// through the overlay's _gui_input_viewport, not the viewport itself.
+	document = p_document;
+	if (!p_document) {
+		return;
+	}
+	if (!view_viewport) {
+		view_viewport = memnew(SubViewport);
+		view_viewport->set_disable_3d(true);
+		view_viewport->set_disable_input(true);
+		scene_view_container->add_child(view_viewport);
+	}
+	Ref<World2D> world = p_document->get_world_2d();
+	if (world.is_valid()) {
+		view_viewport->set_world_2d(world);
+	}
+}
+
+void CanvasItemEditorView::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_ENTER_TREE: {
+			// Reparent-tolerant, mirroring Node3DEditorView: recompute the settings-derived caches
+			// once, when THIS view is actually in the tree (theme ready), and guard against
+			// re-running when the workspace reparents the view between panes. main_view's caches are
+			// still refreshed by the editor's _update_editor_settings(); minted views rely on this.
+			if (!view_settings_initialized) {
+				real_t ruler_width_unscaled = EDITOR_GET("editors/2d/ruler_width");
+				ruler_font_size = MAX(get_theme_font_size(SNAME("rulers_size"), EditorStringName(EditorFonts)) * ruler_width_unscaled / 15.0, 8);
+				ruler_width_scaled = MAX(ruler_width_unscaled * EDSCALE, ruler_font_size * 2.0);
+				view_settings_initialized = true;
+			}
+		} break;
+
+		case NOTIFICATION_EXIT_TREE: {
+			// Binding persists across reparenting; child nodes are freed by normal Node teardown.
+		} break;
+	}
 }
 
 void CanvasItemEditorView::_draw_viewport() {
 	// Update the transform.
 	_update_display_transform();
+
+	// Step⑤b.4d: a document-bound view that is NOT the active edited scene shows only the render +
+	// static decorations (grid/axis/rulers) -- never the active document's selection/hover/snapping
+	// overlay (matches CanvasView2D's active-only selection). The shim main view (document == null)
+	// always draws the full overlay.
+	const bool draw_edit_overlay = !(document && !_is_active_document());
 
 	_draw_grid();
 	_draw_ruler_tool();
@@ -4300,14 +4397,17 @@ void CanvasItemEditorView::_draw_viewport() {
 		_draw_locks_and_groups(EditorNode::get_singleton()->get_edited_scene());
 		_draw_invisible_nodes_positions(EditorNode::get_singleton()->get_edited_scene());
 	}
-	_draw_selection();
+	if (draw_edit_overlay) {
+		_draw_selection();
+	}
 
 	RID ci = viewport->get_canvas_item();
 	RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, Transform2D());
 
 	// Only the active view forwards to plugin overlays (identical behavior today: main_view is the
-	// only view). EditorPlugin::update_overlays() reaches the overlay via get_viewport_control().
-	if (this == editor->_get_active_view()) {
+	// only view; document-bound views are never _get_active_view()). EditorPlugin::update_overlays()
+	// reaches the overlay via get_viewport_control().
+	if (draw_edit_overlay && this == editor->_get_active_view()) {
 		EditorNode::get_singleton()->get_editor_plugins_over()->forward_canvas_draw_over_viewport(viewport);
 		EditorNode::get_singleton()->get_editor_plugins_force_over()->forward_canvas_force_draw_over_viewport(viewport);
 	}
@@ -4318,9 +4418,13 @@ void CanvasItemEditorView::_draw_viewport() {
 	if (show_guides) {
 		_draw_guides();
 	}
-	_draw_smart_snapping();
+	if (draw_edit_overlay) {
+		_draw_smart_snapping();
+	}
 	_draw_focus();
-	_draw_hover();
+	if (draw_edit_overlay) {
+		_draw_hover();
+	}
 	_draw_message();
 }
 
@@ -5643,7 +5747,11 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	// Publish ourselves as the services' main_view up front: the editor's get_*_container /
 	// get_viewport_control forwarders route through main_view, and CanvasItemEditorViewport's
 	// ctor (built below) calls get_controls_container() before this constructor returns.
-	editor->main_view = this;
+	// Step⑤b.4d: only the FIRST (main) view claims main_view; minted document-bound views
+	// (create_view_bound_to) must not clobber it or every editor->view forwarder would retarget.
+	if (!editor->main_view) {
+		editor->main_view = this;
+	}
 	// Fill the right_panel_split slot exactly like the old direct viewport_scrollable child
 	// (one extra Control layer, zero inset -- mirror Node3DEditorView's zero-margin fill).
 	set_h_size_flags(SIZE_EXPAND_FILL);
@@ -5662,9 +5770,14 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	viewport_scrollable->add_child(scene_view_container);
 	scene_view_container->set_stretch(true);
 	scene_view_container->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
-	// G1: display the active document's scene_root here; EditorNode rebinds this on scene switch.
-	// At construction no document is active yet, so get_scene_root() returns the placeholder root.
-	scene_view_container->add_child(EditorNode::get_singleton()->get_scene_root());
+	// G1 shim: the MAIN view displays the active document's scene_root here; EditorNode rebinds
+	// this on scene switch. At construction no document is active yet, so get_scene_root() returns
+	// the placeholder root. Step⑤b.4d: minted document-bound views must NOT grab the shared
+	// scene_root (that would steal it from the main view) -- they host their OWN view_viewport,
+	// added by bind_document().
+	if (editor->main_view == this) {
+		scene_view_container->add_child(EditorNode::get_singleton()->get_scene_root());
+	}
 
 	controls_vb = memnew(VBoxContainer);
 	controls_vb->set_begin(Point2(5, 5));
@@ -5756,6 +5869,16 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	resample_timer->set_one_shot(true);
 	add_child(resample_timer);
 	resample_timer->connect("timeout", callable_mp(this, &CanvasItemEditorView::_update_oversampling));
+}
+
+Control *CanvasItemEditor::create_view_bound_to(EditorDocument *p_document) {
+	// Mint an independent CanvasItemEditorView bound to p_document's isolated World2D -- the exact
+	// mirror of Node3DEditor::create_view_bound_to. The view builds its own SubViewport in
+	// bind_document(); when it enters the tree it recomputes its settings caches through its own
+	// lifecycle, so nothing here has to be ordered against the main view.
+	CanvasItemEditorView *view = memnew(CanvasItemEditorView(this));
+	view->bind_document(p_document);
+	return view;
 }
 
 void CanvasItemEditorView::update_viewport() {

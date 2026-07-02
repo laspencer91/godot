@@ -45,9 +45,10 @@ class EditorDocumentView;
 // "active" document. It owns the model-side per-pane binding (EditorDocumentView)
 // and the editor surface Control.
 //
-// v1 scope: the surface is the 3D view only (the CanvasView2D 2D surface and the
-// 2D/3D toggle arrive with the 2D extraction, Step ⑤). Selection/gizmos are still
-// global, so a non-active DocumentView shows its scene but not live selection.
+// The surface is a per-document editor view minted by the matching services
+// singleton: a Node3DEditorView (3D) or a CanvasItemEditorView (2D, via
+// CanvasItemEditor::create_view_bound_to). Selection/gizmos are still global, so a
+// non-active DocumentView shows its scene but edits/selection only while active.
 class DocumentView : public MarginContainer {
 	GDCLASS(DocumentView, MarginContainer);
 

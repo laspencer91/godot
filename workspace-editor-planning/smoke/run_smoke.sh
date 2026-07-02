@@ -48,14 +48,34 @@ if [[ -z "$BIN" || ! -x "$BIN" ]]; then
 	exit 2
 fi
 
+host_path() {
+	local path="$1"
+	if [[ "$BIN" == *.exe && -n "${WSL_DISTRO_NAME:-}" ]] && command -v wslpath >/dev/null 2>&1; then
+		wslpath -w "$path"
+	elif [[ "$BIN" == *.exe ]] && command -v cygpath >/dev/null 2>&1; then
+		cygpath -w "$path"
+	else
+		printf '%s\n' "$path"
+	fi
+}
+
 # --- error-class matcher -------------------------------------------------------
 # Any of these lines in a run means the case failed. Kept in one place so the net
 # tightens uniformly.
 ERR_RE='ERROR|WARNING|material.*null|leaked|Camera is not|Condition.*is true|Parameter .* is null'
 
 QUIT_AFTER="${QUIT_AFTER:-200}"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+if [[ "$BIN" == *.exe && -n "${WSL_DISTRO_NAME:-}" ]]; then
+	# Windows editor binaries cannot open WSL-private /tmp paths. Keep the throwaway
+	# project beside the repo so wslpath can hand the editor a normal Windows path.
+	WORK_PARENT="$REPO_ROOT/.godot-smoke-tmp"
+	mkdir -p "$WORK_PARENT"
+	WORK="$(mktemp -d "$WORK_PARENT/tmp.XXXXXX")"
+else
+	WORK="$(mktemp -d)"
+fi
+trap 'rm -rf "$WORK"; if [[ -n "${WORK_PARENT:-}" ]]; then rmdir "$WORK_PARENT" 2>/dev/null || true; fi' EXIT
+HOST_WORK="$(host_path "$WORK")"
 
 # Work on a throwaway copy so the committed project stays clean (no .godot/).
 cp "$SMOKE_DIR"/*.tscn "$SMOKE_DIR/project.godot" "$WORK"/
@@ -65,7 +85,7 @@ fail=0
 run_case() {
 	local name="$1"; shift
 	local log="$WORK/$name.log"
-	"$BIN" --path "$WORK" "$@" --quit-after "$QUIT_AFTER" >"$log" 2>&1
+	"$BIN" --path "$HOST_WORK" "$@" --quit-after "$QUIT_AFTER" >"$log" 2>&1
 	local code=$?
 	local errs
 	errs=$(grep -cE "$ERR_RE" "$log")
