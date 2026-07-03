@@ -430,6 +430,11 @@ public:
 	_FORCE_INLINE_ bool edit(const Ref<Resource> &p_resource, bool p_grab_focus = true) { return edit(p_resource, -1, 0, p_grab_focus); }
 	bool edit(const Ref<Resource> &p_resource, int p_line, int p_col, bool p_grab_focus = true);
 
+	// G2 S2: create + fully wire a script/text view for p_resource, registered in the open-scripts
+	// registry but NOT parented into any container. The caller hosts it (edit() adds it to
+	// tab_container; a workspace DocumentView adds it to its pane).
+	ScriptEditorBase *create_editor_view(const Ref<Resource> &p_resource);
+
 	Vector<String> _get_breakpoints();
 	void get_breakpoints(List<String> *p_breakpoints);
 

@@ -2183,6 +2183,95 @@ Error ScriptEditor::_save_text_file(Ref<TextFile> p_text_file, const String &p_p
 	return OK;
 }
 
+ScriptEditorBase *ScriptEditor::create_editor_view(const Ref<Resource> &p_resource) {
+	// G2 S2: build and FULLY WIRE a script/text view for p_resource without parenting it into any
+	// container, so any host can add it to the tree afterward (edit() -> tab_container; a workspace
+	// DocumentView -> its pane). Registration into the open-scripts registry happens here; hosting,
+	// focus, the shared edit-menu mount, and go-to-tab stay with the caller. set_edit_state is safe to
+	// call pre-tree: TextEditorBase stashes it as pending_state and applies it when the editor enables.
+	ScriptEditorBase *seb = nullptr;
+
+	for (int i = script_editor_func_count - 1; i >= 0; i--) {
+		seb = script_editor_funcs[i](p_resource);
+		if (seb) {
+			break;
+		}
+	}
+	if (!seb) {
+		return nullptr;
+	}
+
+	seb->set_edited_resource(p_resource);
+	seb->set_toggle_list_control(get_left_list_split());
+	_register_view(seb);
+
+	// If we delete a script within the filesystem, the original resource path
+	// is lost, so keep it as `edited_file_data` to figure out the exact tab to delete.
+	seb->edited_file_data.path = p_resource->get_path();
+	seb->edited_file_data.last_modified_time = FileAccess::get_modified_time(p_resource->get_path());
+
+	seb->connect("name_changed", callable_mp(this, &ScriptEditor::_update_script_names));
+	seb->connect("edited_script_changed", callable_mp(this, &ScriptEditor::_script_changed));
+
+	Ref<Script> scr = p_resource;
+	if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
+		// Syntax highlighting.
+		bool highlighter_set = false;
+		for (int i = 0; i < syntax_highlighters.size(); i++) {
+			Ref<EditorSyntaxHighlighter> highlighter = syntax_highlighters[i]->_create();
+			if (highlighter.is_null()) {
+				continue;
+			}
+			teb->add_syntax_highlighter(highlighter);
+
+			if (highlighter_set) {
+				continue;
+			}
+
+			PackedStringArray languages = highlighter->_get_supported_languages();
+			// If script try language, else use extension.
+			if (scr.is_valid()) {
+				if (languages.has(scr->get_language()->get_name())) {
+					teb->set_syntax_highlighter(highlighter);
+					highlighter_set = true;
+				}
+				continue;
+			}
+
+			if (languages.has(p_resource->get_path().get_extension())) {
+				teb->set_syntax_highlighter(highlighter);
+				highlighter_set = true;
+			}
+		}
+
+		teb->set_tooltip_request_func(callable_mp(this, &ScriptEditor::_get_debug_tooltip));
+
+		teb->connect("request_help", callable_mp(this, &ScriptEditor::_help_search));
+		teb->connect("request_open_script_at_line", callable_mp(this, &ScriptEditor::_goto_script_line));
+		teb->connect("go_to_help", callable_mp(this, &ScriptEditor::_help_class_goto));
+		teb->connect("request_save_history", callable_mp(this, &ScriptEditor::_save_history));
+		teb->connect("request_save_previous_state", callable_mp(this, &ScriptEditor::_save_previous_state));
+		teb->connect("search_in_files_requested", callable_mp(this, &ScriptEditor::open_find_in_files_dialog).bind(false));
+		teb->connect("replace_in_files_requested", callable_mp(this, &ScriptEditor::open_find_in_files_dialog).bind(true));
+		teb->connect("go_to_method", callable_mp(this, &ScriptEditor::script_goto_method));
+
+		if (script_editor_cache->has_section(p_resource->get_path())) {
+			teb->set_edit_state(script_editor_cache->get_value(p_resource->get_path(), "state"));
+			if (ScriptTextEditor *ste = Object::cast_to<ScriptTextEditor>(teb)) {
+				ste->store_previous_state();
+			}
+		}
+
+		if (CodeTextEditor *cte = teb->get_code_editor()) {
+			cte->set_zoom_factor(zoom_factor);
+			cte->connect("zoomed", callable_mp(this, &ScriptEditor::_set_script_zoom_factor));
+			cte->connect(SceneStringName(visibility_changed), callable_mp(this, &ScriptEditor::_update_code_editor_zoom_factor).bind(cte));
+		}
+	}
+
+	return seb;
+}
+
 bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, bool p_grab_focus) {
 	if (p_resource.is_null()) {
 		return false;
@@ -2248,21 +2337,10 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 	}
 
 	// doesn't have it, make a new one
-	ScriptEditorBase *seb = nullptr;
-
-	for (int i = script_editor_func_count - 1; i >= 0; i--) {
-		seb = script_editor_funcs[i](p_resource);
-		if (seb) {
-			break;
-		}
-	}
+	ScriptEditorBase *seb = create_editor_view(p_resource); // G2 S2: create + fully wire without parenting.
 	ERR_FAIL_NULL_V(seb, false);
 
-	seb->set_edited_resource(p_resource);
-
-	seb->set_toggle_list_control(get_left_list_split());
 	tab_container->add_child(seb);
-	_register_view(seb); // G2 S1: track this view in the open-scripts registry (tab order == open order).
 
 	if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 		if (p_grab_focus) {
@@ -2287,69 +2365,6 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 	if (p_grab_focus) {
 		_go_to_tab(tab_container->get_tab_count() - 1);
 		_add_recent_script(p_resource->get_path());
-	}
-
-	// If we delete a script within the filesystem, the original resource path
-	// is lost, so keep it as `edited_file_data` to figure out the exact tab to delete.
-	seb->edited_file_data.path = p_resource->get_path();
-	seb->edited_file_data.last_modified_time = FileAccess::get_modified_time(p_resource->get_path());
-
-	seb->connect("name_changed", callable_mp(this, &ScriptEditor::_update_script_names));
-	seb->connect("edited_script_changed", callable_mp(this, &ScriptEditor::_script_changed));
-
-	if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
-		// Syntax highlighting.
-		bool highlighter_set = false;
-		for (int i = 0; i < syntax_highlighters.size(); i++) {
-			Ref<EditorSyntaxHighlighter> highlighter = syntax_highlighters[i]->_create();
-			if (highlighter.is_null()) {
-				continue;
-			}
-			teb->add_syntax_highlighter(highlighter);
-
-			if (highlighter_set) {
-				continue;
-			}
-
-			PackedStringArray languages = highlighter->_get_supported_languages();
-			// If script try language, else use extension.
-			if (scr.is_valid()) {
-				if (languages.has(scr->get_language()->get_name())) {
-					teb->set_syntax_highlighter(highlighter);
-					highlighter_set = true;
-				}
-				continue;
-			}
-
-			if (languages.has(p_resource->get_path().get_extension())) {
-				teb->set_syntax_highlighter(highlighter);
-				highlighter_set = true;
-			}
-		}
-
-		teb->set_tooltip_request_func(callable_mp(this, &ScriptEditor::_get_debug_tooltip));
-
-		teb->connect("request_help", callable_mp(this, &ScriptEditor::_help_search));
-		teb->connect("request_open_script_at_line", callable_mp(this, &ScriptEditor::_goto_script_line));
-		teb->connect("go_to_help", callable_mp(this, &ScriptEditor::_help_class_goto));
-		teb->connect("request_save_history", callable_mp(this, &ScriptEditor::_save_history));
-		teb->connect("request_save_previous_state", callable_mp(this, &ScriptEditor::_save_previous_state));
-		teb->connect("search_in_files_requested", callable_mp(this, &ScriptEditor::open_find_in_files_dialog).bind(false));
-		teb->connect("replace_in_files_requested", callable_mp(this, &ScriptEditor::open_find_in_files_dialog).bind(true));
-		teb->connect("go_to_method", callable_mp(this, &ScriptEditor::script_goto_method));
-
-		if (script_editor_cache->has_section(p_resource->get_path())) {
-			teb->set_edit_state(script_editor_cache->get_value(p_resource->get_path(), "state"));
-			if (ScriptTextEditor *ste = Object::cast_to<ScriptTextEditor>(teb)) {
-				ste->store_previous_state();
-			}
-		}
-
-		if (CodeTextEditor *cte = teb->get_code_editor()) {
-			cte->set_zoom_factor(zoom_factor);
-			cte->connect("zoomed", callable_mp(this, &ScriptEditor::_set_script_zoom_factor));
-			cte->connect(SceneStringName(visibility_changed), callable_mp(this, &ScriptEditor::_update_code_editor_zoom_factor).bind(cte));
-		}
 	}
 
 	_sort_list_on_update = true;
