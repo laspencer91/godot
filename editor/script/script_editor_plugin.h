@@ -435,6 +435,11 @@ public:
 	// tab_container; a workspace DocumentView adds it to its pane).
 	ScriptEditorBase *create_editor_view(const Ref<Resource> &p_resource);
 
+	// G2 S4: a host (e.g. a workspace DocumentView being torn down) releasing a view it hosted.
+	// Drops it from the open-scripts registry; the caller frees the Control. Idempotent with the
+	// tree_exiting auto-unregister, and lets a dtor avoid touching ScriptEditor privates.
+	void release_editor_view(ScriptEditorBase *p_view) { _unregister_view(p_view); }
+
 	Vector<String> _get_breakpoints();
 	void get_breakpoints(List<String> *p_breakpoints);
 

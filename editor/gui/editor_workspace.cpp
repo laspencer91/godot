@@ -37,6 +37,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/gui/tabbed_document_host.h"
+#include "editor/script/script_editor_plugin.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/label.h"
 #include "scene/gui/panel_container.h"
@@ -250,6 +251,17 @@ void EditorWorkspace::_debug_split_focused_with_tabs(bool p_vertical) {
 			active_tab = tab;
 		}
 	}
+
+	// G2 S4: also surface the first open script as a tab, so script-document hosting is exercisable
+	// through the debug split. The real reveal()-driven open path lands in S5/S6.
+	if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+		Vector<Ref<Script>> open_scripts = se->get_open_scripts();
+		if (!open_scripts.is_empty() && open_scripts[0].is_valid()) {
+			ScriptDocument *sd = ed.get_or_create_script_document(open_scripts[0]);
+			host->add_document(sd, open_scripts[0]->get_path().get_file());
+		}
+	}
+
 	if (host->get_document_count() == 0) {
 		memdelete(host);
 		return;

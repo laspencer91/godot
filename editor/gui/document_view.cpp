@@ -30,9 +30,12 @@
 
 #include "document_view.h"
 
+#include "core/object/callable_mp.h"
+#include "editor/doc/editor_help.h"
 #include "editor/editor_document.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
+#include "editor/script/script_editor_plugin.h"
 
 DocumentView::DocumentView(EditorDocument *p_document) {
 	set_h_size_flags(SIZE_EXPAND_FILL);
@@ -49,16 +52,37 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	// Host the editor surface for this document's kind, pointed at THIS document's isolated
 	// world so the pane renders p_document's scene independently of the globally-active one.
 	// 2D scenes get a CanvasItemEditorView (the real 2D editor view, minted per-document); 3D (and
-	// mixed/unknown, until the ⑤b 2D/3D toggle) get a Node3DEditorView. Symmetric factory calls.
+	// mixed/unknown, until the ⑤b 2D/3D toggle) get a Node3DEditorView. Script/help documents get a
+	// ScriptTextEditor/EditorHelp view. Symmetric factory calls per kind.
 	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
-	if (type == EditorDocument::TYPE_SCENE_2D) {
-		if (CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton()) {
-			editor_surface = canvas_editor->create_view_bound_to(p_document);
-		}
-	} else {
-		if (Node3DEditor *spatial = Node3DEditor::get_singleton()) {
-			editor_surface = spatial->create_view_bound_to(p_document);
-		}
+	switch (type) {
+		case EditorDocument::TYPE_SCRIPT: {
+			// G2 S4: the per-script VIEW is minted by the ScriptEditor SERVICES singleton, fully wired to
+			// menus / find-in-files / save-all / debugger. The singleton stays; only the view is per-tab.
+			ScriptDocument *sd = static_cast<ScriptDocument *>(p_document);
+			if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+				editor_surface = se->create_editor_view(sd->get_script_resource());
+			}
+		} break;
+		case EditorDocument::TYPE_HELP: {
+			// G2 S4: the view is an EditorHelp. go_to_class needs the view in the tree (theme + doc data),
+			// so defer it until after this DocumentView has been parented into its pane.
+			HelpDocument *hd = static_cast<HelpDocument *>(p_document);
+			EditorHelp *help = memnew(EditorHelp);
+			help->set_name(hd->get_class_name());
+			callable_mp(help, &EditorHelp::go_to_class).call_deferred(hd->get_class_name());
+			editor_surface = help;
+		} break;
+		case EditorDocument::TYPE_SCENE_2D: {
+			if (CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton()) {
+				editor_surface = canvas_editor->create_view_bound_to(p_document);
+			}
+		} break;
+		default: {
+			if (Node3DEditor *spatial = Node3DEditor::get_singleton()) {
+				editor_surface = spatial->create_view_bound_to(p_document);
+			}
+		} break;
 	}
 	// Parent + stretch the minted surface identically regardless of kind.
 	if (editor_surface) {
@@ -69,6 +93,13 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 }
 
 DocumentView::~DocumentView() {
+	// G2 S4: if this view hosted a script surface, drop it from the ScriptEditor open-scripts
+	// registry before the scene tree frees it (idempotent belt-and-suspenders with tree_exiting).
+	if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(editor_surface)) {
+		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+			se->release_editor_view(seb);
+		}
+	}
 	// editor_surface is a child Control freed by the scene tree; doc_view is a plain
 	// C++ object we own, so free it here.
 	if (doc_view) {
