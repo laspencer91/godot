@@ -67,6 +67,28 @@ int TabbedDocumentHost::add_document(EditorDocument *p_document, const String &p
 	return idx;
 }
 
+bool TabbedDocumentHost::has_document(EditorDocument *p_document) const {
+	return documents.find(p_document) >= 0;
+}
+
+void TabbedDocumentHost::focus_document(EditorDocument *p_document) {
+	// G2 S5: if the document already has a tab here, select it; otherwise append one (titled from the
+	// document's path filename, e.g. "player.gd" or "Node2D") and select that.
+	if (!p_document) {
+		return;
+	}
+	const int idx = documents.find(p_document);
+	if (idx >= 0) {
+		set_current(idx);
+		return;
+	}
+	String title = p_document->get_path().get_file();
+	if (title.is_empty()) {
+		title = "Document";
+	}
+	set_current(add_document(p_document, title));
+}
+
 DocumentView *TabbedDocumentHost::_ensure_view(int p_idx) {
 	ERR_FAIL_INDEX_V(p_idx, documents.size(), nullptr);
 	if (!views[p_idx]) {

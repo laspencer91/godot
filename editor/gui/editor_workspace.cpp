@@ -296,6 +296,56 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 	emit_signal(SNAME("focused_pane_changed"), focused_pane);
 }
 
+WorkspacePane *EditorWorkspace::_find_pane_showing(WorkspacePane *p_pane, EditorDocument *p_document) const {
+	if (!p_pane) {
+		return nullptr;
+	}
+	if (p_pane->is_leaf()) {
+		if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content())) {
+			if (host->has_document(p_document)) {
+				return p_pane;
+			}
+		}
+		return nullptr;
+	}
+	if (WorkspacePane *found = _find_pane_showing(p_pane->get_first(), p_document)) {
+		return found;
+	}
+	return _find_pane_showing(p_pane->get_second(), p_document);
+}
+
+WorkspacePane *EditorWorkspace::find_pane_showing(EditorDocument *p_document) const {
+	if (!p_document) {
+		return nullptr;
+	}
+	return _find_pane_showing(root_pane, p_document);
+}
+
+WorkspacePane *EditorWorkspace::resolve_target_pane_for_documents() {
+	// (a) The focused pane, if it already hosts tabs — this is what keeps "open a script from a
+	// script" in the SAME pane (the focused pane IS a TabbedDocumentHost while you edit a script).
+	WorkspacePane *focused = get_focused_pane();
+	if (focused && Object::cast_to<TabbedDocumentHost>(focused->get_content())) {
+		return focused;
+	}
+	// (b) The most-recently-focused tabbed leaf.
+	if (last_tabbed_pane && last_tabbed_pane->is_leaf() && Object::cast_to<TabbedDocumentHost>(last_tabbed_pane->get_content())) {
+		return last_tabbed_pane;
+	}
+	// (c) Split the focused leaf, minting a fresh tabbed host on the new (second/right) side.
+	if (!focused || !focused->is_leaf()) {
+		focused = root_pane;
+	}
+	TabbedDocumentHost *host = memnew(TabbedDocumentHost);
+	WorkspacePane *new_pane = focused->split(false, host, true);
+	if (new_pane) {
+		last_tabbed_pane = new_pane;
+		return new_pane;
+	}
+	memdelete(host); // split failed (target not a leaf); nothing hosts the orphan.
+	return nullptr;
+}
+
 EditorWorkspace::EditorWorkspace() {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);

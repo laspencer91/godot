@@ -33,6 +33,7 @@
 #include "core/input/input_event.h"
 #include "scene/gui/box_container.h"
 
+class EditorDocument;
 class EditorWorkspace;
 class SplitContainer;
 
@@ -128,5 +129,19 @@ public:
 	WorkspacePane *get_last_tabbed_pane() const { return last_tabbed_pane; }
 	void set_focused_pane(WorkspacePane *p_pane);
 
+	// G2 S5: locate the leaf pane whose TabbedDocumentHost already shows p_document (no-duplicate-tab
+	// rule), or null if none. Walks the whole pane tree.
+	WorkspacePane *find_pane_showing(EditorDocument *p_document) const;
+
+	// G2 S5: resolve where a revealed document should open (seam #3): (a) the focused pane if it hosts
+	// tabs; else (b) the most-recently-focused tabbed leaf; else (c) split the focused leaf and mint a
+	// fresh TabbedDocumentHost on the new side. The returned pane's content is a TabbedDocumentHost
+	// (or null if it could not be resolved). This is what makes "open a script from a script" land as
+	// a new tab in the SAME pane.
+	WorkspacePane *resolve_target_pane_for_documents();
+
 	EditorWorkspace();
+
+private:
+	WorkspacePane *_find_pane_showing(WorkspacePane *p_pane, EditorDocument *p_document) const;
 };

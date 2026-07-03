@@ -35,6 +35,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/gui/editor_workspace.h"
+#include "editor/gui/tabbed_document_host.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/settings/editor_settings.h"
 #include "scene/gui/box_container.h"
@@ -221,8 +222,31 @@ void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kin
 	ERR_FAIL_NULL(p_document);
 
 	const EditorDocument::Type document_type = p_document->get_type();
+
+	// G2 S5: script/help documents open as WORKSPACE TABS, not a main-screen switch. If the document
+	// already has a tab in any pane, focus it (no-duplicate rule); otherwise resolve a target pane —
+	// which, when a script is opened from within a script, is the focused tabbed pane, so the new
+	// script lands as a new tab in the SAME pane.
+	if (document_type == EditorDocument::TYPE_SCRIPT || document_type == EditorDocument::TYPE_HELP) {
+		if (!workspace) {
+			return;
+		}
+		WorkspacePane *target = workspace->find_pane_showing(p_document);
+		if (!target) {
+			target = workspace->resolve_target_pane_for_documents();
+		}
+		if (!target) {
+			return;
+		}
+		if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(target->get_content())) {
+			host->focus_document(p_document);
+			workspace->set_focused_pane(target);
+		}
+		return;
+	}
+
 	if (document_type != EditorDocument::TYPE_SCENE_2D && document_type != EditorDocument::TYPE_SCENE_3D && document_type != EditorDocument::TYPE_SCENE_MIXED) {
-		WARN_PRINT_ONCE("EditorMainScreen::reveal() only handles scene documents in this rollout.");
+		WARN_PRINT_ONCE("EditorMainScreen::reveal() only handles scene, script, and help documents in this rollout.");
 		return;
 	}
 

@@ -76,5 +76,11 @@ public:
 	int get_current() const { return current; }
 	int get_document_count() const { return documents.size(); }
 
+	// G2 S5: reveal a document in this pane — focus its existing tab, or append one titled from the
+	// document (path filename, else a generic fallback) and select it. has_document backs the
+	// no-duplicate-tab rule (a document lives in at most one pane in v1).
+	bool has_document(EditorDocument *p_document) const;
+	void focus_document(EditorDocument *p_document);
+
 	TabbedDocumentHost();
 };
