@@ -179,6 +179,15 @@ class ScriptEditor : public PanelContainer {
 	bool help_overview_enabled;
 	VSplitContainer *list_split = nullptr;
 	TabContainer *tab_container = nullptr;
+
+	// G2 S1: the authoritative set of open script VIEWS, decoupled from tab_container's children so
+	// views can eventually be hosted outside this internal TabContainer (workspace tabs). Appended in
+	// open (edit()) order — mirroring tab order at creation — and self-heals via each view's
+	// tree_exiting (fires on the _close_tab memdelete and on editor-shutdown teardown). EditorHelp
+	// views are NOT tracked here (EditorHelp is not a ScriptEditorBase); help enumeration still reads
+	// tab_container until the S6/S7 help-as-document work. NOTE: if script views ever gain live tree
+	// reparenting (later workspace milestones), re-registration on tree_entered will be needed.
+	Vector<ScriptEditorBase *> registered_views;
 	EditorFileDialog *file_dialog = nullptr;
 	AcceptDialog *error_dialog = nullptr;
 	ConfirmationDialog *erase_tab_confirm = nullptr;
@@ -251,6 +260,9 @@ class ScriptEditor : public PanelContainer {
 	void _open_recent_script(int p_idx);
 
 	void _show_error_dialog(const String &p_path);
+
+	void _register_view(ScriptEditorBase *p_view);
+	void _unregister_view(ScriptEditorBase *p_view);
 
 	void _close_tab(int p_idx, bool p_save = true, bool p_history_back = true);
 	void _update_find_replace_bar();

@@ -212,8 +212,8 @@ void ScriptEditor::_goto_script_line(Ref<RefCounted> p_script, int p_line) {
 void ScriptEditor::_change_execution(Ref<RefCounted> p_script, int p_line, bool p_set) {
 	Ref<Script> scr = Object::cast_to<Script>(*p_script);
 	if (scr.is_valid() && (scr->has_source_code() || scr->get_path().is_resource_file())) {
-		for (int i = 0; i < tab_container->get_tab_count(); i++) {
-			if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(tab_container->get_tab_control(i))) {
+		for (ScriptEditorBase *seb : registered_views) { // G2 S1
+			if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 				if ((scr.is_valid() && teb->get_edited_resource() == p_script) || teb->get_edited_resource()->get_path() == scr->get_path()) {
 					if (p_set) {
 						teb->set_executing_line(p_line);
@@ -230,8 +230,8 @@ void ScriptEditor::_set_breakpoint(Ref<RefCounted> p_script, int p_line, bool p_
 	Ref<Script> scr = Object::cast_to<Script>(*p_script);
 	if (scr.is_valid() && (scr->has_source_code() || scr->get_path().is_resource_file())) {
 		// Update if open.
-		for (int i = 0; i < tab_container->get_tab_count(); i++) {
-			CodeEditorBase *ceb = Object::cast_to<CodeEditorBase>(tab_container->get_tab_control(i));
+		for (ScriptEditorBase *seb : registered_views) { // G2 S1
+			CodeEditorBase *ceb = Object::cast_to<CodeEditorBase>(seb);
 			if (ceb && ceb->get_edited_resource()->get_path() == scr->get_path()) {
 				ceb->set_breakpoint(p_line, p_enabled);
 				return;
@@ -259,8 +259,8 @@ void ScriptEditor::_set_breakpoint(Ref<RefCounted> p_script, int p_line, bool p_
 }
 
 void ScriptEditor::_clear_breakpoints() {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (CodeEditorBase *ceb = Object::cast_to<CodeEditorBase>(tab_container->get_tab_control(i))) {
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		if (CodeEditorBase *ceb = Object::cast_to<CodeEditorBase>(seb)) {
 			ceb->clear_breakpoints();
 		}
 	}
@@ -521,6 +521,23 @@ void ScriptEditor::_show_error_dialog(const String &p_path) {
 	error_dialog->popup_centered();
 }
 
+void ScriptEditor::_register_view(ScriptEditorBase *p_view) {
+	// G2 S1: record an open script view. Registration order follows open (edit()) order, which is the
+	// tab order at creation time. The view self-removes from the registry when it leaves the tree
+	// (tree_exiting fires on the _close_tab memdelete and on every other teardown path, incl. editor
+	// shutdown), so the registry never holds a freed pointer.
+	if (!p_view || registered_views.has(p_view)) {
+		return;
+	}
+	registered_views.push_back(p_view);
+	p_view->connect(SceneStringName(tree_exiting), callable_mp(this, &ScriptEditor::_unregister_view).bind(p_view));
+}
+
+void ScriptEditor::_unregister_view(ScriptEditorBase *p_view) {
+	// Idempotent: erase is a no-op if the view was already dropped.
+	registered_views.erase(p_view);
+}
+
 void ScriptEditor::_close_tab(int p_idx, bool p_save, bool p_history_back) {
 	int selected = p_idx;
 	if (selected < 0 || selected >= tab_container->get_tab_count()) {
@@ -692,12 +709,7 @@ void ScriptEditor::_ask_close_current_unsaved_tab(ScriptEditorBase *current) {
 void ScriptEditor::_resave_scripts(const String &p_str) {
 	apply_scripts();
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		Ref<Resource> scr = seb->get_edited_resource();
 
 		if (scr->is_built_in()) {
@@ -721,11 +733,9 @@ void ScriptEditor::_resave_scripts(const String &p_str) {
 }
 
 void ScriptEditor::_res_saved_callback(const Ref<Resource> &p_res) {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i))) {
-			if (seb->get_edited_resource() == p_res) {
-				seb->tag_saved_version();
-			}
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		if (seb->get_edited_resource() == p_res) {
+			seb->tag_saved_version();
 		}
 	}
 
@@ -747,12 +757,7 @@ void ScriptEditor::_scene_saved_callback(const String &p_path) {
 }
 
 void ScriptEditor::_mark_built_in_scripts_as_saved(const String &p_parent_path) {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		Ref<Resource> edited_res = seb->get_edited_resource();
 		if (!edited_res->is_built_in()) {
 			continue; // External script, who cares.
@@ -808,12 +813,7 @@ bool ScriptEditor::_test_script_times_on_disk(Ref<Resource> p_for_script) {
 	bool need_reload = false;
 	bool use_autoreload = EDITOR_GET("text_editor/behavior/files/auto_reload_scripts_on_external_change");
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		Ref<Resource> edited_res = seb->get_edited_resource();
 		if (p_for_script.is_valid() && edited_res.is_valid() && p_for_script != edited_res) {
 			continue;
@@ -1362,13 +1362,7 @@ bool ScriptEditor::_has_docs_tab() const {
 }
 
 bool ScriptEditor::_has_script_tab() const {
-	const int child_count = tab_container->get_tab_count();
-	for (int i = 0; i < child_count; i++) {
-		if (Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i))) {
-			return true;
-		}
-	}
-	return false;
+	return !registered_views.is_empty(); // G2 S1: the registry holds exactly the open script views.
 }
 
 void ScriptEditor::_prepare_file_menu() {
@@ -1608,8 +1602,8 @@ Vector<String> ScriptEditor::_get_breakpoints() {
 
 void ScriptEditor::get_breakpoints(List<String> *p_breakpoints) {
 	HashSet<String> loaded_scripts;
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		CodeEditorBase *ceb = Object::cast_to<CodeEditorBase>(tab_container->get_tab_control(i));
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		CodeEditorBase *ceb = Object::cast_to<CodeEditorBase>(seb);
 		if (!ceb) {
 			continue;
 		}
@@ -2129,12 +2123,7 @@ Ref<TextFile> ScriptEditor::_load_text_file(const String &p_path, Error *r_error
 
 	// Reuse an already-open TextFile resource to avoid creating duplicates.
 	// This prevents opening the same file multiple times as "unsaved" tabs.
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		if (seb->edited_file_data.path == local_path) {
 			Ref<TextFile> existing_text_file = seb->get_edited_resource();
 			if (existing_text_file.is_valid()) {
@@ -2230,14 +2219,10 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 		}
 	}
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		if ((scr.is_valid() && seb->get_edited_resource() == p_resource) || seb->get_edited_resource()->get_path() == p_resource->get_path()) {
 			if (should_open) {
+				const int i = tab_container->get_tab_idx_from_control(seb); // G2 S1: resolve the found view's current tab index.
 				if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 					teb->enable_editor();
 
@@ -2277,6 +2262,7 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 
 	seb->set_toggle_list_control(get_left_list_split());
 	tab_container->add_child(seb);
+	_register_view(seb); // G2 S1: track this view in the open-scripts registry (tab order == open order).
 
 	if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 		if (p_grab_focus) {
@@ -2393,9 +2379,8 @@ void ScriptEditor::reload_open_files() {
 PackedStringArray ScriptEditor::get_unsaved_scripts() const {
 	PackedStringArray unsaved_list;
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (seb && seb->is_unsaved()) {
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		if (seb->is_unsaved()) {
 			unsaved_list.append(seb->get_name());
 		}
 	}
@@ -2405,9 +2390,8 @@ PackedStringArray ScriptEditor::get_unsaved_scripts() const {
 PackedStringArray ScriptEditor::get_unsaved_files() const {
 	PackedStringArray unsaved_list;
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (seb && seb->is_unsaved()) {
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		if (seb->is_unsaved()) {
 			unsaved_list.append(seb->get_edited_resource()->get_path());
 		}
 	}
@@ -2446,12 +2430,7 @@ void ScriptEditor::save_current_script() {
 void ScriptEditor::save_all_scripts() {
 	HashSet<String> scenes_to_save;
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		_auto_format_text(seb);
 
 		if (!seb->is_unsaved()) {
@@ -2499,20 +2478,13 @@ void ScriptEditor::save_all_scripts() {
 }
 
 void ScriptEditor::update_script_times() {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i))) {
-			seb->edited_file_data.last_modified_time = FileAccess::get_modified_time(seb->edited_file_data.path);
-		}
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		seb->edited_file_data.last_modified_time = FileAccess::get_modified_time(seb->edited_file_data.path);
 	}
 }
 
 void ScriptEditor::apply_scripts() const {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 			teb->insert_final_newline();
 		}
@@ -2530,12 +2502,7 @@ void ScriptEditor::reload_scripts(bool p_refresh_only) {
 }
 
 void ScriptEditor::_reload_scripts(bool p_refresh_only) {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		Ref<Resource> edited_res = seb->get_edited_resource();
 
 		if (edited_res->is_built_in()) {
@@ -2743,8 +2710,8 @@ void ScriptEditor::_apply_editor_settings() {
 
 	ScriptServer::set_reload_scripts_on_save(EDITOR_GET("text_editor/behavior/files/auto_reload_and_parse_scripts_on_save"));
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(tab_container->get_tab_control(i))) {
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 			teb->update_settings();
 		}
 	}
@@ -2759,9 +2726,8 @@ void ScriptEditor::_files_moved(const String &p_old_file, const String &p_new_fi
 		return;
 	}
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (seb && seb->edited_file_data.path == p_old_file) {
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		if (seb->edited_file_data.path == p_old_file) {
 			seb->edited_file_data.path = p_new_file;
 			break;
 		}
@@ -3546,12 +3512,7 @@ void ScriptEditor::_history_back() {
 Vector<Ref<Script>> ScriptEditor::get_open_scripts() const {
 	Vector<Ref<Script>> out_scripts = Vector<Ref<Script>>();
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		Ref<Script> scr = seb->get_edited_resource();
 		if (scr.is_valid()) {
 			out_scripts.push_back(scr);
@@ -3563,10 +3524,8 @@ Vector<Ref<Script>> ScriptEditor::get_open_scripts() const {
 
 TypedArray<ScriptEditorBase> ScriptEditor::_get_open_script_editors() const {
 	TypedArray<ScriptEditorBase> script_editors;
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i))) {
-			script_editors.push_back(seb);
-		}
+	for (ScriptEditorBase *seb : registered_views) { // G2 S1
+		script_editors.push_back(seb);
 	}
 	return script_editors;
 }
