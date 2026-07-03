@@ -11371,6 +11371,13 @@ Node3DEditor::~Node3DEditor() {
 }
 
 void Node3DEditorPlugin::make_visible(bool p_visible) {
+	// G2 D3: pane-safe by construction. `spatial_editor` is the SERVICES singleton; show()/hide()
+	// reach only its own `main_view` (the legacy-strip 3D surface, parented under shader_split). Per-pane
+	// Node3DEditorViews are separate instances parented in DocumentViews (create_view_bound_to), so they
+	// are untouched. set_process()/set_physics_process() gate only the singleton's own callbacks (it has
+	// no NOTIFICATION_PROCESS and only a snap-to-floor one-shot in physics-process); each
+	// Node3DEditorViewport self-drives its own process from NOTIFICATION_VISIBILITY_CHANGED, so pane
+	// viewports keep rendering regardless. refresh_dirty_gizmos() is an additive shared-services refresh.
 	if (p_visible) {
 		spatial_editor->show();
 		spatial_editor->set_process(true);

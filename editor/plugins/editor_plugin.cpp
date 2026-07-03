@@ -358,6 +358,14 @@ bool EditorPlugin::has_main_screen() const {
 	return success;
 }
 
+// G2 D3 visibility contract: main-screen `make_visible` applies to the plugin's own SINGLETON
+// screen surface ONLY (its toolbars/container as hosted by the legacy main-screen strip). Per-pane
+// document views own their render visibility independently — each is a self-driven SubViewport
+// (UPDATE_WHEN_VISIBLE) parented in a DocumentView, not in the plugin singleton — and must NEVER be
+// blanked, frozen, or reparented by this call. When a `make_visible(false)` body touches shared
+// state (e.g. a scene_root viewport flag or a services process loop), it must be inert for panes:
+// scope any hide to the singleton's own surface. See the 2D/3D main-screen plugin bodies for the
+// audited, pane-safe implementations of this contract.
 void EditorPlugin::make_visible(bool p_visible) {
 	GDVIRTUAL_CALL(_make_visible, p_visible);
 }

@@ -6334,6 +6334,13 @@ bool CanvasItemEditorPlugin::handles(Object *p_object) const {
 }
 
 void CanvasItemEditorPlugin::make_visible(bool p_visible) {
+	// G2 D3: pane-safe by construction. `canvas_item_editor` is the SERVICES singleton; show()/hide()
+	// and set_process() reach only its own `main_view` (the legacy-strip 2D surface). Per-pane
+	// CanvasItemEditorViews are separate instances parented in DocumentViews (create_view_bound_to),
+	// so they are untouched. The scene_root viewport flags below target the ACTIVE document's parked
+	// scene_root SubViewport (under EditorNode::documents_holder), which no view displays — every view,
+	// main and pane, renders the document's World2D through its OWN view_viewport (a distinct viewport
+	// RID). These per-viewport toggles therefore cannot disturb any pane view.
 	if (p_visible) {
 		canvas_item_editor->show();
 		canvas_item_editor->set_process(true);

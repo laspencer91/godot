@@ -186,6 +186,9 @@ void EditorMainScreen::_select_index(int p_index) {
 		return;
 	}
 
+	// G2 D3: this is the ONLY driver of main-screen make_visible. Per the EditorPlugin::make_visible
+	// contract, these calls toggle the outgoing/incoming plugin's own singleton screen surface only;
+	// pane-hosted document views are visibility-independent and are never affected here.
 	if (selected_plugin) {
 		selected_plugin->make_visible(false);
 	}
