@@ -102,6 +102,8 @@ public:
 
 class EditorSelection;
 class EditorDocument;
+class ScriptDocument;
+class HelpDocument;
 
 class EditorData {
 public:
@@ -152,6 +154,11 @@ private:
 
 	Vector<EditedScene> edited_scene;
 	int current_edited_scene = -1;
+
+	// G2 S3: auxiliary (non-scene) documents — scripts and help pages opened as workspace tabs.
+	// Scene documents live on EditedScene::document; these have no edited-scene slot. Owned here
+	// (memnew'd by get_or_create_*), freed by close_aux_document and in the EditorData teardown.
+	Vector<EditorDocument *> aux_documents;
 	int last_created_scene = 1;
 
 	bool _find_updated_instances(Node *p_root, Node *p_node, HashSet<String> &checked_paths);
@@ -225,6 +232,14 @@ public:
 	EditorDocument *get_document(int p_idx = -1) const;
 	EditorDocument *get_active_document() const;
 	int find_document_index(const EditorDocument *p_document) const;
+
+	// G2 S3: auxiliary (non-scene) document registry — script and help documents opened as
+	// workspace tabs. get_or_create_* dedups by resource/class (one document per open script/class);
+	// find_aux_document_by_path resolves a stored path (resource path, or "help://<class>").
+	ScriptDocument *get_or_create_script_document(const Ref<Resource> &p_resource);
+	HelpDocument *get_or_create_help_document(const String &p_class);
+	EditorDocument *find_aux_document_by_path(const String &p_path) const;
+	void close_aux_document(EditorDocument *p_document);
 
 	String get_scene_title(int p_idx, bool p_always_strip_extension = false) const;
 	String get_scene_path(int p_idx) const;

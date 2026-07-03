@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "core/io/resource.h" // Ref<Resource> by-value getter on ScriptDocument.
 #include "core/string/ustring.h"
 #include "core/templates/rid.h"
 #include "core/variant/dictionary.h"
@@ -54,6 +55,7 @@ public:
 		TYPE_SCENE_MIXED,
 		TYPE_SCRIPT,
 		TYPE_RESOURCE,
+		TYPE_HELP, // G2 S3: a class-reference (help) document. Append-only — do not reorder.
 	};
 
 protected:
@@ -140,6 +142,36 @@ public:
 
 	SceneDocument();
 	virtual ~SceneDocument();
+};
+
+// G2 S3: a script (or text) document opened as a workspace tab. No render world — the view
+// is a ScriptTextEditor/TextEditor hosted by a DocumentView, and the scripting SERVICES stay on
+// the ScriptEditor singleton. `path` == the edited resource's path.
+class ScriptDocument : public EditorDocument {
+	Ref<Resource> script;
+
+public:
+	Ref<Resource> get_script_resource() const { return script; }
+	void set_script_resource(const Ref<Resource> &p_script) { script = p_script; }
+
+	ScriptDocument() { type = TYPE_SCRIPT; }
+	virtual ~ScriptDocument() {}
+};
+
+// G2 S3: a class-reference (help) document opened as a workspace tab. The view is an EditorHelp.
+// `path` == "help://" + class_name (a stable, unique key for lookup/dedup).
+class HelpDocument : public EditorDocument {
+	String class_name;
+
+public:
+	String get_class_name() const { return class_name; }
+	void set_class_name(const String &p_class) {
+		class_name = p_class;
+		path = "help://" + p_class;
+	}
+
+	HelpDocument() { type = TYPE_HELP; }
+	virtual ~HelpDocument() {}
 };
 
 // VIEW STATE — one per pane that presents a document. Holds the presentation

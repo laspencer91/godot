@@ -873,6 +873,65 @@ int EditorData::find_document_index(const EditorDocument *p_document) const {
 	return -1;
 }
 
+ScriptDocument *EditorData::get_or_create_script_document(const Ref<Resource> &p_resource) {
+	// G2 S3: one ScriptDocument per open script/text resource. Dedup by resource identity first
+	// (ResourceCache hands back the same Ref), then by a non-empty stored path.
+	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
+	const String path = p_resource->get_path();
+	for (EditorDocument *doc : aux_documents) {
+		if (doc->get_type() != EditorDocument::TYPE_SCRIPT) {
+			continue;
+		}
+		ScriptDocument *sd = static_cast<ScriptDocument *>(doc);
+		if (sd->get_script_resource() == p_resource || (!path.is_empty() && sd->get_path() == path)) {
+			return sd;
+		}
+	}
+	ScriptDocument *sd = memnew(ScriptDocument);
+	sd->set_script_resource(p_resource);
+	sd->set_path(path);
+	aux_documents.push_back(sd);
+	return sd;
+}
+
+HelpDocument *EditorData::get_or_create_help_document(const String &p_class) {
+	// G2 S3: one HelpDocument per class; path == "help://<class>" is the dedup key.
+	const String path = "help://" + p_class;
+	for (EditorDocument *doc : aux_documents) {
+		if (doc->get_type() == EditorDocument::TYPE_HELP && doc->get_path() == path) {
+			return static_cast<HelpDocument *>(doc);
+		}
+	}
+	HelpDocument *hd = memnew(HelpDocument);
+	hd->set_class_name(p_class); // also sets path to "help://<class>".
+	aux_documents.push_back(hd);
+	return hd;
+}
+
+EditorDocument *EditorData::find_aux_document_by_path(const String &p_path) const {
+	if (p_path.is_empty()) {
+		return nullptr;
+	}
+	for (EditorDocument *doc : aux_documents) {
+		if (doc->get_path() == p_path) {
+			return doc;
+		}
+	}
+	return nullptr;
+}
+
+void EditorData::close_aux_document(EditorDocument *p_document) {
+	if (!p_document) {
+		return;
+	}
+	const int idx = aux_documents.find(p_document);
+	if (idx < 0) {
+		return;
+	}
+	aux_documents.remove_at(idx);
+	memdelete(p_document);
+}
+
 uint64_t EditorData::get_scene_time_opened(int p_idx) const {
 	ERR_FAIL_INDEX_V(p_idx, edited_scene.size(), 0);
 	return edited_scene[p_idx].time_opened;
@@ -1274,6 +1333,11 @@ EditorData::EditorData() {
 }
 
 EditorData::~EditorData() {
+	// G2 S3: free any auxiliary (script/help) documents still open at editor teardown.
+	for (EditorDocument *doc : aux_documents) {
+		memdelete(doc);
+	}
+	aux_documents.clear();
 	memdelete(undo_redo_manager);
 }
 
