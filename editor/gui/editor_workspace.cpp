@@ -293,7 +293,7 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 		// newly focused pane's active tab decides it (a script view, or null for any other kind).
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 			DocumentView *view = host->get_current_view();
-			se->set_current_view(Object::cast_to<ScriptEditorBase>(view ? view->get_editor_surface() : nullptr));
+			se->set_current_surface(view ? view->get_editor_surface() : nullptr);
 		}
 	}
 

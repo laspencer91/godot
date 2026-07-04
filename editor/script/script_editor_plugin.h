@@ -40,6 +40,7 @@
 
 class CodeTextEditor;
 class EditorFileDialog;
+class EditorHelp;
 class EditorHelpSearch;
 class FilterLineEdit;
 class FindReplaceBar;
@@ -189,9 +190,15 @@ class ScriptEditor : public PanelContainer {
 	// reparenting (later workspace milestones), re-registration on tree_entered will be needed.
 	Vector<ScriptEditorBase *> registered_views;
 	// G2 S6a: the current script view, following the workspace (the focused pane's active script
-	// tab, pushed by TabbedDocumentHost/EditorWorkspace via set_current_view). ObjectID so a
+	// tab, pushed by TabbedDocumentHost/EditorWorkspace via set_current_surface). ObjectID so a
 	// closed tab's freed view degrades to "no current view" instead of dangling.
 	ObjectID current_view_id;
+	// G2 S6b: the current script-or-help surface (superset of current_view_id — EditorHelp is not
+	// a ScriptEditorBase). Drives navigation history and the help/search menu state.
+	ObjectID current_surface_id;
+	// G2 S6b: the authoritative set of open help VIEWS (mirror of registered_views for EditorHelp,
+	// which the S1 registry can't hold). Minted by create_help_view; self-heals via tree_exiting.
+	Vector<EditorHelp *> registered_help_views;
 	EditorFileDialog *file_dialog = nullptr;
 	AcceptDialog *error_dialog = nullptr;
 	ConfirmationDialog *erase_tab_confirm = nullptr;
@@ -228,7 +235,9 @@ class ScriptEditor : public PanelContainer {
 	Vector<Ref<EditorSyntaxHighlighter>> syntax_highlighters;
 
 	struct ScriptHistory {
-		Control *control = nullptr;
+		// G2 S6b: the view by ObjectID — workspace tabs can be closed out from under the history,
+		// so records must degrade to "skip" instead of dangling.
+		ObjectID control_id;
 		Variant state;
 	};
 
@@ -271,6 +280,14 @@ class ScriptEditor : public PanelContainer {
 	// G2 S6a: summon p_resource's workspace tab via EditorMainScreen::reveal (minting the
 	// ScriptDocument + view on first open) and return the wired view from the registry.
 	ScriptEditorBase *_reveal_script_view(const Ref<Resource> &p_resource, bool p_grab_focus);
+
+	// G2 S6b: help twin of _reveal_script_view — summon p_class's help tab via reveal (the
+	// DocumentView mints the EditorHelp through create_help_view) and return the view.
+	EditorHelp *_reveal_help_view(const String &p_class);
+	void _unregister_help_view(EditorHelp *p_view);
+
+	// G2 S6b: the current script-or-help surface (see current_surface_id), legacy tab fallback.
+	Control *_get_current_surface() const;
 
 	void _close_tab(int p_idx, bool p_save = true, bool p_history_back = true);
 	void _update_find_replace_bar();
@@ -448,6 +465,10 @@ public:
 	// tree_exiting auto-unregister, and lets a dtor avoid touching ScriptEditor privates.
 	void release_editor_view(ScriptEditorBase *p_view) { _unregister_view(p_view); }
 
+	// G2 S6b: help twin of create_editor_view — create + wire an EditorHelp view for p_class,
+	// registered in the open-help registry but NOT parented (a workspace DocumentView hosts it).
+	EditorHelp *create_help_view(const String &p_class);
+
 	Vector<String> _get_breakpoints();
 	void get_breakpoints(List<String> *p_breakpoints);
 
@@ -466,9 +487,16 @@ public:
 
 	ScriptEditorBase *get_current_editor() const { return _get_current_editor(); }
 
-	// G2 S6a: pushed by the workspace (tab selection / pane focus) so "act on current script"
-	// operations follow the focused pane. Null clears it (a non-script tab became current).
-	void set_current_view(ScriptEditorBase *p_view);
+	// G2 S6a/S6b: pushed by the workspace (tab selection / pane focus) with the active tab's raw
+	// editor surface so "act on current script" operations follow the focused pane. Classifies
+	// internally: ScriptEditorBase -> current view+surface, EditorHelp -> surface only, anything
+	// else (scene view, screen host, null) clears both.
+	void set_current_surface(Control *p_surface);
+
+	// G2 S6b: focus_editor("Script") intent over the workspace — reveal the current (else most
+	// recently opened) script/help tab. False when nothing is open (caller falls back to the
+	// legacy Script screen).
+	bool reveal_recent_script_or_help();
 
 	bool script_goto_method(Ref<Script> p_script, const String &p_method);
 

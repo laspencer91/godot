@@ -293,9 +293,21 @@ Array ScriptEditor::_get_cached_breakpoints_for_script(const String &p_path) con
 	return state["breakpoints"];
 }
 
-void ScriptEditor::set_current_view(ScriptEditorBase *p_view) {
-	// G2 S6a: pushed by TabbedDocumentHost (tab selection) and EditorWorkspace (pane focus).
-	current_view_id = p_view ? p_view->get_instance_id() : ObjectID();
+void ScriptEditor::set_current_surface(Control *p_surface) {
+	// G2 S6a/S6b: pushed by TabbedDocumentHost (tab selection) and EditorWorkspace (pane focus).
+	ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(p_surface);
+	current_view_id = seb ? seb->get_instance_id() : ObjectID();
+	current_surface_id = (seb || Object::cast_to<EditorHelp>(p_surface)) ? p_surface->get_instance_id() : ObjectID();
+}
+
+Control *ScriptEditor::_get_current_surface() const {
+	// G2 S6b: the current script-or-help surface, following the workspace like _get_current_editor.
+	if (current_surface_id.is_valid()) {
+		if (Control *surface = Object::cast_to<Control>(ObjectDB::get_instance(current_surface_id))) {
+			return surface;
+		}
+	}
+	return tab_container->get_current_tab_control(); // Legacy fallback (retired in S7).
 }
 
 ScriptEditorBase *ScriptEditor::_get_current_editor() const {
@@ -322,9 +334,13 @@ void ScriptEditor::_update_history_arrows() {
 }
 
 void ScriptEditor::_save_history() {
-	if (history_pos >= 0 && history_pos < history.size() && history[history_pos].control == tab_container->get_current_tab_control()) {
-		Node *n = tab_container->get_current_tab_control();
+	// G2 S6b: the history follows the workspace's current script/help surface.
+	Control *n = _get_current_surface();
+	if (!n) {
+		return;
+	}
 
+	if (history_pos >= 0 && history_pos < history.size() && history[history_pos].control_id == n->get_instance_id()) {
 		if (Object::cast_to<TextEditorBase>(n)) {
 			Dictionary nav_state = Object::cast_to<TextEditorBase>(n)->get_navigation_state();
 			nav_state["ensure_caret_visible"] = true;
@@ -337,7 +353,7 @@ void ScriptEditor::_save_history() {
 
 	history.resize(history_pos + 1);
 	ScriptHistory sh;
-	sh.control = tab_container->get_current_tab_control();
+	sh.control_id = n->get_instance_id();
 	sh.state = Variant();
 
 	history.push_back(sh);
@@ -352,9 +368,13 @@ void ScriptEditor::_save_previous_state(Dictionary p_state) {
 		return;
 	}
 
-	if (history_pos >= 0 && history_pos < history.size() && history[history_pos].control == tab_container->get_current_tab_control()) {
-		Node *n = tab_container->get_current_tab_control();
+	// G2 S6b: the history follows the workspace's current script/help surface.
+	Control *n = _get_current_surface();
+	if (!n) {
+		return;
+	}
 
+	if (history_pos >= 0 && history_pos < history.size() && history[history_pos].control_id == n->get_instance_id()) {
 		if (Object::cast_to<ScriptTextEditor>(n)) {
 			history.write[history_pos].state = p_state;
 		}
@@ -362,7 +382,7 @@ void ScriptEditor::_save_previous_state(Dictionary p_state) {
 
 	history.resize(history_pos + 1);
 	ScriptHistory sh;
-	sh.control = tab_container->get_current_tab_control();
+	sh.control_id = n->get_instance_id();
 	sh.state = Variant();
 
 	history.push_back(sh);
@@ -383,25 +403,24 @@ void ScriptEditor::_go_to_tab(int p_idx) {
 		return;
 	}
 
-	if (history_pos >= 0 && history_pos < history.size() && history[history_pos].control == tab_container->get_current_tab_control()) {
-		Node *n = tab_container->get_current_tab_control();
-
-		if (Object::cast_to<TextEditorBase>(n)) {
-			Dictionary nav_state = Object::cast_to<TextEditorBase>(n)->get_navigation_state();
+	Node *cur = tab_container->get_current_tab_control();
+	if (cur && history_pos >= 0 && history_pos < history.size() && history[history_pos].control_id == cur->get_instance_id()) {
+		if (Object::cast_to<TextEditorBase>(cur)) {
+			Dictionary nav_state = Object::cast_to<TextEditorBase>(cur)->get_navigation_state();
 			nav_state["ensure_caret_visible"] = true;
 			history.write[history_pos].state = nav_state;
 		}
-		if (Object::cast_to<EditorHelp>(n)) {
-			history.write[history_pos].state = Object::cast_to<EditorHelp>(n)->get_scroll();
+		if (Object::cast_to<EditorHelp>(cur)) {
+			history.write[history_pos].state = Object::cast_to<EditorHelp>(cur)->get_scroll();
 		}
 	}
 
 	history.resize(history_pos + 1);
 	ScriptHistory sh;
-	sh.control = c;
+	sh.control_id = c->get_instance_id();
 	sh.state = Variant();
 
-	if (!lock_history && (history.is_empty() || history[history.size() - 1].control != sh.control)) {
+	if (!lock_history && (history.is_empty() || history[history.size() - 1].control_id != sh.control_id)) {
 		history.push_back(sh);
 		history_pos++;
 	}
@@ -591,7 +610,7 @@ void ScriptEditor::_close_tab(int p_idx, bool p_save, bool p_history_back) {
 	history.resize(history_pos + 1);
 
 	for (int i = 0; i < history.size(); i++) {
-		if (history[i].control == tselected) {
+		if (history[i].control_id == tselected->get_instance_id()) {
 			history.remove_at(i);
 			i--;
 			history_pos--;
@@ -614,7 +633,13 @@ void ScriptEditor::_close_tab(int p_idx, bool p_save, bool p_history_back) {
 		}
 		if (idx >= 0) {
 			if (history_pos >= 0) {
-				idx = tab_container->get_tab_idx_from_control(history[history_pos].control);
+				// G2 S6b: records hold ObjectIDs now; only retarget if the record's control is a live
+				// internal tab (workspace-tab records resolve to -1 and keep the neighbor index).
+				Control *hc = Object::cast_to<Control>(ObjectDB::get_instance(history[history_pos].control_id));
+				const int hidx = hc ? tab_container->get_tab_idx_from_control(hc) : -1;
+				if (hidx >= 0) {
+					idx = hidx;
+				}
 			}
 			_go_to_tab(idx);
 		} else {
@@ -2286,6 +2311,63 @@ ScriptEditorBase *ScriptEditor::create_editor_view(const Ref<Resource> &p_resour
 	return seb;
 }
 
+EditorHelp *ScriptEditor::create_help_view(const String &p_class) {
+	// G2 S6b: help twin of create_editor_view — create + wire WITHOUT parenting (a workspace
+	// DocumentView hosts it). Registered in the open-help registry, self-healing via tree_exiting.
+	EditorHelp *eh = memnew(EditorHelp);
+	eh->set_name(p_class);
+	eh->connect("go_to_help", callable_mp(this, &ScriptEditor::_help_class_goto));
+	eh->connect("request_save_history", callable_mp(this, &ScriptEditor::_save_history));
+	eh->connect(SceneStringName(tree_exiting), callable_mp(this, &ScriptEditor::_unregister_help_view).bind(eh));
+	registered_help_views.push_back(eh);
+	return eh;
+}
+
+void ScriptEditor::_unregister_help_view(EditorHelp *p_view) {
+	registered_help_views.erase(p_view);
+}
+
+EditorHelp *ScriptEditor::_reveal_help_view(const String &p_class) {
+	// G2 S6b: summon p_class's help tab — the HelpDocument + reveal() focus (or mint via the
+	// DocumentView, which calls create_help_view) — and resolve the view from the registry.
+	if (p_class.is_empty()) {
+		return nullptr;
+	}
+	EditorData &editor_data = EditorNode::get_editor_data();
+	HelpDocument *doc = editor_data.get_or_create_help_document(p_class);
+	ERR_FAIL_NULL_V(doc, nullptr);
+
+	EditorMainScreen *main_screen = EditorNode::get_singleton()->get_editor_main_screen();
+	ERR_FAIL_NULL_V(main_screen, nullptr);
+	main_screen->reveal(doc, DocumentViewKind::HELP);
+
+	for (EditorHelp *eh : registered_help_views) {
+		if (eh->get_class() == p_class) {
+			return eh;
+		}
+	}
+	return nullptr;
+}
+
+bool ScriptEditor::reveal_recent_script_or_help() {
+	// G2 S6b: the focus_editor("Script") intent — land on the current (else most recently opened)
+	// script/help tab. False when nothing is open.
+	Control *cur = _get_current_surface();
+	if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(cur)) {
+		return _reveal_script_view(seb->get_edited_resource(), true) != nullptr;
+	}
+	if (EditorHelp *eh = Object::cast_to<EditorHelp>(cur)) {
+		return _reveal_help_view(eh->get_class()) != nullptr;
+	}
+	if (!registered_views.is_empty()) {
+		return _reveal_script_view(registered_views[registered_views.size() - 1]->get_edited_resource(), true) != nullptr;
+	}
+	if (!registered_help_views.is_empty()) {
+		return _reveal_help_view(registered_help_views[registered_help_views.size() - 1]->get_class()) != nullptr;
+	}
+	return false;
+}
+
 ScriptEditorBase *ScriptEditor::_reveal_script_view(const Ref<Resource> &p_resource, bool p_grab_focus) {
 	// G2 S6a: the workspace-native open path — the document model + reveal() mint (or focus) the
 	// script's tab; the DocumentView inside it creates the fully-wired view via create_editor_view,
@@ -3361,11 +3443,8 @@ void ScriptEditor::get_window_layout(Ref<ConfigFile> p_layout) {
 		scripts.push_back(path);
 	}
 
-	// Help views are still hosted internally until S6b.
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (EditorHelp *eh = Object::cast_to<EditorHelp>(tab_container->get_tab_control(i))) {
-			helps.push_back(eh->get_class());
-		}
+	for (EditorHelp *eh : registered_help_views) { // G2 S6b
+		helps.push_back(eh->get_class());
 	}
 
 	p_layout->set_value("ScriptEditor", "open_scripts", scripts);
@@ -3384,28 +3463,28 @@ void ScriptEditor::_help_class_open(const String &p_class) {
 		return;
 	}
 
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		EditorHelp *eh = Object::cast_to<EditorHelp>(tab_container->get_tab_control(i));
-
-		if (eh && eh->get_class() == p_class) {
-			_go_to_tab(i);
-			_update_script_names();
-			return;
+	// G2 S6b: help opens as a WORKSPACE TAB (reveal focuses the existing tab or mints one via
+	// the DocumentView -> create_help_view path; the view navigates to the class on entering
+	// the tree).
+	bool was_open = false;
+	for (EditorHelp *eh : registered_help_views) {
+		if (eh->get_class() == p_class) {
+			was_open = true;
+			break;
 		}
 	}
 
-	EditorHelp *eh = memnew(EditorHelp);
+	EditorHelp *eh = _reveal_help_view(p_class);
+	if (!eh) {
+		return;
+	}
 
-	eh->set_name(p_class);
-	tab_container->add_child(eh);
-	_go_to_tab(tab_container->get_tab_count() - 1);
-	eh->go_to_class(p_class);
-	eh->connect("go_to_help", callable_mp(this, &ScriptEditor::_help_class_goto));
-	eh->connect("request_save_history", callable_mp(this, &ScriptEditor::_save_history));
-	_add_recent_script(p_class);
-	_sort_list_on_update = true;
+	if (!was_open) {
+		_add_recent_script(p_class);
+		_sort_list_on_update = true;
+		_save_layout();
+	}
 	_update_script_names();
-	_save_layout();
 }
 
 void ScriptEditor::_help_class_goto(const String &p_desc) {
@@ -3415,13 +3494,13 @@ void ScriptEditor::_help_class_goto(const String &p_desc) {
 		return;
 	}
 
-	EditorHelp *eh = memnew(EditorHelp);
-
-	eh->set_name(cname);
-	tab_container->add_child(eh);
-	_go_to_tab(tab_container->get_tab_count() - 1);
-	eh->go_to_help(p_desc);
-	eh->connect("go_to_help", callable_mp(this, &ScriptEditor::_help_class_goto));
+	// G2 S6b: mint the help tab via reveal. The freshly-minted view's go_to_class runs deferred
+	// (needs the tree), so the anchor navigation must be deferred AFTER it to win.
+	EditorHelp *eh = _reveal_help_view(cname);
+	if (!eh) {
+		return;
+	}
+	callable_mp(eh, &EditorHelp::go_to_help).call_deferred(p_desc);
 	_add_recent_script(eh->get_class());
 	_sort_list_on_update = true;
 	_update_script_names();
@@ -3429,12 +3508,11 @@ void ScriptEditor::_help_class_goto(const String &p_desc) {
 }
 
 bool ScriptEditor::_help_tab_goto(const String &p_name, const String &p_desc) {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		EditorHelp *eh = Object::cast_to<EditorHelp>(tab_container->get_tab_control(i));
-
-		if (eh && eh->get_class() == p_name) {
-			_go_to_tab(i);
-			eh->go_to_help(p_desc);
+	// G2 S6b: registry-based; reveal focuses the existing workspace tab.
+	for (EditorHelp *eh : registered_help_views) {
+		if (eh->get_class() == p_name) {
+			_reveal_help_view(p_name);
+			callable_mp(eh, &EditorHelp::go_to_help).call_deferred(p_desc);
 			_update_script_names();
 			return true;
 		}
@@ -3443,9 +3521,8 @@ bool ScriptEditor::_help_tab_goto(const String &p_name, const String &p_desc) {
 }
 
 void ScriptEditor::update_doc(const String &p_name) {
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		EditorHelp *eh = Object::cast_to<EditorHelp>(tab_container->get_tab_control(i));
-		if (eh && eh->get_class() == p_name) {
+	for (EditorHelp *eh : registered_help_views) { // G2 S6b
+		if (eh->get_class() == p_name) {
 			eh->update_doc();
 			return;
 		}
@@ -3479,7 +3556,7 @@ void ScriptEditor::_update_selected_editor_menu() {
 
 	PopupMenu *search_popup = script_search_menu->get_popup();
 	search_popup->clear();
-	if (Object::cast_to<EditorHelp>(tab_container->get_current_tab_control())) {
+	if (Object::cast_to<EditorHelp>(_get_current_surface())) { // G2 S6b: follows the workspace.
 		search_popup->add_shortcut(ED_SHORTCUT("script_editor/find", TTRC("Find..."), KeyModifierMask::CMD_OR_CTRL | Key::F), HELP_SEARCH_FIND);
 		search_popup->add_shortcut(ED_SHORTCUT("script_editor/find_next", TTRC("Find Next"), Key::F3), HELP_SEARCH_FIND_NEXT);
 		search_popup->add_shortcut(ED_SHORTCUT("script_editor/find_previous", TTRC("Find Previous"), KeyModifierMask::SHIFT | Key::F3), HELP_SEARCH_FIND_PREVIOUS);
@@ -3488,7 +3565,8 @@ void ScriptEditor::_update_selected_editor_menu() {
 		search_popup->add_shortcut(ED_GET_SHORTCUT("script_editor/replace_in_files"), REPLACE_IN_FILES);
 		script_search_menu->show();
 	} else {
-		if (tab_container->get_tab_count() == 0) {
+		// G2 S6b: "no open documents" now means empty registries, not an empty internal tab bar.
+		if (registered_views.is_empty() && registered_help_views.is_empty() && tab_container->get_tab_count() == 0) {
 			search_popup->add_shortcut(ED_GET_SHORTCUT("editor/find_in_files"), SEARCH_IN_FILES);
 			search_popup->add_shortcut(ED_GET_SHORTCUT("script_editor/replace_in_files"), REPLACE_IN_FILES);
 			script_search_menu->show();
@@ -3503,21 +3581,34 @@ void ScriptEditor::_unlock_history() {
 }
 
 void ScriptEditor::_update_history_pos(int p_new_pos) {
-	Node *n = tab_container->get_current_tab_control();
+	// G2 S6b: history navigates the WORKSPACE — save the outgoing surface's state, then reveal the
+	// record's tab (records reference views by ObjectID; dead ones are skipped by the callers).
+	Control *n = _get_current_surface();
 
-	if (Object::cast_to<TextEditorBase>(n)) {
-		Dictionary nav_state = Object::cast_to<TextEditorBase>(n)->get_navigation_state();
-		nav_state["ensure_caret_visible"] = true;
-		history.write[history_pos].state = nav_state;
-	}
-	if (Object::cast_to<EditorHelp>(n)) {
-		history.write[history_pos].state = Object::cast_to<EditorHelp>(n)->get_scroll();
+	if (n && history_pos >= 0 && history_pos < history.size()) {
+		if (Object::cast_to<TextEditorBase>(n)) {
+			Dictionary nav_state = Object::cast_to<TextEditorBase>(n)->get_navigation_state();
+			nav_state["ensure_caret_visible"] = true;
+			history.write[history_pos].state = nav_state;
+		}
+		if (Object::cast_to<EditorHelp>(n)) {
+			history.write[history_pos].state = Object::cast_to<EditorHelp>(n)->get_scroll();
+		}
 	}
 
 	history_pos = p_new_pos;
-	tab_container->set_current_tab(tab_container->get_tab_idx_from_control(history[history_pos].control));
+	n = Object::cast_to<Control>(ObjectDB::get_instance(history[history_pos].control_id));
+	if (!n) {
+		_update_history_arrows();
+		return;
+	}
 
-	n = history[history_pos].control;
+	// Summon the record's workspace tab (no-duplicate rule focuses the existing one).
+	if (ScriptEditorBase *record_view = Object::cast_to<ScriptEditorBase>(n)) {
+		_reveal_script_view(record_view->get_edited_resource(), true);
+	} else if (EditorHelp *record_help = Object::cast_to<EditorHelp>(n)) {
+		_reveal_help_view(record_help->get_class());
+	}
 
 	ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(n);
 	if (seb) {
@@ -3551,14 +3642,24 @@ void ScriptEditor::_update_history_pos(int p_new_pos) {
 }
 
 void ScriptEditor::_history_forward() {
-	if (history_pos < history.size() - 1) {
-		_update_history_pos(history_pos + 1);
+	// G2 S6b: skip records whose view was freed (workspace tab closed).
+	int pos = history_pos + 1;
+	while (pos < history.size() && !ObjectDB::get_instance(history[pos].control_id)) {
+		pos++;
+	}
+	if (pos < history.size()) {
+		_update_history_pos(pos);
 	}
 }
 
 void ScriptEditor::_history_back() {
-	if (history_pos > 0) {
-		_update_history_pos(history_pos - 1);
+	// G2 S6b: skip records whose view was freed (workspace tab closed).
+	int pos = history_pos - 1;
+	while (pos >= 0 && !ObjectDB::get_instance(history[pos].control_id)) {
+		pos--;
+	}
+	if (pos >= 0) {
+		_update_history_pos(pos);
 	}
 }
 

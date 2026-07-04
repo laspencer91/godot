@@ -168,7 +168,7 @@ void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 		return;
 	}
 	DocumentView *view = (p_idx >= 0 && p_idx < views.size()) ? views[p_idx] : nullptr;
-	se->set_current_view(Object::cast_to<ScriptEditorBase>(view ? view->get_editor_surface() : nullptr));
+	se->set_current_surface(view ? view->get_editor_surface() : nullptr);
 }
 
 void TabbedDocumentHost::_on_tab_selected(int p_idx) {

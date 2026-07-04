@@ -65,13 +65,15 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			}
 		} break;
 		case EditorDocument::TYPE_HELP: {
-			// G2 S4: the view is an EditorHelp. go_to_class needs the view in the tree (theme + doc data),
-			// so defer it until after this DocumentView has been parented into its pane.
+			// G2 S6b: the view is minted by the ScriptEditor SERVICES singleton (wired to go_to_help
+			// navigation + history, registered in the open-help registry). go_to_class needs the view
+			// in the tree (theme + doc data), so defer it until after this DocumentView is parented.
 			HelpDocument *hd = static_cast<HelpDocument *>(p_document);
-			EditorHelp *help = memnew(EditorHelp);
-			help->set_name(hd->get_class_name());
-			callable_mp(help, &EditorHelp::go_to_class).call_deferred(hd->get_class_name());
-			editor_surface = help;
+			if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+				EditorHelp *help = se->create_help_view(hd->get_class_name());
+				callable_mp(help, &EditorHelp::go_to_class).call_deferred(hd->get_class_name());
+				editor_surface = help;
+			}
 		} break;
 		case EditorDocument::TYPE_SCREEN_HOST: {
 			// G2 S5.5: this view hosts the legacy main-screen stack ITSELF (seam #5). The stack is

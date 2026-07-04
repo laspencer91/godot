@@ -37,6 +37,7 @@
 #include "editor/gui/editor_workspace.h"
 #include "editor/gui/tabbed_document_host.h"
 #include "editor/plugins/editor_plugin.h"
+#include "editor/script/script_editor_plugin.h" // G2 S6b: focus_editor("Script") over the workspace.
 #include "editor/settings/editor_settings.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
@@ -213,6 +214,15 @@ void EditorMainScreen::focus_editor(const StringName &p_name) {
 
 	const String plugin_name = String(p_name);
 	ERR_FAIL_COND_MSG(!main_editor_plugins.has(plugin_name), "The editor name '" + plugin_name + "' was not found.");
+
+	// G2 S6b: "focus the Script editor" means the workspace now — land on the current (else most
+	// recent) script/help tab when any is open; the empty legacy Script screen only when none are.
+	if (p_name == SNAME("Script")) {
+		ScriptEditor *script_editor = ScriptEditor::get_singleton();
+		if (script_editor && script_editor->reveal_recent_script_or_help()) {
+			return;
+		}
+	}
 
 	EditorPlugin *plugin = main_editor_plugins[plugin_name];
 
