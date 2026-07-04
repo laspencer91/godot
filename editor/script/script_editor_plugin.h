@@ -39,6 +39,7 @@
 #include "scene/resources/text_file.h"
 
 class CodeTextEditor;
+class DocumentView;
 class EditorFileDialog;
 class EditorHelp;
 class EditorHelpSearch;
@@ -153,7 +154,6 @@ class ScriptEditor : public PanelContainer {
 	MenuButton *file_menu = nullptr;
 	MenuButton *script_search_menu = nullptr;
 	MenuButton *debug_menu = nullptr;
-	PopupMenu *context_menu = nullptr;
 	Timer *autosave_timer = nullptr;
 	LocalVector<Control *> editor_menus;
 
@@ -166,28 +166,15 @@ class ScriptEditor : public PanelContainer {
 	bool is_floating = false;
 	EditorHelpSearch *help_search_dialog = nullptr;
 
-	ItemList *script_list = nullptr;
+	// G2 S7: script_list, the members/help overviews, list_split, and the internal TabContainer are
+	// GONE — the workspace tab bar IS the script list; views live in workspace-tab DocumentViews.
 	HSplitContainer *script_split = nullptr;
-	ItemList *members_overview = nullptr;
-	LineEdit *filter_scripts = nullptr;
-	LineEdit *filter_methods = nullptr;
-	VBoxContainer *scripts_vbox = nullptr;
-	VBoxContainer *overview_vbox = nullptr;
-	HBoxContainer *buttons_hbox = nullptr;
-	Button *members_overview_alphabeta_sort_button = nullptr;
-	bool members_overview_enabled;
-	ItemList *help_overview = nullptr;
-	bool help_overview_enabled;
-	VSplitContainer *list_split = nullptr;
-	TabContainer *tab_container = nullptr;
 
-	// G2 S1: the authoritative set of open script VIEWS, decoupled from tab_container's children so
-	// views can eventually be hosted outside this internal TabContainer (workspace tabs). Appended in
-	// open (edit()) order — mirroring tab order at creation — and self-heals via each view's
-	// tree_exiting (fires on the _close_tab memdelete and on editor-shutdown teardown). EditorHelp
-	// views are NOT tracked here (EditorHelp is not a ScriptEditorBase); help enumeration still reads
-	// tab_container until the S6/S7 help-as-document work. NOTE: if script views ever gain live tree
-	// reparenting (later workspace milestones), re-registration on tree_entered will be needed.
+	// G2 S1: the authoritative set of open script VIEWS. Appended in open (edit()) order and
+	// self-heals via each view's tree_exiting (fires on workspace-tab close and on editor-shutdown
+	// teardown). EditorHelp views are tracked separately in registered_help_views. NOTE: if script
+	// views ever gain live tree reparenting (later workspace milestones), re-registration on
+	// tree_entered will be needed.
 	Vector<ScriptEditorBase *> registered_views;
 	// G2 S6a: the current script view, following the workspace (the focused pane's active script
 	// tab, pushed by TabbedDocumentHost/EditorWorkspace via set_current_surface). ObjectID so a
@@ -245,11 +232,10 @@ class ScriptEditor : public PanelContainer {
 	int history_pos;
 
 	List<String> previous_scripts;
-	List<int> script_close_queue;
+	List<ObjectID> script_close_queue; // G2 S7: surfaces by ObjectID (freed views skip silently).
 
 	List<String> _get_recognized_extensions();
 
-	void _tab_changed(int p_which);
 	void _menu_option(int p_option);
 	void _theme_option(int p_option);
 	void _show_save_theme_as_dialog();
@@ -289,16 +275,25 @@ class ScriptEditor : public PanelContainer {
 	// G2 S6b: the current script-or-help surface (see current_surface_id), legacy tab fallback.
 	Control *_get_current_surface() const;
 
-	void _close_tab(int p_idx, bool p_save = true, bool p_history_back = true);
+	// G2 S7: THE close path — close a script/help surface's workspace tab. Saving (if p_save and
+	// unsaved) happens here; the remaining side effects (state cache, previous_scripts,
+	// notify_script_close) run in notify_surface_closing, invoked by TabbedDocumentHost for every
+	// user-driven tab close (menu Close and the tab X both converge there).
+	void _close_surface(Control *p_surface, bool p_save);
 	void _update_find_replace_bar();
 
-	void _close_current_tab(bool p_save = true, bool p_history_back = true);
+	void _close_current_tab(bool p_save = true);
 	void _close_discard_current_tab(const String &p_str);
 	void _close_docs_tab();
 	void _close_other_tabs();
 	void _close_tabs_below();
 	void _close_all_tabs();
-	void _queue_close_tabs();
+	void _queue_close_surfaces();
+
+	// G2 S7: all open script+help surfaces in registration order (scripts first) — the successor
+	// of the script_list ordering for cycling, close-others/below, and menu enablement.
+	Vector<Control *> _get_open_surfaces() const;
+	void _cycle_script_surface(int p_dir);
 
 	void _copy_script_path();
 	void _copy_script_uid();
@@ -352,38 +347,16 @@ class ScriptEditor : public PanelContainer {
 	void _reload_scripts(bool p_refresh_only = false);
 	void _auto_format_text(ScriptEditorBase *p_seb);
 
-	void _update_members_overview_visibility();
-	void _update_members_overview();
-	void _toggle_members_overview_alpha_sort(bool p_alphabetic_sort);
-	void _filter_scripts_text_changed(const String &p_newtext);
-	void _filter_methods_text_changed(const String &p_newtext);
 	void _update_script_names();
-	bool _sort_list_on_update;
-
-	void _members_overview_selected(int p_idx);
-	void _script_selected(int p_idx);
-
-	void _update_help_overview_visibility();
-	void _update_help_overview();
-	void _help_overview_selected(int p_idx);
 
 	void _update_online_doc();
-
-	void _find_scripts(Node *p_base, Node *p_current, HashSet<Ref<Script>> &used);
 
 	void _tree_changed();
 
 	void _split_dragged(float);
 
-	Variant get_drag_data_fw(const Point2 &p_point, Control *p_from);
-	bool can_drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from) const;
-	void drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from);
-
 	virtual void input(const Ref<InputEvent> &p_event) override;
 	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;
-
-	void _script_list_clicked(int p_item, Vector2 p_local_mouse_pos, MouseButton p_mouse_button_index);
-	void _make_script_list_context_menu();
 
 	void _calculate_script_name_button_size();
 	void _calculate_script_name_button_ratio();
@@ -403,10 +376,18 @@ class ScriptEditor : public PanelContainer {
 	void _update_history_arrows();
 	void _save_history();
 	void _save_previous_state(Dictionary p_state);
-	void _go_to_tab(int p_idx);
 	void _update_history_pos(int p_new_pos);
-	void _update_script_colors();
 	void _update_modified_scripts_for_external_editor(Ref<Script> p_for_script = Ref<Script>());
+
+	// G2 S7 (seam #8): the shared chrome (menu_hb strip + find_replace_bar) reparents into the
+	// focused script/help tab's DocumentView, parked back home (menu_home / find_bar_home) when
+	// no script/help tab is current. Shortcut contexts travel with the mount so menu shortcuts
+	// fire from inside the workspace tab.
+	Node *menu_home = nullptr;
+	Node *find_bar_home = nullptr;
+	void _mount_chrome(DocumentView *p_view);
+	void _park_chrome();
+	void _set_chrome_shortcut_context(Node *p_context);
 
 	void _script_changed();
 	int file_dialog_option;
@@ -487,11 +468,21 @@ public:
 
 	ScriptEditorBase *get_current_editor() const { return _get_current_editor(); }
 
-	// G2 S6a/S6b: pushed by the workspace (tab selection / pane focus) with the active tab's raw
-	// editor surface so "act on current script" operations follow the focused pane. Classifies
-	// internally: ScriptEditorBase -> current view+surface, EditorHelp -> surface only, anything
-	// else (scene view, screen host, null) clears both.
-	void set_current_surface(Control *p_surface);
+	// G2 S6a/S6b/S7: pushed by the workspace (tab selection / pane focus) with the active tab's
+	// DocumentView so "act on current script" operations follow the focused pane. Classifies the
+	// view's surface internally: ScriptEditorBase -> current view+surface, EditorHelp -> surface
+	// only, anything else (scene view, screen host, null) clears both. Also mounts/parks the
+	// shared chrome (seam #8).
+	void set_current_surface(DocumentView *p_view);
+
+	// G2 S7: single choke point for workspace-tab close side effects (state cache, previous
+	// scripts, notify_script_close). Called by TabbedDocumentHost just before it frees the
+	// closed tab's view — both the tab X and the File menu close paths land here.
+	void notify_surface_closing(Control *p_surface);
+
+	// G2 S7: if the shared chrome is currently mounted under p_host (a DocumentView about to be
+	// freed), park it back home first so it isn't freed with the host.
+	void park_chrome_if_hosted_by(Node *p_host);
 
 	// G2 S6b: focus_editor("Script") intent over the workspace — reveal the current (else most
 	// recently opened) script/help tab. False when nothing is open (caller falls back to the
@@ -511,8 +502,6 @@ public:
 	void update_docs_from_script(const Ref<Script> &p_script);
 
 	void trigger_live_script_reload(const String &p_script_path);
-
-	VSplitContainer *get_left_list_split() { return list_split; }
 
 	void set_live_auto_reload_running_scripts(bool p_enabled);
 

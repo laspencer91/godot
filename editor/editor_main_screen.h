@@ -93,6 +93,10 @@ public:
 	// G2 S6a: p_grab_focus=false makes sure the document has a (hidden) tab + view without
 	// changing the current tab or pane focus — the background-open path.
 	void reveal(EditorDocument *p_document, DocumentViewKind p_kind = DocumentViewKind::DEFAULT, bool p_grab_focus = true);
+
+	// G2 S7: close p_document's workspace tab wherever it lives (side effects included via the
+	// host's close pipeline). False if no pane shows it.
+	bool close_document(EditorDocument *p_document);
 	void focus_editor(const StringName &p_name);
 	int get_selected_index() const;
 	int get_plugin_index(EditorPlugin *p_editor) const;

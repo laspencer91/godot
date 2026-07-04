@@ -168,7 +168,7 @@ void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 		return;
 	}
 	DocumentView *view = (p_idx >= 0 && p_idx < views.size()) ? views[p_idx] : nullptr;
-	se->set_current_surface(view ? view->get_editor_surface() : nullptr);
+	se->set_current_surface(view);
 }
 
 void TabbedDocumentHost::_on_tab_selected(int p_idx) {
@@ -181,9 +181,26 @@ void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	}
 }
 
+bool TabbedDocumentHost::close_document(EditorDocument *p_document) {
+	// G2 S7: programmatic close (File menu paths) — same pipeline as the tab X.
+	const int idx = documents.find(p_document);
+	if (idx < 0) {
+		return false;
+	}
+	_on_tab_close(idx);
+	return true;
+}
+
 void TabbedDocumentHost::_on_tab_close(int p_idx) {
 	if (p_idx < 0 || p_idx >= documents.size()) {
 		return;
+	}
+	// G2 S7: single choke point for script/help close side effects (state cache,
+	// previous-scripts, notify_script_close) — must run while the surface is still alive.
+	if (views[p_idx]) {
+		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+			se->notify_surface_closing(views[p_idx]->get_editor_surface());
+		}
 	}
 	if (views[p_idx]) {
 		// Child of content_host: memdelete removes it from the tree and frees it (with

@@ -34,6 +34,7 @@
 
 class EditorDocument;
 class EditorDocumentView;
+class VBoxContainer;
 
 // DocumentView is the per-pane presentation of one open document (G2). A
 // WorkspacePane hosts a DocumentView; the DocumentView binds to a specific
@@ -60,6 +61,10 @@ class DocumentView : public MarginContainer {
 	// Control, so the scene tree frees it with this node.
 	Control *editor_surface = nullptr;
 
+	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The
+	// ScriptEditor mounts its menu strip / find bar here while this view's tab is current.
+	VBoxContainer *content_vbox = nullptr;
+
 protected:
 	static void _bind_methods() {}
 	void _notification(int p_what);
@@ -67,6 +72,10 @@ protected:
 public:
 	EditorDocumentView *get_document_view() const { return doc_view; }
 	Control *get_editor_surface() const { return editor_surface; }
+
+	// G2 S7 (seam #8): where the focused tab's shared chrome (ScriptEditor menu strip + find
+	// bar) mounts. Null cast target for non-hosting views is fine — callers null-check.
+	Control *get_chrome_host() const;
 
 	DocumentView(EditorDocument *p_document);
 	~DocumentView();

@@ -291,6 +291,19 @@ void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kin
 	}
 }
 
+bool EditorMainScreen::close_document(EditorDocument *p_document) {
+	// G2 S7: route through the owning pane's tab host so the close side effects run.
+	if (!workspace || !p_document) {
+		return false;
+	}
+	WorkspacePane *pane = workspace->find_pane_showing(p_document);
+	if (!pane) {
+		return false;
+	}
+	TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(pane->get_content());
+	return host && host->close_document(p_document);
+}
+
 int EditorMainScreen::get_selected_index() const {
 	for (int i = 0; i < editor_table.size(); i++) {
 		if (selected_plugin == editor_table[i]) {

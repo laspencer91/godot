@@ -36,6 +36,7 @@
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "editor/script/script_editor_plugin.h"
+#include "scene/gui/box_container.h"
 
 DocumentView::DocumentView(EditorDocument *p_document) {
 	set_h_size_flags(SIZE_EXPAND_FILL);
@@ -48,6 +49,14 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	// Bind the model side: this view presents p_document.
 	doc_view = memnew(EditorDocumentView);
 	doc_view->set_document(p_document);
+
+	// G2 S7 (seam #8): a vertical stack so shared chrome (menu strip / find bar) can mount
+	// above/below the surface while this tab is current.
+	content_vbox = memnew(VBoxContainer);
+	content_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
+	content_vbox->set_v_size_flags(SIZE_EXPAND_FILL);
+	content_vbox->add_theme_constant_override("separation", 0);
+	add_child(content_vbox);
 
 	// Host the editor surface for this document's kind, pointed at THIS document's isolated
 	// world so the pane renders p_document's scene independently of the globally-active one.
@@ -101,10 +110,14 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	}
 	// Parent + stretch the minted surface identically regardless of kind.
 	if (editor_surface) {
-		add_child(editor_surface);
+		content_vbox->add_child(editor_surface);
 		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
 		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
 	}
+}
+
+Control *DocumentView::get_chrome_host() const {
+	return content_vbox;
 }
 
 void DocumentView::_notification(int p_what) {
@@ -114,6 +127,10 @@ void DocumentView::_notification(int p_what) {
 	// PREDELETE dispatches derived-first, so this runs BEFORE Node's handler frees the children —
 	// the last moment editor_surface is guaranteed alive (the destructor is too late: children are
 	// already freed by then).
+	// G2 S7: if the shared chrome is mounted under this view, park it home before we die.
+	if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+		se->park_chrome_if_hosted_by(this);
+	}
 	if (!editor_surface) {
 		return;
 	}
@@ -129,11 +146,11 @@ void DocumentView::_notification(int p_what) {
 	// gone (whole-editor teardown, children die last-first), leave the stack to be freed with this
 	// view, matching the stock lifetime where the vbox died with the main-screen tree.
 	EditorDocument *doc = doc_view ? doc_view->get_document() : nullptr;
-	if (doc && doc->get_type() == EditorDocument::TYPE_SCREEN_HOST && editor_surface->get_parent() == this) {
+	if (doc && doc->get_type() == EditorDocument::TYPE_SCREEN_HOST && editor_surface->get_parent() == content_vbox) { // G2 S7: surfaces live under content_vbox now.
 		ScreenHostDocument *shd = static_cast<ScreenHostDocument *>(doc);
 		Control *park = Object::cast_to<Control>(ObjectDB::get_instance(shd->get_park_holder_id()));
 		if (park) {
-			remove_child(editor_surface);
+			content_vbox->remove_child(editor_surface);
 			park->add_child(editor_surface);
 			editor_surface = nullptr; // No longer ours; Node's PREDELETE must not free it.
 		}
