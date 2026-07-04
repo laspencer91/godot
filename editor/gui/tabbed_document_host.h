@@ -61,6 +61,7 @@ class TabbedDocumentHost : public VBoxContainer {
 	DocumentView *_ensure_view(int p_idx); // Create (hidden) if absent; returns the view.
 	void _show(int p_idx); // Reveal tab p_idx's view, hide the rest.
 	void _activate_document(int p_idx); // Make tab p_idx's document the editor's active edited scene.
+	void _sync_current_script_view(int p_idx); // G2 S6a: tell ScriptEditor which script view (if any) is current.
 	void _on_tab_selected(int p_idx);
 	void _on_tab_close(int p_idx);
 
@@ -81,6 +82,15 @@ public:
 	// no-duplicate-tab rule (a document lives in at most one pane in v1).
 	bool has_document(EditorDocument *p_document) const;
 	void focus_document(EditorDocument *p_document);
+
+	// G2 S6a: make sure p_document has a tab (title derived like focus_document) WITHOUT changing
+	// the selection — the background-open path (open dominant script while p_grab_focus is false).
+	// The view is minted eagerly (hidden) so the document's editor surface exists either way.
+	// Returns the tab index.
+	int ensure_document(EditorDocument *p_document);
+
+	// G2 S6a: the current tab's DocumentView (null when no tabs / not yet minted).
+	DocumentView *get_current_view() const;
 
 	TabbedDocumentHost();
 };

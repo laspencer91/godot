@@ -36,6 +36,7 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/gui/document_view.h" // G2 S6a: current-script-view sync on pane focus.
 #include "editor/gui/tabbed_document_host.h"
 #include "editor/script/script_editor_plugin.h"
 #include "editor/themes/editor_scale.h"
@@ -285,8 +286,15 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 	}
 
 	focused_pane = p_pane;
-	if (Object::cast_to<TabbedDocumentHost>(focused_pane->get_content())) {
+	if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(focused_pane->get_content())) {
 		last_tabbed_pane = focused_pane;
+
+		// G2 S6a: the "current script" the ScriptEditor services act on follows pane focus — the
+		// newly focused pane's active tab decides it (a script view, or null for any other kind).
+		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+			DocumentView *view = host->get_current_view();
+			se->set_current_view(Object::cast_to<ScriptEditorBase>(view ? view->get_editor_surface() : nullptr));
+		}
 	}
 
 	if (old_focused) {

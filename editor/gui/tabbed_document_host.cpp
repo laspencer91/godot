@@ -35,6 +35,7 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/gui/document_view.h"
+#include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
 #include "scene/gui/margin_container.h"
 #include "scene/gui/tab_bar.h"
 
@@ -77,16 +78,32 @@ void TabbedDocumentHost::focus_document(EditorDocument *p_document) {
 	if (!p_document) {
 		return;
 	}
-	const int idx = documents.find(p_document);
-	if (idx >= 0) {
-		set_current(idx);
-		return;
+	set_current(ensure_document(p_document));
+}
+
+int TabbedDocumentHost::ensure_document(EditorDocument *p_document) {
+	// G2 S6a: add-if-missing without selecting, so a background open (dominant script during a
+	// scene change) doesn't steal the current tab. The view is minted eagerly (hidden) so the
+	// document's editor surface — and for scripts its ScriptEditor registration — exists even
+	// before the tab is first shown.
+	ERR_FAIL_NULL_V(p_document, -1);
+	int idx = documents.find(p_document);
+	if (idx < 0) {
+		String title = p_document->get_path().get_file();
+		if (title.is_empty()) {
+			title = "Document";
+		}
+		idx = add_document(p_document, title);
 	}
-	String title = p_document->get_path().get_file();
-	if (title.is_empty()) {
-		title = "Document";
+	_ensure_view(idx);
+	return idx;
+}
+
+DocumentView *TabbedDocumentHost::get_current_view() const {
+	if (current < 0 || current >= views.size()) {
+		return nullptr;
 	}
-	set_current(add_document(p_document, title));
+	return views[current];
 }
 
 DocumentView *TabbedDocumentHost::_ensure_view(int p_idx) {
@@ -142,12 +159,25 @@ void TabbedDocumentHost::_activate_document(int p_idx) {
 	}
 }
 
+void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
+	// G2 S6a: the "current script" the ScriptEditor services act on (save, run, breakpoints)
+	// follows the workspace: a script tab becoming current makes its view the current one; any
+	// other kind of tab clears it (mirrors stock behavior when a help tab is current).
+	ScriptEditor *se = ScriptEditor::get_singleton();
+	if (!se) {
+		return;
+	}
+	DocumentView *view = (p_idx >= 0 && p_idx < views.size()) ? views[p_idx] : nullptr;
+	se->set_current_view(Object::cast_to<ScriptEditorBase>(view ? view->get_editor_surface() : nullptr));
+}
+
 void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	_show(p_idx);
 	// Only a genuine, in-tree selection drives the global active scene -- not the programmatic
 	// set_current() done while the host is being built and placed into a pane.
 	if (is_inside_tree()) {
 		_activate_document(p_idx);
+		_sync_current_script_view(p_idx); // G2 S6a
 	}
 }
 

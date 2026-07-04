@@ -90,7 +90,9 @@ public:
 	void select_prev();
 	void select_by_name(const String &p_name);
 	void select(int p_index);
-	void reveal(EditorDocument *p_document, DocumentViewKind p_kind = DocumentViewKind::DEFAULT);
+	// G2 S6a: p_grab_focus=false makes sure the document has a (hidden) tab + view without
+	// changing the current tab or pane focus — the background-open path.
+	void reveal(EditorDocument *p_document, DocumentViewKind p_kind = DocumentViewKind::DEFAULT, bool p_grab_focus = true);
 	void focus_editor(const StringName &p_name);
 	int get_selected_index() const;
 	int get_plugin_index(EditorPlugin *p_editor) const;

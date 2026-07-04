@@ -188,6 +188,10 @@ class ScriptEditor : public PanelContainer {
 	// tab_container until the S6/S7 help-as-document work. NOTE: if script views ever gain live tree
 	// reparenting (later workspace milestones), re-registration on tree_entered will be needed.
 	Vector<ScriptEditorBase *> registered_views;
+	// G2 S6a: the current script view, following the workspace (the focused pane's active script
+	// tab, pushed by TabbedDocumentHost/EditorWorkspace via set_current_view). ObjectID so a
+	// closed tab's freed view degrades to "no current view" instead of dangling.
+	ObjectID current_view_id;
 	EditorFileDialog *file_dialog = nullptr;
 	AcceptDialog *error_dialog = nullptr;
 	ConfirmationDialog *erase_tab_confirm = nullptr;
@@ -263,6 +267,10 @@ class ScriptEditor : public PanelContainer {
 
 	void _register_view(ScriptEditorBase *p_view);
 	void _unregister_view(ScriptEditorBase *p_view);
+
+	// G2 S6a: summon p_resource's workspace tab via EditorMainScreen::reveal (minting the
+	// ScriptDocument + view on first open) and return the wired view from the registry.
+	ScriptEditorBase *_reveal_script_view(const Ref<Resource> &p_resource, bool p_grab_focus);
 
 	void _close_tab(int p_idx, bool p_save = true, bool p_history_back = true);
 	void _update_find_replace_bar();
@@ -457,6 +465,10 @@ public:
 	Vector<Ref<Script>> get_open_scripts() const;
 
 	ScriptEditorBase *get_current_editor() const { return _get_current_editor(); }
+
+	// G2 S6a: pushed by the workspace (tab selection / pane focus) so "act on current script"
+	// operations follow the focused pane. Null clears it (a non-script tab became current).
+	void set_current_view(ScriptEditorBase *p_view);
 
 	bool script_goto_method(Ref<Script> p_script, const String &p_method);
 

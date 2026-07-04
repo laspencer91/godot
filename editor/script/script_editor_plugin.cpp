@@ -293,7 +293,21 @@ Array ScriptEditor::_get_cached_breakpoints_for_script(const String &p_path) con
 	return state["breakpoints"];
 }
 
+void ScriptEditor::set_current_view(ScriptEditorBase *p_view) {
+	// G2 S6a: pushed by TabbedDocumentHost (tab selection) and EditorWorkspace (pane focus).
+	current_view_id = p_view ? p_view->get_instance_id() : ObjectID();
+}
+
 ScriptEditorBase *ScriptEditor::_get_current_editor() const {
+	// G2 S6a: the current script follows the workspace — the focused pane's active script tab.
+	// The ObjectID degrades a freed view (closed tab) to null instead of dangling.
+	if (current_view_id.is_valid()) {
+		if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(ObjectDB::get_instance(current_view_id))) {
+			return seb;
+		}
+	}
+
+	// Legacy fallback: the internal TabContainer (retired in S7).
 	int selected = tab_container->get_current_tab();
 	if (selected < 0 || selected >= tab_container->get_tab_count()) {
 		return nullptr;
@@ -2272,6 +2286,27 @@ ScriptEditorBase *ScriptEditor::create_editor_view(const Ref<Resource> &p_resour
 	return seb;
 }
 
+ScriptEditorBase *ScriptEditor::_reveal_script_view(const Ref<Resource> &p_resource, bool p_grab_focus) {
+	// G2 S6a: the workspace-native open path — the document model + reveal() mint (or focus) the
+	// script's tab; the DocumentView inside it creates the fully-wired view via create_editor_view,
+	// which lands in registered_views. Resolve it from there by edited resource.
+	EditorData &editor_data = EditorNode::get_editor_data();
+	ScriptDocument *doc = editor_data.get_or_create_script_document(p_resource);
+	ERR_FAIL_NULL_V(doc, nullptr);
+
+	EditorMainScreen *main_screen = EditorNode::get_singleton()->get_editor_main_screen();
+	ERR_FAIL_NULL_V(main_screen, nullptr);
+	main_screen->reveal(doc, DocumentViewKind::SCRIPT, p_grab_focus);
+
+	Ref<Script> scr = p_resource;
+	for (ScriptEditorBase *seb : registered_views) {
+		if ((scr.is_valid() && seb->get_edited_resource() == p_resource) || seb->get_edited_resource()->get_path() == p_resource->get_path()) {
+			return seb;
+		}
+	}
+	return nullptr;
+}
+
 bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, bool p_grab_focus) {
 	if (p_resource.is_null()) {
 		return false;
@@ -2308,26 +2343,22 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 		}
 	}
 
+	// G2 S6a: already open — reveal its workspace tab (same-pane, no-duplicate rule) and apply
+	// the line/focus intent directly on the view.
 	for (ScriptEditorBase *seb : registered_views) { // G2 S1
 		if ((scr.is_valid() && seb->get_edited_resource() == p_resource) || seb->get_edited_resource()->get_path() == p_resource->get_path()) {
 			if (should_open) {
-				const int i = tab_container->get_tab_idx_from_control(seb); // G2 S1: resolve the found view's current tab index.
+				_reveal_script_view(p_resource, true);
 				if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 					teb->enable_editor();
 
-					if (tab_container->get_current_tab() != i) {
-						_go_to_tab(i);
-					}
-
-					if (is_visible_in_tree()) {
+					if (teb->is_visible_in_tree()) {
 						teb->ensure_focus();
 					}
 
 					if (p_line >= 0) {
 						teb->goto_line_centered(p_line, p_col);
 					}
-				} else if (tab_container->get_current_tab() != i) {
-					_go_to_tab(i);
 				}
 			}
 			_update_script_names();
@@ -2336,11 +2367,10 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 		}
 	}
 
-	// doesn't have it, make a new one
-	ScriptEditorBase *seb = create_editor_view(p_resource); // G2 S2: create + fully wire without parenting.
+	// Not open yet — G2 S6a: summon it as a workspace tab (the DocumentView mints the wired view
+	// via create_editor_view). p_grab_focus=false keeps the current tab (background dominant open).
+	ScriptEditorBase *seb = _reveal_script_view(p_resource, p_grab_focus);
 	ERR_FAIL_NULL_V(seb, false);
-
-	tab_container->add_child(seb);
 
 	if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 		if (p_grab_focus) {
@@ -2363,7 +2393,6 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 	}
 
 	if (p_grab_focus) {
-		_go_to_tab(tab_container->get_tab_count() - 1);
 		_add_recent_script(p_resource->get_path());
 	}
 
@@ -3242,8 +3271,14 @@ void ScriptEditor::set_window_layout(Ref<ConfigFile> p_layout) {
 		}
 
 		if (!script_info.is_empty()) {
-			if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(tab_container->get_tab_control(tab_container->get_tab_count() - 1))) {
-				teb->set_edit_state(script_info["state"]);
+			// G2 S6a: the restored view lives in a workspace tab — resolve it from the registry.
+			for (ScriptEditorBase *seb : registered_views) {
+				if (seb->get_edited_resource().is_valid() && seb->get_edited_resource()->get_path() == path) {
+					if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
+						teb->set_edit_state(script_info["state"]);
+					}
+					break;
+				}
 			}
 		}
 	}
@@ -3296,10 +3331,10 @@ void ScriptEditor::set_window_layout(Ref<ConfigFile> p_layout) {
 	if (p_layout->has_section_key("ScriptEditor", "selected_script")) {
 		String selected_script = p_layout->get_value("ScriptEditor", "selected_script");
 		// If the selected script is not in the list of open scripts, select nothing.
-		for (int i = 0; i < tab_container->get_tab_count(); i++) {
-			ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-			if (seb && seb->get_edited_resource()->get_path() == selected_script) {
-				_go_to_tab(i);
+		// G2 S6a: reveal the selected script's workspace tab (registry-based; tab_container is legacy).
+		for (ScriptEditorBase *seb : registered_views) {
+			if (seb->get_edited_resource().is_valid() && seb->get_edited_resource()->get_path() == selected_script) {
+				_reveal_script_view(seb->get_edited_resource(), true);
 				break;
 			}
 		}
@@ -3310,21 +3345,24 @@ void ScriptEditor::get_window_layout(Ref<ConfigFile> p_layout) {
 	Array scripts;
 	Array helps;
 	String selected_script;
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i))) {
-			const String path = seb->get_edited_resource()->get_path();
-			if (path.is_empty()) {
-				continue;
-			}
-
-			if (tab_container->get_current_tab_control() == tab_container->get_tab_control(i)) {
-				selected_script = path;
-			}
-
-			_save_editor_state(seb);
-			scripts.push_back(path);
+	// G2 S6a: open script views live in workspace tabs — enumerate the registry, not tab_container.
+	ScriptEditorBase *current = _get_current_editor();
+	for (ScriptEditorBase *seb : registered_views) {
+		const String path = seb->get_edited_resource()->get_path();
+		if (path.is_empty()) {
+			continue;
 		}
 
+		if (seb == current) {
+			selected_script = path;
+		}
+
+		_save_editor_state(seb);
+		scripts.push_back(path);
+	}
+
+	// Help views are still hosted internally until S6b.
+	for (int i = 0; i < tab_container->get_tab_count(); i++) {
 		if (EditorHelp *eh = Object::cast_to<EditorHelp>(tab_container->get_tab_control(i))) {
 			helps.push_back(eh->get_class());
 		}
