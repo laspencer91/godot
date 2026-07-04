@@ -215,6 +215,13 @@ void EditorMainScreen::focus_editor(const StringName &p_name) {
 	ERR_FAIL_COND_MSG(!main_editor_plugins.has(plugin_name), "The editor name '" + plugin_name + "' was not found.");
 
 	EditorPlugin *plugin = main_editor_plugins[plugin_name];
+
+	// G2 S5.5: singleton screens live inside the screen-host tab — summon/focus that tab first,
+	// so the make_visible dance below runs inside a visible view (e.g. strip button pressed while
+	// a script tab is current).
+	if (screen_host_document) {
+		reveal(screen_host_document);
+	}
 	_select_index(get_plugin_index(plugin));
 }
 
@@ -226,8 +233,9 @@ void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kin
 	// G2 S5: script/help documents open as WORKSPACE TABS, not a main-screen switch. If the document
 	// already has a tab in any pane, focus it (no-duplicate rule); otherwise resolve a target pane —
 	// which, when a script is opened from within a script, is the focused tabbed pane, so the new
-	// script lands as a new tab in the SAME pane.
-	if (document_type == EditorDocument::TYPE_SCRIPT || document_type == EditorDocument::TYPE_HELP) {
+	// script lands as a new tab in the SAME pane. G2 S5.5: the screen-host document rides the same
+	// path (its tab normally already exists in the root host; after a tab close this re-summons it).
+	if (document_type == EditorDocument::TYPE_SCRIPT || document_type == EditorDocument::TYPE_HELP || document_type == EditorDocument::TYPE_SCREEN_HOST) {
 		if (!workspace) {
 			return;
 		}
@@ -384,11 +392,35 @@ EditorMainScreen::EditorMainScreen() {
 	main_screen_vbox->set_v_size_flags(Control::SIZE_EXPAND_FILL);
 	main_screen_vbox->add_theme_constant_override("separation", 0);
 
-	// G2: the main editor area is now the workspace tree. In this first increment a
-	// single root pane hosts the existing main-screen stack (main_screen_vbox), so
-	// get_control() and behavior are unchanged; later increments split panes and host
-	// editors per-pane. Plugins/addons still parent into get_control() == main_screen_vbox.
+	// G2 S5.5: hidden holder main_screen_vbox parks under whenever no screen-host view hosts it
+	// (D11: get_control() must return the live vbox at every instant). Added BEFORE the workspace
+	// on purpose — teardown frees children last-first, so the screen-host view can park the vbox
+	// here while the holder is still alive.
+	screen_park_holder = memnew(Control);
+	screen_park_holder->set_name("ScreenParkHolder");
+	screen_park_holder->set_visible(false);
+	add_child(screen_park_holder);
+
+	// G2 S5.5: the main editor area is the workspace tree, and the root pane hosts a TAB HOST from
+	// startup: tab 0 is the screen-host document, whose view carries the legacy main-screen stack
+	// (main_screen_vbox) — so the first script/scene reveal opens as a sibling tab in this pane,
+	// never a split. Plugins/addons still parent into get_control() == main_screen_vbox.
 	workspace = memnew(EditorWorkspace);
 	add_child(workspace);
-	workspace->get_root_pane()->set_content(main_screen_vbox);
+
+	screen_host_document = memnew(ScreenHostDocument);
+	screen_host_document->set_screen_stack(main_screen_vbox);
+	screen_host_document->set_park_holder_id(screen_park_holder->get_instance_id());
+
+	TabbedDocumentHost *root_host = memnew(TabbedDocumentHost);
+	workspace->get_root_pane()->set_content(root_host);
+	root_host->add_document(screen_host_document, screen_host_document->get_path().get_file());
+}
+
+EditorMainScreen::~EditorMainScreen() {
+	// Plain C++ model object (not registered in EditorData) — owned here.
+	if (screen_host_document) {
+		memdelete(screen_host_document);
+		screen_host_document = nullptr;
+	}
 }

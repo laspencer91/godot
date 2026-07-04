@@ -58,6 +58,14 @@ private:
 	VBoxContainer *main_screen_vbox = nullptr;
 	EditorPlugin *selected_plugin = nullptr;
 
+	// G2 S5.5: the one screen-host document (seam #5) — tab 0 of the root pane's tab host,
+	// whose view carries main_screen_vbox. Owned here (plain C++ object, not in EditorData).
+	ScreenHostDocument *screen_host_document = nullptr;
+	// Hidden holder main_screen_vbox parks under whenever no screen-host view exists, keeping
+	// get_control() live (D11). Added as a child BEFORE the workspace: teardown frees children
+	// last-first, so the workspace (and its views) dies while the holder is still alive.
+	Control *screen_park_holder = nullptr;
+
 	HBoxContainer *button_hb = nullptr;
 	Vector<Button *> buttons;
 	Vector<EditorPlugin *> editor_table;
@@ -96,4 +104,5 @@ public:
 	void remove_main_plugin(EditorPlugin *p_editor);
 
 	EditorMainScreen();
+	~EditorMainScreen();
 };

@@ -62,6 +62,7 @@ class DocumentView : public MarginContainer {
 
 protected:
 	static void _bind_methods() {}
+	void _notification(int p_what);
 
 public:
 	EditorDocumentView *get_document_view() const { return doc_view; }

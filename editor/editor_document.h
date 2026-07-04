@@ -21,6 +21,7 @@
 #pragma once
 
 #include "core/io/resource.h" // Ref<Resource> by-value getter on ScriptDocument.
+#include "core/object/object_id.h" // Park-holder handle on ScreenHostDocument.
 #include "core/string/ustring.h"
 #include "core/templates/rid.h"
 #include "core/variant/dictionary.h"
@@ -28,6 +29,7 @@
 #include "scene/resources/3d/world_3d.h" // Ref<World3D> by-value getters need the complete type.
 #include "scene/resources/world_2d.h" // Ref<World2D> by-value getters need the complete type.
 
+class Control;
 class Node;
 class SubViewport;
 class WorkspacePane;
@@ -56,6 +58,7 @@ public:
 		TYPE_SCRIPT,
 		TYPE_RESOURCE,
 		TYPE_HELP, // G2 S3: a class-reference (help) document. Append-only — do not reorder.
+		TYPE_SCREEN_HOST, // G2 S5.5: THE one screen-host document (seam #5). Append-only.
 	};
 
 protected:
@@ -172,6 +175,31 @@ public:
 
 	HelpDocument() { type = TYPE_HELP; }
 	virtual ~HelpDocument() {}
+};
+
+// G2 S5.5: THE one screen-host document (seam #5). Its DocumentView hosts the legacy
+// main-screen stack (EditorMainScreen's main_screen_vbox) itself, so the singleton screens
+// (2D/3D/Script/Game/AssetLib + third-party main screens) live inside one workspace tab and
+// the root pane can be a tab host from startup — the first script/scene reveal then opens as
+// a sibling tab in the SAME pane, never a split. The stack is NOT owned here: when the view
+// dies, it parks back under the hidden holder identified by park_holder_id, so
+// EditorMainScreen::get_control() keeps returning the live vbox at every instant (D11).
+class ScreenHostDocument : public EditorDocument {
+	Control *screen_stack = nullptr; // main_screen_vbox (not owned).
+	ObjectID park_holder_id; // Hidden holder the stack returns to when no view hosts it.
+
+public:
+	Control *get_screen_stack() const { return screen_stack; }
+	void set_screen_stack(Control *p_stack) { screen_stack = p_stack; }
+
+	ObjectID get_park_holder_id() const { return park_holder_id; }
+	void set_park_holder_id(ObjectID p_id) { park_holder_id = p_id; }
+
+	ScreenHostDocument() {
+		type = TYPE_SCREEN_HOST;
+		path = "screens://Editor"; // Stable key; get_file() doubles as the v1 tab title.
+	}
+	virtual ~ScreenHostDocument() {}
 };
 
 // VIEW STATE — one per pane that presents a document. Holds the presentation

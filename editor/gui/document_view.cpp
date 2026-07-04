@@ -73,6 +73,19 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			callable_mp(help, &EditorHelp::go_to_class).call_deferred(hd->get_class_name());
 			editor_surface = help;
 		} break;
+		case EditorDocument::TYPE_SCREEN_HOST: {
+			// G2 S5.5: this view hosts the legacy main-screen stack ITSELF (seam #5). The stack is
+			// EditorMainScreen's main_screen_vbox — never owned here; NOTIFICATION_PREDELETE parks it
+			// back under the hidden holder so get_control() keeps returning the live vbox (D11).
+			ScreenHostDocument *shd = static_cast<ScreenHostDocument *>(p_document);
+			Control *stack = shd->get_screen_stack();
+			if (stack) {
+				if (Node *stack_parent = stack->get_parent()) {
+					stack_parent->remove_child(stack); // Un-park (re-summon after a tab close).
+				}
+				editor_surface = stack;
+			}
+		} break;
 		case EditorDocument::TYPE_SCENE_2D: {
 			if (CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton()) {
 				editor_surface = canvas_editor->create_view_bound_to(p_document);
@@ -92,16 +105,42 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	}
 }
 
-DocumentView::~DocumentView() {
+void DocumentView::_notification(int p_what) {
+	if (p_what != NOTIFICATION_PREDELETE) {
+		return;
+	}
+	// PREDELETE dispatches derived-first, so this runs BEFORE Node's handler frees the children —
+	// the last moment editor_surface is guaranteed alive (the destructor is too late: children are
+	// already freed by then).
+	if (!editor_surface) {
+		return;
+	}
 	// G2 S4: if this view hosted a script surface, drop it from the ScriptEditor open-scripts
-	// registry before the scene tree frees it (idempotent belt-and-suspenders with tree_exiting).
+	// registry before it is freed (idempotent belt-and-suspenders with tree_exiting).
 	if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(editor_surface)) {
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 			se->release_editor_view(seb);
 		}
 	}
-	// editor_surface is a child Control freed by the scene tree; doc_view is a plain
-	// C++ object we own, so free it here.
+	// G2 S5.5: the screen-host view does not own the legacy main-screen stack — park it back under
+	// EditorMainScreen's hidden holder so get_control() stays live (D11). If the holder is already
+	// gone (whole-editor teardown, children die last-first), leave the stack to be freed with this
+	// view, matching the stock lifetime where the vbox died with the main-screen tree.
+	EditorDocument *doc = doc_view ? doc_view->get_document() : nullptr;
+	if (doc && doc->get_type() == EditorDocument::TYPE_SCREEN_HOST && editor_surface->get_parent() == this) {
+		ScreenHostDocument *shd = static_cast<ScreenHostDocument *>(doc);
+		Control *park = Object::cast_to<Control>(ObjectDB::get_instance(shd->get_park_holder_id()));
+		if (park) {
+			remove_child(editor_surface);
+			park->add_child(editor_surface);
+			editor_surface = nullptr; // No longer ours; Node's PREDELETE must not free it.
+		}
+	}
+}
+
+DocumentView::~DocumentView() {
+	// doc_view is a plain C++ object we own; the children (editor_surface) were already freed by
+	// Node's PREDELETE — surface-detach work lives in _notification(NOTIFICATION_PREDELETE) above.
 	if (doc_view) {
 		memdelete(doc_view);
 		doc_view = nullptr;
