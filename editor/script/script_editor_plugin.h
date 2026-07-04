@@ -166,9 +166,9 @@ class ScriptEditor : public PanelContainer {
 	bool is_floating = false;
 	EditorHelpSearch *help_search_dialog = nullptr;
 
-	// G2 S7: script_list, the members/help overviews, list_split, and the internal TabContainer are
-	// GONE — the workspace tab bar IS the script list; views live in workspace-tab DocumentViews.
-	HSplitContainer *script_split = nullptr;
+	// G2 S7: script_list, the members/help overviews, list_split, script_split, and the internal
+	// TabContainer are GONE — the workspace tab bar IS the script list; views live in
+	// workspace-tab DocumentViews.
 
 	// G2 S1: the authoritative set of open script VIEWS. Appended in open (edit()) order and
 	// self-heals via each view's tree_exiting (fires on workspace-tab close and on editor-shutdown
@@ -295,6 +295,15 @@ class ScriptEditor : public PanelContainer {
 	Vector<Control *> _get_open_surfaces() const;
 	void _cycle_script_surface(int p_dir);
 
+	// G2 simplify: registry lookups + the shared save body, each previously duplicated inline.
+	ScriptEditorBase *_find_view_for_resource(const Ref<Resource> &p_resource) const;
+	EditorHelp *_find_help_view(const String &p_class) const;
+	void _save_view(ScriptEditorBase *p_view);
+
+	// G2 simplify: set while _queue_close_surfaces drains, so notify_surface_closing skips its
+	// per-surface refresh/layout-save (the queue does ONE refresh after the batch).
+	bool closing_surface_batch = false;
+
 	void _copy_script_path();
 	void _copy_script_uid();
 
@@ -352,8 +361,6 @@ class ScriptEditor : public PanelContainer {
 	void _update_online_doc();
 
 	void _tree_changed();
-
-	void _split_dragged(float);
 
 	virtual void input(const Ref<InputEvent> &p_event) override;
 	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;

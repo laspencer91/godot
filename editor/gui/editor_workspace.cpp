@@ -259,7 +259,7 @@ void EditorWorkspace::_debug_split_focused_with_tabs(bool p_vertical) {
 		Vector<Ref<Script>> open_scripts = se->get_open_scripts();
 		if (!open_scripts.is_empty() && open_scripts[0].is_valid()) {
 			ScriptDocument *sd = ed.get_or_create_script_document(open_scripts[0]);
-			host->add_document(sd, open_scripts[0]->get_path().get_file());
+			host->add_document(sd, sd->get_title());
 		}
 	}
 

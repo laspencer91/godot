@@ -95,6 +95,17 @@ public:
 	String get_path() const { return path; }
 	void set_path(const String &p_path) { path = p_path; }
 
+	// Display label for workspace tabs. Path-derived by default; subclasses with a better
+	// source (e.g. HelpDocument's class name) override.
+	virtual String get_title() const {
+		const String file = path.get_file();
+		return file.is_empty() ? "Document" : file;
+	}
+
+	// Whether reveal() opens this document as a workspace tab (vs the legacy main-screen
+	// switch). Scenes flip to true in M7.1.
+	virtual bool opens_as_workspace_tab() const { return false; }
+
 	bool is_dirty() const { return dirty; }
 	void set_dirty(bool p_dirty) { dirty = p_dirty; }
 
@@ -157,6 +168,8 @@ public:
 	Ref<Resource> get_script_resource() const { return script; }
 	void set_script_resource(const Ref<Resource> &p_script) { script = p_script; }
 
+	virtual bool opens_as_workspace_tab() const override { return true; }
+
 	ScriptDocument() { type = TYPE_SCRIPT; }
 	virtual ~ScriptDocument() {}
 };
@@ -172,6 +185,9 @@ public:
 		class_name = p_class;
 		path = "help://" + p_class;
 	}
+
+	virtual String get_title() const override { return class_name; }
+	virtual bool opens_as_workspace_tab() const override { return true; }
 
 	HelpDocument() { type = TYPE_HELP; }
 	virtual ~HelpDocument() {}
@@ -194,6 +210,8 @@ public:
 
 	ObjectID get_park_holder_id() const { return park_holder_id; }
 	void set_park_holder_id(ObjectID p_id) { park_holder_id = p_id; }
+
+	virtual bool opens_as_workspace_tab() const override { return true; }
 
 	ScreenHostDocument() {
 		type = TYPE_SCREEN_HOST;

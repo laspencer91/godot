@@ -89,11 +89,7 @@ int TabbedDocumentHost::ensure_document(EditorDocument *p_document) {
 	ERR_FAIL_NULL_V(p_document, -1);
 	int idx = documents.find(p_document);
 	if (idx < 0) {
-		String title = p_document->get_path().get_file();
-		if (title.is_empty()) {
-			title = "Document";
-		}
-		idx = add_document(p_document, title);
+		idx = add_document(p_document, p_document->get_title());
 	}
 	_ensure_view(idx);
 	return idx;

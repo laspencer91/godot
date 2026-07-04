@@ -41,7 +41,6 @@
 #include "core/object/class_db.h"
 #include "core/os/keyboard.h"
 #include "core/os/os.h"
-#include "core/string/fuzzy_search.h"
 #include "core/variant/dictionary.h"
 #include "core/version.h"
 #include "editor/debugger/editor_debugger_node.h"
@@ -76,8 +75,6 @@
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
 #include "scene/gui/separator.h"
-#include "scene/gui/tab_container.h"
-#include "scene/gui/texture_rect.h"
 #include "scene/main/node.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
@@ -299,8 +296,16 @@ void ScriptEditor::set_current_surface(DocumentView *p_view) {
 	Control *surface = p_view ? p_view->get_editor_surface() : nullptr;
 	ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(surface);
 	const bool is_ours = seb || Object::cast_to<EditorHelp>(surface);
+
+	// G2 simplify: reveal() pushes twice (tab select + pane focus) — same surface means chrome
+	// and menus are already in place, so skip the full refresh.
+	const ObjectID new_surface_id = is_ours ? surface->get_instance_id() : ObjectID();
+	if (new_surface_id == current_surface_id) {
+		return;
+	}
+
 	current_view_id = seb ? seb->get_instance_id() : ObjectID();
-	current_surface_id = is_ours ? surface->get_instance_id() : ObjectID();
+	current_surface_id = new_surface_id;
 
 	// G2 S7 (seam #8): the shared chrome follows the focused script/help tab.
 	if (is_ours) {
@@ -569,21 +574,7 @@ void ScriptEditor::_close_surface(Control *p_surface, bool p_save) {
 	if (seb) {
 		Ref<Resource> file = seb->get_edited_resource();
 		if (p_save && file.is_valid() && !file->is_built_in() && seb->is_unsaved()) {
-			_auto_format_text(seb);
-			seb->apply_code();
-			Ref<TextFile> text_file = file;
-			Ref<Script> scr = file;
-			if (text_file.is_valid()) {
-				_save_text_file(text_file, text_file->get_path());
-			} else {
-				if (scr.is_valid()) {
-					clear_docs_from_script(scr);
-				}
-				EditorNode::get_singleton()->save_resource(file);
-				if (scr.is_valid()) {
-					update_docs_from_script(scr);
-				}
-			}
+			_save_view(seb); // G2 simplify: shared save body with save_current_script.
 		}
 		doc = editor_data.get_or_create_script_document(file);
 	} else {
@@ -621,12 +612,62 @@ void ScriptEditor::notify_surface_closing(Control *p_surface) {
 	} else if (!Object::cast_to<EditorHelp>(p_surface)) {
 		return;
 	}
+	// G2 simplify: during a batch close the queue does ONE refresh + layout save after draining.
+	if (closing_surface_batch) {
+		return;
+	}
 	// The surface is freed right after this call; refresh bookkeeping next frame. History records
 	// referencing the freed view degrade to skippable ObjectIDs (S6b) — no purge needed.
 	callable_mp(this, &ScriptEditor::_update_script_names).call_deferred();
 	callable_mp(this, &ScriptEditor::_update_find_replace_bar).call_deferred();
 	callable_mp(this, &ScriptEditor::_update_history_arrows).call_deferred();
 	_save_layout();
+}
+
+ScriptEditorBase *ScriptEditor::_find_view_for_resource(const Ref<Resource> &p_resource) const {
+	// G2 simplify: the one "open view for this resource" predicate (identity for scripts, else path).
+	Ref<Script> scr = p_resource;
+	for (ScriptEditorBase *seb : registered_views) {
+		if ((scr.is_valid() && seb->get_edited_resource() == p_resource) || seb->get_edited_resource()->get_path() == p_resource->get_path()) {
+			return seb;
+		}
+	}
+	return nullptr;
+}
+
+EditorHelp *ScriptEditor::_find_help_view(const String &p_class) const {
+	for (EditorHelp *eh : registered_help_views) {
+		if (eh->get_class() == p_class) {
+			return eh;
+		}
+	}
+	return nullptr;
+}
+
+void ScriptEditor::_save_view(ScriptEditorBase *p_view) {
+	// G2 simplify: the shared save body (was duplicated between save_current_script and the
+	// close path).
+	_auto_format_text(p_view);
+
+	Ref<Resource> resource = p_view->get_edited_resource();
+	Ref<TextFile> text_file = resource;
+	Ref<Script> scr = resource;
+
+	if (text_file.is_valid()) {
+		p_view->apply_code();
+		_save_text_file(text_file, text_file->get_path());
+		return;
+	}
+
+	if (scr.is_valid()) {
+		clear_docs_from_script(scr);
+	}
+
+	EditorNode::get_singleton()->save_resource(resource);
+
+	if (scr.is_valid()) {
+		update_docs_from_script(scr);
+	}
 }
 
 Vector<Control *> ScriptEditor::_get_open_surfaces() const {
@@ -724,6 +765,7 @@ void ScriptEditor::_close_all_tabs() {
 void ScriptEditor::_queue_close_surfaces() {
 	// G2 S7: surface-based close queue. Unsaved scripts pause the queue on the confirm dialog
 	// (revealed first so the Close-and-Save action targets them as the current view).
+	closing_surface_batch = true; // One refresh after the batch, not per surface.
 	while (!script_close_queue.is_empty()) {
 		const ObjectID id = script_close_queue.front()->get();
 		script_close_queue.pop_front();
@@ -743,7 +785,11 @@ void ScriptEditor::_queue_close_surfaces() {
 
 		_close_surface(surface, false);
 	}
+	closing_surface_batch = false;
+	_update_script_names();
+	_update_history_arrows();
 	_update_find_replace_bar();
+	_save_layout();
 }
 
 void ScriptEditor::_ask_close_current_unsaved_tab(ScriptEditorBase *current) {
@@ -1478,7 +1524,6 @@ void ScriptEditor::_notification(int p_what) {
 			EditorNode::get_singleton()->connect("scene_saved", callable_mp(this, &ScriptEditor::_scene_saved_callback));
 			FileSystemDock::get_singleton()->connect("files_moved", callable_mp(this, &ScriptEditor::_files_moved));
 			FileSystemDock::get_singleton()->connect("file_removed", callable_mp(this, &ScriptEditor::_file_removed));
-			script_split->connect("dragged", callable_mp(this, &ScriptEditor::_split_dragged));
 
 			EditorFileSystem::get_singleton()->connect("filesystem_changed", callable_mp(this, &ScriptEditor::_filesystem_changed));
 #ifdef ANDROID_ENABLED
@@ -1869,12 +1914,7 @@ EditorHelp *ScriptEditor::_reveal_help_view(const String &p_class) {
 	ERR_FAIL_NULL_V(main_screen, nullptr);
 	main_screen->reveal(doc, DocumentViewKind::HELP);
 
-	for (EditorHelp *eh : registered_help_views) {
-		if (eh->get_class() == p_class) {
-			return eh;
-		}
-	}
-	return nullptr;
+	return _find_help_view(p_class);
 }
 
 bool ScriptEditor::reveal_recent_script_or_help() {
@@ -1908,13 +1948,7 @@ ScriptEditorBase *ScriptEditor::_reveal_script_view(const Ref<Resource> &p_resou
 	ERR_FAIL_NULL_V(main_screen, nullptr);
 	main_screen->reveal(doc, DocumentViewKind::SCRIPT, p_grab_focus);
 
-	Ref<Script> scr = p_resource;
-	for (ScriptEditorBase *seb : registered_views) {
-		if ((scr.is_valid() && seb->get_edited_resource() == p_resource) || seb->get_edited_resource()->get_path() == p_resource->get_path()) {
-			return seb;
-		}
-	}
-	return nullptr;
+	return _find_view_for_resource(p_resource);
 }
 
 bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, bool p_grab_focus) {
@@ -1955,25 +1989,23 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 
 	// G2 S6a: already open — reveal its workspace tab (same-pane, no-duplicate rule) and apply
 	// the line/focus intent directly on the view.
-	for (ScriptEditorBase *seb : registered_views) { // G2 S1
-		if ((scr.is_valid() && seb->get_edited_resource() == p_resource) || seb->get_edited_resource()->get_path() == p_resource->get_path()) {
-			if (should_open) {
-				_reveal_script_view(p_resource, true);
-				if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
-					teb->enable_editor();
+	if (ScriptEditorBase *open_view = _find_view_for_resource(p_resource)) { // G2 simplify
+		if (should_open) {
+			_reveal_script_view(p_resource, true);
+			if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(open_view)) {
+				teb->enable_editor();
 
-					if (teb->is_visible_in_tree()) {
-						teb->ensure_focus();
-					}
+				if (teb->is_visible_in_tree()) {
+					teb->ensure_focus();
+				}
 
-					if (p_line >= 0) {
-						teb->goto_line_centered(p_line, p_col);
-					}
+				if (p_line >= 0) {
+					teb->goto_line_centered(p_line, p_col);
 				}
 			}
-			_update_script_names();
-			return true;
 		}
+		_update_script_names();
+		return true;
 	}
 
 	// Not open yet — G2 S6a: summon it as a workspace tab (the DocumentView mints the wired view
@@ -2056,27 +2088,7 @@ void ScriptEditor::save_current_script() {
 		return;
 	}
 
-	_auto_format_text(current);
-
-	Ref<Resource> resource = current->get_edited_resource();
-	Ref<TextFile> text_file = resource;
-	Ref<Script> scr = resource;
-
-	if (text_file.is_valid()) {
-		current->apply_code();
-		_save_text_file(text_file, text_file->get_path());
-		return;
-	}
-
-	if (scr.is_valid()) {
-		clear_docs_from_script(scr);
-	}
-
-	EditorNode::get_singleton()->save_resource(resource);
-
-	if (scr.is_valid()) {
-		update_docs_from_script(scr);
-	}
+	_save_view(current); // G2 simplify: shared save body with the close path.
 }
 
 void ScriptEditor::save_all_scripts() {
@@ -2448,10 +2460,6 @@ void ScriptEditor::_tree_changed() {
 	callable_mp(this, &ScriptEditor::_update_script_names).call_deferred();
 }
 
-void ScriptEditor::_split_dragged(float) {
-	_save_layout();
-}
-
 void ScriptEditor::input(const Ref<InputEvent> &p_event) {
 	// This is implemented in `input()` rather than `unhandled_input()` to allow
 	// the shortcut to be used regardless of the click location.
@@ -2596,9 +2604,6 @@ void ScriptEditor::set_window_layout(Ref<ConfigFile> p_layout) {
 		_help_class_open(path);
 	}
 
-	if (p_layout->has_section_key("ScriptEditor", "script_split_offset")) {
-		script_split->set_split_offset(p_layout->get_value("ScriptEditor", "script_split_offset"));
-	}
 
 	// Remove any deleted editors that have been removed between launches.
 	// and if a Script, register breakpoints with the debugger.
@@ -2665,7 +2670,6 @@ void ScriptEditor::get_window_layout(Ref<ConfigFile> p_layout) {
 	p_layout->set_value("ScriptEditor", "open_scripts", scripts);
 	p_layout->set_value("ScriptEditor", "selected_script", selected_script);
 	p_layout->set_value("ScriptEditor", "open_help", helps);
-	p_layout->set_value("ScriptEditor", "script_split_offset", script_split->get_split_offset());
 	p_layout->set_value("ScriptEditor", "zoom_factor", zoom_factor);
 
 	// Save the cache.
@@ -2680,13 +2684,7 @@ void ScriptEditor::_help_class_open(const String &p_class) {
 	// G2 S6b: help opens as a WORKSPACE TAB (reveal focuses the existing tab or mints one via
 	// the DocumentView -> create_help_view path; the view navigates to the class on entering
 	// the tree).
-	bool was_open = false;
-	for (EditorHelp *eh : registered_help_views) {
-		if (eh->get_class() == p_class) {
-			was_open = true;
-			break;
-		}
-	}
+	const bool was_open = _find_help_view(p_class) != nullptr; // G2 simplify
 
 	EditorHelp *eh = _reveal_help_view(p_class);
 	if (!eh) {
@@ -2721,23 +2719,19 @@ void ScriptEditor::_help_class_goto(const String &p_desc) {
 
 bool ScriptEditor::_help_tab_goto(const String &p_name, const String &p_desc) {
 	// G2 S6b: registry-based; reveal focuses the existing workspace tab.
-	for (EditorHelp *eh : registered_help_views) {
-		if (eh->get_class() == p_name) {
-			_reveal_help_view(p_name);
-			callable_mp(eh, &EditorHelp::go_to_help).call_deferred(p_desc);
-			_update_script_names();
-			return true;
-		}
+	EditorHelp *eh = _find_help_view(p_name); // G2 simplify
+	if (!eh) {
+		return false;
 	}
-	return false;
+	_reveal_help_view(p_name);
+	callable_mp(eh, &EditorHelp::go_to_help).call_deferred(p_desc);
+	_update_script_names();
+	return true;
 }
 
 void ScriptEditor::update_doc(const String &p_name) {
-	for (EditorHelp *eh : registered_help_views) { // G2 S6b
-		if (eh->get_class() == p_name) {
-			eh->update_doc();
-			return;
-		}
+	if (EditorHelp *eh = _find_help_view(p_name)) { // G2 simplify
+		eh->update_doc();
 	}
 }
 
@@ -3145,19 +3139,16 @@ ScriptEditor::ScriptEditor(WindowWrapper *p_wrapper) {
 	main_container->add_child(menu_hb);
 	menu_home = main_container;
 
-	script_split = memnew(HSplitContainer);
-	main_container->add_child(script_split);
-	script_split->set_v_size_flags(SIZE_EXPAND_FILL);
-	script_split->set_drag_nested_intersections(true);
-
 #ifdef ANDROID_ENABLED
 	virtual_keyboard_spacer = memnew(Control);
 	virtual_keyboard_spacer->set_h_size_flags(SIZE_EXPAND_FILL);
 	main_container->add_child(virtual_keyboard_spacer);
 #endif
 
+	// G2 simplify: script_split (HSplitContainer) died with the left panel — one child needs no split.
 	VBoxContainer *code_editor_container = memnew(VBoxContainer);
-	script_split->add_child(code_editor_container);
+	code_editor_container->set_v_size_flags(SIZE_EXPAND_FILL);
+	main_container->add_child(code_editor_container);
 
 	find_replace_bar = memnew(FindReplaceBar);
 	code_editor_container->add_child(find_replace_bar);
@@ -3282,7 +3273,6 @@ ScriptEditor::ScriptEditor(WindowWrapper *p_wrapper) {
 	script_name_button->set_flat(true);
 	script_name_button->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
 	script_name_button->set_h_size_flags(SIZE_EXPAND_FILL);
-	script_name_button->set_tooltip_text(TTRC("Navigate to script list."));
 	// G2 S7: the name button's "scroll the script list" action died with the list; it stays as a
 	// pure current-document label.
 	script_name_button_hbox->add_child(script_name_button);

@@ -240,12 +240,11 @@ void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kin
 
 	const EditorDocument::Type document_type = p_document->get_type();
 
-	// G2 S5: script/help documents open as WORKSPACE TABS, not a main-screen switch. If the document
-	// already has a tab in any pane, focus it (no-duplicate rule); otherwise resolve a target pane —
-	// which, when a script is opened from within a script, is the focused tabbed pane, so the new
-	// script lands as a new tab in the SAME pane. G2 S5.5: the screen-host document rides the same
-	// path (its tab normally already exists in the root host; after a tab close this re-summons it).
-	if (document_type == EditorDocument::TYPE_SCRIPT || document_type == EditorDocument::TYPE_HELP || document_type == EditorDocument::TYPE_SCREEN_HOST) {
+	// G2 S5: tab documents (script/help/screen-host) open as WORKSPACE TABS, not a main-screen
+	// switch. If the document already has a tab in any pane, focus it (no-duplicate rule);
+	// otherwise resolve a target pane — which, when a script is opened from within a script, is
+	// the focused tabbed pane, so the new script lands as a new tab in the SAME pane.
+	if (p_document->opens_as_workspace_tab()) {
 		if (!workspace) {
 			return;
 		}
@@ -441,7 +440,7 @@ EditorMainScreen::EditorMainScreen() {
 
 	TabbedDocumentHost *root_host = memnew(TabbedDocumentHost);
 	workspace->get_root_pane()->set_content(root_host);
-	root_host->add_document(screen_host_document, screen_host_document->get_path().get_file());
+	root_host->add_document(screen_host_document, screen_host_document->get_title());
 }
 
 EditorMainScreen::~EditorMainScreen() {
