@@ -36,7 +36,9 @@
 class Control;
 class DocumentView;
 class EditorDocument;
+class PopupMenu;
 class TabBar;
+class WorkspacePane;
 
 // TabbedDocumentHost is the tabbed content of one workspace pane (G2): a TabBar
 // of open documents over a content area that shows the active document's
@@ -58,12 +60,26 @@ class TabbedDocumentHost : public VBoxContainer {
 	Vector<DocumentView *> views; // Parallel to documents; lazily created, owned via content_host.
 	int current = -1;
 
+	// G2 S8: tab-bar context menu (Split Right/Down, Close Tab, Close Pane).
+	enum {
+		MENU_SPLIT_RIGHT,
+		MENU_SPLIT_DOWN,
+		MENU_CLOSE_TAB,
+		MENU_CLOSE_PANE,
+	};
+	PopupMenu *tab_menu = nullptr;
+	int menu_tab = -1; // The right-clicked tab the open menu acts on.
+
 	DocumentView *_ensure_view(int p_idx); // Create (hidden) if absent; returns the view.
 	void _show(int p_idx); // Reveal tab p_idx's view, hide the rest.
 	void _activate_document(int p_idx); // Make tab p_idx's document the editor's active edited scene.
 	void _sync_current_script_view(int p_idx); // G2 S6a: tell ScriptEditor which script view (if any) is current.
+	void _remove_tab_entry(int p_idx); // Drop the tab row, keeping the current selection when it survives.
 	void _on_tab_selected(int p_idx);
 	void _on_tab_close(int p_idx);
+	void _on_tab_rmb(int p_idx); // G2 S8
+	void _on_menu_pressed(int p_id); // G2 S8
+	WorkspacePane *_owning_pane() const; // G2 S8: nearest WorkspacePane ancestor (null outside a workspace).
 
 protected:
 	static void _bind_methods() {}
@@ -95,6 +111,18 @@ public:
 	// G2 S7: close p_document's tab (same pipeline as the tab X, side effects included).
 	// False if the document has no tab here.
 	bool close_document(EditorDocument *p_document);
+
+	// G2 S8: close tab p_idx (same pipeline as the tab X). Public so pane close can
+	// drain remaining tabs through the side-effect choke point.
+	void close_tab(int p_idx) { _on_tab_close(p_idx); }
+
+	EditorDocument *get_document(int p_idx) const; // G2 S8 (null on bad index).
+
+	// G2 S8: tab move between hosts. detach_tab removes the tab and hands back its live
+	// DocumentView WITHOUT close side effects; adopt_tab re-homes such a view here and
+	// selects it. Used by EditorWorkspace::split_pane_with_tab.
+	DocumentView *detach_tab(int p_idx);
+	int adopt_tab(EditorDocument *p_document, DocumentView *p_view);
 
 	TabbedDocumentHost();
 };

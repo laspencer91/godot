@@ -124,6 +124,42 @@ void WorkspacePane::input(const Ref<InputEvent> &p_event) {
 	}
 }
 
+void WorkspacePane::collapse_split(WorkspacePane *p_removed) {
+	// G2 S8: absorb the surviving child, freeing the removed subtree. Private access
+	// across WorkspacePane instances is what lets the survivor's split state move here.
+	ERR_FAIL_COND(is_leaf());
+	ERR_FAIL_COND(p_removed != first && p_removed != second);
+	WorkspacePane *survivor = (p_removed == first) ? second : first;
+
+	SplitContainer *old_split = split_container;
+	split_container = nullptr;
+	first = nullptr;
+	second = nullptr;
+
+	if (survivor->is_leaf()) {
+		Control *surviving_content = survivor->get_content();
+		survivor->set_content(nullptr); // Detach before the shell is freed.
+		remove_child(old_split);
+		memdelete(old_split); // Frees p_removed's subtree and the survivor shell.
+		set_content(surviving_content);
+	} else {
+		// The survivor is itself a split: its divider subtree moves up into this pane.
+		SplitContainer *inner = survivor->split_container;
+		WorkspacePane *inner_first = survivor->first;
+		WorkspacePane *inner_second = survivor->second;
+		survivor->split_container = nullptr;
+		survivor->first = nullptr;
+		survivor->second = nullptr;
+		survivor->remove_child(inner);
+		remove_child(old_split);
+		memdelete(old_split);
+		split_container = inner;
+		first = inner_first;
+		second = inner_second;
+		add_child(inner);
+	}
+}
+
 int WorkspacePane::get_leaf_count() const {
 	if (is_leaf()) {
 		return 1;
@@ -351,6 +387,98 @@ WorkspacePane *EditorWorkspace::resolve_target_pane_for_documents() {
 	}
 	memdelete(host); // split failed (target not a leaf); nothing hosts the orphan.
 	return nullptr;
+}
+
+WorkspacePane *EditorWorkspace::_find_tabbed_leaf(WorkspacePane *p_pane) const {
+	if (!p_pane) {
+		return nullptr;
+	}
+	if (p_pane->is_leaf()) {
+		return Object::cast_to<TabbedDocumentHost>(p_pane->get_content()) ? p_pane : nullptr;
+	}
+	if (WorkspacePane *found = _find_tabbed_leaf(p_pane->get_first())) {
+		return found;
+	}
+	return _find_tabbed_leaf(p_pane->get_second());
+}
+
+void EditorWorkspace::close_pane(WorkspacePane *p_pane) {
+	// G2 S8: deliberate pane close. Remaining tabs drain through the host close pipeline
+	// first (state cache, script-close notifications), then the parent split collapses
+	// onto the sibling. The root pane never closes.
+	if (!p_pane || p_pane == root_pane || !p_pane->is_inside_tree()) {
+		return;
+	}
+	if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content())) {
+		const ObjectID pane_id = p_pane->get_instance_id();
+		while (host->get_document_count() > 0) {
+			host->close_tab(0);
+			if (!ObjectDB::get_instance(pane_id)) {
+				return; // Something already tore the pane down mid-drain.
+			}
+		}
+	}
+
+	SplitContainer *sc = Object::cast_to<SplitContainer>(p_pane->get_parent());
+	ERR_FAIL_NULL(sc);
+	WorkspacePane *parent = Object::cast_to<WorkspacePane>(sc->get_parent());
+	ERR_FAIL_NULL(parent);
+
+	// Track by ObjectID across the collapse: the closed subtree and (when the survivor
+	// is a split) the survivor's own shell are freed by it.
+	const ObjectID focused_id = focused_pane ? focused_pane->get_instance_id() : ObjectID();
+	const ObjectID last_tabbed_id = last_tabbed_pane ? last_tabbed_pane->get_instance_id() : ObjectID();
+
+	parent->collapse_split(p_pane);
+
+	focused_pane = Object::cast_to<WorkspacePane>(ObjectDB::get_instance(focused_id));
+	last_tabbed_pane = Object::cast_to<WorkspacePane>(ObjectDB::get_instance(last_tabbed_id));
+	if (!last_tabbed_pane) {
+		last_tabbed_pane = _find_tabbed_leaf(root_pane);
+	}
+	if (!focused_pane) {
+		set_focused_pane(last_tabbed_pane ? last_tabbed_pane : root_pane);
+	} else {
+		focused_pane->queue_redraw(); // Focus border hides when one leaf remains.
+	}
+}
+
+void EditorWorkspace::_close_pane_by_id(ObjectID p_pane_id) {
+	close_pane(Object::cast_to<WorkspacePane>(ObjectDB::get_instance(p_pane_id)));
+}
+
+void EditorWorkspace::queue_close_pane(WorkspacePane *p_pane) {
+	if (!p_pane) {
+		return;
+	}
+	callable_mp(this, &EditorWorkspace::_close_pane_by_id).call_deferred(p_pane->get_instance_id());
+}
+
+WorkspacePane *EditorWorkspace::split_pane_with_tab(WorkspacePane *p_pane, int p_tab, bool p_vertical) {
+	// G2 S8: context-menu split — the clicked tab MOVES into a fresh tabbed host on the
+	// new side; its DocumentView is re-homed live, so editing state is untouched.
+	ERR_FAIL_NULL_V(p_pane, nullptr);
+	TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content());
+	ERR_FAIL_NULL_V(host, nullptr);
+	ERR_FAIL_INDEX_V(p_tab, host->get_document_count(), nullptr);
+	if (host->get_document_count() < 2) {
+		return nullptr; // Moving the only tab out would leave a dead pane behind.
+	}
+
+	EditorDocument *doc = host->get_document(p_tab);
+	DocumentView *view = host->detach_tab(p_tab);
+	ERR_FAIL_NULL_V(view, nullptr);
+
+	TabbedDocumentHost *new_host = memnew(TabbedDocumentHost);
+	WorkspacePane *new_pane = p_pane->split(p_vertical, new_host, true);
+	if (!new_pane) {
+		host->adopt_tab(doc, view); // Split refused; put the tab back.
+		memdelete(new_host);
+		return nullptr;
+	}
+	new_host->adopt_tab(doc, view);
+	set_focused_pane(new_pane);
+	return new_pane;
 }
 
 EditorWorkspace::EditorWorkspace() {

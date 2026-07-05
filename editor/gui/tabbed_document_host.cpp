@@ -35,8 +35,10 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/gui/document_view.h"
+#include "editor/gui/editor_workspace.h" // G2 S8: pane split/close from the tab bar.
 #include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
 #include "scene/gui/margin_container.h"
+#include "scene/gui/popup_menu.h"
 #include "scene/gui/tab_bar.h"
 
 TabbedDocumentHost::TabbedDocumentHost() {
@@ -49,7 +51,13 @@ TabbedDocumentHost::TabbedDocumentHost() {
 	tab_bar->set_tab_close_display_policy(TabBar::CLOSE_BUTTON_SHOW_ALWAYS);
 	tab_bar->connect("tab_selected", callable_mp(this, &TabbedDocumentHost::_on_tab_selected));
 	tab_bar->connect("tab_close_pressed", callable_mp(this, &TabbedDocumentHost::_on_tab_close));
+	tab_bar->connect("tab_rmb_clicked", callable_mp(this, &TabbedDocumentHost::_on_tab_rmb)); // G2 S8
 	add_child(tab_bar);
+
+	// G2 S8: pane management context menu (built per popup in _on_tab_rmb).
+	tab_menu = memnew(PopupMenu);
+	add_child(tab_menu);
+	tab_menu->connect("id_pressed", callable_mp(this, &TabbedDocumentHost::_on_menu_pressed));
 
 	content_host = memnew(MarginContainer);
 	content_host->set_h_size_flags(SIZE_EXPAND_FILL);
@@ -187,6 +195,23 @@ bool TabbedDocumentHost::close_document(EditorDocument *p_document) {
 	return true;
 }
 
+void TabbedDocumentHost::_remove_tab_entry(int p_idx) {
+	// G2 S8: drop the tab row and reselect — keep the previously current tab when it
+	// survives (closing/moving a background tab must not steal the selection), else the
+	// nearest neighbour.
+	int reselect = current;
+	views.remove_at(p_idx);
+	documents.remove_at(p_idx);
+	tab_bar->remove_tab(p_idx);
+	if (p_idx < reselect) {
+		reselect--;
+	}
+	current = -1;
+	if (documents.size() > 0) {
+		set_current(CLAMP(reselect, 0, documents.size() - 1));
+	}
+}
+
 void TabbedDocumentHost::_on_tab_close(int p_idx) {
 	if (p_idx < 0 || p_idx >= documents.size()) {
 		return;
@@ -203,13 +228,102 @@ void TabbedDocumentHost::_on_tab_close(int p_idx) {
 		// its Node3DEditorView, whose gizmo layer is returned to its world's freelist).
 		memdelete(views[p_idx]);
 	}
-	views.remove_at(p_idx);
-	documents.remove_at(p_idx);
-	tab_bar->remove_tab(p_idx);
+	_remove_tab_entry(p_idx);
 
-	// Reselect a neighbour so a view is always shown while tabs remain.
-	current = -1;
-	if (documents.size() > 0) {
-		set_current(MIN(p_idx, documents.size() - 1));
+	// G2 S8: the last tab closing in a non-root pane closes the pane. Deferred — we may
+	// be deep inside this host's own signal emission, and the close frees this host.
+	if (documents.is_empty()) {
+		WorkspacePane *pane = _owning_pane();
+		EditorWorkspace *ws = pane ? pane->get_workspace() : nullptr;
+		if (ws && pane != ws->get_root_pane()) {
+			ws->queue_close_pane(pane);
+		}
+	}
+}
+
+EditorDocument *TabbedDocumentHost::get_document(int p_idx) const {
+	if (p_idx < 0 || p_idx >= documents.size()) {
+		return nullptr;
+	}
+	return documents[p_idx];
+}
+
+DocumentView *TabbedDocumentHost::detach_tab(int p_idx) {
+	// G2 S8: remove the tab and hand back its live view WITHOUT close side effects —
+	// the caller re-homes it in another host, so editing state stays untouched.
+	ERR_FAIL_INDEX_V(p_idx, documents.size(), nullptr);
+	DocumentView *view = _ensure_view(p_idx);
+	content_host->remove_child(view);
+	_remove_tab_entry(p_idx);
+	return view;
+}
+
+int TabbedDocumentHost::adopt_tab(EditorDocument *p_document, DocumentView *p_view) {
+	// G2 S8: receive a tab detached from another host — the view is reparented and the
+	// new tab selected.
+	ERR_FAIL_NULL_V(p_document, -1);
+	ERR_FAIL_NULL_V(p_view, -1);
+	const int idx = documents.size();
+	documents.push_back(p_document);
+	views.push_back(p_view);
+	content_host->add_child(p_view);
+	p_view->set_visible(false); // set_current reveals it.
+	tab_bar->add_tab(p_document->get_title());
+	set_current(idx);
+	return idx;
+}
+
+WorkspacePane *TabbedDocumentHost::_owning_pane() const {
+	for (Node *n = get_parent(); n; n = n->get_parent()) {
+		if (WorkspacePane *pane = Object::cast_to<WorkspacePane>(n)) {
+			return pane;
+		}
+	}
+	return nullptr;
+}
+
+void TabbedDocumentHost::_on_tab_rmb(int p_idx) {
+	// G2 S8: pane management entry point — split/close from the tab bar.
+	menu_tab = p_idx;
+	tab_menu->clear();
+	tab_menu->add_item(TTR("Split Right"), MENU_SPLIT_RIGHT);
+	tab_menu->add_item(TTR("Split Down"), MENU_SPLIT_DOWN);
+	tab_menu->add_separator();
+	tab_menu->add_item(TTR("Close Tab"), MENU_CLOSE_TAB);
+	tab_menu->add_item(TTR("Close Pane"), MENU_CLOSE_PANE);
+
+	// Splitting out the only tab would leave a dead pane behind; the root pane never closes.
+	const bool can_split = documents.size() > 1;
+	tab_menu->set_item_disabled(tab_menu->get_item_index(MENU_SPLIT_RIGHT), !can_split);
+	tab_menu->set_item_disabled(tab_menu->get_item_index(MENU_SPLIT_DOWN), !can_split);
+	WorkspacePane *pane = _owning_pane();
+	EditorWorkspace *ws = pane ? pane->get_workspace() : nullptr;
+	const bool can_close_pane = ws && pane != ws->get_root_pane();
+	tab_menu->set_item_disabled(tab_menu->get_item_index(MENU_CLOSE_PANE), !can_close_pane);
+
+	tab_menu->set_position(get_screen_position() + get_local_mouse_position());
+	tab_menu->reset_size();
+	tab_menu->popup();
+}
+
+void TabbedDocumentHost::_on_menu_pressed(int p_id) {
+	WorkspacePane *pane = _owning_pane();
+	EditorWorkspace *ws = pane ? pane->get_workspace() : nullptr;
+	switch (p_id) {
+		case MENU_SPLIT_RIGHT:
+		case MENU_SPLIT_DOWN: {
+			if (ws) {
+				ws->split_pane_with_tab(pane, menu_tab, p_id == MENU_SPLIT_DOWN);
+			}
+		} break;
+		case MENU_CLOSE_TAB: {
+			close_tab(menu_tab);
+		} break;
+		case MENU_CLOSE_PANE: {
+			// Deferred: closing frees this host (and the menu emitting this signal).
+			if (ws) {
+				ws->queue_close_pane(pane);
+			}
+		} break;
 	}
 }

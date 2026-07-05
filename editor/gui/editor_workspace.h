@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/input/input_event.h"
+#include "core/object/object_id.h"
 #include "scene/gui/box_container.h"
 
 class EditorDocument;
@@ -91,6 +92,11 @@ public:
 	WorkspacePane *get_second() const { return second; }
 	int get_leaf_count() const;
 
+	// G2 S8: this SPLIT pane becomes its surviving child. p_removed's whole subtree is
+	// freed (DocumentViews run their PREDELETE detach work); the survivor's payload —
+	// leaf content or inner split — is re-homed into this pane.
+	void collapse_split(WorkspacePane *p_removed);
+
 	WorkspacePane();
 };
 
@@ -140,8 +146,24 @@ public:
 	// a new tab in the SAME pane.
 	WorkspacePane *resolve_target_pane_for_documents();
 
+	// G2 S8: deliberate pane close (tab-bar context menu / last tab closed). Drains the
+	// pane's remaining tabs through the host close pipeline, then collapses the parent
+	// split onto the sibling. The root pane never closes.
+	void close_pane(WorkspacePane *p_pane);
+
+	// G2 S8: close_pane on the next idle frame, ObjectID-guarded — safe to call from
+	// inside the pane's own signal emissions (tab close, context menu).
+	void queue_close_pane(WorkspacePane *p_pane);
+
+	// G2 S8: split p_pane and MOVE its p_tab into a fresh TabbedDocumentHost on the new
+	// (second) side. The tab's DocumentView is re-homed, not closed and reopened, so no
+	// close side effects fire. Returns the new pane (null if the move was refused).
+	WorkspacePane *split_pane_with_tab(WorkspacePane *p_pane, int p_tab, bool p_vertical);
+
 	EditorWorkspace();
 
 private:
 	WorkspacePane *_find_pane_showing(WorkspacePane *p_pane, EditorDocument *p_document) const;
+	WorkspacePane *_find_tabbed_leaf(WorkspacePane *p_pane) const;
+	void _close_pane_by_id(ObjectID p_pane_id);
 };
