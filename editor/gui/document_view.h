@@ -34,6 +34,7 @@
 
 class EditorDocument;
 class EditorDocumentView;
+class SceneTreeDock;
 class VBoxContainer;
 
 // DocumentView is the per-pane presentation of one open document (G2). A
@@ -60,6 +61,12 @@ class DocumentView : public MarginContainer {
 	// The editor surface rendering the document (a Node3DEditorView in v1). A child
 	// Control, so the scene tree frees it with this node.
 	Control *editor_surface = nullptr;
+
+	// G2 D7a: for a scene document, its own Scene Tree dock embedded to the left of the surface,
+	// bound to this document. Null for non-scene (script/help/resource) views. bound_scene_document
+	// is kept only to refresh the tree's root once the view is in-tree (root may load late).
+	SceneTreeDock *scene_tree_dock = nullptr;
+	EditorDocument *bound_scene_document = nullptr;
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The
 	// ScriptEditor mounts its menu strip / find bar here while this view's tab is current.

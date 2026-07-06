@@ -4943,13 +4943,14 @@ void SceneTreeDock::set_bound_document(EditorDocument *p_document) {
 SceneTreeDock::SceneTreeDock(Node *p_scene_root, EditorSelection *p_editor_selection, EditorData &p_editor_data, bool p_is_global) {
 	set_name(TTRC("Scene"));
 	set_icon_name("PackedScene");
-	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_scene", TTRC("Open Scene Dock")));
 	set_default_slot(EditorDock::DOCK_SLOT_LEFT_UR);
 
-	// G2 D5: only the one global dock claims the singleton (bound per-pane instances must not clobber
-	// it — the ~80 get_singleton() callers expect the active-scene dock).
+	// G2 D5: only the one global dock claims the singleton and registers the global dock command
+	// (bound per-pane instances must not clobber the singleton — the ~80 get_singleton() callers
+	// expect the active-scene dock — nor re-register "docks/open_scene", which errors as a duplicate).
 	if (p_is_global) {
 		singleton = this;
+		set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_scene", TTRC("Open Scene Dock")));
 	}
 	editor_data = &p_editor_data;
 	editor_selection = p_editor_selection;

@@ -32,11 +32,15 @@
 
 #include "core/object/callable_mp.h"
 #include "editor/doc/editor_help.h"
+#include "editor/docks/scene_tree_dock.h"
 #include "editor/editor_document.h"
+#include "editor/editor_node.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "editor/script/script_editor_plugin.h"
+#include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/split_container.h"
 
 DocumentView::DocumentView(EditorDocument *p_document) {
 	set_h_size_flags(SIZE_EXPAND_FILL);
@@ -108,6 +112,27 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			}
 		} break;
 	}
+	// G2 D7a: a scene document's tab is a COMPOSITE — its own Scene Tree dock to the left of the
+	// editor surface, bound to this document. The dock is a bound instance (is_global=false, D5, so it
+	// never claims the SceneTreeDock singleton) reading this doc's own root/selection/history via the
+	// D4 resolvers. Non-scene documents (script/help/screen-host/resource) have no selection, so they
+	// are left as a plain surface. The composite becomes `editor_surface` (the split), which the
+	// generic parent/stretch below adds to content_vbox.
+	if (editor_surface && p_document && p_document->get_selection()) {
+		scene_tree_dock = memnew(SceneTreeDock(p_document->get_root(), p_document->get_selection(), EditorNode::get_editor_data(), false));
+		scene_tree_dock->set_bound_document(p_document);
+		scene_tree_dock->set_edited_scene(p_document->get_root());
+		scene_tree_dock->set_custom_minimum_size(Size2(250 * EDSCALE, 0));
+		bound_scene_document = p_document;
+
+		HSplitContainer *scene_split = memnew(HSplitContainer);
+		scene_split->add_child(scene_tree_dock);
+		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
+		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
+		scene_split->add_child(editor_surface);
+		editor_surface = scene_split;
+	}
+
 	// Parent + stretch the minted surface identically regardless of kind.
 	if (editor_surface) {
 		content_vbox->add_child(editor_surface);
@@ -121,6 +146,15 @@ Control *DocumentView::get_chrome_host() const {
 }
 
 void DocumentView::_notification(int p_what) {
+	if (p_what == NOTIFICATION_READY) {
+		// G2 D7a: re-point the embedded Scene Tree at its document's root now that we're in-tree. The
+		// scene root can be assigned after a background (grab_focus=false) view is minted, so a refresh
+		// here guarantees the tree shows the current tree rather than an empty one.
+		if (scene_tree_dock && bound_scene_document) {
+			scene_tree_dock->set_edited_scene(bound_scene_document->get_root());
+		}
+		return;
+	}
 	if (p_what != NOTIFICATION_PREDELETE) {
 		return;
 	}
