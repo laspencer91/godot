@@ -647,7 +647,8 @@ TextEditorBase::TextEditorBase() {
 	code_editor = memnew(CodeTextEditor);
 	code_editor->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
 	code_editor->set_v_size_flags(Control::SIZE_EXPAND_FILL);
-	code_editor->show_toggle_files_button();
+	// G2 S7: the workspace tabs ARE the script/text file list — there is no files panel to toggle,
+	// so don't surface the (now inert) toggle-files button here.
 	code_editor->get_text_editor()->set_context_menu_enabled(false);
 	code_editor->get_text_editor()->connect(SceneStringName(gui_input), callable_mp(this, &TextEditorBase::_text_edit_gui_input));
 	code_editor->connect("validate_script", callable_mp(this, &TextEditorBase::_validate_script));

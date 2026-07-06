@@ -1729,7 +1729,11 @@ void CodeTextEditor::_set_show_warnings_panel(bool p_show) {
 }
 
 void CodeTextEditor::_toggle_files_pressed() {
-	ERR_FAIL_NULL(toggle_files_list);
+	// G2: no files-list control means there is nothing to toggle (script/text editors host
+	// their file list as workspace tabs now). Soft no-op instead of erroring.
+	if (!toggle_files_list) {
+		return;
+	}
 	toggle_files_list->set_visible(!toggle_files_list->is_visible());
 	EditorSettings::get_singleton()->set_project_metadata("files_panel", "show_files_panel", toggle_files_list->is_visible());
 	update_toggle_files_button();
@@ -1942,7 +1946,11 @@ void CodeTextEditor::show_toggle_files_button() {
 }
 
 void CodeTextEditor::update_toggle_files_button() {
-	ERR_FAIL_NULL(toggle_files_list);
+	// G2: only meaningful when a files-list control is wired (shaders still are; script/text
+	// editors are not since S7 made the workspace tabs the list). Otherwise no-op.
+	if (!toggle_files_list) {
+		return;
+	}
 	bool forward = toggle_files_list->is_visible() == is_layout_rtl();
 	toggle_files_button->set_button_icon(get_editor_theme_icon(forward ? SNAME("Forward") : SNAME("Back")));
 	toggle_files_button->set_tooltip_text(vformat("%s (%s)", TTR("Toggle Files Panel"), ED_GET_SHORTCUT("script_editor/toggle_files_panel")->get_as_text()));

@@ -2011,7 +2011,11 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 	// Not open yet — G2 S6a: summon it as a workspace tab (the DocumentView mints the wired view
 	// via create_editor_view). p_grab_focus=false keeps the current tab (background dominant open).
 	ScriptEditorBase *seb = _reveal_script_view(p_resource, p_grab_focus);
-	ERR_FAIL_NULL_V(seb, false);
+	if (!seb) {
+		// G2: no editor view could be minted for this resource (e.g. a non-script/text type routed
+		// here). Nothing opened — report failure quietly rather than spamming the log.
+		return false;
+	}
 
 	if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
 		if (p_grab_focus) {
