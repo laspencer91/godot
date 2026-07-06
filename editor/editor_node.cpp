@@ -4620,7 +4620,7 @@ void EditorNode::_activate_scene_views() {
 	// G2 D2 (Model B): retarget the global selection proxy at the now-active document's own
 	// EditorSelection (or its fallback storage when no scene document is active). Silent — the
 	// switch path's existing save/restore refresh drives consumers; the relay carries live changes.
-	EditorSelection *doc_selection = (doc && doc->is_scene()) ? static_cast<SceneDocument *>(doc)->get_selection() : nullptr;
+	EditorSelection *doc_selection = doc ? doc->get_selection() : nullptr;
 	static_cast<EditorActiveSelectionProxy *>(editor_selection)->set_target(doc_selection);
 }
 

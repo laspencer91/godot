@@ -78,10 +78,6 @@ public:
 	Type get_type() const { return type; }
 	void set_type(Type p_type) { type = p_type; }
 
-	// True for the scene-document family (2D/3D/mixed) — the documents that own a render world
-	// and a live EditorSelection. Lets cast-free call sites gate a static_cast to SceneDocument.
-	bool is_scene() const { return type == TYPE_SCENE_2D || type == TYPE_SCENE_3D || type == TYPE_SCENE_MIXED; }
-
 	// Classify a scene by its root node kind (Node3D -> 3D, Node2D/Control -> 2D, else MIXED),
 	// matching how the editor picks a default view. Used to route a DocumentView to the right
 	// per-pane editor surface. Null root -> UNKNOWN.
@@ -121,6 +117,12 @@ public:
 	virtual RID get_scenario() const { return RID(); }
 	virtual RID get_space() const { return RID(); }
 
+	// Per-document selection + history — same convention as the world accessors: default to "none"
+	// (script/resource documents have neither), SceneDocument overrides. Consumers null-coalesce
+	// with the global (EditorNode::get_editor_selection[_history]) instead of downcasting.
+	virtual EditorSelection *get_selection() const { return nullptr; }
+	virtual EditorSelectionHistory *get_selection_history() { return nullptr; }
+
 	EditorDocument() {}
 	virtual ~EditorDocument() {}
 };
@@ -135,10 +137,9 @@ class SceneDocument : public EditorDocument {
 	Ref<World3D> world_3d;
 	Ref<World2D> world_2d;
 
-	// RESERVED (per-document selection, ARCHITECTURE.md #6): the live selection is
-	// still EditorNode::editor_selection / editor_history in v1, snapshotted per
-	// scene and swapped on switch. This is the intended home for when panes render
-	// co-visibly and the active pane's document owns the selection.
+	// This document's own selection + history (G2 D1–D3). The selection is authoritative: the global
+	// EditorNode::editor_selection is an EditorActiveSelectionProxy that retargets at the active
+	// document's selection, and per-pane docks (D7) bind these directly.
 	EditorSelection *selection = nullptr;
 	EditorSelectionHistory selection_history;
 
@@ -149,8 +150,8 @@ public:
 	virtual RID get_scenario() const override;
 	virtual RID get_space() const override;
 
-	EditorSelection *get_selection() const { return selection; }
-	EditorSelectionHistory *get_selection_history() { return &selection_history; }
+	virtual EditorSelection *get_selection() const override { return selection; }
+	virtual EditorSelectionHistory *get_selection_history() override { return &selection_history; }
 
 	// Document-level activation side effects (only the focused document drives the
 	// audio listener in v1). The per-pane "is this view active" bit lives on

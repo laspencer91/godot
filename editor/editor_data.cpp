@@ -1064,11 +1064,10 @@ void EditorData::save_edited_scene_state(EditorSelection *p_selection, EditorSel
 	es.history_current = p_history->current_elem_idx;
 	es.history_stored = p_history->history;
 
-	// G2 D3: the outgoing scene's selection history backs onto its SceneDocument's own
+	// G2 D3: the outgoing scene's selection history backs onto its EditorDocument's own
 	// EditorSelectionHistory — the store D6/D7's per-pane inspector/docks bind to. Kept in lockstep
 	// with the es fields (still the global fallback), so global back/forward is unchanged today.
-	if (es.document && es.document->is_scene()) {
-		EditorSelectionHistory *doc_history = static_cast<SceneDocument *>(es.document)->get_selection_history();
+	if (EditorSelectionHistory *doc_history = es.document ? es.document->get_selection_history() : nullptr) {
 		doc_history->current_elem_idx = p_history->current_elem_idx;
 		doc_history->history = p_history->history;
 	}
@@ -1084,8 +1083,7 @@ Dictionary EditorData::restore_edited_scene_state(EditorSelection *p_selection, 
 
 	// G2 D3: restore the global history from the incoming document's own store (kept in lockstep on
 	// save); fall back to the es snapshot for any non-scene/legacy entry.
-	if (es.document && es.document->is_scene()) {
-		EditorSelectionHistory *doc_history = static_cast<SceneDocument *>(es.document)->get_selection_history();
+	if (EditorSelectionHistory *doc_history = es.document ? es.document->get_selection_history() : nullptr) {
 		p_history->current_elem_idx = doc_history->current_elem_idx;
 		p_history->history = doc_history->history;
 	} else {

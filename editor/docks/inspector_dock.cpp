@@ -720,10 +720,8 @@ void InspectorDock::shortcut_input(const Ref<InputEvent> &p_event) {
 
 // G2 D6: history resolver. Global dock (bound_document == nullptr) => today's global history.
 EditorSelectionHistory *InspectorDock::_doc_history() const {
-	if (bound_document && bound_document->is_scene()) {
-		return static_cast<SceneDocument *>(bound_document)->get_selection_history();
-	}
-	return EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *doc_history = bound_document ? bound_document->get_selection_history() : nullptr;
+	return doc_history ? doc_history : EditorNode::get_singleton()->get_editor_selection_history();
 }
 
 void InspectorDock::set_bound_document(EditorDocument *p_document) {

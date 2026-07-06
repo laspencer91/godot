@@ -2346,9 +2346,10 @@ void SceneTreeDock::perform_node_renames(Node *p_base, HashMap<Node *, NodePath>
 						}
 
 						if (!anim->get_path().is_resource_file()) {
+							Node *scene_root_node = _doc_scene_root();
 							EditorNode::get_editor_folding().save_scene_folding(
-									_doc_scene_root(),
-									_doc_scene_root()->get_scene_file_path());
+									scene_root_node,
+									scene_root_node->get_scene_file_path());
 						} else {
 							EditorNode::get_editor_folding().save_resource_folding(
 									anim,
@@ -2802,10 +2803,11 @@ void SceneTreeDock::_toggle_editable_children(Node *p_node) {
 
 	undo_redo->create_action(TTR("Toggle Editable Children"));
 
-	bool editable = !_doc_scene_root()->is_editable_instance(p_node);
+	Node *scene_root_node = _doc_scene_root();
+	bool editable = !scene_root_node->is_editable_instance(p_node);
 
-	undo_redo->add_undo_method(_doc_scene_root(), "set_editable_instance", p_node, !editable);
-	undo_redo->add_do_method(_doc_scene_root(), "set_editable_instance", p_node, editable);
+	undo_redo->add_undo_method(scene_root_node, "set_editable_instance", p_node, !editable);
+	undo_redo->add_do_method(scene_root_node, "set_editable_instance", p_node, editable);
 
 	if (editable) {
 		bool original_scene_instance_load_placeholder = p_node->get_scene_instance_load_placeholder();
@@ -3847,7 +3849,8 @@ void SceneTreeDock::_add_children_to_popup(Object *p_obj, int p_depth) {
 }
 
 void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
-	ERR_FAIL_COND(!_doc_scene_root());
+	Node *scene_root_node = _doc_scene_root();
+	ERR_FAIL_COND(!scene_root_node);
 	menu->clear(false);
 
 	const List<Node *> selection = editor_selection->get_top_selected_node_list();
@@ -4045,7 +4048,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 		// Allow multi-toggling scene unique names but only if all selected nodes are owned by the edited scene root.
 		bool all_owned = true;
 		for (Node *node : full_selection) {
-			if (node->get_owner() != _doc_scene_root()) {
+			if (node->get_owner() != scene_root_node) {
 				all_owned = false;
 				break;
 			}
@@ -4076,7 +4079,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 				menu->add_icon_item(get_editor_theme_icon(SNAME("Load")), TTR("Open in Editor"), TOOL_SCENE_OPEN_INHERITED);
 			} else if (!is_top_level) {
 				BEGIN_SECTION()
-				bool editable = _doc_scene_root()->is_editable_instance(selection.front()->get());
+				bool editable = scene_root_node->is_editable_instance(selection.front()->get());
 				bool placeholder = selection.front()->get()->get_scene_instance_load_placeholder();
 				if (profile_allow_editing) {
 					menu->add_check_item(TTR("Editable Children"), TOOL_SCENE_EDITABLE_CHILDREN);
@@ -4119,7 +4122,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 #undef END_SECTIOn
 
 	Vector<String> p_paths;
-	Node *root = _doc_scene_root();
+	Node *root = scene_root_node;
 	for (const List<Node *>::Element *E = selection.front(); E; E = E->next()) {
 		String node_path = String(root->get_path().rel_path_to(E->get()->get_path()));
 		p_paths.push_back(node_path);
@@ -4924,18 +4927,16 @@ Node *SceneTreeDock::_doc_scene_root() const {
 }
 
 EditorSelectionHistory *SceneTreeDock::_doc_history() const {
-	if (bound_document && bound_document->is_scene()) {
-		return static_cast<SceneDocument *>(bound_document)->get_selection_history();
-	}
-	return EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *doc_history = bound_document ? bound_document->get_selection_history() : nullptr;
+	return doc_history ? doc_history : EditorNode::get_singleton()->get_editor_selection_history();
 }
 
 void SceneTreeDock::set_bound_document(EditorDocument *p_document) {
 	bound_document = p_document;
-	if (p_document && p_document->is_scene()) {
+	if (EditorSelection *doc_selection = p_document ? p_document->get_selection() : nullptr) {
 		// The bound dock reads/writes the document's own selection directly (the proxy is only for the
 		// active-document globals); scene root + history follow via the resolvers above.
-		editor_selection = static_cast<SceneDocument *>(p_document)->get_selection();
+		editor_selection = doc_selection;
 	}
 }
 
