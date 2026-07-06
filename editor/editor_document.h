@@ -78,6 +78,10 @@ public:
 	Type get_type() const { return type; }
 	void set_type(Type p_type) { type = p_type; }
 
+	// True for the scene-document family (2D/3D/mixed) — the documents that own a render world
+	// and a live EditorSelection. Lets cast-free call sites gate a static_cast to SceneDocument.
+	bool is_scene() const { return type == TYPE_SCENE_2D || type == TYPE_SCENE_3D || type == TYPE_SCENE_MIXED; }
+
 	// Classify a scene by its root node kind (Node3D -> 3D, Node2D/Control -> 2D, else MIXED),
 	// matching how the editor picks a default view. Used to route a DocumentView to the right
 	// per-pane editor surface. Null root -> UNKNOWN.

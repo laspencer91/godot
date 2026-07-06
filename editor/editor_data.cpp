@@ -1058,6 +1058,22 @@ void EditorData::save_edited_scene_state(EditorSelection *p_selection, EditorSel
 
 	EditedScene &es = edited_scene.write[current_edited_scene];
 	es.selection = p_selection->get_full_selected_node_list();
+
+	// G2 D1: write-behind mirror of the outgoing scene's selection into its document's live
+	// EditorSelection. The global p_selection stays authoritative in v1; this only warms the
+	// per-document store that Model B (D2) promotes to authoritative. The outgoing scene is still
+	// current here so its nodes are in-tree, but guard defensively — add_node requires in-tree.
+	if (es.document && es.document->is_scene()) {
+		if (EditorSelection *doc_selection = static_cast<SceneDocument *>(es.document)->get_selection()) {
+			doc_selection->clear();
+			for (Node *n : es.selection) {
+				if (n && n->is_inside_tree()) {
+					doc_selection->add_node(n);
+				}
+			}
+		}
+	}
+
 	es.history_current = p_history->current_elem_idx;
 	es.history_stored = p_history->history;
 	es.editor_states = get_editor_plugin_states();
@@ -1073,8 +1089,19 @@ Dictionary EditorData::restore_edited_scene_state(EditorSelection *p_selection, 
 	p_history->history = es.history_stored;
 
 	p_selection->clear();
-	for (Node *E : es.selection) {
-		p_selection->add_node(E);
+	// G2 D1: prefer the incoming document's live selection (populated write-behind on save);
+	// fall back to the node-list snapshot for any document that predates the per-document store.
+	// Behaviorally identical today: es.selection and the doc store are written in lockstep by
+	// save_edited_scene_state, and the doc store additionally drops freed nodes safely.
+	EditorSelection *doc_selection = (es.document && es.document->is_scene()) ? static_cast<SceneDocument *>(es.document)->get_selection() : nullptr;
+	if (doc_selection) {
+		for (Node *n : doc_selection->get_full_selected_node_list()) {
+			p_selection->add_node(n);
+		}
+	} else {
+		for (Node *E : es.selection) {
+			p_selection->add_node(E);
+		}
 	}
 	set_editor_plugin_states(es.editor_states);
 
