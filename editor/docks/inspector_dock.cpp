@@ -37,6 +37,7 @@
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/docks/filesystem_dock.h"
 #include "editor/editor_main_screen.h"
+#include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
@@ -313,13 +314,13 @@ void InspectorDock::_prepare_resource_extra_popup() {
 }
 
 Ref<Resource> InspectorDock::_get_current_resource() const {
-	ObjectID current_id = EditorNode::get_singleton()->get_editor_selection_history()->get_current();
+	ObjectID current_id = _doc_history()->get_current();
 	Object *current_obj = current_id.is_valid() ? ObjectDB::get_instance(current_id) : nullptr;
 	return Ref<Resource>(Object::cast_to<Resource>(current_obj));
 }
 
 void InspectorDock::_prepare_history() {
-	EditorSelectionHistory *editor_history = EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *editor_history = _doc_history();
 	editor_history->cleanup_history();
 
 	int history_to = MAX(0, editor_history->get_history_len() - 25);
@@ -370,7 +371,7 @@ void InspectorDock::_prepare_history() {
 
 void InspectorDock::_select_history(int p_idx) {
 	// Push it to the top, it is not correct, but it's more useful.
-	ObjectID id = EditorNode::get_singleton()->get_editor_selection_history()->get_history_obj(p_idx);
+	ObjectID id = _doc_history()->get_history_obj(p_idx);
 	Object *obj = ObjectDB::get_instance(id);
 	if (!obj) {
 		return;
@@ -407,7 +408,7 @@ void InspectorDock::_files_moved(const String &p_old_file, const String &p_new_f
 		return;
 	}
 
-	ObjectID current_id = EditorNode::get_singleton()->get_editor_selection_history()->get_current();
+	ObjectID current_id = _doc_history()->get_current();
 	Ref<Resource> res(current_id.is_valid() ? ObjectDB::get_instance(current_id) : nullptr);
 	// We only care about updating the path if the current object is the one being renamed.
 	if (res.is_valid() && p_old_file == res->get_path()) {
@@ -417,7 +418,7 @@ void InspectorDock::_files_moved(const String &p_old_file, const String &p_new_f
 }
 
 void InspectorDock::_edit_forward() {
-	if (EditorNode::get_singleton()->get_editor_selection_history()->next()) {
+	if (_doc_history()->next()) {
 		EditorNode::get_singleton()->edit_current();
 
 		if (const EditorDebuggerRemoteObjects *robjs = Object::cast_to<EditorDebuggerRemoteObjects>(current)) {
@@ -427,7 +428,7 @@ void InspectorDock::_edit_forward() {
 }
 
 void InspectorDock::_edit_back() {
-	EditorSelectionHistory *editor_history = EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *editor_history = _doc_history();
 	if ((current && editor_history->previous()) || editor_history->get_path_size() == 1) {
 		EditorNode::get_singleton()->edit_current();
 
@@ -549,7 +550,7 @@ void InspectorDock::clear() {
 }
 
 void InspectorDock::update(Object *p_object) {
-	EditorSelectionHistory *editor_history = EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *editor_history = _doc_history();
 
 	backward_button->set_disabled(editor_history->is_at_beginning());
 	forward_button->set_disabled(editor_history->is_at_end());
@@ -717,6 +718,18 @@ void InspectorDock::shortcut_input(const Ref<InputEvent> &p_event) {
 	}
 }
 
+// G2 D6: history resolver. Global dock (bound_document == nullptr) => today's global history.
+EditorSelectionHistory *InspectorDock::_doc_history() const {
+	if (bound_document && bound_document->is_scene()) {
+		return static_cast<SceneDocument *>(bound_document)->get_selection_history();
+	}
+	return EditorNode::get_singleton()->get_editor_selection_history();
+}
+
+void InspectorDock::set_bound_document(EditorDocument *p_document) {
+	bound_document = p_document;
+}
+
 InspectorDock::InspectorDock(EditorData &p_editor_data) {
 	singleton = this;
 	set_name(TTRC("Inspector"));
@@ -801,7 +814,7 @@ InspectorDock::InspectorDock(EditorData &p_editor_data) {
 
 	HBoxContainer *subresource_hb = memnew(HBoxContainer);
 	main_vb->add_child(subresource_hb);
-	object_selector = memnew(EditorObjectSelector(EditorNode::get_singleton()->get_editor_selection_history()));
+	object_selector = memnew(EditorObjectSelector(_doc_history()));
 	object_selector->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	subresource_hb->add_child(object_selector);
 

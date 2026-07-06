@@ -40,8 +40,10 @@
 #include "scene/gui/menu_button.h"
 #include "scene/gui/tree.h"
 
+class EditorDocument;
 class EditorFileDialog;
 class EditorObjectSelector;
+class EditorSelectionHistory;
 
 class InspectorDock : public EditorDock {
 	GDCLASS(InspectorDock, EditorDock);
@@ -92,6 +94,11 @@ class InspectorDock : public EditorDock {
 	Button *open_docs_button = nullptr;
 	MenuButton *object_menu = nullptr;
 	EditorObjectSelector *object_selector = nullptr;
+
+	// G2 D6: when bound to a document (the D7b per-pane composite), selection history resolves to
+	// that document's own store instead of the global. Null on the global dock => today's behavior.
+	EditorDocument *bound_document = nullptr;
+	EditorSelectionHistory *_doc_history() const;
 
 	bool info_is_warning = false; // Display in yellow and use warning icon if true.
 	Button *info = nullptr;
@@ -160,6 +167,10 @@ public:
 
 	void store_script_properties(Object *p_object);
 	void apply_script_properties(Object *p_object);
+
+	// G2 D6: bind this inspector instance to a specific document (D7b) so its history menu/back/
+	// forward act on that document's selection history.
+	void set_bound_document(EditorDocument *p_document);
 
 	InspectorDock(EditorData &p_editor_data);
 	~InspectorDock();
