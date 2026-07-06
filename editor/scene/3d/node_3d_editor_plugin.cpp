@@ -7207,9 +7207,15 @@ void Node3DEditorViewportContainer::_notification(int p_what) {
 void Node3DEditorViewportContainer::set_view(View p_view) {
 	view = p_view;
 
+	// G2 M7.2: resolve THIS container's own viewports (children of its splits) rather than the
+	// singleton main view's, so per-pane 3D views control their own 1/2/3/4-viewport layout. For the
+	// main view these are the same objects, so behavior is unchanged there.
 	Node3DEditorViewport *viewports[4];
+	viewports[0] = Object::cast_to<Node3DEditorViewport>(first_split->get_child(0));
+	viewports[1] = Object::cast_to<Node3DEditorViewport>(first_split->get_child(1));
+	viewports[2] = Object::cast_to<Node3DEditorViewport>(second_split->get_child(0));
+	viewports[3] = Object::cast_to<Node3DEditorViewport>(second_split->get_child(1));
 	for (uint32_t i = 0; i < 4; i++) {
-		viewports[i] = Node3DEditor::get_singleton()->get_editor_viewport(i);
 		ERR_FAIL_NULL(viewports[i]);
 	}
 
@@ -10034,6 +10040,11 @@ Control *Node3DEditor::create_view_bound_to(EditorDocument *p_document) {
 	// through its own lifecycle, so nothing here has to be ordered against the main view.
 	Node3DEditorView *view = memnew(Node3DEditorView(this));
 	_build_view_viewports(view);
+	// G2 M7.2: a pane-hosted scene defaults to a SINGLE viewport, not the 4-viewport quad. The quad
+	// read as "four panes inside a tab" and collided with the workspace pane model; one clean viewport
+	// per scene tab matches the intended panes->tabs->view hierarchy. (Now that set_view is
+	// container-local, this only affects this pane's view.)
+	view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_1_VIEWPORT);
 	view->bind_document(p_document);
 	// Bind to the requested document's world; fall back to the main view's if none given.
 	Ref<World3D> world = p_document ? p_document->get_world_3d() : Ref<World3D>();
