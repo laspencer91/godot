@@ -4616,6 +4616,12 @@ void EditorNode::_activate_scene_views() {
 	if (spatial_editor) {
 		spatial_editor->set_active_world(doc ? doc->get_world_3d() : Ref<World3D>());
 	}
+
+	// G2 D2 (Model B): retarget the global selection proxy at the now-active document's own
+	// EditorSelection (or its fallback storage when no scene document is active). Silent — the
+	// switch path's existing save/restore refresh drives consumers; the relay carries live changes.
+	EditorSelection *doc_selection = (doc && doc->is_scene()) ? static_cast<SceneDocument *>(doc)->get_selection() : nullptr;
+	static_cast<EditorActiveSelectionProxy *>(editor_selection)->set_target(doc_selection);
 }
 
 void EditorNode::set_edited_scene(Node *p_scene) {
@@ -8594,7 +8600,9 @@ EditorNode::EditorNode() {
 		EditorInspector::add_inspector_plugin(ppm);
 	}
 
-	editor_selection = memnew(EditorSelection);
+	// G2 D2 (Model B): the global selection consumers hold is a stable retargeting proxy over the
+	// active document's own EditorSelection. Typed as EditorSelection* everywhere else.
+	editor_selection = memnew(EditorActiveSelectionProxy);
 
 	EditorFileSystem *efs = memnew(EditorFileSystem);
 	add_child(efs);

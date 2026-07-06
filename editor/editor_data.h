@@ -330,39 +330,75 @@ protected:
 	static void _bind_methods();
 
 public:
-	void add_node(Node *p_node);
-	void remove_node(Node *p_node);
-	bool is_selected(Node *p_node) const;
+	// G2 D2: the consumer-facing method set is virtual so EditorActiveSelectionProxy can retarget
+	// each call at the active document's selection (Model B). Everything else stays non-virtual.
+	virtual void add_node(Node *p_node);
+	virtual void remove_node(Node *p_node);
+	virtual bool is_selected(Node *p_node) const;
 
 	template <typename T>
 	T *get_node_editor_data(Node *p_node) {
-		if (!p_node) {
-			return nullptr;
-		}
-		ObjectID nid = p_node->get_instance_id();
-		if (!selection.has(nid)) {
-			return nullptr;
-		}
-		return Object::cast_to<T>(selection[nid]);
+		return Object::cast_to<T>(get_node_meta(p_node));
 	}
+	// G2 D2: backing accessor for get_node_editor_data<T> (the template can't be virtual). The proxy
+	// overrides it to reach the active target's per-node metadata.
+	virtual Object *get_node_meta(Node *p_node) const;
 
 	// Adds an editor plugin which can provide metadata for selected nodes.
-	void add_editor_plugin(Object *p_object);
+	virtual void add_editor_plugin(Object *p_object);
+	// G2 D2: whether any metadata provider has been registered — lets the proxy seed a target once.
+	bool has_editor_plugins() const { return !editor_plugins.is_empty(); }
 
-	void update(bool p_deferred = true);
-	void clear();
+	virtual void update(bool p_deferred = true);
+	virtual void clear();
 
 	// Returns only the top level selected nodes.
 	// That is, if the selection includes some node and a child of that node, only the parent is returned.
-	List<Node *> get_top_selected_node_list();
+	virtual List<Node *> get_top_selected_node_list();
 	// Same as get_top_selected_node_list but returns a copy in a TypedArray for binding to scripts.
-	TypedArray<Node> get_top_selected_nodes();
+	virtual TypedArray<Node> get_top_selected_nodes();
 	// Returns all the selected nodes (list version of "get_selected_nodes").
-	List<Node *> get_full_selected_node_list();
+	virtual List<Node *> get_full_selected_node_list();
 	// Same as get_full_selected_node_list but returns a copy in a TypedArray for binding to scripts.
-	TypedArray<Node> get_selected_nodes();
+	virtual TypedArray<Node> get_selected_nodes();
 	// Returns the map of selected objects and their metadata.
-	HashMap<ObjectID, Object *> &get_selection() { return selection; }
+	virtual HashMap<ObjectID, Object *> &get_selection() { return selection; }
 
-	~EditorSelection();
+	virtual ~EditorSelection();
+};
+
+// G2 D2 (Model B): the stable EditorSelection object that all ~48 global consumers and the cached
+// dock/editor pointers hold. It owns no selection state of its own while a scene document is active;
+// instead it retargets every read/write at that document's own EditorSelection and relays its
+// selection_changed as this object's own, so per-document selections are authoritative while the
+// global object identity (and its signal) never changes. Falls back to inherited storage when no
+// scene document is active (empty project / script-only session). Not a GDCLASS: it deliberately
+// reports as EditorSelection so consumers and the inherited "selection_changed" signal are unaware.
+class EditorActiveSelectionProxy : public EditorSelection {
+	EditorSelection *target = nullptr;
+	// Metadata providers (2D/3D/control editors) registered on the global selection at startup, kept
+	// so each document's selection can be seeded on first activation (add_node populates per-doc meta).
+	List<Object *> plugin_providers;
+
+	void _relay_selection_changed();
+	void _seed_plugins(EditorSelection *p_target);
+
+public:
+	// Point the proxy at p_target (nullptr => inherited fallback storage). Silent: consumers are
+	// refreshed by the existing scene-switch machinery; the relay carries subsequent live changes.
+	void set_target(EditorSelection *p_target);
+	EditorSelection *get_target() const { return target; }
+
+	virtual void add_node(Node *p_node) override;
+	virtual void remove_node(Node *p_node) override;
+	virtual bool is_selected(Node *p_node) const override;
+	virtual Object *get_node_meta(Node *p_node) const override;
+	virtual void add_editor_plugin(Object *p_object) override;
+	virtual void update(bool p_deferred = true) override;
+	virtual void clear() override;
+	virtual List<Node *> get_top_selected_node_list() override;
+	virtual TypedArray<Node> get_top_selected_nodes() override;
+	virtual List<Node *> get_full_selected_node_list() override;
+	virtual TypedArray<Node> get_selected_nodes() override;
+	virtual HashMap<ObjectID, Object *> &get_selection() override;
 };

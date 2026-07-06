@@ -1057,23 +1057,10 @@ void EditorData::save_edited_scene_state(EditorSelection *p_selection, EditorSel
 	ERR_FAIL_INDEX(current_edited_scene, edited_scene.size());
 
 	EditedScene &es = edited_scene.write[current_edited_scene];
+	// G2 D2: the outgoing scene's live selection now lives on its SceneDocument's own EditorSelection
+	// (the proxy's target). es.selection remains the cross-switch snapshot the restore path replays —
+	// a separate List, so restore can clear the target and repopulate it without self-erasing.
 	es.selection = p_selection->get_full_selected_node_list();
-
-	// G2 D1: write-behind mirror of the outgoing scene's selection into its document's live
-	// EditorSelection. The global p_selection stays authoritative in v1; this only warms the
-	// per-document store that Model B (D2) promotes to authoritative. The outgoing scene is still
-	// current here so its nodes are in-tree, but guard defensively — add_node requires in-tree.
-	if (es.document && es.document->is_scene()) {
-		if (EditorSelection *doc_selection = static_cast<SceneDocument *>(es.document)->get_selection()) {
-			doc_selection->clear();
-			for (Node *n : es.selection) {
-				if (n && n->is_inside_tree()) {
-					doc_selection->add_node(n);
-				}
-			}
-		}
-	}
-
 	es.history_current = p_history->current_elem_idx;
 	es.history_stored = p_history->history;
 	es.editor_states = get_editor_plugin_states();
@@ -1088,20 +1075,12 @@ Dictionary EditorData::restore_edited_scene_state(EditorSelection *p_selection, 
 	p_history->current_elem_idx = es.history_current;
 	p_history->history = es.history_stored;
 
+	// G2 D2: replay the incoming scene's snapshot onto the proxy (→ the now-active document's own
+	// selection, retargeted just before this by _activate_scene_views). es.selection is a separate
+	// List, so clearing the target then repopulating from it does not self-erase.
 	p_selection->clear();
-	// G2 D1: prefer the incoming document's live selection (populated write-behind on save);
-	// fall back to the node-list snapshot for any document that predates the per-document store.
-	// Behaviorally identical today: es.selection and the doc store are written in lockstep by
-	// save_edited_scene_state, and the doc store additionally drops freed nodes safely.
-	EditorSelection *doc_selection = (es.document && es.document->is_scene()) ? static_cast<SceneDocument *>(es.document)->get_selection() : nullptr;
-	if (doc_selection) {
-		for (Node *n : doc_selection->get_full_selected_node_list()) {
-			p_selection->add_node(n);
-		}
-	} else {
-		for (Node *E : es.selection) {
-			p_selection->add_node(E);
-		}
+	for (Node *E : es.selection) {
+		p_selection->add_node(E);
 	}
 	set_editor_plugin_states(es.editor_states);
 
@@ -1429,6 +1408,14 @@ bool EditorSelection::is_selected(Node *p_node) const {
 	return selection.has(p_node->get_instance_id());
 }
 
+Object *EditorSelection::get_node_meta(Node *p_node) const {
+	if (!p_node) {
+		return nullptr;
+	}
+	HashMap<ObjectID, Object *>::ConstIterator E = selection.find(p_node->get_instance_id());
+	return E ? E->value : nullptr;
+}
+
 void EditorSelection::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear"), &EditorSelection::clear);
 	ClassDB::bind_method(D_METHOD("add_node", "node"), &EditorSelection::add_node);
@@ -1569,4 +1556,106 @@ void EditorSelection::clear() {
 
 EditorSelection::~EditorSelection() {
 	clear();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// EditorActiveSelectionProxy (G2 D2, Model B) — see editor_data.h.
+
+void EditorActiveSelectionProxy::_relay_selection_changed() {
+	emit_signal(SNAME("selection_changed"));
+}
+
+void EditorActiveSelectionProxy::_seed_plugins(EditorSelection *p_target) {
+	// Providers register once at startup and are never removed; seed a target the first time it
+	// becomes active so its add_node populates the same per-node metadata the globals expect.
+	if (!p_target || p_target->has_editor_plugins()) {
+		return;
+	}
+	for (Object *provider : plugin_providers) {
+		p_target->add_editor_plugin(provider);
+	}
+}
+
+void EditorActiveSelectionProxy::set_target(EditorSelection *p_target) {
+	if (target == p_target) {
+		return;
+	}
+	if (target) {
+		target->disconnect(SNAME("selection_changed"), callable_mp(this, &EditorActiveSelectionProxy::_relay_selection_changed));
+	}
+	target = p_target;
+	if (target) {
+		_seed_plugins(target);
+		target->connect(SNAME("selection_changed"), callable_mp(this, &EditorActiveSelectionProxy::_relay_selection_changed));
+	}
+}
+
+void EditorActiveSelectionProxy::add_node(Node *p_node) {
+	if (target) {
+		target->add_node(p_node);
+	} else {
+		EditorSelection::add_node(p_node);
+	}
+}
+
+void EditorActiveSelectionProxy::remove_node(Node *p_node) {
+	if (target) {
+		target->remove_node(p_node);
+	} else {
+		EditorSelection::remove_node(p_node);
+	}
+}
+
+bool EditorActiveSelectionProxy::is_selected(Node *p_node) const {
+	return target ? target->is_selected(p_node) : EditorSelection::is_selected(p_node);
+}
+
+Object *EditorActiveSelectionProxy::get_node_meta(Node *p_node) const {
+	return target ? target->get_node_meta(p_node) : EditorSelection::get_node_meta(p_node);
+}
+
+void EditorActiveSelectionProxy::add_editor_plugin(Object *p_object) {
+	// Remember the provider for seeding future targets, and register it on the fallback storage plus
+	// the currently-active target so metadata works regardless of which is live.
+	plugin_providers.push_back(p_object);
+	EditorSelection::add_editor_plugin(p_object);
+	if (target) {
+		target->add_editor_plugin(p_object);
+	}
+}
+
+void EditorActiveSelectionProxy::update(bool p_deferred) {
+	if (target) {
+		target->update(p_deferred);
+	} else {
+		EditorSelection::update(p_deferred);
+	}
+}
+
+void EditorActiveSelectionProxy::clear() {
+	if (target) {
+		target->clear();
+	} else {
+		EditorSelection::clear();
+	}
+}
+
+List<Node *> EditorActiveSelectionProxy::get_top_selected_node_list() {
+	return target ? target->get_top_selected_node_list() : EditorSelection::get_top_selected_node_list();
+}
+
+TypedArray<Node> EditorActiveSelectionProxy::get_top_selected_nodes() {
+	return target ? target->get_top_selected_nodes() : EditorSelection::get_top_selected_nodes();
+}
+
+List<Node *> EditorActiveSelectionProxy::get_full_selected_node_list() {
+	return target ? target->get_full_selected_node_list() : EditorSelection::get_full_selected_node_list();
+}
+
+TypedArray<Node> EditorActiveSelectionProxy::get_selected_nodes() {
+	return target ? target->get_selected_nodes() : EditorSelection::get_selected_nodes();
+}
+
+HashMap<ObjectID, Object *> &EditorActiveSelectionProxy::get_selection() {
+	return target ? target->get_selection() : EditorSelection::get_selection();
 }
