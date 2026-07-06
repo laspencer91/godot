@@ -377,6 +377,9 @@ public:
 	// document's own EditorSelection; scene root / history follow via the resolvers.
 	void set_bound_document(EditorDocument *p_document);
 
-	SceneTreeDock(Node *p_scene_root, EditorSelection *p_editor_selection, EditorData &p_editor_data);
+	// G2 D5: p_is_global==false constructs a bound instance (D7a per-pane composite) that does NOT
+	// claim the `singleton` — the ~80 SceneTreeDock::get_singleton() callers keep resolving to the
+	// one global dock. The dialogs are already self-parented, so N instances stay independent.
+	SceneTreeDock(Node *p_scene_root, EditorSelection *p_editor_selection, EditorData &p_editor_data, bool p_is_global = true);
 	~SceneTreeDock();
 };
