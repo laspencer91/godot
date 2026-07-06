@@ -39,6 +39,7 @@
 #include "core/os/keyboard.h"
 #include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/debugger/editor_debugger_node.h"
+#include "editor/editor_document.h"
 #include "editor/docks/filesystem_dock.h"
 #include "editor/docks/groups_dock.h"
 #include "editor/docks/inspector_dock.h"
@@ -112,7 +113,7 @@ void SceneTreeDock::_inspect_hovered_node() {
 		tree_item_inspected->set_custom_color(0, accent_color);
 	}
 
-	EditorSelectionHistory *editor_history = EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *editor_history = _doc_history();
 	editor_history->add_object(node_hovered_now->get_instance_id());
 	InspectorDock::get_inspector_singleton()->edit(node_hovered_now);
 	InspectorDock::get_inspector_singleton()->propagate_notification(NOTIFICATION_DRAG_BEGIN); // Enable inspector drag preview after it updated.
@@ -649,7 +650,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			}
 
 			// Prefer nodes that inherit from the current scene root.
-			Node *current_edited_scene_root = EditorNode::get_singleton()->get_edited_scene();
+			Node *current_edited_scene_root = _doc_scene_root();
 			if (current_edited_scene_root) {
 				String root_class = current_edited_scene_root->get_class_name();
 				static Vector<String> preferred_types;
@@ -722,7 +723,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			} else {
 				was_empty = true;
 			}
-			clipboard_source_scene = EditorNode::get_singleton()->get_edited_scene()->get_scene_file_path();
+			clipboard_source_scene = _doc_scene_root()->get_scene_file_path();
 
 			selection.sort_custom<Node::Comparator>();
 
@@ -833,7 +834,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			}
 
 			EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-			undo_redo->create_action(TTR("Detach Script"), UndoRedo::MERGE_DISABLE, EditorNode::get_singleton()->get_edited_scene());
+			undo_redo->create_action(TTR("Detach Script"), UndoRedo::MERGE_DISABLE, _doc_scene_root());
 
 			for (int i = 0; i < selection.size(); i++) {
 				Node *n = Object::cast_to<Node>(selection[i]);
@@ -1129,7 +1130,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 				break;
 			}
 
-			Node *root = EditorNode::get_singleton()->get_edited_scene();
+			Node *root = _doc_scene_root();
 			if (!root) {
 				break;
 			}
@@ -1286,7 +1287,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			if (e) {
 				Node *node = e->get();
 				if (node) {
-					Node *root = EditorNode::get_singleton()->get_edited_scene();
+					Node *root = _doc_scene_root();
 					NodePath path = root->get_path().rel_path_to(node->get_path());
 					DisplayServer::get_singleton()->clipboard_set(String(path));
 				}
@@ -1354,7 +1355,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 						break;
 					}
 
-					bool editable = EditorNode::get_singleton()->get_edited_scene()->is_editable_instance(node);
+					bool editable = _doc_scene_root()->is_editable_instance(node);
 
 					if (editable) {
 						editable_instance_remove_dialog->set_text(TTR("Disabling \"Editable Children\" will cause all properties of this subscene's descendant nodes to be reverted to their default."));
@@ -1379,7 +1380,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			if (e) {
 				Node *node = e->get();
 				if (node) {
-					bool editable = EditorNode::get_singleton()->get_edited_scene()->is_editable_instance(node);
+					bool editable = _doc_scene_root()->is_editable_instance(node);
 					bool placeholder = node->get_scene_instance_load_placeholder();
 
 					// Fire confirmation dialog when children are editable.
@@ -1392,7 +1393,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 					placeholder = !placeholder;
 
 					if (placeholder) {
-						EditorNode::get_singleton()->get_edited_scene()->set_editable_instance(node, false);
+						_doc_scene_root()->set_editable_instance(node, false);
 					}
 
 					node->set_scene_instance_load_placeholder(placeholder);
@@ -1414,7 +1415,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			if (e) {
 				Node *node = e->get();
 				if (node) {
-					Node *root = EditorNode::get_singleton()->get_edited_scene();
+					Node *root = _doc_scene_root();
 					EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
 					if (!root) {
 						break;
@@ -1484,7 +1485,7 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			if (first_selected == nullptr) {
 				return;
 			}
-			if (first_selected->get() == EditorNode::get_singleton()->get_edited_scene()) {
+			if (first_selected->get() == _doc_scene_root()) {
 				// Exclude Root Node. It should never be unique name in its own scene!
 				editor_selection->remove_node(first_selected->get());
 				first_selected = editor_selection->get_top_selected_node_list().front();
@@ -1837,7 +1838,7 @@ void SceneTreeDock::_notification(int p_what) {
 					return;
 				}
 				if (edited_object_at_drag_start) {
-					EditorSelectionHistory *editor_history = EditorNode::get_singleton()->get_editor_selection_history();
+					EditorSelectionHistory *editor_history = _doc_history();
 					editor_history->add_object(edited_object_at_drag_start->get_instance_id());
 					InspectorDock::get_inspector_singleton()->edit(edited_object_at_drag_start);
 					InspectorDock::get_singleton()->update(edited_object_at_drag_start);
@@ -2346,8 +2347,8 @@ void SceneTreeDock::perform_node_renames(Node *p_base, HashMap<Node *, NodePath>
 
 						if (!anim->get_path().is_resource_file()) {
 							EditorNode::get_editor_folding().save_scene_folding(
-									EditorNode::get_singleton()->get_edited_scene(),
-									EditorNode::get_singleton()->get_edited_scene()->get_scene_file_path());
+									_doc_scene_root(),
+									_doc_scene_root()->get_scene_file_path());
 						} else {
 							EditorNode::get_editor_folding().save_resource_folding(
 									anim,
@@ -2801,10 +2802,10 @@ void SceneTreeDock::_toggle_editable_children(Node *p_node) {
 
 	undo_redo->create_action(TTR("Toggle Editable Children"));
 
-	bool editable = !EditorNode::get_singleton()->get_edited_scene()->is_editable_instance(p_node);
+	bool editable = !_doc_scene_root()->is_editable_instance(p_node);
 
-	undo_redo->add_undo_method(EditorNode::get_singleton()->get_edited_scene(), "set_editable_instance", p_node, !editable);
-	undo_redo->add_do_method(EditorNode::get_singleton()->get_edited_scene(), "set_editable_instance", p_node, editable);
+	undo_redo->add_undo_method(_doc_scene_root(), "set_editable_instance", p_node, !editable);
+	undo_redo->add_do_method(_doc_scene_root(), "set_editable_instance", p_node, editable);
 
 	if (editable) {
 		bool original_scene_instance_load_placeholder = p_node->get_scene_instance_load_placeholder();
@@ -2943,7 +2944,7 @@ void SceneTreeDock::_delete_confirm(bool p_cut) {
 	_push_item(nullptr);
 
 	// Fixes the EditorSelectionHistory from still offering deleted notes
-	EditorSelectionHistory *editor_history = EditorNode::get_singleton()->get_editor_selection_history();
+	EditorSelectionHistory *editor_history = _doc_history();
 	editor_history->cleanup_history();
 	InspectorDock::get_singleton()->call("_prepare_history");
 	InspectorDock::get_singleton()->update(nullptr);
@@ -3585,7 +3586,9 @@ static bool _is_node_visible(Node *p_node) {
 	if (!p_node->get_owner()) {
 		return false;
 	}
-	if (p_node->get_owner() != EditorNode::get_singleton()->get_edited_scene() && !EditorNode::get_singleton()->get_edited_scene()->is_editable_instance(p_node->get_owner())) {
+	// G2 D4: free function (no bound-document context) — reads the active scene directly.
+	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
+	if (p_node->get_owner() != edited_scene && !edited_scene->is_editable_instance(p_node->get_owner())) {
 		return false;
 	}
 
@@ -3598,7 +3601,7 @@ void SceneTreeDock::_normalize_drop(Node *&to_node, int &to_pos, int p_type) {
 
 	if (p_type == -1) {
 		// Drop as sibling, above.
-		if (to_node == EditorNode::get_singleton()->get_edited_scene()) {
+		if (to_node == _doc_scene_root()) {
 			to_node = nullptr;
 			ERR_FAIL_MSG("Cannot perform drop above the root node!");
 		}
@@ -3607,7 +3610,7 @@ void SceneTreeDock::_normalize_drop(Node *&to_node, int &to_pos, int p_type) {
 		to_node = to_node->get_parent();
 	} else if (p_type == 1) {
 		// Drop as child of root node if out of bounds.
-		if (to_node == EditorNode::get_singleton()->get_edited_scene()) {
+		if (to_node == _doc_scene_root()) {
 			to_pos = -1;
 			return;
 		}
@@ -3844,7 +3847,7 @@ void SceneTreeDock::_add_children_to_popup(Object *p_obj, int p_depth) {
 }
 
 void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
-	ERR_FAIL_COND(!EditorNode::get_singleton()->get_edited_scene());
+	ERR_FAIL_COND(!_doc_scene_root());
 	menu->clear(false);
 
 	const List<Node *> selection = editor_selection->get_top_selected_node_list();
@@ -4042,7 +4045,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 		// Allow multi-toggling scene unique names but only if all selected nodes are owned by the edited scene root.
 		bool all_owned = true;
 		for (Node *node : full_selection) {
-			if (node->get_owner() != EditorNode::get_singleton()->get_edited_scene()) {
+			if (node->get_owner() != _doc_scene_root()) {
 				all_owned = false;
 				break;
 			}
@@ -4073,7 +4076,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 				menu->add_icon_item(get_editor_theme_icon(SNAME("Load")), TTR("Open in Editor"), TOOL_SCENE_OPEN_INHERITED);
 			} else if (!is_top_level) {
 				BEGIN_SECTION()
-				bool editable = EditorNode::get_singleton()->get_edited_scene()->is_editable_instance(selection.front()->get());
+				bool editable = _doc_scene_root()->is_editable_instance(selection.front()->get());
 				bool placeholder = selection.front()->get()->get_scene_instance_load_placeholder();
 				if (profile_allow_editing) {
 					menu->add_check_item(TTR("Editable Children"), TOOL_SCENE_EDITABLE_CHILDREN);
@@ -4116,7 +4119,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 #undef END_SECTIOn
 
 	Vector<String> p_paths;
-	Node *root = EditorNode::get_singleton()->get_edited_scene();
+	Node *root = _doc_scene_root();
 	for (const List<Node *>::Element *E = selection.front(); E; E = E->next()) {
 		String node_path = String(root->get_path().rel_path_to(E->get()->get_path()));
 		p_paths.push_back(node_path);
@@ -4915,6 +4918,27 @@ void SceneTreeDock::_update_configuration_warning() {
 	}
 }
 
+// G2 D4: the three ambient resolvers. Global dock (bound_document == nullptr) => today's globals.
+Node *SceneTreeDock::_doc_scene_root() const {
+	return bound_document ? bound_document->get_root() : EditorNode::get_singleton()->get_edited_scene();
+}
+
+EditorSelectionHistory *SceneTreeDock::_doc_history() const {
+	if (bound_document && bound_document->is_scene()) {
+		return static_cast<SceneDocument *>(bound_document)->get_selection_history();
+	}
+	return EditorNode::get_singleton()->get_editor_selection_history();
+}
+
+void SceneTreeDock::set_bound_document(EditorDocument *p_document) {
+	bound_document = p_document;
+	if (p_document && p_document->is_scene()) {
+		// The bound dock reads/writes the document's own selection directly (the proxy is only for the
+		// active-document globals); scene root + history follow via the resolvers above.
+		editor_selection = static_cast<SceneDocument *>(p_document)->get_selection();
+	}
+}
+
 SceneTreeDock::SceneTreeDock(Node *p_scene_root, EditorSelection *p_editor_selection, EditorData &p_editor_data) {
 	set_name(TTRC("Scene"));
 	set_icon_name("PackedScene");
@@ -4925,6 +4949,8 @@ SceneTreeDock::SceneTreeDock(Node *p_scene_root, EditorSelection *p_editor_selec
 	editor_data = &p_editor_data;
 	editor_selection = p_editor_selection;
 	scene_root = p_scene_root;
+	// G2 D4: bound_document stays null for the global dock — every resolver below returns the
+	// active-scene globals, so this dock behaves exactly as before until D7a binds a document.
 
 	VBoxContainer *main_vbox = memnew(VBoxContainer);
 	add_child(main_vbox);

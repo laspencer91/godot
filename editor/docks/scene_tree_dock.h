@@ -37,7 +37,9 @@
 
 class CheckBox;
 class EditorData;
+class EditorDocument;
 class EditorSelection;
+class EditorSelectionHistory;
 class MenuButton;
 class PanelContainer;
 class RenameDialog;
@@ -142,6 +144,12 @@ class SceneTreeDock : public EditorDock {
 
 	EditorData *editor_data = nullptr;
 	EditorSelection *editor_selection = nullptr;
+	// G2 D4: when bound to a document (the D7a per-pane composite), this dock resolves its scene
+	// root / selection / history from that document instead of the active-scene globals. Null on the
+	// global dock => resolvers return exactly today's globals, so the change is inert until D7a.
+	EditorDocument *bound_document = nullptr;
+	Node *_doc_scene_root() const;
+	EditorSelectionHistory *_doc_history() const;
 	LocalVector<ObjectID> node_previous_selection;
 	bool update_script_button_queued = false;
 
@@ -364,6 +372,10 @@ public:
 	ScriptCreateDialog *get_script_create_dialog() {
 		return script_create_dialog;
 	}
+
+	// G2 D4: bind this dock instance to a specific document (D7a). Repoints the selection at the
+	// document's own EditorSelection; scene root / history follow via the resolvers.
+	void set_bound_document(EditorDocument *p_document);
 
 	SceneTreeDock(Node *p_scene_root, EditorSelection *p_editor_selection, EditorData &p_editor_data);
 	~SceneTreeDock();
