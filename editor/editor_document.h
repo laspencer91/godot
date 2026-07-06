@@ -153,6 +153,10 @@ public:
 	virtual EditorSelection *get_selection() const override { return selection; }
 	virtual EditorSelectionHistory *get_selection_history() override { return &selection_history; }
 
+	// G2 M7.1: scenes now open as workspace tabs (pane-hosted DocumentView with its own viewport),
+	// not the single legacy main screen. This is the routing flip that unblocks two-scenes-in-two-panes.
+	virtual bool opens_as_workspace_tab() const override { return true; }
+
 	// Document-level activation side effects (only the focused document drives the
 	// audio listener in v1). The per-pane "is this view active" bit lives on
 	// EditorDocumentView, not here.

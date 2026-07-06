@@ -591,6 +591,9 @@ private:
 	void _set_current_scene_nocheck(int p_idx);
 	// G1: bind the 2D/3D editors to the active document's scene_root + world (no node reparenting).
 	void _activate_scene_views();
+	// G2 M7.1: ensure the active scene has a (background) pane tab. Deferred from the scene switch to
+	// avoid reentrancy; no-arg so call_deferred needs no enum/Variant marshalling.
+	void _ensure_active_scene_tab();
 	void _nav_to_selected_scene();
 	bool _validate_scene_recursive(const String &p_filename, Node *p_node);
 	void _save_scene(String p_file, int idx = -1);

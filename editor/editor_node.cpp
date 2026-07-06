@@ -4600,6 +4600,16 @@ SubViewport *EditorNode::get_scene_root() {
 	return scene_root;
 }
 
+void EditorNode::_ensure_active_scene_tab() {
+	// G2 M7.1: create (or focus, no-op if present) the active scene's pane tab. Background open
+	// (grab_focus=false) so it never steals focus from another pane during a scene switch.
+	EditorMainScreen *main_screen = get_editor_main_screen();
+	EditorDocument *active_doc = editor_data.get_active_document();
+	if (main_screen && active_doc && active_doc->opens_as_workspace_tab()) {
+		main_screen->reveal(active_doc, DocumentViewKind::DEFAULT, false);
+	}
+}
+
 void EditorNode::_activate_scene_views() {
 	// Acting as the (proto) workspace: bind both the 2D and 3D editors to the active document's
 	// isolated world. The world is passed explicitly (the editor no longer reaches into the global
@@ -4608,13 +4618,19 @@ void EditorNode::_activate_scene_views() {
 	// exactly like a pane view; the shared scene_root is no longer reparented into a display
 	// container — every document's scene_root stays parked under documents_holder for its lifetime.
 	EditorDocument *doc = editor_data.get_active_document();
+	// G2 M7.1: a pane-hosted scene renders through its OWN DocumentView viewport, so the legacy
+	// singleton 2D/3D main views must NOT also bind to its world — double-binding renders the scene
+	// twice and exhausts the per-world gizmo cull-mask layer budget. Unbind them for pane-hosted docs
+	// (same no-world path already used for the empty-project case). The pane view is the surface now;
+	// the singleton toolbars still travel to it in M7.2a.
+	EditorDocument *legacy_bound_doc = (doc && doc->opens_as_workspace_tab()) ? nullptr : doc;
 	CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
 	if (canvas_editor) {
-		canvas_editor->activate_document(doc);
+		canvas_editor->activate_document(legacy_bound_doc);
 	}
 	Node3DEditor *spatial_editor = Node3DEditor::get_singleton();
 	if (spatial_editor) {
-		spatial_editor->set_active_world(doc ? doc->get_world_3d() : Ref<World3D>());
+		spatial_editor->set_active_world(legacy_bound_doc ? legacy_bound_doc->get_world_3d() : Ref<World3D>());
 	}
 
 	// G2 D2 (Model B): retarget the global selection proxy at the now-active document's own
@@ -4789,6 +4805,11 @@ void EditorNode::_set_current_scene_nocheck(int p_idx) {
 
 	_update_title();
 	callable_mp(scene_tabs, &EditorSceneTabs::update_scene_tabs).call_deferred();
+
+	// G2 M7.1: the now-current scene opens as a workspace tab. Deferred + background (grab_focus
+	// false) so switching scenes via the legacy strip creates the scene's pane tab without stealing
+	// focus or reentering the switch machinery; clicking the tab shows its per-pane view.
+	callable_mp(this, &EditorNode::_ensure_active_scene_tab).call_deferred();
 
 	if (tabs_to_close.is_empty() && !restoring_scenes) {
 		callable_mp(this, &EditorNode::_set_main_scene_state).call_deferred(state, get_edited_scene()); // Do after everything else is done setting up.
