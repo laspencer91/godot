@@ -8912,6 +8912,13 @@ EditorNode::EditorNode() {
 	scene_tabs->add_extra_button(distraction_free);
 	distraction_free->connect(SceneStringName(pressed), callable_mp(this, &EditorNode::_toggle_distraction_free_mode));
 
+	// G2 M7.2b: since M7.1 scenes are workspace tabs (one tab bar per pane), so the legacy global
+	// scene-tab strip is a redundant second row. Hide it — it stays in the tree and keeps being
+	// updated so its ~dozens of accessors (get_current_tab, update_scene_tabs, close/option paths)
+	// keep working; scene switching now happens through the pane tab bars. The distraction-free
+	// shortcut (Ctrl+Shift+F11) still works even with its button hidden here.
+	scene_tabs->set_visible(false);
+
 	editor_main_screen = memnew(EditorMainScreen);
 	editor_main_screen->set_custom_minimum_size(Size2(0, 80) * EDSCALE);
 	editor_main_screen->set_draw_behind_parent(true);
