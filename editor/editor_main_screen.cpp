@@ -108,7 +108,11 @@ void EditorMainScreen::load_layout_from_config(Ref<ConfigFile> p_config_file, co
 
 void EditorMainScreen::set_button_enabled(int p_index, bool p_enabled) {
 	ERR_FAIL_INDEX(p_index, buttons.size());
-	buttons[p_index]->set_visible(p_enabled);
+	// G2 M7.2b: a retired strip button (2D/3D/Script) stays hidden regardless of profile enable state
+	// — its editing surface lives in the workspace panes now, not the strip.
+	if (!buttons[p_index]->has_meta("_g2_strip_retired")) {
+		buttons[p_index]->set_visible(p_enabled);
+	}
 	if (!p_enabled && buttons[p_index]->is_pressed()) {
 		select(EDITOR_2D);
 	}
@@ -116,6 +120,11 @@ void EditorMainScreen::set_button_enabled(int p_index, bool p_enabled) {
 
 bool EditorMainScreen::is_button_enabled(int p_index) const {
 	ERR_FAIL_INDEX_V(p_index, buttons.size(), false);
+	// G2 M7.2b: a retired button has no strip presence but its feature is enabled via the workspace,
+	// so report it enabled (callers gate features on this, not on strip visibility).
+	if (buttons[p_index]->has_meta("_g2_strip_retired")) {
+		return true;
+	}
 	return buttons[p_index]->is_visible();
 }
 
@@ -383,6 +392,18 @@ void EditorMainScreen::add_main_plugin(EditorPlugin *p_editor) {
 	button_hb->add_child(tb);
 	editor_table.push_back(p_editor);
 	main_editor_plugins.insert(p_editor->get_plugin_name(), p_editor);
+
+	// G2 M7.2b: scenes and scripts are the workspace's job now (panes + tabs), so the 2D / 3D / Script
+	// strip buttons are redundant switchers. Hide them — the strip carries only the singleton screens
+	// (Game / AssetLib / third-party). The buttons stay in buttons[]/editor_table so the index-based
+	// legacy shims (select(EDITOR_2D/3D/SCRIPT) from platform/mono) and feature-profile bookkeeping
+	// keep working; only their visibility changes. focus_editor("2D"/"3D"/"Script") already routes to
+	// the workspace, not these buttons.
+	const String pname = p_editor->get_plugin_name();
+	if (pname == "2D" || pname == "3D" || pname == "Script") {
+		tb->hide();
+		tb->set_meta("_g2_strip_retired", true); // marker so set_button_enabled keeps it hidden.
+	}
 }
 
 void EditorMainScreen::remove_main_plugin(EditorPlugin *p_editor) {
