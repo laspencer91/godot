@@ -45,6 +45,7 @@
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/foldable_container.h"
+#include "scene/gui/scroll_container.h"
 #include "scene/gui/split_container.h"
 
 DocumentView::DocumentView(EditorDocument *p_document) {
@@ -139,7 +140,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		scene_tree_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *tree_section = memnew(FoldableContainer);
 		tree_section->set_title(TTR("Scene Tree"));
-		tree_section->set_v_size_flags(SIZE_EXPAND_FILL);
+		tree_section->set_custom_minimum_size(Size2(0, 260 * EDSCALE)); // internal tree scrolls; column scrolls past.
 		tree_section->add_child(scene_tree_dock);
 		dock_column->add_child(tree_section);
 
@@ -149,7 +150,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		inspector_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *inspector_section = memnew(FoldableContainer);
 		inspector_section->set_title(TTR("Inspector"));
-		inspector_section->set_v_size_flags(SIZE_EXPAND_FILL);
+		inspector_section->set_custom_minimum_size(Size2(0, 320 * EDSCALE)); // internal inspector scrolls.
 		inspector_section->add_child(inspector_dock);
 		dock_column->add_child(inspector_section);
 
@@ -188,10 +189,18 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
 		surface_vbox->add_child(editor_surface);
 
+		// G2 styling: the accordion can exceed the pane height (e.g. Signals + Groups both expanded),
+		// so host it in a vertical ScrollContainer — otherwise the bottom sections clip off-screen.
+		ScrollContainer *dock_scroll = memnew(ScrollContainer);
+		dock_scroll->set_horizontal_scroll_mode(ScrollContainer::SCROLL_MODE_DISABLED);
+		dock_scroll->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
+		dock_column->set_h_size_flags(SIZE_EXPAND_FILL);
+		dock_scroll->add_child(dock_column);
+
 		// Compose: [toolbar|viewport] | dock column (docks on the right, per the design).
 		HSplitContainer *scene_split = memnew(HSplitContainer);
 		scene_split->add_child(surface_vbox);
-		scene_split->add_child(dock_column);
+		scene_split->add_child(dock_scroll);
 		editor_surface = scene_split;
 	}
 

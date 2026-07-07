@@ -157,6 +157,10 @@ public:
 	// not the single legacy main screen. This is the routing flip that unblocks two-scenes-in-two-panes.
 	virtual bool opens_as_workspace_tab() const override { return true; }
 
+	// G2 styling: the tab shows the scene's filename (root->get_scene_file_path), not the generic
+	// "Document" fallback. Defined out-of-line — needs Node's full type.
+	virtual String get_title() const override;
+
 	// Document-level activation side effects (only the focused document drives the
 	// audio listener in v1). The per-pane "is this view active" bit lives on
 	// EditorDocumentView, not here.

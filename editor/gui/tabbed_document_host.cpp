@@ -126,6 +126,11 @@ void TabbedDocumentHost::_show(int p_idx) {
 		return;
 	}
 	_ensure_view(p_idx);
+	// G2 styling: refresh the tab title — a scene document's name resolves once its root/scene-file is
+	// set, which can be after the (background) tab was first added.
+	if (documents[p_idx]) {
+		tab_bar->set_tab_title(p_idx, documents[p_idx]->get_title());
+	}
 	// Reveal the selected view, hide the rest. Hidden SubViewports stop rendering
 	// (UPDATE_WHEN_VISIBLE), so only the active tab draws.
 	for (int i = 0; i < views.size(); i++) {

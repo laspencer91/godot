@@ -82,6 +82,19 @@ RID SceneDocument::get_space() const {
 	return world_3d.is_valid() ? world_3d->get_space() : RID();
 }
 
+String SceneDocument::get_title() const {
+	// G2 styling: the tab title is the scene's filename (e.g. "player.tscn"); "[unsaved]" for a scene
+	// with no file yet. Falls back to the base path-derived title if the root isn't set.
+	if (root) {
+		const String scene_path = root->get_scene_file_path();
+		if (!scene_path.is_empty()) {
+			return scene_path.get_file();
+		}
+		return TTRC("[unsaved]");
+	}
+	return EditorDocument::get_title();
+}
+
 void SceneDocument::activate() {
 	if (scene_root) {
 		// Only the focused document drives the audio listener in v1.
