@@ -3810,6 +3810,14 @@ void Node3DEditorViewport::_notification(int p_what) {
 			if (!gizmo_instances_initialized) {
 				_init_gizmo_instance();
 				gizmo_instances_initialized = true;
+				// G2 M7.2a: for a per-pane viewport, set_editor_world() bound this viewport's world
+				// BEFORE it entered the tree, so its transform-gizmo migration early-returned (the
+				// instances didn't exist yet). Now that _init_gizmo_instance() has created them in the
+				// singleton scenario, re-apply the already-bound world to migrate them into it — else
+				// the gizmos render in an invisible scenario and never show over the pane's scene.
+				if (gizmo_layer_world.is_valid()) {
+					set_editor_world(gizmo_layer_world);
+				}
 			}
 		} break;
 
