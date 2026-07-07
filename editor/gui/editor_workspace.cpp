@@ -228,6 +228,8 @@ WorkspacePane *WorkspacePane::from_dict(const Dictionary &p_dict, EditorWorkspac
 			}
 			return pane;
 		}
+		pane->set_pane_id(0); // Split panes carry no persisted id (to_dict writes ids on leaves only); keep
+		// it 0 so a make_pane auto-id can't collide with a leaf's saved id in find_pane_by_id.
 		SplitContainer *sc = memnew(SplitContainer);
 		sc->set_vertical((bool)p_dict.get("vert", false));
 		sc->set_h_size_flags(SIZE_EXPAND_FILL);
@@ -440,6 +442,23 @@ WorkspacePane *EditorWorkspace::find_pane_showing(EditorDocument *p_document) co
 	return _find_pane_showing(root_pane, p_document);
 }
 
+WorkspacePane *EditorWorkspace::find_pane_by_id(uint32_t p_id) const {
+	return p_id == 0 ? nullptr : _find_pane_by_id(root_pane, p_id); // G2 M6.2 (0 == unassigned; e.g. split panes).
+}
+
+WorkspacePane *EditorWorkspace::_find_pane_by_id(WorkspacePane *p_pane, uint32_t p_id) const {
+	if (!p_pane) {
+		return nullptr;
+	}
+	if (p_pane->get_pane_id() == p_id) {
+		return p_pane;
+	}
+	if (WorkspacePane *found = _find_pane_by_id(p_pane->get_first(), p_id)) {
+		return found;
+	}
+	return _find_pane_by_id(p_pane->get_second(), p_id);
+}
+
 WorkspacePane *EditorWorkspace::resolve_target_pane_for_documents() {
 	// (a) The focused pane, if it already hosts tabs — this is what keeps "open a script from a
 	// script" in the SAME pane (the focused pane IS a TabbedDocumentHost while you edit a script).
@@ -624,9 +643,12 @@ bool EditorWorkspace::load_geometry(const Dictionary &p_geometry) {
 	// always past every stored id, so a later split can't collide — and save->load->save round-trips.
 	next_pane_id = MAX((uint32_t)(int)p_geometry.get("next", 1), 1u);
 
+	// Focus is left UNSET here on purpose: during a restore the leaves are still empty, and
+	// set_focused_pane's side effects (script surface, scene-pane toolbar) reach into content that isn't
+	// placed yet. get_focused_pane falls back to the root while null, and the restore driver calls
+	// set_focused_pane once — after it fills the panes — so those side effects bind correctly.
 	last_tabbed_pane = _find_tabbed_leaf(root_pane);
-	focused_pane = nullptr; // Force set_focused_pane past its no-op guard.
-	set_focused_pane(last_tabbed_pane ? last_tabbed_pane : root_pane);
+	focused_pane = nullptr;
 	return true;
 }
 

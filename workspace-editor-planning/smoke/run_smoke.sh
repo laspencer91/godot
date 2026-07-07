@@ -113,6 +113,13 @@ mkdir -p "$WORK/.godot/editor"
 cp "$SMOKE_DIR/restore_layout.cfg" "$WORK/.godot/editor/editor_layout.cfg"
 run_case "restore_3_scenes" -e
 
+# Workspace-session restore (M6.2): seed a 2-pane split layout — test_2d in one pane, test_3d +
+# the screen-host in the other — and launch with no explicit scene. A clean run proves the pane
+# tree rebuilds, documents re-home into the right panes, and per-pane scene views mint without
+# the double-render/leak spam the restore path historically tripped on.
+cp "$SMOKE_DIR/restore_workspace.cfg" "$WORK/.godot/editor/editor_layout.cfg"
+run_case "restore_workspace" -e
+
 echo
 if [[ $fail -eq 0 ]]; then
 	echo "SMOKE: PASS"

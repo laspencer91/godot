@@ -97,13 +97,188 @@ void EditorMainScreen::save_layout_to_config(Ref<ConfigFile> p_config_file, cons
 	} else {
 		p_config_file->set_value(p_section, "selected_main_editor_idx", Variant());
 	}
+
+	// G2 M6.2: persist the whole workspace — split-tree geometry (M6.1) plus, per leaf, the tab
+	// documents (by path) and which is current. One blob so restore is a single unit.
+	if (workspace) {
+		Dictionary session;
+		session["geometry"] = workspace->save_geometry();
+		Dictionary tabs;
+		_collect_pane_tabs(workspace->get_root_pane(), tabs);
+		session["tabs"] = tabs;
+		p_config_file->set_value(p_section, "workspace", session);
+	}
 }
 
 void EditorMainScreen::load_layout_from_config(Ref<ConfigFile> p_config_file, const String &p_section) {
+	// G2 M6.2 — restore PHASE 2 (tabs). Runs from _load_central_editor_layout_from_config, AFTER scenes
+	// are restored, so scene/script/help documents resolve here. The geometry + screen-host were already
+	// rebuilt in phase 1 (begin_workspace_restore, before any scene loaded — see below); this only fills
+	// the panes with their remaining tabs and drives focus. When there's no saved session, the legacy
+	// strip select() path runs instead.
+	if (!_pending_session.is_empty()) {
+		Dictionary tabs = _pending_session.get("tabs", Dictionary());
+		_populate_pane_tabs(workspace->get_root_pane(), tabs);
+		set_workspace_focus_after_restore();
+		_pending_session = Dictionary();
+		if (EditorNode *en = EditorNode::get_singleton()) {
+			en->set_workspace_session_restore_pending(false); // Resume the default scene auto-reveal.
+		}
+		return;
+	}
+
 	int selected_main_editor_idx = p_config_file->get_value(p_section, "selected_main_editor_idx", -1);
 	if (selected_main_editor_idx >= 0 && selected_main_editor_idx < buttons.size()) {
 		callable_mp(this, &EditorMainScreen::select).call_deferred(selected_main_editor_idx);
 	}
+}
+
+bool EditorMainScreen::begin_workspace_restore(Ref<ConfigFile> p_config_file, const String &p_section) {
+	// G2 M6.2 — restore PHASE 1 (geometry + screen-host), called BEFORE any scene is opened. This timing
+	// is essential: rebuilding the tree re-enters main_screen_vbox (the live 2D/3D editors) into a pane,
+	// and re-entering the 3D editor while multiple scene worlds are live exhausts the per-world gizmo
+	// layer budget and crashes. At 0 open scenes the move is clean. Phase 2 (load_layout_from_config)
+	// then adds the scene/script tabs once the scenes exist. Returns true if a session was found.
+	if (!workspace || !p_config_file->has_section_key(p_section, "workspace")) {
+		return false;
+	}
+	Dictionary session = p_config_file->get_value(p_section, "workspace");
+	if (!workspace->load_geometry(session.get("geometry", Dictionary()))) {
+		return false; // Bad geometry: leave the default tree; legacy/auto-reveal path takes over.
+	}
+
+	// Re-home the screen-host into its saved pane (fresh mint from the parked vbox — clean at 0 worlds).
+	WorkspacePane *host_pane = workspace->find_pane_by_id(_screen_host_pane_id(session.get("tabs", Dictionary())));
+	if (!host_pane || !Object::cast_to<TabbedDocumentHost>(host_pane->get_content())) {
+		host_pane = workspace->get_last_tabbed_pane();
+	}
+	if (host_pane) {
+		if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(host_pane->get_content())) {
+			host->ensure_document(screen_host_document);
+		}
+	}
+
+	_pending_session = session; // Hand the tab set to phase 2.
+	if (EditorNode *en = EditorNode::get_singleton()) {
+		en->set_workspace_session_restore_pending(true); // Stand the default scene auto-reveal down until phase 2.
+	}
+	return true;
+}
+
+void EditorMainScreen::_collect_pane_tabs(WorkspacePane *p_pane, Dictionary &r_tabs) const {
+	// G2 M6.2: record each leaf's tab documents (by path) + current doc path, keyed by pane_id. Docs
+	// without a persistable path (unsaved scenes) are skipped; a leaf with none contributes no entry.
+	if (!p_pane) {
+		return;
+	}
+	if (!p_pane->is_leaf()) {
+		_collect_pane_tabs(p_pane->get_first(), r_tabs);
+		_collect_pane_tabs(p_pane->get_second(), r_tabs);
+		return;
+	}
+	TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content());
+	if (!host) {
+		return;
+	}
+	Array docs;
+	String current_path;
+	for (int i = 0; i < host->get_document_count(); i++) {
+		EditorDocument *doc = host->get_document(i);
+		if (!doc || doc->get_path().is_empty()) {
+			continue;
+		}
+		if (i == host->get_current()) {
+			current_path = doc->get_path();
+		}
+		docs.push_back(doc->get_path());
+	}
+	if (docs.is_empty()) {
+		return;
+	}
+	Dictionary entry;
+	entry["docs"] = docs;
+	entry["cur"] = current_path;
+	r_tabs[itos(p_pane->get_pane_id())] = entry;
+}
+
+EditorDocument *EditorMainScreen::_resolve_session_document(const String &p_path) {
+	// G2 M6.2: the legacy-screens host doc is ours (not in EditorData); everything else — scenes,
+	// scripts, help — resolves through EditorNode against the already-restored open-document set.
+	if (p_path.is_empty()) {
+		return nullptr;
+	}
+	if (screen_host_document && p_path == screen_host_document->get_path()) {
+		return screen_host_document;
+	}
+	EditorNode *en = EditorNode::get_singleton();
+	return en ? en->resolve_workspace_document(p_path) : nullptr;
+}
+
+uint32_t EditorMainScreen::_screen_host_pane_id(const Dictionary &p_tabs) const {
+	// G2 M6.2: which saved leaf held the screen-host tab (0 if none recorded it).
+	const String host_path = screen_host_document ? screen_host_document->get_path() : String();
+	Array keys = p_tabs.keys();
+	for (int j = 0; j < keys.size(); j++) {
+		Dictionary entry = p_tabs[keys[j]];
+		Array docs = entry.get("docs", Array());
+		for (int i = 0; i < docs.size(); i++) {
+			if (String(docs[i]) == host_path) {
+				return (uint32_t)String(keys[j]).to_int();
+			}
+		}
+	}
+	return 0;
+}
+
+void EditorMainScreen::_populate_pane_tabs(WorkspacePane *p_pane, const Dictionary &p_tabs) {
+	// G2 M6.2 (phase 2): fill each leaf with its saved documents. The screen-host is skipped — phase 1
+	// (begin_workspace_restore) already placed it, at 0 open scenes, so main_screen_vbox isn't moved again.
+	if (!p_pane) {
+		return;
+	}
+	if (!p_pane->is_leaf()) {
+		_populate_pane_tabs(p_pane->get_first(), p_tabs);
+		_populate_pane_tabs(p_pane->get_second(), p_tabs);
+		return;
+	}
+	TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content());
+	if (!host) {
+		return;
+	}
+	const String key = itos(p_pane->get_pane_id());
+	if (!p_tabs.has(key)) {
+		return;
+	}
+	Dictionary entry = p_tabs[key];
+	Array docs = entry.get("docs", Array());
+	for (int i = 0; i < docs.size(); i++) {
+		EditorDocument *doc = _resolve_session_document(docs[i]);
+		if (doc && doc != screen_host_document) {
+			host->ensure_document(doc); // Appends a (hidden) tab + mints the pane-bound view; no focus steal.
+		}
+	}
+	// Select the saved current tab now that this pane's documents (including any adopted screen-host) exist.
+	if (EditorDocument *current = _resolve_session_document(entry.get("cur", String()))) {
+		if (host->has_document(current)) {
+			host->focus_document(current);
+		}
+	}
+}
+
+void EditorMainScreen::set_workspace_focus_after_restore() {
+	// G2 M6.2: now that every pane is filled, drive focus once through the real path (load_geometry left
+	// focused_pane null) so the focused pane's script surface / scene-pane toolbar bind correctly. Prefer
+	// the pane showing the active scene, so the editor opens on it just like a normal boot.
+	WorkspacePane *focus = nullptr;
+	if (EditorNode *en = EditorNode::get_singleton()) {
+		if (EditorDocument *active = en->get_editor_data().get_active_document()) {
+			focus = workspace->find_pane_showing(active);
+		}
+	}
+	if (!focus) {
+		focus = workspace->get_last_tabbed_pane();
+	}
+	workspace->set_focused_pane(focus ? focus : workspace->get_root_pane());
 }
 
 void EditorMainScreen::set_button_enabled(int p_index, bool p_enabled) {

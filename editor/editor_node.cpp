@@ -4617,6 +4617,9 @@ SubViewport *EditorNode::get_scene_root() {
 void EditorNode::_ensure_active_scene_tab() {
 	// G2 M7.1: create (or focus, no-op if present) the active scene's pane tab. Background open
 	// (grab_focus=false) so it never steals focus from another pane during a scene switch.
+	if (workspace_session_restore_pending) {
+		return; // G2 M6.2: the pending session restore places scenes into their saved panes; don't pre-empt it.
+	}
 	EditorMainScreen *main_screen = get_editor_main_screen();
 	EditorDocument *active_doc = editor_data.get_active_document();
 	if (main_screen && active_doc && active_doc->opens_as_workspace_tab()) {
@@ -6451,6 +6454,14 @@ void EditorNode::_load_editor_layout() {
 		ep.step(TTR("Loading docks..."), 1, true);
 		editor_dock_manager->load_docks_from_config(config, "docks", true);
 
+		// G2 M6.2: rebuild the saved workspace geometry + screen-host placement (phase 1) BEFORE reopening
+		// scenes — the geometry move re-enters the 2D/3D editors, which must happen at 0 live scene worlds
+		// (multiple worlds exhaust the gizmo-layer budget and crash). Phase 2 (the scene/script tabs) runs
+		// from _load_central_editor_layout_from_config once the scenes exist.
+		if (EditorMainScreen *ms = get_editor_main_screen()) {
+			ms->begin_workspace_restore(config, EDITOR_NODE_CONFIG_SECTION);
+		}
+
 		ep.step(TTR("Reopening scenes..."), 2, true);
 		_load_open_scenes_from_config(config);
 
@@ -6463,6 +6474,31 @@ void EditorNode::_load_editor_layout() {
 		ep.step(TTR("Editor layout ready."), 5, true);
 	}
 	load_editor_layout_done = true;
+}
+
+EditorDocument *EditorNode::resolve_workspace_document(const String &p_path) {
+	// G2 M6.2: resolve one saved workspace tab path against the live document set (see the header note).
+	if (p_path.is_empty()) {
+		return nullptr;
+	}
+	// Scenes: match an already-restored open scene by path — scene-restore owns opening, we never reopen.
+	const int scene_idx = editor_data.get_edited_scene_from_path(p_path);
+	if (scene_idx >= 0) {
+		return editor_data.get_document(scene_idx);
+	}
+	// Help: help://Class.
+	if (p_path.begins_with("help://")) {
+		return editor_data.get_or_create_help_document(p_path.trim_prefix("help://"));
+	}
+	// Script/text: an existing aux document, else load the resource and mint one. Missing file -> skip.
+	if (EditorDocument *aux = editor_data.find_aux_document_by_path(p_path)) {
+		return aux;
+	}
+	if (!FileAccess::exists(p_path)) {
+		return nullptr;
+	}
+	Ref<Resource> res = ResourceLoader::load(p_path);
+	return res.is_valid() ? editor_data.get_or_create_script_document(res) : nullptr;
 }
 
 void EditorNode::_save_central_editor_layout_to_config(Ref<ConfigFile> p_config_file) {
