@@ -728,12 +728,24 @@ void InspectorDock::set_bound_document(EditorDocument *p_document) {
 	bound_document = p_document;
 }
 
-InspectorDock::InspectorDock(EditorData &p_editor_data) {
-	singleton = this;
+void InspectorDock::edit_bound(Object *p_object) {
+	// G2 D7b: drive this bound inspector to show p_object (mirrors EditorNode::_edit_current's inspector
+	// half, but for a per-pane instance sourced from its document's selection).
+	inspector->edit(p_object);
+	update(p_object);
+}
+
+InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	set_name(TTRC("Inspector"));
 	set_icon_name("AnimationTrackList");
-	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_inspector", TTRC("Open Inspector Dock")));
 	set_default_slot(EditorDock::DOCK_SLOT_RIGHT_UL);
+	// G2 D7b: only the one global dock claims the singleton + registers the dock command (mirrors D5
+	// for SceneTreeDock — bound per-pane instances must not clobber get_singleton() nor duplicate the
+	// "docks/open_inspector" command).
+	if (p_is_global) {
+		singleton = this;
+		set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_inspector", TTRC("Open Inspector Dock")));
+	}
 
 	VBoxContainer *main_vb = memnew(VBoxContainer);
 	add_child(main_vb);
@@ -900,5 +912,8 @@ InspectorDock::InspectorDock(EditorData &p_editor_data) {
 }
 
 InspectorDock::~InspectorDock() {
-	singleton = nullptr;
+	// G2 D7b: only clear the singleton if we own it (a bound per-pane instance never claimed it).
+	if (singleton == this) {
+		singleton = nullptr;
+	}
 }

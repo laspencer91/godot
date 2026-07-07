@@ -34,6 +34,7 @@
 
 class EditorDocument;
 class EditorDocumentView;
+class InspectorDock;
 class SceneTreeDock;
 class VBoxContainer;
 
@@ -66,7 +67,12 @@ class DocumentView : public MarginContainer {
 	// bound to this document. Null for non-scene (script/help/resource) views. bound_scene_document
 	// is kept only to refresh the tree's root once the view is in-tree (root may load late).
 	SceneTreeDock *scene_tree_dock = nullptr;
+	// G2 D7b: per-pane Inspector, bound to this document; driven from the doc selection via
+	// _bound_selection_changed so it shows this pane's selection independently of the global one.
+	InspectorDock *inspector_dock = nullptr;
 	EditorDocument *bound_scene_document = nullptr;
+
+	void _bound_selection_changed();
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The
 	// ScriptEditor mounts its menu strip / find bar here while this view's tab is current.

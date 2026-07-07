@@ -171,7 +171,12 @@ public:
 	// G2 D6: bind this inspector instance to a specific document (D7b) so its history menu/back/
 	// forward act on that document's selection history.
 	void set_bound_document(EditorDocument *p_document);
+	// G2 D7b: edit p_object in THIS inspector instance (a bound per-pane inspector), mirroring the
+	// global edit_current path but sourced from the pane's own document selection.
+	void edit_bound(Object *p_object);
 
-	InspectorDock(EditorData &p_editor_data);
+	// G2 D7b: p_is_global==false builds a bound per-pane inspector that does not claim the singleton
+	// or re-register the dock command (which would error as a duplicate).
+	InspectorDock(EditorData &p_editor_data, bool p_is_global = true);
 	~InspectorDock();
 };

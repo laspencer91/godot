@@ -32,7 +32,9 @@
 
 #include "core/object/callable_mp.h"
 #include "editor/doc/editor_help.h"
+#include "editor/docks/inspector_dock.h"
 #include "editor/docks/scene_tree_dock.h"
+#include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
@@ -40,6 +42,7 @@
 #include "editor/script/script_editor_plugin.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/foldable_container.h"
 #include "scene/gui/split_container.h"
 
 DocumentView::DocumentView(EditorDocument *p_document) {
@@ -119,17 +122,55 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	// are left as a plain surface. The composite becomes `editor_surface` (the split), which the
 	// generic parent/stretch below adds to content_vbox.
 	if (editor_surface && p_document && p_document->get_selection()) {
-		scene_tree_dock = memnew(SceneTreeDock(p_document->get_root(), p_document->get_selection(), EditorNode::get_editor_data(), false));
+		bound_scene_document = p_document;
+		EditorData &ed = EditorNode::get_editor_data();
+
+		// D7b: the per-pane dock column — a vertical accordion of FoldableContainer sections
+		// (Scene Tree + Inspector expanded, Signals + Groups folded), on the RIGHT of the surface.
+		VBoxContainer *dock_column = memnew(VBoxContainer);
+		dock_column->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
+
+		// Scene Tree section (D7a's tree, now folded into the accordion, expanded).
+		scene_tree_dock = memnew(SceneTreeDock(p_document->get_root(), p_document->get_selection(), ed, false));
 		scene_tree_dock->set_bound_document(p_document);
 		scene_tree_dock->set_edited_scene(p_document->get_root());
-		scene_tree_dock->set_custom_minimum_size(Size2(250 * EDSCALE, 0));
-		bound_scene_document = p_document;
+		scene_tree_dock->set_v_size_flags(SIZE_EXPAND_FILL);
+		FoldableContainer *tree_section = memnew(FoldableContainer);
+		tree_section->set_title(TTR("Scene Tree"));
+		tree_section->set_v_size_flags(SIZE_EXPAND_FILL);
+		tree_section->add_child(scene_tree_dock);
+		dock_column->add_child(tree_section);
 
+		// Inspector section (bound per-pane inspector, expanded).
+		inspector_dock = memnew(InspectorDock(ed, false));
+		inspector_dock->set_bound_document(p_document);
+		inspector_dock->set_v_size_flags(SIZE_EXPAND_FILL);
+		FoldableContainer *inspector_section = memnew(FoldableContainer);
+		inspector_section->set_title(TTR("Inspector"));
+		inspector_section->set_v_size_flags(SIZE_EXPAND_FILL);
+		inspector_section->add_child(inspector_dock);
+		dock_column->add_child(inspector_section);
+
+		// Signals / Groups sections — folded placeholders; bodies are wired in G3.
+		FoldableContainer *signals_section = memnew(FoldableContainer);
+		signals_section->set_title(TTR("Signals"));
+		signals_section->set_folded(true);
+		dock_column->add_child(signals_section);
+		FoldableContainer *groups_section = memnew(FoldableContainer);
+		groups_section->set_title(TTR("Groups"));
+		groups_section->set_folded(true);
+		dock_column->add_child(groups_section);
+
+		// Drive the bound inspector from THIS document's selection (independent of the active pane).
+		p_document->get_selection()->connect("selection_changed", callable_mp(this, &DocumentView::_bound_selection_changed));
+		_bound_selection_changed();
+
+		// Compose: surface | dock column (docks on the right, per the design).
 		HSplitContainer *scene_split = memnew(HSplitContainer);
-		scene_split->add_child(scene_tree_dock);
 		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
 		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
 		scene_split->add_child(editor_surface);
+		scene_split->add_child(dock_column);
 		editor_surface = scene_split;
 	}
 
@@ -139,6 +180,20 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
 		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
 	}
+}
+
+void DocumentView::_bound_selection_changed() {
+	// G2 D7b: the bound inspector follows THIS document's selection front (mirrors the global
+	// scene-dock -> inspector push, sourced from the per-document selection).
+	if (!inspector_dock || !bound_scene_document) {
+		return;
+	}
+	EditorSelection *selection = bound_scene_document->get_selection();
+	if (!selection) {
+		return;
+	}
+	List<Node *> nodes = selection->get_top_selected_node_list();
+	inspector_dock->edit_bound(nodes.is_empty() ? nullptr : nodes.front()->get());
 }
 
 Control *DocumentView::get_chrome_host() const {
