@@ -36,12 +36,15 @@ void GroupsDock::set_selection(const Vector<Node *> &p_nodes) {
 	groups->set_selection(p_nodes);
 }
 
-GroupsDock::GroupsDock() {
-	singleton = this;
+GroupsDock::GroupsDock(bool p_is_global) {
 	set_name(TTRC("Groups"));
 	set_icon_name("Groups");
-	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_groups", TTRC("Open Groups Dock")));
 	set_default_slot(EditorDock::DOCK_SLOT_RIGHT_UL);
+	// G2 G3: only the global dock claims the singleton + registers the command (mirrors D5).
+	if (p_is_global) {
+		singleton = this;
+		set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_groups", TTRC("Open Groups Dock")));
+	}
 
 	groups = memnew(GroupsEditor);
 	groups->set_v_size_flags(SIZE_EXPAND_FILL);
@@ -49,5 +52,7 @@ GroupsDock::GroupsDock() {
 }
 
 GroupsDock::~GroupsDock() {
-	singleton = nullptr;
+	if (singleton == this) {
+		singleton = nullptr;
+	}
 }

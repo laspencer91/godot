@@ -48,6 +48,8 @@ public:
 
 	void update_lists();
 
-	SignalsDock();
+	// G2 G3: p_is_global==false builds a bound per-pane instance that does not claim the singleton or
+	// re-register the dock command.
+	SignalsDock(bool p_is_global = true);
 	~SignalsDock();
 };

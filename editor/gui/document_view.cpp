@@ -32,8 +32,10 @@
 
 #include "core/object/callable_mp.h"
 #include "editor/doc/editor_help.h"
+#include "editor/docks/groups_dock.h"
 #include "editor/docks/inspector_dock.h"
 #include "editor/docks/scene_tree_dock.h"
+#include "editor/docks/signals_dock.h"
 #include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
@@ -151,14 +153,22 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		inspector_section->add_child(inspector_dock);
 		dock_column->add_child(inspector_section);
 
-		// Signals / Groups sections — folded placeholders; bodies are wired in G3.
+		// G3: Signals section (bound ConnectionsDock, folded by default).
+		signals_dock = memnew(SignalsDock(false));
+		signals_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *signals_section = memnew(FoldableContainer);
 		signals_section->set_title(TTR("Signals"));
 		signals_section->set_folded(true);
+		signals_section->add_child(signals_dock);
 		dock_column->add_child(signals_section);
+
+		// G3: Groups section (bound GroupsEditor dock, folded by default).
+		groups_dock = memnew(GroupsDock(false));
+		groups_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *groups_section = memnew(FoldableContainer);
 		groups_section->set_title(TTR("Groups"));
 		groups_section->set_folded(true);
+		groups_section->add_child(groups_dock);
 		dock_column->add_child(groups_section);
 
 		// Drive the bound inspector from THIS document's selection (independent of the active pane).
@@ -204,7 +214,19 @@ void DocumentView::_bound_selection_changed() {
 		return;
 	}
 	List<Node *> nodes = selection->get_top_selected_node_list();
-	inspector_dock->edit_bound(nodes.is_empty() ? nullptr : nodes.front()->get());
+	Node *front = nodes.is_empty() ? nullptr : nodes.front()->get();
+	inspector_dock->edit_bound(front);
+	// G3: the per-pane Signals + Groups docks follow the same selection.
+	if (signals_dock) {
+		signals_dock->set_object(front);
+	}
+	if (groups_dock) {
+		Vector<Node *> node_vec;
+		for (Node *n : nodes) {
+			node_vec.push_back(n);
+		}
+		groups_dock->set_selection(node_vec);
+	}
 }
 
 Control *DocumentView::get_chrome_host() const {

@@ -45,6 +45,8 @@ public:
 
 	void set_selection(const Vector<Node *> &p_nodes);
 
-	GroupsDock();
+	// G2 G3: p_is_global==false builds a bound per-pane instance that does not claim the singleton or
+	// re-register the dock command.
+	GroupsDock(bool p_is_global = true);
 	~GroupsDock();
 };

@@ -41,12 +41,15 @@ void SignalsDock::set_object(Object *p_object) {
 	connections->set_object(p_object);
 }
 
-SignalsDock::SignalsDock() {
-	singleton = this;
+SignalsDock::SignalsDock(bool p_is_global) {
 	set_name(TTRC("Signals"));
 	set_icon_name("Signals");
-	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_signals", TTRC("Open Signals Dock")));
 	set_default_slot(EditorDock::DOCK_SLOT_RIGHT_UL);
+	// G2 G3: only the global dock claims the singleton + registers the command (mirrors D5).
+	if (p_is_global) {
+		singleton = this;
+		set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_signals", TTRC("Open Signals Dock")));
+	}
 
 	connections = memnew(ConnectionsDock);
 	connections->set_v_size_flags(SIZE_EXPAND_FILL);
@@ -54,5 +57,7 @@ SignalsDock::SignalsDock() {
 }
 
 SignalsDock::~SignalsDock() {
-	singleton = nullptr;
+	if (singleton == this) {
+		singleton = nullptr;
+	}
 }

@@ -34,8 +34,10 @@
 
 class EditorDocument;
 class EditorDocumentView;
+class GroupsDock;
 class InspectorDock;
 class SceneTreeDock;
+class SignalsDock;
 class VBoxContainer;
 
 // DocumentView is the per-pane presentation of one open document (G2). A
@@ -70,6 +72,9 @@ class DocumentView : public MarginContainer {
 	// G2 D7b: per-pane Inspector, bound to this document; driven from the doc selection via
 	// _bound_selection_changed so it shows this pane's selection independently of the global one.
 	InspectorDock *inspector_dock = nullptr;
+	// G2 G3: per-pane Signals (ConnectionsDock) + Groups docks, also driven from the doc selection.
+	SignalsDock *signals_dock = nullptr;
+	GroupsDock *groups_dock = nullptr;
 	EditorDocument *bound_scene_document = nullptr;
 	// G2 M7.2a: the slot above this scene pane's viewport where the shared 2D/3D toolbar mounts while
 	// this pane is focused. Null for non-scene views.
