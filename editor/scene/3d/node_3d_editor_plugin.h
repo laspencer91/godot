@@ -822,6 +822,8 @@ private:
 	void _update_vertex_snap_tooltips();
 	void _xform_dialog_action();
 	void _menu_item_pressed(int p_option);
+	void _update_view_layout_menu_checkmarks(int p_checked_option);
+	void _set_selection_meta_flag(const String &p_action_name, const String &p_meta_name, const String &p_signal_name, bool p_enable);
 	void _menu_item_toggled(bool pressed, int p_option);
 	void _menu_gizmo_toggled(int p_option);
 	// Used for secondary menu items which are displayed depending on the currently selected node
@@ -835,6 +837,7 @@ private:
 	void _generate_selection_boxes();
 
 	void _init_indicators();
+	void _set_gizmos_menu_item_icon(int p_idx, int p_state);
 	void _update_gizmos_menu();
 	void _update_gizmos_menu_theme();
 	void _finish_indicators();

@@ -8030,8 +8030,42 @@ void Node3DEditor::_menu_gizmo_toggled(int p_option) {
 	update_all_gizmos();
 }
 
-void Node3DEditor::_menu_item_pressed(int p_option) {
+void Node3DEditor::_update_view_layout_menu_checkmarks(int p_checked_option) {
+	const int layout_options[] = { MENU_VIEW_USE_1_VIEWPORT, MENU_VIEW_USE_2_VIEWPORTS, MENU_VIEW_USE_3_VIEWPORTS, MENU_VIEW_USE_4_VIEWPORTS, MENU_VIEW_USE_2_VIEWPORTS_ALT, MENU_VIEW_USE_3_VIEWPORTS_ALT };
+	for (const int layout_option : layout_options) {
+		view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(layout_option), layout_option == p_checked_option);
+	}
+}
+
+void Node3DEditor::_set_selection_meta_flag(const String &p_action_name, const String &p_meta_name, const String &p_signal_name, bool p_enable) {
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	undo_redo->create_action(p_action_name);
+
+	const List<Node *> &selection = editor_selection->get_top_selected_node_list();
+
+	for (Node *E : selection) {
+		Node3D *spatial = Object::cast_to<Node3D>(E);
+		if (!spatial || !spatial->is_inside_tree()) {
+			continue;
+		}
+
+		if (p_enable) {
+			undo_redo->add_do_method(spatial, "set_meta", p_meta_name, true);
+			undo_redo->add_undo_method(spatial, "remove_meta", p_meta_name);
+		} else {
+			undo_redo->add_do_method(spatial, "remove_meta", p_meta_name);
+			undo_redo->add_undo_method(spatial, "set_meta", p_meta_name, true);
+		}
+		undo_redo->add_do_method(this, "emit_signal", p_signal_name);
+		undo_redo->add_undo_method(this, "emit_signal", p_signal_name);
+	}
+
+	undo_redo->add_do_method(this, "_refresh_menu_icons");
+	undo_redo->add_undo_method(this, "_refresh_menu_icons");
+	undo_redo->commit_action();
+}
+
+void Node3DEditor::_menu_item_pressed(int p_option) {
 	switch (p_option) {
 		case MENU_TOOL_TRANSFORM:
 		case MENU_TOOL_MOVE:
@@ -8088,12 +8122,7 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 				main_view->set_last_used_viewport_index(0);
 			}
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), true);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_4_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS_ALT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS_ALT), false);
+			_update_view_layout_menu_checkmarks(MENU_VIEW_USE_1_VIEWPORT);
 
 		} break;
 		case MENU_VIEW_USE_2_VIEWPORTS: {
@@ -8102,12 +8131,7 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 				main_view->set_last_used_viewport_index(0);
 			}
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), true);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_4_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS_ALT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS_ALT), false);
+			_update_view_layout_menu_checkmarks(MENU_VIEW_USE_2_VIEWPORTS);
 
 		} break;
 		case MENU_VIEW_USE_2_VIEWPORTS_ALT: {
@@ -8116,12 +8140,7 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 				main_view->set_last_used_viewport_index(0);
 			}
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_4_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS_ALT), true);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS_ALT), false);
+			_update_view_layout_menu_checkmarks(MENU_VIEW_USE_2_VIEWPORTS_ALT);
 
 		} break;
 		case MENU_VIEW_USE_3_VIEWPORTS: {
@@ -8130,12 +8149,7 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 				main_view->set_last_used_viewport_index(0);
 			}
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS), true);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_4_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS_ALT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS_ALT), false);
+			_update_view_layout_menu_checkmarks(MENU_VIEW_USE_3_VIEWPORTS);
 
 		} break;
 		case MENU_VIEW_USE_3_VIEWPORTS_ALT: {
@@ -8144,23 +8158,13 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 				main_view->set_last_used_viewport_index(0);
 			}
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_4_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS_ALT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS_ALT), true);
+			_update_view_layout_menu_checkmarks(MENU_VIEW_USE_3_VIEWPORTS_ALT);
 
 		} break;
 		case MENU_VIEW_USE_4_VIEWPORTS: {
 			main_view->get_viewport_base()->set_view(Node3DEditorViewportContainer::VIEW_USE_4_VIEWPORTS);
 
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_4_VIEWPORTS), true);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS_ALT), false);
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_3_VIEWPORTS_ALT), false);
+			_update_view_layout_menu_checkmarks(MENU_VIEW_USE_4_VIEWPORTS);
 
 		} break;
 		case MENU_VIEW_ORIGIN: {
@@ -8199,87 +8203,16 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 			snap_selected_nodes_to_floor();
 		} break;
 		case MENU_LOCK_SELECTED: {
-			undo_redo->create_action(TTR("Lock Selected"));
-
-			const List<Node *> &selection = editor_selection->get_top_selected_node_list();
-
-			for (Node *E : selection) {
-				Node3D *spatial = Object::cast_to<Node3D>(E);
-				if (!spatial || !spatial->is_inside_tree()) {
-					continue;
-				}
-
-				undo_redo->add_do_method(spatial, "set_meta", "_edit_lock_", true);
-				undo_redo->add_undo_method(spatial, "remove_meta", "_edit_lock_");
-				undo_redo->add_do_method(this, "emit_signal", "item_lock_status_changed");
-				undo_redo->add_undo_method(this, "emit_signal", "item_lock_status_changed");
-			}
-
-			undo_redo->add_do_method(this, "_refresh_menu_icons");
-			undo_redo->add_undo_method(this, "_refresh_menu_icons");
-			undo_redo->commit_action();
+			_set_selection_meta_flag(TTR("Lock Selected"), "_edit_lock_", "item_lock_status_changed", true);
 		} break;
 		case MENU_UNLOCK_SELECTED: {
-			undo_redo->create_action(TTR("Unlock Selected"));
-
-			const List<Node *> &selection = editor_selection->get_top_selected_node_list();
-
-			for (Node *E : selection) {
-				Node3D *spatial = Object::cast_to<Node3D>(E);
-				if (!spatial || !spatial->is_inside_tree()) {
-					continue;
-				}
-
-				undo_redo->add_do_method(spatial, "remove_meta", "_edit_lock_");
-				undo_redo->add_undo_method(spatial, "set_meta", "_edit_lock_", true);
-				undo_redo->add_do_method(this, "emit_signal", "item_lock_status_changed");
-				undo_redo->add_undo_method(this, "emit_signal", "item_lock_status_changed");
-			}
-
-			undo_redo->add_do_method(this, "_refresh_menu_icons");
-			undo_redo->add_undo_method(this, "_refresh_menu_icons");
-			undo_redo->commit_action();
+			_set_selection_meta_flag(TTR("Unlock Selected"), "_edit_lock_", "item_lock_status_changed", false);
 		} break;
 		case MENU_GROUP_SELECTED: {
-			undo_redo->create_action(TTR("Group Selected"));
-
-			const List<Node *> &selection = editor_selection->get_top_selected_node_list();
-
-			for (Node *E : selection) {
-				Node3D *spatial = Object::cast_to<Node3D>(E);
-				if (!spatial || !spatial->is_inside_tree()) {
-					continue;
-				}
-
-				undo_redo->add_do_method(spatial, "set_meta", "_edit_group_", true);
-				undo_redo->add_undo_method(spatial, "remove_meta", "_edit_group_");
-				undo_redo->add_do_method(this, "emit_signal", "item_group_status_changed");
-				undo_redo->add_undo_method(this, "emit_signal", "item_group_status_changed");
-			}
-
-			undo_redo->add_do_method(this, "_refresh_menu_icons");
-			undo_redo->add_undo_method(this, "_refresh_menu_icons");
-			undo_redo->commit_action();
+			_set_selection_meta_flag(TTR("Group Selected"), "_edit_group_", "item_group_status_changed", true);
 		} break;
 		case MENU_UNGROUP_SELECTED: {
-			undo_redo->create_action(TTR("Ungroup Selected"));
-			const List<Node *> &selection = editor_selection->get_top_selected_node_list();
-
-			for (Node *E : selection) {
-				Node3D *spatial = Object::cast_to<Node3D>(E);
-				if (!spatial || !spatial->is_inside_tree()) {
-					continue;
-				}
-
-				undo_redo->add_do_method(spatial, "remove_meta", "_edit_group_");
-				undo_redo->add_undo_method(spatial, "set_meta", "_edit_group_", true);
-				undo_redo->add_do_method(this, "emit_signal", "item_group_status_changed");
-				undo_redo->add_undo_method(this, "emit_signal", "item_group_status_changed");
-			}
-
-			undo_redo->add_do_method(this, "_refresh_menu_icons");
-			undo_redo->add_undo_method(this, "_refresh_menu_icons");
-			undo_redo->commit_action();
+			_set_selection_meta_flag(TTR("Ungroup Selected"), "_edit_group_", "item_group_status_changed", false);
 		} break;
 		case MENU_RULER: {
 			for (int i = 0; i < TOOL_MAX; i++) {
@@ -8606,6 +8539,31 @@ void fragment() {
 	}
 }
 
+// Revolves an arrow profile around p_ivec, appending the resulting triangles to p_surftool.
+static void _lathe_gizmo_arrow(const Ref<SurfaceTool> &p_surftool, const Vector3 *p_arrow, int p_arrow_points, const Vector3 &p_ivec, int p_arrow_sides) {
+	const real_t arrow_sides_step = Math::TAU / p_arrow_sides;
+	for (int k = 0; k < p_arrow_sides; k++) {
+		Basis ma(p_ivec, k * arrow_sides_step);
+		Basis mb(p_ivec, (k + 1) * arrow_sides_step);
+
+		for (int j = 0; j < p_arrow_points - 1; j++) {
+			Vector3 points[4] = {
+				ma.xform(p_arrow[j]),
+				mb.xform(p_arrow[j]),
+				mb.xform(p_arrow[j + 1]),
+				ma.xform(p_arrow[j + 1]),
+			};
+			p_surftool->add_vertex(points[0]);
+			p_surftool->add_vertex(points[1]);
+			p_surftool->add_vertex(points[2]);
+
+			p_surftool->add_vertex(points[0]);
+			p_surftool->add_vertex(points[2]);
+			p_surftool->add_vertex(points[3]);
+		}
+	}
+}
+
 void Node3DEditor::_init_indicators() {
 	{
 		//move gizmo
@@ -8686,29 +8644,7 @@ void Node3DEditor::_init_indicators() {
 						nivec * 0.0 + ivec * (GIZMO_ARROW_OFFSET + GIZMO_ARROW_SIZE),
 					};
 
-					int arrow_sides = 16;
-
-					const real_t arrow_sides_step = Math::TAU / arrow_sides;
-					for (int k = 0; k < arrow_sides; k++) {
-						Basis ma(ivec, k * arrow_sides_step);
-						Basis mb(ivec, (k + 1) * arrow_sides_step);
-
-						for (int j = 0; j < arrow_points - 1; j++) {
-							Vector3 points[4] = {
-								ma.xform(arrow[j]),
-								mb.xform(arrow[j]),
-								mb.xform(arrow[j + 1]),
-								ma.xform(arrow[j + 1]),
-							};
-							surftool->add_vertex(points[0]);
-							surftool->add_vertex(points[1]);
-							surftool->add_vertex(points[2]);
-
-							surftool->add_vertex(points[0]);
-							surftool->add_vertex(points[2]);
-							surftool->add_vertex(points[3]);
-						}
-					}
+					_lathe_gizmo_arrow(surftool, arrow, arrow_points, ivec, 16);
 
 					surftool->set_material(mat);
 					surftool->commit(move_gizmo[i]);
@@ -8908,29 +8844,7 @@ void fragment() {
 						nivec * 0.0 + ivec * 1.11 * GIZMO_SCALE_OFFSET,
 					};
 
-					int arrow_sides = 4;
-
-					const real_t arrow_sides_step = Math::TAU / arrow_sides;
-					for (int k = 0; k < 4; k++) {
-						Basis ma(ivec, k * arrow_sides_step);
-						Basis mb(ivec, (k + 1) * arrow_sides_step);
-
-						for (int j = 0; j < arrow_points - 1; j++) {
-							Vector3 points[4] = {
-								ma.xform(arrow[j]),
-								mb.xform(arrow[j]),
-								mb.xform(arrow[j + 1]),
-								ma.xform(arrow[j + 1]),
-							};
-							surftool->add_vertex(points[0]);
-							surftool->add_vertex(points[1]);
-							surftool->add_vertex(points[2]);
-
-							surftool->add_vertex(points[0]);
-							surftool->add_vertex(points[2]);
-							surftool->add_vertex(points[3]);
-						}
-					}
+					_lathe_gizmo_arrow(surftool, arrow, arrow_points, ivec, 4);
 
 					surftool->set_material(mat);
 					surftool->commit(scale_gizmo[i]);
@@ -9062,6 +8976,20 @@ void fragment() {
 	_generate_selection_boxes();
 }
 
+void Node3DEditor::_set_gizmos_menu_item_icon(int p_idx, int p_state) {
+	switch (p_state) {
+		case EditorNode3DGizmoPlugin::VISIBLE:
+			gizmos_menu->set_item_icon(p_idx, get_editor_theme_icon(SNAME("GuiVisibilityVisible")));
+			break;
+		case EditorNode3DGizmoPlugin::ON_TOP:
+			gizmos_menu->set_item_icon(p_idx, get_editor_theme_icon(SNAME("GuiVisibilityXray")));
+			break;
+		case EditorNode3DGizmoPlugin::HIDDEN:
+			gizmos_menu->set_item_icon(p_idx, get_editor_theme_icon(SNAME("GuiVisibilityHidden")));
+			break;
+	}
+}
+
 void Node3DEditor::_update_gizmos_menu() {
 	gizmos_menu->clear();
 
@@ -9076,17 +9004,7 @@ void Node3DEditor::_update_gizmos_menu() {
 		gizmos_menu->set_item_tooltip(
 				idx,
 				TTR("Click to toggle between visibility states.\n\nOpen eye: Gizmo is visible.\nClosed eye: Gizmo is hidden.\nHalf-open eye: Gizmo is also visible through opaque surfaces (\"x-ray\")."));
-		switch (plugin_state) {
-			case EditorNode3DGizmoPlugin::VISIBLE:
-				gizmos_menu->set_item_icon(idx, get_editor_theme_icon(SNAME("GuiVisibilityVisible")));
-				break;
-			case EditorNode3DGizmoPlugin::ON_TOP:
-				gizmos_menu->set_item_icon(idx, get_editor_theme_icon(SNAME("GuiVisibilityXray")));
-				break;
-			case EditorNode3DGizmoPlugin::HIDDEN:
-				gizmos_menu->set_item_icon(idx, get_editor_theme_icon(SNAME("GuiVisibilityHidden")));
-				break;
-		}
+		_set_gizmos_menu_item_icon(idx, plugin_state);
 	}
 }
 
@@ -9097,17 +9015,7 @@ void Node3DEditor::_update_gizmos_menu_theme() {
 		}
 		const int plugin_state = gizmo_plugins_by_name[i]->get_state();
 		const int idx = gizmos_menu->get_item_index(i);
-		switch (plugin_state) {
-			case EditorNode3DGizmoPlugin::VISIBLE:
-				gizmos_menu->set_item_icon(idx, get_editor_theme_icon(SNAME("GuiVisibilityVisible")));
-				break;
-			case EditorNode3DGizmoPlugin::ON_TOP:
-				gizmos_menu->set_item_icon(idx, get_editor_theme_icon(SNAME("GuiVisibilityXray")));
-				break;
-			case EditorNode3DGizmoPlugin::HIDDEN:
-				gizmos_menu->set_item_icon(idx, get_editor_theme_icon(SNAME("GuiVisibilityHidden")));
-				break;
-		}
+		_set_gizmos_menu_item_icon(idx, plugin_state);
 	}
 }
 
@@ -9615,23 +9523,30 @@ void Node3DEditor::_snap_selected_nodes_to_floor() {
 	// Will be set to `true` if at least one node from the selection was successfully snapped
 	bool snapped_to_floor = false;
 
+	// Builds the snap ray for a `snap_data` entry and casts it, filling `result` on a hit.
+	auto intersect_snap_ray = [&](const KeyValue<Variant, Variant> &p_kv, Node3D *&r_node, Dictionary &r_data) -> bool {
+		Node *node = Object::cast_to<Node>(p_kv.key);
+		r_node = Object::cast_to<Node3D>(node);
+		r_data = p_kv.value;
+		Vector3 from = r_data["from"];
+		Vector3 to = from - Vector3(0.0, max_snap_height, 0.0);
+		HashSet<RID> excluded = _get_physics_bodies_rid(r_node);
+
+		PhysicsDirectSpaceState3D::RayParameters ray_params;
+		ray_params.from = from;
+		ray_params.to = to;
+		ray_params.exclude = excluded;
+
+		return ss->intersect_ray(ray_params, result);
+	};
+
 	if (!snap_data.is_empty()) {
 		// For snapping to be performed, there must be solid geometry under at least one of the selected nodes.
 		// We need to check this before snapping to register the undo/redo action only if needed.
 		for (const KeyValue<Variant, Variant> &kv : snap_data) {
-			Node *node = Object::cast_to<Node>(kv.key);
-			Node3D *sp = Object::cast_to<Node3D>(node);
-			Dictionary d = kv.value;
-			Vector3 from = d["from"];
-			Vector3 to = from - Vector3(0.0, max_snap_height, 0.0);
-			HashSet<RID> excluded = _get_physics_bodies_rid(sp);
-
-			PhysicsDirectSpaceState3D::RayParameters ray_params;
-			ray_params.from = from;
-			ray_params.to = to;
-			ray_params.exclude = excluded;
-
-			if (ss->intersect_ray(ray_params, result)) {
+			Node3D *sp = nullptr;
+			Dictionary d;
+			if (intersect_snap_ray(kv, sp, d)) {
 				snapped_to_floor = true;
 			}
 		}
@@ -9642,19 +9557,9 @@ void Node3DEditor::_snap_selected_nodes_to_floor() {
 
 			// Perform snapping if at least one node can be snapped
 			for (const KeyValue<Variant, Variant> &kv : snap_data) {
-				Node *node = Object::cast_to<Node>(kv.key);
-				Node3D *sp = Object::cast_to<Node3D>(node);
-				Dictionary d = kv.value;
-				Vector3 from = d["from"];
-				Vector3 to = from - Vector3(0.0, max_snap_height, 0.0);
-				HashSet<RID> excluded = _get_physics_bodies_rid(sp);
-
-				PhysicsDirectSpaceState3D::RayParameters ray_params;
-				ray_params.from = from;
-				ray_params.to = to;
-				ray_params.exclude = excluded;
-
-				if (ss->intersect_ray(ray_params, result)) {
+				Node3D *sp = nullptr;
+				Dictionary d;
+				if (intersect_snap_ray(kv, sp, d)) {
 					Vector3 position_offset = d["position_offset"];
 					Transform3D new_transform = sp->get_global_transform();
 
@@ -10211,19 +10116,20 @@ void Node3DEditor::_request_gizmo_for_id(ObjectID p_id) {
 	}
 }
 
+static Node3D *_resolve_subgizmo_node3d(Object *p_obj, Node3D *p_fallback) {
+	if (p_obj) {
+		return Object::cast_to<Node3D>(p_obj);
+	}
+	return p_fallback;
+}
+
 void Node3DEditor::_set_subgizmo_selection(Object *p_obj, Ref<Node3DGizmo> p_gizmo, int p_id, Transform3D p_transform) {
 	if (p_id == -1) {
 		_clear_subgizmo_selection(p_obj);
 		return;
 	}
 
-	Node3D *sp = nullptr;
-	if (p_obj) {
-		sp = Object::cast_to<Node3D>(p_obj);
-	} else {
-		sp = selected;
-	}
-
+	Node3D *sp = _resolve_subgizmo_node3d(p_obj, selected);
 	if (!sp) {
 		return;
 	}
@@ -10239,13 +10145,7 @@ void Node3DEditor::_set_subgizmo_selection(Object *p_obj, Ref<Node3DGizmo> p_giz
 }
 
 void Node3DEditor::_clear_subgizmo_selection(Object *p_obj) {
-	Node3D *sp = nullptr;
-	if (p_obj) {
-		sp = Object::cast_to<Node3D>(p_obj);
-	} else {
-		sp = selected;
-	}
-
+	Node3D *sp = _resolve_subgizmo_node3d(p_obj, selected);
 	if (!sp) {
 		return;
 	}
