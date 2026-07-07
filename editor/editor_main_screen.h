@@ -99,6 +99,9 @@ public:
 	void save_layout_to_config(Ref<ConfigFile> p_config_file, const String &p_section) const;
 	void load_layout_from_config(Ref<ConfigFile> p_config_file, const String &p_section);
 
+	// G2 M6.3: the current workspace session blob (geometry + per-pane tabs), for the named-layout store.
+	Dictionary get_workspace_blob() const;
+
 	// G2 M6.2: restore phase 1 — rebuild the saved pane geometry + re-home the screen-host BEFORE any
 	// scene opens (re-entering the 2D/3D editors with multiple live scene worlds would crash). Must be
 	// called ahead of scene restore; load_layout_from_config then runs phase 2 (the scene/script tabs).

@@ -360,7 +360,6 @@ private:
 	PopupMenu *workspace_menu = nullptr;
 	ConfirmationDialog *workspace_save_dialog = nullptr;
 	LineEdit *workspace_save_name = nullptr;
-	Vector<String> workspace_layout_names; // Ordered, index-aligned with the dynamic Load items.
 	// Load/Reset apply through a restart (rebuilding the tree live would re-enter the 2D/3D editors with
 	// multiple scene worlds and crash — the same reason M6 restore runs before scenes load). These carry
 	// the layout to persist on the way out; a one-shot override consumed by the next _save_editor_layout.
@@ -696,6 +695,9 @@ private:
 
 	void _save_central_editor_layout_to_config(Ref<ConfigFile> p_config_file);
 	void _load_central_editor_layout_from_config(Ref<ConfigFile> p_config_file);
+
+	PackedStringArray _get_open_scene_paths() const; // G2 M6.3: non-empty open-scene paths (save + layout store).
+	void _apply_pending_layout_override(Ref<ConfigFile> p_config); // G2 M6.3: stage-and-restart layout override.
 
 	// G2 M6.3: Workspace menu handlers + the named-layout store (res://.godot/editor/workspace_layouts.cfg).
 	void _update_workspace_menu(); // Rebuilds the dynamic Load list on about_to_popup.

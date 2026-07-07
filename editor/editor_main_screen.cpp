@@ -98,16 +98,24 @@ void EditorMainScreen::save_layout_to_config(Ref<ConfigFile> p_config_file, cons
 		p_config_file->set_value(p_section, "selected_main_editor_idx", Variant());
 	}
 
-	// G2 M6.2: persist the whole workspace — split-tree geometry (M6.1) plus, per leaf, the tab
-	// documents (by path) and which is current. One blob so restore is a single unit.
+	// G2 M6.2: persist the whole workspace as one blob so restore is a single unit.
 	if (workspace) {
-		Dictionary session;
+		p_config_file->set_value(p_section, "workspace", get_workspace_blob());
+	}
+}
+
+Dictionary EditorMainScreen::get_workspace_blob() const {
+	// G2 M6.2/M6.3: the workspace session — split-tree geometry (M6.1) plus, per leaf, the tab documents
+	// (by path) and which is current. Exposed so the named-layout store can capture it without a scratch
+	// ConfigFile round-trip.
+	Dictionary session;
+	if (workspace) {
 		session["geometry"] = workspace->save_geometry();
 		Dictionary tabs;
 		_collect_pane_tabs(tabs);
 		session["tabs"] = tabs;
-		p_config_file->set_value(p_section, "workspace", session);
 	}
+	return session;
 }
 
 void EditorMainScreen::load_layout_from_config(Ref<ConfigFile> p_config_file, const String &p_section) {
