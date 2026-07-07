@@ -458,6 +458,7 @@ private:
 	int times_focused_consecutively = 0;
 	bool pilot_preview_enabled = false;
 	bool _is_node_locked(const Node *p_node) const;
+	bool _has_unlocked_selection() const;
 	void _preview_exited_scene();
 	void _preview_camera_property_changed();
 	void _sync_cursor_from_transform(const Transform3D &p_transform);

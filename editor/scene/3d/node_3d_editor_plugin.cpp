@@ -1387,6 +1387,9 @@ void Node3DEditorViewport::_compute_edit(const Point2 &p_point) {
 	_edit.plane = TRANSFORM_VIEW;
 	spatial_editor->update_transform_gizmo();
 	_edit.center = spatial_editor->get_gizmo_transform().origin;
+	// Default view axis for TRANSFORM_VIEW rotations started without the gizmo's
+	// view ring (e.g. instant transforms); the ring click path overrides this.
+	_edit.view_axis_local = spatial_editor->get_gizmo_transform().basis.xform_inv(_get_camera_normal()).normalized();
 
 	Node3D *selected = spatial_editor->get_single_selected_node();
 	Node3DEditorSelectedItem *se = selected ? editor_selection->get_node_editor_data<Node3DEditorSelectedItem>(selected) : nullptr;
@@ -1886,6 +1889,17 @@ bool Node3DEditorViewport::_is_node_locked(const Node *p_node) const {
 	return p_node->get_meta("_edit_lock_", false);
 }
 
+bool Node3DEditorViewport::_has_unlocked_selection() const {
+	const List<Node *> &selection = editor_selection->get_top_selected_node_list();
+	for (Node *E : selection) {
+		Node3D *sp = Object::cast_to<Node3D>(E);
+		if (sp && !_is_node_locked(sp)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
 	Vector<_RayResult> potential_selection_results;
 	_find_items_at_pos(b->get_position(), potential_selection_results, b->is_alt_pressed());
@@ -2157,8 +2171,11 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 	EditorPlugin::AfterGUIInput after = EditorPlugin::AFTER_GUI_INPUT_PASS;
 	{
 		EditorNode *en = EditorNode::get_singleton();
+		// When previewing a camera, the viewport renders from it, so plugins must
+		// receive it too rather than the hidden (and frozen) editor camera.
+		Camera3D *input_camera = previewing ? previewing : camera;
 
-		switch (en->get_editor_plugins_force_input_forwarding()->forward_3d_gui_input(camera, p_event, true)) {
+		switch (en->get_editor_plugins_force_input_forwarding()->forward_3d_gui_input(input_camera, p_event, true)) {
 			case EditorPlugin::AFTER_GUI_INPUT_PASS: {
 				// Continue processing.
 			} break;
@@ -2172,7 +2189,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 			} break;
 		}
 
-		switch (en->get_editor_plugins_over()->forward_3d_gui_input(camera, p_event, false)) {
+		switch (en->get_editor_plugins_over()->forward_3d_gui_input(input_camera, p_event, false)) {
 			case EditorPlugin::AFTER_GUI_INPUT_PASS: {
 				// Continue processing.
 			} break;
@@ -2564,6 +2581,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 							}
 
 							se->gizmo->commit_subgizmos(ids, restore, false);
+							finish_transform();
 						} else {
 							if (_edit.original_mouse_pos != _edit.mouse_pos) {
 								commit_transform();
@@ -2690,7 +2708,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 				bool is_select_mode = (spatial_editor->get_tool_mode() == Node3DEditor::TOOL_MODE_TRANSFORM);
 				bool is_clicked_selected = editor_selection->is_selected(ObjectDB::get_instance<Node>(clicked));
 
-				if (_edit.mode == TRANSFORM_NONE && (is_select_mode || is_clicked_selected)) {
+				if (_edit.mode == TRANSFORM_NONE && (is_select_mode || is_clicked_selected) && _has_unlocked_selection()) {
 					_compute_edit(_edit.original_mouse_pos);
 					clicked = ObjectID();
 					_edit.mode = TRANSFORM_TRANSLATE;
@@ -2960,7 +2978,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 					begin_transform(TRANSFORM_SCALE, true);
 				}
 			}
-			if (ED_IS_SHORTCUT("spatial_editor/collision_reposition", event_mod) && editor_selection->get_top_selected_node_list().size() == 1 && !collision_reposition) {
+			if (ED_IS_SHORTCUT("spatial_editor/collision_reposition", event_mod) && editor_selection->get_top_selected_node_list().size() == 1 && _has_unlocked_selection() && !collision_reposition) {
 				if (_edit.mode == TRANSFORM_NONE || _edit.instant) {
 					if (_edit.mode == TRANSFORM_NONE) {
 						_compute_edit(_edit.mouse_pos);
@@ -3293,8 +3311,14 @@ void Node3DEditorViewport::_notification(int p_what) {
 							second_line_color = axis_y_color;
 						} else {
 							corner_point = end_pos;
-							first_line_color = axis_x_color;
-							second_line_color = axis_x_color;
+							if (delta.x > 0.0) {
+								first_line_color = axis_x_color;
+							} else if (delta.y > 0.0) {
+								first_line_color = axis_y_color;
+							} else {
+								first_line_color = axis_z_color;
+							}
+							second_line_color = first_line_color;
 						}
 
 						triangle_mesh->clear_surfaces();
@@ -9468,18 +9492,17 @@ void Node3DEditor::_snap_selected_nodes_to_floor() {
 
 			if (cs.size()) {
 				AABB aabb;
-				HashSet<CollisionShape3D *>::Iterator I = cs.begin();
-				if ((*I)->get_shape().is_valid()) {
-					CollisionShape3D *collision_shape = *cs.begin();
-					aabb = collision_shape->get_global_transform().xform(collision_shape->get_shape()->get_debug_mesh()->get_aabb());
-					found_valid_shape = true;
-				}
-
-				for (++I; I; ++I) {
-					CollisionShape3D *col_shape = *I;
+				for (CollisionShape3D *col_shape : cs) {
 					if (col_shape->get_shape().is_valid()) {
-						aabb.merge_with(col_shape->get_global_transform().xform(col_shape->get_shape()->get_debug_mesh()->get_aabb()));
-						found_valid_shape = true;
+						AABB shape_aabb = col_shape->get_global_transform().xform(col_shape->get_shape()->get_debug_mesh()->get_aabb());
+						if (found_valid_shape) {
+							aabb.merge_with(shape_aabb);
+						} else {
+							// Initialize from the first shape that actually has a resource;
+							// merging into a default AABB would wrongly include the world origin.
+							aabb = shape_aabb;
+							found_valid_shape = true;
+						}
 					}
 				}
 				if (found_valid_shape) {
