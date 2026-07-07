@@ -150,6 +150,10 @@ public:
 	void add_dock(EditorDock *p_dock);
 	void remove_dock(EditorDock *p_dock);
 
+	// G2 D8: mark a dock retired — it stays registered (get_singleton() stays valid) but the manager
+	// refuses to ever (re-)enable/show it, so per-pane replacements aren't shadowed by a global copy.
+	static void mark_dock_retired(EditorDock *p_dock);
+
 	EditorDockManager();
 };
 
