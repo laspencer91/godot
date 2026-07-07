@@ -530,8 +530,9 @@ void EditorDockManager::load_docks_from_config(Ref<ConfigFile> p_layout, const S
 			}
 			EditorDock *dock = dock_map[name];
 
-			if (!dock->enabled) {
-				// Don't open disabled docks.
+			if (!dock->enabled || dock->retired) {
+				// Don't open disabled docks — or retired ones (G2 D8): a saved layout from before the
+				// dock was retired must not resurrect it into a slot alongside the per-pane copy.
 				dock->load_layout_from_config(p_layout, section_name);
 				continue;
 			}
@@ -590,6 +591,12 @@ void EditorDockManager::mark_dock_retired(EditorDock *p_dock) {
 void EditorDockManager::set_dock_enabled(EditorDock *p_dock, bool p_enabled) {
 	ERR_FAIL_NULL(p_dock);
 	ERR_FAIL_COND_MSG(!all_docks.has(p_dock), vformat("Cannot set enabled unknown dock '%s'.", p_dock->get_display_title()));
+
+	// G2 D8: a retired dock can be disabled but never re-enabled — its role moved to the per-pane docks,
+	// so a feature-profile pass (which re-enables Signals/Groups/etc.) must not bring the global copy back.
+	if (p_dock->retired && p_enabled) {
+		return;
+	}
 
 	if (p_dock->enabled == p_enabled) {
 		return;

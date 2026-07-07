@@ -120,6 +120,34 @@ run_case "restore_3_scenes" -e
 cp "$SMOKE_DIR/restore_workspace.cfg" "$WORK/.godot/editor/editor_layout.cfg"
 run_case "restore_workspace" -e
 
+# Save-capture round-trip (M6.2): the restore_workspace fixture hand-authors the tab paths, so it
+# never exercises the SAVE side. This case does: restore open scenes (the active one is revealed into
+# a pane by M7.1), quit (which must WRITE that scene into the workspace tabs), then restore again. It
+# guards the regression where SceneDocument::get_path() returned "" and every scene was silently
+# dropped from the saved layout. Two scenes: the single-open-scene auto-reveal is a separate M7.1 gap.
+RT="$WORK/roundtrip"
+mkdir -p "$RT/.godot/editor"
+cp "$SMOKE_DIR"/*.tscn "$SMOKE_DIR/project.godot" "$RT"/
+printf '[EditorNode]\n\nopen_scenes=PackedStringArray("res://test_2d.tscn", "res://test_3d.tscn")\ncurrent_scene="res://test_3d.tscn"\n' > "$RT/.godot/editor/editor_layout.cfg"
+HOST_RT="$(host_path "$RT")"
+"$BIN" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/save.log" 2>&1
+# The scene must appear in a pane's "docs" list (not just open_scenes) after the save.
+if grep -q '"docs".*res://test_3d.tscn' "$RT/.godot/editor/editor_layout.cfg"; then
+	"$BIN" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/restore.log" 2>&1
+	rt_code=$?
+	rt_errs=$(grep -cE "$ERR_RE" "$RT/restore.log")
+	if [[ $rt_code -eq 0 && $rt_errs -eq 0 ]]; then
+		echo "  PASS  save_restore_roundtrip (scene persisted to tabs + restored clean)"
+	else
+		echo "  FAIL  save_restore_roundtrip (restore exit $rt_code, $rt_errs error-class lines)"
+		grep -nE "$ERR_RE" "$RT/restore.log" | head -8 | sed 's/^/        /'
+		fail=1
+	fi
+else
+	echo "  FAIL  save_restore_roundtrip (scene was NOT written into the saved workspace tabs)"
+	fail=1
+fi
+
 echo
 if [[ $fail -eq 0 ]]; then
 	echo "SMOKE: PASS"

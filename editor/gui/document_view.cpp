@@ -103,6 +103,10 @@ void DocumentView::_add_accordion_section(VBoxContainer *p_column, Control *p_do
 	section->add_theme_style_override(SNAME("title_collapsed_panel"), _dock_card_sb(header, true, true));
 	section->add_theme_style_override(SNAME("title_collapsed_hover_panel"), _dock_card_sb(header_hover, true, true));
 	section->add_theme_style_override(SNAME("panel"), _dock_card_sb(base.darkened(0.04), false, true));
+	// The editor theme's FoldableContainer "focus" stylebox is an accent (blue) outline; it's square, so
+	// it pokes out behind our rounded card corners when the header is focused. These fold headers are
+	// mouse-driven — drop the ring so no blue shows behind the rounded tops.
+	section->add_theme_style_override(SNAME("focus"), Ref<StyleBox>(memnew(StyleBoxEmpty)));
 
 	if (p_icon != StringName()) {
 		Ref<Texture2D> icon = gui_base->get_theme_icon(p_icon, EditorStringName(EditorIcons));

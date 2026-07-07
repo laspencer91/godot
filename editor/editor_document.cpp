@@ -82,6 +82,12 @@ RID SceneDocument::get_space() const {
 	return world_3d.is_valid() ? world_3d->get_space() : RID();
 }
 
+String SceneDocument::get_path() const {
+	// M6: derive from the root's scene_file_path (the base `path` is never populated for scenes), so the
+	// workspace save records scene tabs by their real path. Empty (base fallback) for an unsaved scene.
+	return root ? root->get_scene_file_path() : EditorDocument::get_path();
+}
+
 String SceneDocument::get_title() const {
 	// G2 styling: the tab title is the scene's filename (e.g. "player.tscn"); "[unsaved]" for a scene
 	// with no file yet. Falls back to the base path-derived title if the root isn't set.

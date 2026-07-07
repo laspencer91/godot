@@ -92,7 +92,9 @@ public:
 	uint64_t get_time_opened() const { return time_opened; }
 	void set_time_opened(uint64_t p_time) { time_opened = p_time; }
 
-	String get_path() const { return path; }
+	// Virtual so a scene can derive its persist/lookup path from its root's scene_file_path (the base
+	// `path` field is never populated for scenes — see SceneDocument). M6 keys tab persistence on this.
+	virtual String get_path() const { return path; }
 	void set_path(const String &p_path) { path = p_path; }
 
 	// Display label for workspace tabs. Path-derived by default; subclasses with a better
@@ -160,6 +162,11 @@ public:
 	// G2 styling: the tab shows the scene's filename (root->get_scene_file_path), not the generic
 	// "Document" fallback. Defined out-of-line — needs Node's full type.
 	virtual String get_title() const override;
+
+	// M6: the persist/lookup path is the scene's file path (same source as get_title). The base `path`
+	// field is never set for scenes, so without this override get_path() returns "" and the scene is
+	// dropped from the saved workspace tabs. Empty for an unsaved scene. Out-of-line — needs Node.
+	virtual String get_path() const override;
 
 	// Document-level activation side effects (only the focused document drives the
 	// audio listener in v1). The per-pane "is this view active" bit lives on
