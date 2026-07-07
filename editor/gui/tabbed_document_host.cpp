@@ -37,22 +37,38 @@
 #include "editor/gui/document_view.h"
 #include "editor/gui/editor_workspace.h" // G2 S8: pane split/close from the tab bar.
 #include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
+#include "editor/editor_string_names.h"
 #include "scene/gui/margin_container.h"
+#include "scene/gui/panel_container.h"
 #include "scene/gui/popup_menu.h"
 #include "scene/gui/tab_bar.h"
+
+void TabbedDocumentHost::_notification(int p_what) {
+	if (p_what == NOTIFICATION_THEME_CHANGED && tabbar_panel) {
+		// G2 styling: match the native scene-tab strip's background (EditorSceneTabs uses the same
+		// "tabbar_background" stylebox from the TabContainer theme).
+		tabbar_panel->add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("tabbar_background"), SNAME("TabContainer")));
+	}
+}
 
 TabbedDocumentHost::TabbedDocumentHost() {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
 	add_theme_constant_override("separation", 0);
 
+	// G2 styling: host the tab bar in a panel so it gets the editor's tab-bar background (applied on
+	// NOTIFICATION_THEME_CHANGED), matching the native scene-tab strip.
+	tabbar_panel = memnew(PanelContainer);
+	add_child(tabbar_panel);
+
 	tab_bar = memnew(TabBar);
 	tab_bar->set_h_size_flags(SIZE_EXPAND_FILL);
 	tab_bar->set_tab_close_display_policy(TabBar::CLOSE_BUTTON_SHOW_ALWAYS);
+	tab_bar->set_drag_to_rearrange_enabled(true);
 	tab_bar->connect("tab_selected", callable_mp(this, &TabbedDocumentHost::_on_tab_selected));
 	tab_bar->connect("tab_close_pressed", callable_mp(this, &TabbedDocumentHost::_on_tab_close));
 	tab_bar->connect("tab_rmb_clicked", callable_mp(this, &TabbedDocumentHost::_on_tab_rmb)); // G2 S8
-	add_child(tab_bar);
+	tabbar_panel->add_child(tab_bar);
 
 	// G2 S8: pane management context menu (built per popup in _on_tab_rmb).
 	tab_menu = memnew(PopupMenu);

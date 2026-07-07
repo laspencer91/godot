@@ -36,6 +36,7 @@
 class Control;
 class DocumentView;
 class EditorDocument;
+class PanelContainer;
 class PopupMenu;
 class TabBar;
 class WorkspacePane;
@@ -53,6 +54,9 @@ class WorkspacePane;
 class TabbedDocumentHost : public VBoxContainer {
 	GDCLASS(TabbedDocumentHost, VBoxContainer);
 
+	// G2 styling: the tab bar sits in a panel styled with the editor's "tabbar_background" stylebox
+	// (TabContainer theme), matching the native scene-tab strip instead of a bare TabBar.
+	PanelContainer *tabbar_panel = nullptr;
 	TabBar *tab_bar = nullptr;
 	Control *content_host = nullptr; // Fills the pane; parent of every DocumentView.
 
@@ -83,6 +87,7 @@ class TabbedDocumentHost : public VBoxContainer {
 
 protected:
 	static void _bind_methods() {}
+	void _notification(int p_what);
 
 public:
 	// Append a tab for p_document titled p_title; returns its index. The first
