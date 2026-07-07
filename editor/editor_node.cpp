@@ -9250,6 +9250,11 @@ EditorNode::EditorNode() {
 
 	memnew(SceneTreeDock(scene_root, editor_selection, editor_data));
 	editor_dock_manager->add_dock(SceneTreeDock::get_singleton());
+	// G2 D8: the global Scene Tree / Inspector / Signals / Groups docks are retired — each scene pane
+	// hosts its own (D7/G3). Keep the singleton instances registered (so the ~hundreds of
+	// get_singleton() callers never see null) but disabled, so the dock manager parks them hidden
+	// instead of showing a redundant second copy alongside the per-pane accordion.
+	editor_dock_manager->set_dock_enabled(SceneTreeDock::get_singleton(), false);
 
 	memnew(ImportDock);
 	editor_dock_manager->add_dock(ImportDock::get_singleton());
@@ -9263,12 +9268,15 @@ EditorNode::EditorNode() {
 
 	memnew(InspectorDock(editor_data));
 	editor_dock_manager->add_dock(InspectorDock::get_singleton());
+	editor_dock_manager->set_dock_enabled(InspectorDock::get_singleton(), false); // G2 D8 (see above).
 
 	memnew(SignalsDock);
 	editor_dock_manager->add_dock(SignalsDock::get_singleton());
+	editor_dock_manager->set_dock_enabled(SignalsDock::get_singleton(), false); // G2 D8 (see above).
 
 	memnew(GroupsDock);
 	editor_dock_manager->add_dock(GroupsDock::get_singleton());
+	editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), false); // G2 D8 (see above).
 
 	history_dock = memnew(HistoryDock);
 	editor_dock_manager->add_dock(history_dock);
