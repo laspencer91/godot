@@ -81,6 +81,7 @@
 #include "editor/export/shader_baker_export_plugin.h"
 #include "editor/file_system/dependency_editor.h"
 #include "editor/file_system/editor_paths.h"
+#include "editor/gui/document_view.h"
 #include "editor/gui/editor_about.h"
 #include "editor/gui/editor_bottom_panel.h"
 #include "editor/gui/editor_file_dialog.h"
@@ -4607,6 +4608,55 @@ void EditorNode::_ensure_active_scene_tab() {
 	EditorDocument *active_doc = editor_data.get_active_document();
 	if (main_screen && active_doc && active_doc->opens_as_workspace_tab()) {
 		main_screen->reveal(active_doc, DocumentViewKind::DEFAULT, false);
+	}
+}
+
+void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
+	// G2 M7.2a: the shared 2D/3D toolbar follows the focused scene pane. Reparent the matching one into
+	// the current pane's header slot and park the other; park both when the current surface is not a
+	// scene (script/help/screen-host). The toolbar is one Control moving — its button handlers still
+	// drive the singleton services (global tool mode/snap), which the active pane's viewport uses.
+	Node3DEditor *spatial = Node3DEditor::get_singleton();
+	CanvasItemEditor *canvas = CanvasItemEditor::get_singleton();
+
+	EditorDocument::Type type = EditorDocument::TYPE_UNKNOWN;
+	Control *host = nullptr;
+	if (p_view) {
+		host = p_view->get_toolbar_host();
+		if (EditorDocumentView *dv = p_view->get_document_view()) {
+			if (EditorDocument *doc = dv->get_document()) {
+				type = doc->get_type();
+			}
+		}
+	}
+	const bool is_2d = type == EditorDocument::TYPE_SCENE_2D;
+	const bool is_3d = type == EditorDocument::TYPE_SCENE_3D || type == EditorDocument::TYPE_SCENE_MIXED;
+
+	if (host && is_3d && spatial) {
+		Control *tb = spatial->get_shared_toolbar();
+		if (tb && tb->get_parent() != host) {
+			tb->reparent(host);
+			host->move_child(tb, 0);
+		}
+		if (canvas) {
+			canvas->park_shared_toolbar();
+		}
+	} else if (host && is_2d && canvas) {
+		Control *tb = canvas->get_shared_toolbar();
+		if (tb && tb->get_parent() != host) {
+			tb->reparent(host);
+			host->move_child(tb, 0);
+		}
+		if (spatial) {
+			spatial->park_shared_toolbar();
+		}
+	} else {
+		if (spatial) {
+			spatial->park_shared_toolbar();
+		}
+		if (canvas) {
+			canvas->park_shared_toolbar();
+		}
 	}
 }
 

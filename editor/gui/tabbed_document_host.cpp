@@ -173,6 +173,10 @@ void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 	}
 	DocumentView *view = (p_idx >= 0 && p_idx < views.size()) ? views[p_idx] : nullptr;
 	se->set_current_surface(view);
+	// G2 M7.2a: the shared 2D/3D toolbar follows the current tab into its scene pane's header.
+	if (EditorNode *en = EditorNode::get_singleton()) {
+		en->update_scene_pane_toolbar(view);
+	}
 }
 
 void TabbedDocumentHost::_on_tab_selected(int p_idx) {

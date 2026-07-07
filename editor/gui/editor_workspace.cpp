@@ -330,6 +330,10 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 			se->set_current_surface(host->get_current_view());
 		}
+		// G2 M7.2a: the shared 2D/3D toolbar follows pane focus into the focused scene pane's header.
+		if (EditorNode *en = EditorNode::get_singleton()) {
+			en->update_scene_pane_toolbar(host->get_current_view());
+		}
 	}
 
 	if (old_focused) {

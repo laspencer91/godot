@@ -71,6 +71,9 @@ class DocumentView : public MarginContainer {
 	// _bound_selection_changed so it shows this pane's selection independently of the global one.
 	InspectorDock *inspector_dock = nullptr;
 	EditorDocument *bound_scene_document = nullptr;
+	// G2 M7.2a: the slot above this scene pane's viewport where the shared 2D/3D toolbar mounts while
+	// this pane is focused. Null for non-scene views.
+	Control *toolbar_host = nullptr;
 
 	void _bound_selection_changed();
 
@@ -89,6 +92,9 @@ public:
 	// G2 S7 (seam #8): where the focused tab's shared chrome (ScriptEditor menu strip + find
 	// bar) mounts. Null cast target for non-hosting views is fine — callers null-check.
 	Control *get_chrome_host() const;
+
+	// G2 M7.2a: the header slot above the viewport where the focused pane's 2D/3D toolbar mounts.
+	Control *get_toolbar_host() const { return toolbar_host; }
 
 	DocumentView(EditorDocument *p_document);
 	~DocumentView();

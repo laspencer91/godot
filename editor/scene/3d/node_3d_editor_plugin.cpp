@@ -10001,6 +10001,18 @@ Node3DEditorViewport *Node3DEditor::get_freelook_viewport() const {
 	return main_view->get_freelook_viewport();
 }
 
+Control *Node3DEditor::get_shared_toolbar() const {
+	return main_flow;
+}
+
+void Node3DEditor::park_shared_toolbar() {
+	// G2 M7.2a: return the toolbar flow to its stock home when no scene pane hosts it.
+	if (main_flow && toolbar_home && main_flow->get_parent() != toolbar_home) {
+		main_flow->reparent(toolbar_home);
+		toolbar_home->move_child(main_flow, 0);
+	}
+}
+
 Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 	editor = p_editor;
 	editor->editor_views.push_back(this); // G2 M7.2: join the gizmo-render fan-out (see editor_views).
@@ -10719,8 +10731,9 @@ Node3DEditor::Node3DEditor() {
 	vbc->add_child(toolbar_margin);
 
 	// A fluid container for all toolbars.
-	HFlowContainer *main_flow = memnew(HFlowContainer);
+	main_flow = memnew(HFlowContainer);
 	toolbar_margin->add_child(main_flow);
+	toolbar_home = toolbar_margin; // G2 M7.2a: park target when no scene pane hosts the toolbar.
 
 	// Main toolbars.
 	HBoxContainer *main_menu_hbox = memnew(HBoxContainer);

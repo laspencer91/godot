@@ -616,6 +616,7 @@ public:
 };
 
 class Node3DEditorView;
+class HFlowContainer;
 
 class Node3DEditor : public VBoxContainer {
 	GDCLASS(Node3DEditor, VBoxContainer);
@@ -663,6 +664,12 @@ private:
 	// v1: exactly one, created in the ctor; later: one per workspace pane. The viewport
 	// accessors below forward to it. viewport_base/viewports/last_used/freelook moved here.
 	Node3DEditorView *main_view = nullptr;
+
+	// G2 M7.2a: the full toolbar flow (main_menu_hbox + contextual toolbars). Reparented into the
+	// focused scene pane's header via get_shared_toolbar()/park_shared_toolbar(); toolbar_home is its
+	// stock parent (the toolbar margin inside this editor's own vbox).
+	HFlowContainer *main_flow = nullptr;
+	Node *toolbar_home = nullptr;
 
 	// G2 M7.2: every live Node3DEditorView — the singleton main_view plus every per-pane view minted
 	// by create_view_bound_to (registered in the view ctor, removed in its dtor). update_transform_gizmo
@@ -1081,6 +1088,11 @@ public:
 	Control *create_view_bound_to(EditorDocument *p_document);
 	Node3DEditorViewport *get_editor_viewport(int p_idx) const;
 	Node3DEditorViewport *get_last_used_viewport();
+
+	// G2 M7.2a: the shared 3D toolbar follows the focused scene pane. get_shared_toolbar() is the
+	// Control the pane header reparents in; park_shared_toolbar() returns it to its stock home.
+	Control *get_shared_toolbar() const;
+	void park_shared_toolbar();
 
 	void set_freelook_viewport(Node3DEditorViewport *p_viewport);
 	Node3DEditorViewport *get_freelook_viewport() const;

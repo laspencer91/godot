@@ -77,6 +77,8 @@ public:
 	Dictionary undo_state;
 };
 
+class HFlowContainer;
+
 class CanvasItemEditor : public VBoxContainer {
 	GDCLASS(CanvasItemEditor, VBoxContainer);
 
@@ -214,6 +216,11 @@ private:
 	// _get_active_view() is the single choke point every editor->view reach goes through.
 	CanvasItemEditorView *main_view = nullptr;
 	CanvasItemEditorView *_get_active_view() const { return main_view; }
+
+	// G2 M7.2a: the full toolbar flow, reparented into the focused 2D scene pane's header
+	// (get_shared_toolbar/park_shared_toolbar). toolbar_home is its stock parent.
+	HFlowContainer *main_flow = nullptr;
+	Node *toolbar_home = nullptr;
 
 	// Used for secondary menu items which are displayed depending on the currently selected node
 	// (such as MeshInstance's "Mesh" menu).
@@ -534,6 +541,10 @@ public:
 	// Node3DEditor::create_view_bound_to). DocumentView hosts the returned Control; it renders
 	// p_document independently and edits only while p_document is the active edited scene.
 	Control *create_view_bound_to(EditorDocument *p_document);
+
+	// G2 M7.2a: the shared 2D toolbar follows the focused scene pane.
+	Control *get_shared_toolbar() const;
+	void park_shared_toolbar();
 
 	// ⑤c: bind the main view to p_document (the active document) so it renders + edits that
 	// document through its own world-bound viewport. Called by EditorNode on every scene switch.

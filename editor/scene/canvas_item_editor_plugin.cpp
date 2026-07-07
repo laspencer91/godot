@@ -5886,6 +5886,18 @@ void CanvasItemEditor::activate_document(EditorDocument *p_document) {
 	}
 }
 
+Control *CanvasItemEditor::get_shared_toolbar() const {
+	return main_flow;
+}
+
+void CanvasItemEditor::park_shared_toolbar() {
+	// G2 M7.2a: return the toolbar flow to its stock home when no scene pane hosts it.
+	if (main_flow && toolbar_home && main_flow->get_parent() != toolbar_home) {
+		main_flow->reparent(toolbar_home);
+		toolbar_home->move_child(main_flow, 0);
+	}
+}
+
 void CanvasItemEditorView::update_viewport() {
 	_update_scrollbars();
 	viewport->queue_redraw();
@@ -5920,8 +5932,9 @@ CanvasItemEditor::CanvasItemEditor() {
 	add_child(toolbar_margin);
 
 	// A fluid container for all toolbars.
-	HFlowContainer *main_flow = memnew(HFlowContainer);
+	main_flow = memnew(HFlowContainer);
 	toolbar_margin->add_child(main_flow);
+	toolbar_home = toolbar_margin; // G2 M7.2a: park target when no scene pane hosts the toolbar.
 
 	// Main toolbars.
 	HBoxContainer *main_menu_hbox = memnew(HBoxContainer);

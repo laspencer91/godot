@@ -165,11 +165,22 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		p_document->get_selection()->connect("selection_changed", callable_mp(this, &DocumentView::_bound_selection_changed));
 		_bound_selection_changed();
 
-		// Compose: surface | dock column (docks on the right, per the design).
-		HSplitContainer *scene_split = memnew(HSplitContainer);
+		// Left side: [toolbar host | viewport]. M7.2a mounts the focused pane's 2D/3D toolbar into
+		// toolbar_host; it sits empty (zero height) otherwise.
+		toolbar_host = memnew(HBoxContainer);
+		toolbar_host->set_h_size_flags(SIZE_EXPAND_FILL);
+		VBoxContainer *surface_vbox = memnew(VBoxContainer);
+		surface_vbox->add_theme_constant_override("separation", 0);
+		surface_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
+		surface_vbox->set_v_size_flags(SIZE_EXPAND_FILL);
+		surface_vbox->add_child(toolbar_host);
 		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
 		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-		scene_split->add_child(editor_surface);
+		surface_vbox->add_child(editor_surface);
+
+		// Compose: [toolbar|viewport] | dock column (docks on the right, per the design).
+		HSplitContainer *scene_split = memnew(HSplitContainer);
+		scene_split->add_child(surface_vbox);
 		scene_split->add_child(dock_column);
 		editor_surface = scene_split;
 	}

@@ -82,6 +82,7 @@ class EditorFileDialog;
 class EditorFolding;
 class EditorLayoutsDialog;
 class EditorLog;
+class DocumentView;
 class EditorMainScreen;
 class EditorNativeShaderSourceVisualizer;
 class EditorPluginList;
@@ -865,6 +866,10 @@ public:
 
 	SubViewport *get_scene_root(); // Active document's scene_root (placeholder when none is active).
 	void register_document_context(EditorDocument *p_doc); // Parents a document's scene_root into the live tree.
+	// G2 M7.2a: mount the (now-current) scene pane's matching 2D/3D toolbar into its header slot; park
+	// both toolbars home when the current surface is not a scene pane. Pushed from the same tab-select
+	// / pane-focus points that drive ScriptEditor::set_current_surface.
+	void update_scene_pane_toolbar(DocumentView *p_view);
 
 	// G2: make the open scene at p_idx the active edited scene (same path the stock scene-tab
 	// bar uses). Lets a workspace pane's tab selection drive which document the editor edits.
