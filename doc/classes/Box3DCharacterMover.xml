@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DCharacterMover" inherits="RefCounted" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Box3D capsule character mover helper.
+	</brief_description>
+	<description>
+		[Box3DCharacterMover] exposes Box3D's geometric capsule mover to scripts. It is a query-only mover, not a simulated body. Call [method setup] with a Box3D space [RID], configure the capsule and collision mask, then drive it from fixed-tick movement code.
+		The mover origin is at the character's feet. [method set_capsule] takes Godot-style total capsule height and radius, but [method move], [method cast_motion], and [method collide] expect [param position] to be the feet position, not the capsule center.
+		[method move] runs the Box3D mover loop using 5 iterations and a 1 cm delta tolerance. The returned [code]cast_fraction[/code] is the last iteration's cast fraction and is intended for diagnostics.
+		Plane dictionaries returned by [method collide] contain [code]normal[/code], [code]offset[/code], and [code]local_point[/code] in the frame of the position passed to [method collide]. [code]point[/code] is world-space. Feed planes back to [method solve_planes] and [method clip_velocity] unchanged for the same position.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="get_collision_mask" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the physics layer mask used by mover queries.
+			</description>
+		</method>
+		<method name="get_floor_max_angle" qualifiers="const">
+			<return type="float" />
+			<description>
+				Returns the floor angle limit in radians.
+			</description>
+		</method>
+		<method name="cast_motion" qualifiers="const">
+			<return type="float" />
+			<param index="0" name="position" type="Vector3" />
+			<param index="1" name="translation" type="Vector3" />
+			<description>
+				Casts the mover from feet [param position] along [param translation] and returns the safe travel fraction in the range [code][0, 1][/code]. Returns [code]0.0[/code] if the mover cannot query the space.
+			</description>
+		</method>
+		<method name="clip_velocity" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="velocity" type="Vector3" />
+			<param index="1" name="planes" type="Array" />
+			<description>
+				Clips [param velocity] against mover collision [param planes].
+			</description>
+		</method>
+		<method name="collide" qualifiers="const">
+			<return type="Array" />
+			<param index="0" name="position" type="Vector3" />
+			<description>
+				Returns collision plane dictionaries for the mover at feet [param position].
+			</description>
+		</method>
+		<method name="move" qualifiers="const">
+			<return type="Dictionary" />
+			<param index="0" name="position" type="Vector3" />
+			<param index="1" name="velocity" type="Vector3" />
+			<param index="2" name="delta" type="float" />
+			<description>
+				Moves from feet [param position] by [param velocity] over [param delta]. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]planes[/code], [code]cast_fraction[/code], and [code]iterations[/code].
+			</description>
+		</method>
+		<method name="set_capsule">
+			<return type="void" />
+			<param index="0" name="height" type="float" />
+			<param index="1" name="radius" type="float" />
+			<description>
+				Sets the feet-origin capsule using total [param height] and [param radius]. Heights below [code]radius * 2[/code] are clamped.
+			</description>
+		</method>
+		<method name="set_collision_mask">
+			<return type="void" />
+			<param index="0" name="mask" type="int" />
+			<description>
+				Sets the physics layer mask used by mover queries.
+			</description>
+		</method>
+		<method name="set_exclusions">
+			<return type="void" />
+			<param index="0" name="bodies" type="Array" />
+			<description>
+				Sets body RIDs excluded from mover casts and collision-plane gathering.
+			</description>
+		</method>
+		<method name="set_floor_max_angle">
+			<return type="void" />
+			<param index="0" name="radians" type="float" />
+			<description>
+				Sets the floor angle limit in radians.
+			</description>
+		</method>
+		<method name="setup">
+			<return type="void" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Binds this mover to a Box3D physics space.
+			</description>
+		</method>
+		<method name="solve_planes" qualifiers="const">
+			<return type="Dictionary" />
+			<param index="0" name="target_delta" type="Vector3" />
+			<param index="1" name="planes" type="Array" />
+			<description>
+				Solves [param target_delta] against mover collision [param planes]. Returns [code]delta[/code], [code]iterations[/code], and updated [code]planes[/code].
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="collision_mask" type="int" setter="set_collision_mask" getter="get_collision_mask" default="1">
+			Physics layers the mover queries.
+		</member>
+		<member name="floor_max_angle" type="float" setter="set_floor_max_angle" getter="get_floor_max_angle" default="0.7853981633974483">
+			Maximum floor angle in radians. Defaults to 45 degrees.
+		</member>
+	</members>
+</class>

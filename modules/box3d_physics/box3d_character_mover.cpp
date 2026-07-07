@@ -95,6 +95,8 @@ void Box3DCharacterMover::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_capsule", "height", "radius"), &Box3DCharacterMover::set_capsule);
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &Box3DCharacterMover::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &Box3DCharacterMover::get_collision_mask);
+	ClassDB::bind_method(D_METHOD("set_floor_max_angle", "radians"), &Box3DCharacterMover::set_floor_max_angle);
+	ClassDB::bind_method(D_METHOD("get_floor_max_angle"), &Box3DCharacterMover::get_floor_max_angle);
 	ClassDB::bind_method(D_METHOD("set_exclusions", "bodies"), &Box3DCharacterMover::set_exclusions);
 	ClassDB::bind_method(D_METHOD("cast_motion", "position", "translation"), &Box3DCharacterMover::cast_motion);
 	ClassDB::bind_method(D_METHOD("collide", "position"), &Box3DCharacterMover::collide);
@@ -103,6 +105,7 @@ void Box3DCharacterMover::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("move", "position", "velocity", "delta"), &Box3DCharacterMover::move);
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "floor_max_angle", PROPERTY_HINT_RANGE, "0,1.5707963267949,0.001,radians"), "set_floor_max_angle", "get_floor_max_angle");
 }
 
 Box3DCharacterMover::Box3DCharacterMover() {
@@ -118,15 +121,22 @@ b3QueryFilter Box3DCharacterMover::_make_filter() const {
 
 bool Box3DCharacterMover::_can_query() const {
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
-	return server != nullptr && server->can_access_space(space);
+	return server != nullptr && server->can_access_space(_get_space());
+}
+
+Box3DSpace3D *Box3DCharacterMover::_get_space() const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	if (server == nullptr) {
+		return nullptr;
+	}
+	return server->get_space(space_rid);
 }
 
 void Box3DCharacterMover::setup(RID p_space) {
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL_MSG(server, "Box3DCharacterMover requires the Box3D physics server to be active.");
 
-	space = server->get_space(p_space);
-	ERR_FAIL_NULL_MSG(space, "Box3DCharacterMover setup received an invalid Box3D space RID.");
+	ERR_FAIL_NULL_MSG(server->get_space(p_space), "Box3DCharacterMover setup received an invalid Box3D space RID.");
 	space_rid = p_space;
 }
 
@@ -144,6 +154,10 @@ void Box3DCharacterMover::set_collision_mask(uint32_t p_mask) {
 	collision_mask = p_mask;
 }
 
+void Box3DCharacterMover::set_floor_max_angle(real_t p_angle) {
+	floor_max_angle = CLAMP(p_angle, 0.0, 1.5707963267948966);
+}
+
 void Box3DCharacterMover::set_exclusions(const TypedArray<RID> &p_bodies) {
 	exclusions.clear();
 	for (int i = 0; i < p_bodies.size(); i++) {
@@ -152,21 +166,23 @@ void Box3DCharacterMover::set_exclusions(const TypedArray<RID> &p_bodies) {
 }
 
 float Box3DCharacterMover::cast_motion(const Vector3 &p_position, const Vector3 &p_translation) const {
-	ERR_FAIL_COND_V_MSG(!_can_query(), 1.0f, "Box3DCharacterMover cannot query the space right now.");
+	Box3DSpace3D *query_space = _get_space();
+	ERR_FAIL_COND_V_MSG(!_can_query(), 0.0f, "Box3DCharacterMover cannot query the space right now.");
 
 	Box3DMoverFilterContext ctx;
 	ctx.exclusions = &exclusions;
-	return b3World_CastMover(space->get_world(), to_box3d(p_position), &capsule, to_box3d(p_translation), _make_filter(), _mover_filter_callback, &ctx);
+	return b3World_CastMover(query_space->get_world(), to_box3d(p_position), &capsule, to_box3d(p_translation), _make_filter(), _mover_filter_callback, &ctx);
 }
 
 Array Box3DCharacterMover::_collide_internal(const Vector3 &p_position) const {
 	Array planes;
+	Box3DSpace3D *query_space = _get_space();
 	ERR_FAIL_COND_V_MSG(!_can_query(), planes, "Box3DCharacterMover cannot query the space right now.");
 
 	Box3DMoverPlaneContext ctx;
 	ctx.exclusions = &exclusions;
 	ctx.origin = p_position;
-	b3World_CollideMover(space->get_world(), to_box3d(p_position), &capsule, _make_filter(), _mover_plane_callback, &ctx);
+	b3World_CollideMover(query_space->get_world(), to_box3d(p_position), &capsule, _make_filter(), _mover_plane_callback, &ctx);
 	return ctx.planes;
 }
 
@@ -220,10 +236,6 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		solved_planes = solve["planes"];
 		total_iterations += (int)solve["iterations"];
 
-		if (delta.length_squared() < 0.0001f) {
-			break;
-		}
-
 		last_fraction = cast_motion(position, delta);
 		const Vector3 applied_delta = delta * last_fraction;
 		position += applied_delta;
@@ -233,26 +245,23 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		}
 	}
 
-	const Array final_planes = _collide_internal(position);
-	const Dictionary final_solve = solve_planes(Vector3(), final_planes);
-	const Vector3 solve_delta = final_solve["delta"];
-	solved_planes = final_solve["planes"];
-	total_iterations += (int)final_solve["iterations"];
-	position += solve_delta;
-
 	const Vector3 clipped_velocity = clip_velocity(p_velocity, solved_planes);
+	const real_t floor_threshold = Math::cos(floor_max_angle);
 
 	Vector3 floor_normal;
 	bool on_floor = false;
 	bool on_wall = false;
+	bool on_ceiling = false;
 	for (int i = 0; i < solved_planes.size(); i++) {
 		Dictionary plane = solved_planes[i];
 		const Vector3 normal = plane["normal"];
-		if (normal.y > 0.7) {
+		if (normal.y > floor_threshold) {
 			on_floor = true;
 			if (normal.y > floor_normal.y) {
 				floor_normal = normal;
 			}
+		} else if (normal.y < -floor_threshold) {
+			on_ceiling = true;
 		} else {
 			on_wall = true;
 		}
@@ -263,6 +272,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	result["velocity"] = clipped_velocity;
 	result["on_floor"] = on_floor;
 	result["on_wall"] = on_wall;
+	result["on_ceiling"] = on_ceiling;
 	result["floor_normal"] = floor_normal;
 	result["planes"] = solved_planes;
 	result["cast_fraction"] = last_fraction;
