@@ -46,6 +46,8 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	bool doing_sync = false;
 
 	RID _create_shape(ShapeType p_type);
+	bool _can_mutate_body_shapes(const Box3DBody3D *p_body) const;
+	bool _can_mutate_shape_owners(const Box3DShape3D *p_shape) const;
 
 public:
 	explicit Box3DPhysicsServer3D(bool p_using_threads = false);

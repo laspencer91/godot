@@ -219,6 +219,9 @@ void Box3DShape3D::set_surface_material(int p_material_id) {
 void Box3DShape3D::set_surface_map(const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices) {
 	mesh_material_ids = p_material_ids;
 	mesh_triangle_material_indices = p_triangle_indices;
+	if (data.get_type() == Variant::NIL) {
+		return;
+	}
 	set_data(data);
 }
 

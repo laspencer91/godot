@@ -24,6 +24,20 @@ RID Box3DPhysicsServer3D::_create_shape(ShapeType p_type) {
 	return shape_owner.make_rid(shape);
 }
 
+bool Box3DPhysicsServer3D::_can_mutate_body_shapes(const Box3DBody3D *p_body) const {
+	Box3DSpace3D *space = p_body->get_space();
+	return space == nullptr || can_access_space(space);
+}
+
+bool Box3DPhysicsServer3D::_can_mutate_shape_owners(const Box3DShape3D *p_shape) const {
+	for (Box3DBody3D *body : p_shape->get_owners()) {
+		if (!_can_mutate_body_shapes(body)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 RID Box3DPhysicsServer3D::custom_shape_create() {
 	ERR_FAIL_V_MSG(RID(), "Box3D: custom shapes are not supported.");
 }
@@ -49,12 +63,14 @@ PhysicsServer3D::ShapeType Box3DPhysicsServer3D::shape_get_type(RID p_shape) con
 void Box3DPhysicsServer3D::shape_set_surface_material(RID p_shape, int p_material_id) {
 	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
 	ERR_FAIL_NULL(shape);
+	ERR_FAIL_COND_MSG(!_can_mutate_shape_owners(shape), "Box3D: surface material changes are inaccessible right now, wait for iteration or physics process notification.");
 	shape->set_surface_material(p_material_id);
 }
 
 void Box3DPhysicsServer3D::shape_set_surface_map(RID p_shape, const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices) {
 	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
 	ERR_FAIL_NULL(shape);
+	ERR_FAIL_COND_MSG(!_can_mutate_shape_owners(shape), "Box3D: surface material changes are inaccessible right now, wait for iteration or physics process notification.");
 	shape->set_surface_map(p_material_ids, p_triangle_indices);
 }
 
@@ -210,6 +226,7 @@ void Box3DPhysicsServer3D::body_set_shape_disabled(RID p_body, int p_shape_idx, 
 void Box3DPhysicsServer3D::body_set_surface_material(RID p_body, int p_shape_idx, int p_material_id) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
+	ERR_FAIL_COND_MSG(!_can_mutate_body_shapes(body), "Box3D: surface material changes are inaccessible right now, wait for iteration or physics process notification.");
 	body->set_surface_material(p_shape_idx, p_material_id);
 }
 
