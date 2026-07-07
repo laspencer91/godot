@@ -359,6 +359,8 @@ void register_core_settings() {
 
 	GLOBAL_DEF("threading/worker_pool/max_threads", -1);
 	GLOBAL_DEF("threading/worker_pool/low_priority_thread_ratio", 0.3);
+
+	GLOBAL_DEF(PropertyInfo(Variant::BOOL, "threading/resource_loading/parallel_blocking_loads"), false);
 }
 
 void register_early_core_singletons() {

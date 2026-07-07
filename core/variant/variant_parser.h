@@ -56,6 +56,10 @@ public:
 		virtual bool is_utf8() const = 0;
 		bool is_eof() const;
 
+		// Must be called before any character is read from the stream, as toggling
+		// readahead mid-stream would desync the underlying source position.
+		void set_readahead_enabled(bool p_enabled) { readahead_enabled = p_enabled; }
+
 		virtual ~Stream() {}
 	};
 

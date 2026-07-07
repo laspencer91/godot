@@ -921,7 +921,7 @@ void ResourceLoaderText::set_translation_remapped(bool p_remapped) {
 }
 
 ResourceLoaderText::ResourceLoaderText() :
-		stream(false), format_version(FORMAT_VERSION) {}
+		stream(true), format_version(FORMAT_VERSION) {}
 
 void ResourceLoaderText::get_dependencies(Ref<FileAccess> p_f, List<String> *p_dependencies, bool p_add_types) {
 	open(p_f);
@@ -989,6 +989,10 @@ void ResourceLoaderText::get_dependencies(Ref<FileAccess> p_f, List<String> *p_d
 }
 
 Error ResourceLoaderText::rename_dependencies(Ref<FileAccess> p_f, const String &p_path, const HashMap<String, String> &p_map) {
+	// This method interleaves raw FileAccess reads (get_position()/seek()/get_buffer())
+	// with parsing through the stream, so readahead must be disabled to keep the raw
+	// file position in sync with what the parser has consumed.
+	stream.set_readahead_enabled(false);
 	open(p_f, true);
 	ERR_FAIL_COND_V(error != OK, error);
 	ignore_resource_parsing = true;

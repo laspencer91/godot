@@ -398,10 +398,22 @@ Error VariantParser::get_token(Stream *p_stream, Token &r_token, int &line, Stri
 				}
 
 				if (p_stream->is_utf8()) {
-					// Re-interpret the string we built as ascii.
-					CharString string_as_ascii = str.ascii(true);
-					str.clear();
-					str.append_utf8(string_as_ascii);
+					// The characters were read as raw bytes (Latin-1 widened) and must be
+					// re-decoded as UTF-8. For the overwhelmingly common pure-ASCII case
+					// this round-trip is a no-op, so skip it to avoid two allocations.
+					bool is_ascii = true;
+					for (int i = 0; i < str.length(); i++) {
+						if (str[i] >= 0x80) {
+							is_ascii = false;
+							break;
+						}
+					}
+					if (!is_ascii) {
+						// Re-interpret the string we built as UTF-8.
+						CharString string_as_ascii = str.ascii(true);
+						str.clear();
+						str.append_utf8(string_as_ascii);
+					}
 				}
 				if (string_name) {
 					r_token.type = TK_STRING_NAME;

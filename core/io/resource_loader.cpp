@@ -516,14 +516,23 @@ Ref<Resource> ResourceLoader::load(const String &p_path, const String &p_type_hi
 	}
 
 	LoadThreadMode thread_mode = LOAD_THREAD_FROM_CURRENT;
+	bool use_sub_threads = false;
 	if (WorkerThreadPool::get_singleton()->get_caller_task_id() != WorkerThreadPool::INVALID_TASK_ID) {
 		// If user is initiating a single-threaded load from a WorkerThreadPool task,
 		// we instead spawn a new task so there's a precondition that a load in a pool task
 		// is always initiated by the engine. That makes certain aspects simpler, such as
 		// cyclic load detection and awaiting.
 		thread_mode = LOAD_THREAD_SPAWN_SINGLE;
+	} else if (p_cache_mode != CACHE_MODE_IGNORE && p_cache_mode != CACHE_MODE_IGNORE_DEEP) {
+		// Keep the top-level parse inline on the calling thread (no added latency for
+		// zero-dependency loads), but let external resources be distributed to the
+		// worker pool so they load in parallel.
+		// Cache-ignoring loads keep the fully serial path, since their dependency
+		// tasks may end up unregistered (task_if_unregistered), which
+		// _load_complete_inner() cannot await while still in progress.
+		use_sub_threads = _use_sub_threads_for_blocking_loads();
 	}
-	Ref<LoadToken> load_token = _load_start(p_path, p_type_hint, thread_mode, p_cache_mode);
+	Ref<LoadToken> load_token = _load_start(p_path, p_type_hint, thread_mode, p_cache_mode, false, use_sub_threads);
 	if (load_token.is_null()) {
 		if (r_error) {
 			*r_error = FAILED;
@@ -535,7 +544,7 @@ Ref<Resource> ResourceLoader::load(const String &p_path, const String &p_type_hi
 	return res;
 }
 
-Ref<ResourceLoader::LoadToken> ResourceLoader::_load_start(const String &p_path, const String &p_type_hint, LoadThreadMode p_thread_mode, CacheMode p_cache_mode, bool p_for_user) {
+Ref<ResourceLoader::LoadToken> ResourceLoader::_load_start(const String &p_path, const String &p_type_hint, LoadThreadMode p_thread_mode, CacheMode p_cache_mode, bool p_for_user, bool p_use_sub_threads) {
 	String local_path = _validate_local_path(p_path);
 	ERR_FAIL_COND_V(local_path.is_empty(), Ref<ResourceLoader::LoadToken>());
 
@@ -584,7 +593,10 @@ Ref<ResourceLoader::LoadToken> ResourceLoader::_load_start(const String &p_path,
 			load_task.local_path = local_path;
 			load_task.type_hint = p_type_hint;
 			load_task.cache_mode = p_cache_mode;
-			load_task.use_sub_threads = p_thread_mode == LOAD_THREAD_DISTRIBUTE;
+			// A LOAD_THREAD_FROM_CURRENT task keeps its top-level parse inline on the
+			// calling thread, but it may still distribute its external resources to the
+			// worker pool if requested (parallel blocking loads).
+			load_task.use_sub_threads = p_thread_mode == LOAD_THREAD_DISTRIBUTE || p_use_sub_threads;
 			if (p_cache_mode == CACHE_MODE_REUSE) {
 				Ref<Resource> existing = ResourceCache::get_ref(local_path);
 				if (existing.is_valid()) {
@@ -843,33 +855,58 @@ Ref<Resource> ResourceLoader::_load_complete_inner(LoadToken &p_load_token, Erro
 			bool loader_is_wtp = load_task.task_id != 0;
 			if (loader_is_wtp) {
 				// Loading thread is in the worker pool.
-				p_thread_load_lock.temp_unlock();
-
-				int load_nesting_backup = load_nesting;
-				load_nesting = 0;
-				Error wait_err = WorkerThreadPool::get_singleton()->wait_for_task_completion(load_task.task_id);
-				DEV_ASSERT(load_nesting == 0);
-				load_nesting = load_nesting_backup;
-
-				DEV_ASSERT(!wait_err || wait_err == ERR_BUSY);
-				if (wait_err == ERR_BUSY) {
-					// The WorkerThreadPool has reported that the current task wants to await on an older one.
-					// That't not allowed for safety, to avoid deadlocks. Fortunately, though, in the context of
-					// resource loading that means that the task to wait for can be restarted here to break the
-					// cycle, with as much recursion into this process as needed.
-					// When the stack is eventually unrolled, the original load will have been notified to go on.
-					load_task.load_token->reference();
-					_run_load_task(&load_task);
-				}
-
-				p_thread_load_lock.temp_relock();
-				load_task.awaited = true;
-				// Mark nested loads with the same task id as awaited.
-				for (KeyValue<String, ResourceLoader::ThreadLoadTask> &E : thread_load_tasks) {
-					if (E.value.task_id == load_task.task_id) {
-						E.value.awaited = true;
+				if (Thread::is_main_thread()) {
+					// On the main thread, spin pumping the servers (e.g., the
+					// RenderingServer command queue in single-threaded rendering mode)
+					// while the worker loads, mirroring load_threaded_get(). Otherwise,
+					// a worker blocked pushing to a full server command queue that only
+					// the main thread flushes could deadlock against the blocking wait
+					// below.
+					while (load_task.status == THREAD_LOAD_IN_PROGRESS) {
+						p_thread_load_lock.temp_unlock();
+						bool exit = !_ensure_load_progress();
+						OS::get_singleton()->delay_usec(1000);
+						p_thread_load_lock.temp_relock();
+						if (exit) {
+							// Servers are running on separate threads; no pumping needed.
+							// Fall through to the blocking wait.
+							break;
+						}
 					}
 				}
+
+				if (load_task.status == THREAD_LOAD_IN_PROGRESS) {
+					p_thread_load_lock.temp_unlock();
+
+					int load_nesting_backup = load_nesting;
+					load_nesting = 0;
+					Error wait_err = WorkerThreadPool::get_singleton()->wait_for_task_completion(load_task.task_id);
+					DEV_ASSERT(load_nesting == 0);
+					load_nesting = load_nesting_backup;
+
+					DEV_ASSERT(!wait_err || wait_err == ERR_BUSY);
+					if (wait_err == ERR_BUSY) {
+						// The WorkerThreadPool has reported that the current task wants to await on an older one.
+						// That't not allowed for safety, to avoid deadlocks. Fortunately, though, in the context of
+						// resource loading that means that the task to wait for can be restarted here to break the
+						// cycle, with as much recursion into this process as needed.
+						// When the stack is eventually unrolled, the original load will have been notified to go on.
+						load_task.load_token->reference();
+						_run_load_task(&load_task);
+					}
+
+					p_thread_load_lock.temp_relock();
+					load_task.awaited = true;
+					// Mark nested loads with the same task id as awaited.
+					for (KeyValue<String, ResourceLoader::ThreadLoadTask> &E : thread_load_tasks) {
+						if (E.value.task_id == load_task.task_id) {
+							E.value.awaited = true;
+						}
+					}
+				}
+				// If the load finished while pumping instead, the task hasn't been
+				// awaited; LoadToken::clear() will retire it, as in the case of
+				// load_threaded_get() having pumped in the same fashion.
 
 				DEV_ASSERT(load_task.status == THREAD_LOAD_FAILED || load_task.status == THREAD_LOAD_LOADED);
 			} else if (load_task.need_wait) {
@@ -955,6 +992,19 @@ bool ResourceLoader::_ensure_load_progress() {
 	}
 	RenderingServer::get_singleton()->sync();
 	return true;
+}
+
+bool ResourceLoader::_use_sub_threads_for_blocking_loads() {
+	// Cached on first use. Reading the project setting before ProjectSettings is
+	// available (very early engine init) must behave as disabled (old serial path).
+	static int cached = -1; // -1: unknown, 0: off, 1: on.
+	if (cached == -1) {
+		if (ProjectSettings::get_singleton() == nullptr) {
+			return false;
+		}
+		cached = GLOBAL_GET("threading/resource_loading/parallel_blocking_loads") ? 1 : 0;
+	}
+	return cached == 1;
 }
 
 void ResourceLoader::resource_changed_connect(Resource *p_source, const Callable &p_callable, uint32_t p_flags) {
