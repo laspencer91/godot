@@ -131,7 +131,12 @@ void Box3DArea3D::_build_all_shapes() {
 		b3ShapeDef def = b3DefaultShapeDef();
 		def.isSensor = true;
 		def.enableSensorEvents = true;
-		def.filter.categoryBits = (uint64_t)collision_layer;
+		// Box3D filtering is a two-way mask/category AND, but Godot area detection is one-way
+		// (area mask vs body layer only). Body shapes always carry the query bit in maskBits, so
+		// putting it in the sensor's categoryBits makes the reverse test pass unconditionally and
+		// area-vs-body reduces to exactly Godot's test. Queries are unaffected: their 32-bit masks
+		// never contain the query bit, so it is inert in categoryBits there.
+		def.filter.categoryBits = (uint64_t)collision_layer | BOX3D_QUERY_FILTER_BIT;
 		def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
 		def.userData = (void *)(uintptr_t)i;
 
@@ -289,12 +294,10 @@ void Box3DArea3D::set_collision_mask(uint32_t p_mask) {
 }
 
 void Box3DArea3D::set_monitorable(bool p_monitorable) {
+	// A Box3D sensor shape's enableSensorEvents flag gates its OWN sensing, so it must stay
+	// enabled regardless of monitorable. Whether other areas may observe this one is enforced
+	// module-side when sensor events are dispatched (Box3DSpace3D::_process_sensor_event).
 	monitorable = p_monitorable;
-	for (const b3ShapeId &shape_id : shape_ids) {
-		if (B3_IS_NON_NULL(shape_id)) {
-			b3Shape_EnableSensorEvents(shape_id, true);
-		}
-	}
 }
 
 void Box3DArea3D::set_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value) {
@@ -402,9 +405,8 @@ void Box3DArea3D::queue_body_event(bool p_added, RID p_body, ObjectID p_instance
 }
 
 void Box3DArea3D::queue_area_event(bool p_added, RID p_area, ObjectID p_instance_id, int p_area_shape, int p_self_shape) {
-	if (!monitorable) {
-		return;
-	}
+	// Monitorable gating happens on the VISITOR side (Box3DSpace3D::_process_sensor_event):
+	// Godot reports area B to area A when B is monitorable, regardless of A's own flag.
 	MonitorKey key;
 	key.rid = p_area;
 	key.instance_id = p_instance_id;
@@ -414,7 +416,7 @@ void Box3DArea3D::queue_area_event(bool p_added, RID p_area, ObjectID p_instance
 }
 
 void Box3DArea3D::call_queries() {
-	if (!monitor_callback.is_null() && !monitored_bodies.is_empty()) {
+	if (!monitored_bodies.is_empty()) {
 		if (monitor_callback.is_valid()) {
 			Variant res[5];
 			const Variant *resptr[5] = { &res[0], &res[1], &res[2], &res[3], &res[4] };
@@ -438,7 +440,7 @@ void Box3DArea3D::call_queries() {
 		monitored_bodies.clear();
 	}
 
-	if (!area_monitor_callback.is_null() && !monitored_areas.is_empty()) {
+	if (!monitored_areas.is_empty()) {
 		if (area_monitor_callback.is_valid()) {
 			Variant res[5];
 			const Variant *resptr[5] = { &res[0], &res[1], &res[2], &res[3], &res[4] };

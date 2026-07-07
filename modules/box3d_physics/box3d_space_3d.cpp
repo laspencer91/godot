@@ -144,6 +144,13 @@ void Box3DSpace3D::_process_sensor_event(bool p_added, b3ShapeId p_sensor_shape,
 		sensor_area->queue_body_event(p_added, body->get_rid(), body->get_instance_id(), visitor_shape, sensor_shape);
 	} else if (visitor_object->get_type() == Box3DCollisionObject3D::TYPE_AREA) {
 		Box3DArea3D *area = static_cast<Box3DArea3D *>(visitor_object);
+		// Godot contract: an area is reported to other areas only when it is monitorable, and
+		// area-area detection is one-way (sensor mask vs visitor layer). Box3D-level filtering
+		// always passes for area pairs (both carry the query bit in category and mask), so the
+		// layer test lives here.
+		if (!area->is_monitorable() || (sensor_area->get_collision_mask() & area->get_collision_layer()) == 0) {
+			return;
+		}
 		sensor_area->queue_area_event(p_added, area->get_rid(), area->get_instance_id(), visitor_shape, sensor_shape);
 	}
 
@@ -186,13 +193,15 @@ void Box3DSpace3D::_harvest_body_contacts() {
 					const Vector3 other_point = _box3d_contact_point(other_body->get_body_id(), point, !body_is_a);
 					const Vector3 normal = to_godot(manifold.normal) * (body_is_a ? -1.0 : 1.0);
 					Box3DBody3D::Contact contact;
-					contact.local_pos = body->get_transform().affine_inverse().xform(self_point);
-					contact.local_normal = body->get_transform().basis.inverse().xform(normal).normalized();
+					// Godot's get_contact_local_* getters return GLOBAL coordinates despite the
+					// names (see PhysicsDirectBodyState3D docs and the Jolt module) — store world space.
+					contact.local_pos = self_point;
+					contact.local_normal = normal;
 					contact.impulse = normal * point.totalNormalImpulse;
 					contact.local_shape = _box3d_shape_index(self_shape);
 					contact.local_velocity_at_pos = to_godot(b3Body_GetWorldPointVelocity(body->get_body_id(), to_box3d(self_point)));
 					contact.collider = other_body->get_rid();
-					contact.collider_pos = other_body->get_transform().origin;
+					contact.collider_pos = other_point;
 					contact.collider_instance_id = other_body->get_instance_id();
 					contact.collider_shape = _box3d_shape_index(other_shape);
 					contact.collider_velocity_at_pos = to_godot(b3Body_GetWorldPointVelocity(other_body->get_body_id(), to_box3d(other_point)));

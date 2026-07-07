@@ -312,7 +312,16 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 			if (approach_speed <= 0.0) {
 				continue;
 			}
-			const Vector3 impulse = -normal * approach_speed * push_strength;
+			// Effective normal mass at the contact point (samples/sample.cpp SolveMove push pass):
+			// scales momentum transfer to what the body can absorb, so push_strength = 1 gives a
+			// consistent delta-v across body masses instead of acting as a fixed 1 kg impulse.
+			const b3BodyId body_id = body->get_body_id();
+			const b3Vec3 push_normal = to_box3d(-normal);
+			const b3Vec3 rB = b3SubPos(to_box3d(point), b3Body_GetWorldCenter(body_id));
+			const b3Vec3 rnB = b3Cross(rB, push_normal);
+			const float k_normal = b3Body_GetInverseMass(body_id) + b3Dot(rnB, b3MulMV(b3Body_GetWorldInverseRotationalInertia(body_id), rnB));
+			const float normal_mass = k_normal > 0.0f ? 1.0f / k_normal : 0.0f;
+			const Vector3 impulse = -normal * approach_speed * normal_mass * push_strength;
 			body->apply_impulse(impulse, point - body->get_transform().origin);
 		}
 	}

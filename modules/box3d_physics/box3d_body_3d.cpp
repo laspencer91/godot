@@ -468,13 +468,6 @@ void Box3DBody3D::apply_environment_forces(float p_step) {
 	total_linear_damp = 0.0;
 	total_angular_damp = 0.0;
 
-	if (omit_force_integration) {
-		b3Body_SetGravityScale(body_id, 0.0f);
-		b3Body_SetLinearDamping(body_id, 0.0f);
-		b3Body_SetAngularDamping(body_id, 0.0f);
-		return;
-	}
-
 	bool gravity_done = false;
 	bool linear_damp_done = false;
 	bool angular_damp_done = false;
@@ -533,13 +526,25 @@ void Box3DBody3D::apply_environment_forces(float p_step) {
 	total_linear_damp = linear_damp_mode == PhysicsServer3D::BODY_DAMP_MODE_REPLACE ? linear_damp : total_linear_damp + linear_damp;
 	total_angular_damp = angular_damp_mode == PhysicsServer3D::BODY_DAMP_MODE_REPLACE ? angular_damp : total_angular_damp + angular_damp;
 
+	// Totals above stay valid for the direct-state getters even when the user integrates
+	// forces themselves (stock behavior: omit only skips the APPLICATION, custom integrators
+	// still read state.total_gravity / total_*_damp).
+	if (omit_force_integration) {
+		b3Body_SetGravityScale(body_id, 0.0f);
+		b3Body_SetLinearDamping(body_id, 0.0f);
+		b3Body_SetAngularDamping(body_id, 0.0f);
+		return;
+	}
+
 	const bool use_world_gravity = areas.is_empty();
 	b3Body_SetGravityScale(body_id, use_world_gravity ? (float)gravity_scale : 0.0f);
 	b3Body_SetLinearDamping(body_id, (float)total_linear_damp);
 	b3Body_SetAngularDamping(body_id, (float)total_angular_damp);
 
 	if (!use_world_gravity && !total_gravity.is_zero_approx()) {
-		b3Body_ApplyForceToCenter(body_id, to_box3d(total_gravity * b3Body_GetMass(body_id)), true);
+		// wake=false: a sleeping body inside an override area stays asleep, matching how world
+		// gravity treats sleepers. Waking here every step would make these bodies never sleep.
+		b3Body_ApplyForceToCenter(body_id, to_box3d(total_gravity * b3Body_GetMass(body_id)), false);
 	}
 	if (!constant_force.is_zero_approx()) {
 		b3Body_ApplyForceToCenter(body_id, to_box3d(constant_force), true);
