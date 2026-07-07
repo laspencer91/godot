@@ -10,6 +10,16 @@
 #include "core/io/image.h"
 #include "core/templates/local_vector.h"
 
+static void _copy_material_indices(const PackedByteArray &p_source, LocalVector<uint8_t> &r_indices, int p_triangle_count) {
+	if (p_source.size() != p_triangle_count) {
+		return;
+	}
+	r_indices.resize(p_triangle_count);
+	for (int i = 0; i < p_triangle_count; i++) {
+		r_indices[i] = p_source[i];
+	}
+}
+
 void Box3DShape3D::_clear_geometry() {
 	if (hull) {
 		b3DestroyHull(hull);
@@ -79,6 +89,7 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			ERR_FAIL_COND_MSG(vertex_count == 0 || vertex_count % 3 != 0, "Box3D: concave shape needs a triangle soup (3 vertices per face).");
 			LocalVector<b3Vec3> vertices;
 			LocalVector<int32_t> indices;
+			LocalVector<uint8_t> material_indices;
 			vertices.resize(vertex_count);
 			indices.resize(vertex_count);
 			for (int i = 0; i < vertex_count; i++) {
@@ -90,6 +101,8 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			mesh_def.indices = indices.ptr();
 			mesh_def.vertexCount = vertex_count;
 			mesh_def.triangleCount = vertex_count / 3;
+			_copy_material_indices(mesh_triangle_material_indices, material_indices, mesh_def.triangleCount);
+			mesh_def.materialIndices = material_indices.size() == mesh_def.triangleCount ? material_indices.ptr() : nullptr;
 			mesh_def.weldVertices = true;
 			mesh_def.weldTolerance = 0.0001f;
 			mesh_def.identifyEdges = true; // Internal-edge (ghost collision) suppression.
@@ -131,6 +144,7 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 
 			LocalVector<b3Vec3> vertices;
 			LocalVector<int32_t> indices;
+			LocalVector<uint8_t> material_indices;
 			vertices.resize(width * depth);
 			indices.resize((width - 1) * (depth - 1) * 6);
 
@@ -165,6 +179,8 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			mesh_def.indices = indices.ptr();
 			mesh_def.vertexCount = vertices.size();
 			mesh_def.triangleCount = indices.size() / 3;
+			_copy_material_indices(mesh_triangle_material_indices, material_indices, mesh_def.triangleCount);
+			mesh_def.materialIndices = material_indices.size() == mesh_def.triangleCount ? material_indices.ptr() : nullptr;
 			mesh_def.weldVertices = true;
 			mesh_def.weldTolerance = 0.0001f;
 			mesh_def.useMedianSplit = true;
@@ -190,4 +206,35 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 	for (Box3DBody3D *body : owners) {
 		body->shapes_changed();
 	}
+}
+
+void Box3DShape3D::set_surface_material(int p_material_id) {
+	has_surface_material = p_material_id > 0;
+	surface_material_id = MAX(0, p_material_id);
+	for (Box3DBody3D *body : owners) {
+		body->shapes_changed();
+	}
+}
+
+void Box3DShape3D::set_surface_map(const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices) {
+	mesh_material_ids = p_material_ids;
+	mesh_triangle_material_indices = p_triangle_indices;
+	set_data(data);
+}
+
+PackedByteArray Box3DShape3D::get_mesh_material_indices() const {
+	PackedByteArray indices;
+	if (mesh == nullptr) {
+		return indices;
+	}
+	const uint8_t *src = b3GetMeshMaterialIndices(mesh);
+	if (src == nullptr) {
+		return indices;
+	}
+	indices.resize(mesh->triangleCount);
+	uint8_t *write = indices.ptrw();
+	for (int i = 0; i < mesh->triangleCount; i++) {
+		write[i] = src[i];
+	}
+	return indices;
 }

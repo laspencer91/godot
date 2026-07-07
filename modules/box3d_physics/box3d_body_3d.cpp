@@ -8,6 +8,7 @@
 #include "box3d_direct_space_state_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
+#include "box3d_surface_materials.h"
 
 #include "box3d/collision.h"
 #include "box3d/math_functions.h"
@@ -114,13 +115,18 @@ void Box3DBody3D::_destroy_all_shapes() {
 static b3MeshData *_clone_mesh_with_transform(const b3MeshData *p_mesh, const Transform3D &p_transform) {
 	const b3Vec3 *src_vertices = b3GetMeshVertices(p_mesh);
 	const b3MeshTriangle *src_triangles = b3GetMeshTriangles(p_mesh);
+	const uint8_t *src_material_indices = b3GetMeshMaterialIndices(p_mesh);
 	ERR_FAIL_NULL_V(src_vertices, nullptr);
 	ERR_FAIL_NULL_V(src_triangles, nullptr);
 
 	LocalVector<b3Vec3> vertices;
 	LocalVector<int32_t> indices;
+	LocalVector<uint8_t> material_indices;
 	vertices.resize(p_mesh->vertexCount);
 	indices.resize(p_mesh->triangleCount * 3);
+	if (src_material_indices != nullptr) {
+		material_indices.resize(p_mesh->triangleCount);
+	}
 
 	for (int i = 0; i < p_mesh->vertexCount; i++) {
 		vertices[i] = to_box3d(p_transform.xform(to_godot(src_vertices[i])));
@@ -129,6 +135,9 @@ static b3MeshData *_clone_mesh_with_transform(const b3MeshData *p_mesh, const Tr
 		indices[i * 3 + 0] = src_triangles[i].index1;
 		indices[i * 3 + 1] = src_triangles[i].index2;
 		indices[i * 3 + 2] = src_triangles[i].index3;
+		if (src_material_indices != nullptr) {
+			material_indices[i] = src_material_indices[i];
+		}
 	}
 
 	b3MeshDef mesh_def = {};
@@ -136,10 +145,19 @@ static b3MeshData *_clone_mesh_with_transform(const b3MeshData *p_mesh, const Tr
 	mesh_def.indices = indices.ptr();
 	mesh_def.vertexCount = vertices.size();
 	mesh_def.triangleCount = p_mesh->triangleCount;
+	mesh_def.materialIndices = material_indices.size() == p_mesh->triangleCount ? material_indices.ptr() : nullptr;
 	mesh_def.weldVertices = false;
 	mesh_def.identifyEdges = true;
 
 	return b3CreateMesh(&mesh_def, nullptr, 0);
+}
+
+bool Box3DBody3D::_slot_has_named_surface_material(uint32_t p_slot) const {
+	if (p_slot >= slots.size()) {
+		return false;
+	}
+	const ShapeSlot &slot = slots[p_slot];
+	return slot.has_surface_material || (slot.shape != nullptr && slot.shape->has_named_surface_material());
 }
 
 void Box3DBody3D::_build_all_shapes() {
@@ -147,12 +165,6 @@ void Box3DBody3D::_build_all_shapes() {
 		return;
 	}
 	_destroy_all_shapes();
-
-	b3ShapeDef def = b3DefaultShapeDef();
-	def.baseMaterial.friction = (float)friction;
-	def.baseMaterial.restitution = (float)bounce;
-	def.filter.categoryBits = (uint64_t)collision_layer;
-	def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
 
 	for (uint32_t i = 0; i < slots.size(); i++) {
 		shape_ids.push_back(b3_nullShapeId);
@@ -162,9 +174,35 @@ void Box3DBody3D::_build_all_shapes() {
 		if (slot.disabled || slot.shape == nullptr) {
 			continue;
 		}
-		def.userData = (void *)(uintptr_t)i; // Godot shape index for query results.
 
 		Box3DShape3D *s = slot.shape;
+		b3ShapeDef def = b3DefaultShapeDef();
+		def.baseMaterial.friction = (float)friction;
+		def.baseMaterial.restitution = (float)bounce;
+		def.filter.categoryBits = (uint64_t)collision_layer;
+		def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
+		def.userData = (void *)(uintptr_t)i; // Godot shape index for query results.
+
+		Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+		LocalVector<b3SurfaceMaterial> mesh_materials;
+		if (box3d_physics != nullptr) {
+			if (slot.has_surface_material) {
+				def.baseMaterial = box3d_physics->get_box3d_material(slot.surface_material_id);
+			} else if (s->has_named_surface_material()) {
+				def.baseMaterial = box3d_physics->get_box3d_material(s->get_surface_material_id());
+			}
+
+			const PackedInt64Array &mesh_material_ids = s->get_mesh_material_ids();
+			if (mesh_material_ids.size() > 0) {
+				mesh_materials.resize(mesh_material_ids.size());
+				for (int j = 0; j < mesh_material_ids.size(); j++) {
+					mesh_materials[j] = box3d_physics->get_box3d_material((int)mesh_material_ids[j]);
+				}
+				def.materials = mesh_materials.ptr();
+				def.materialCount = mesh_materials.size();
+			}
+		}
+
 		b3ShapeId shape_id = b3_nullShapeId;
 		const b3Vec3 unit_scale = b3Vec3{ 1.0f, 1.0f, 1.0f };
 
@@ -337,6 +375,21 @@ void Box3DBody3D::set_shape_disabled(int p_index, bool p_disabled) {
 	shapes_changed();
 }
 
+void Box3DBody3D::set_surface_material(int p_shape_idx, int p_material_id) {
+	if (p_shape_idx == -1) {
+		for (ShapeSlot &slot : slots) {
+			slot.has_surface_material = p_material_id > 0;
+			slot.surface_material_id = MAX(0, p_material_id);
+		}
+		shapes_changed();
+		return;
+	}
+	ERR_FAIL_INDEX(p_shape_idx, (int)slots.size());
+	slots[p_shape_idx].has_surface_material = p_material_id > 0;
+	slots[p_shape_idx].surface_material_id = MAX(0, p_material_id);
+	shapes_changed();
+}
+
 const Box3DBody3D::ShapeSlot *Box3DBody3D::get_shape_slot(int p_index) const {
 	ERR_FAIL_INDEX_V(p_index, (int)slots.size(), nullptr);
 	return &slots[p_index];
@@ -430,14 +483,22 @@ void Box3DBody3D::set_param(PhysicsServer3D::BodyParameter p_param, const Varian
 	switch (p_param) {
 		case PhysicsServer3D::BODY_PARAM_FRICTION: {
 			friction = p_value;
-			for (const b3ShapeId &id : shape_ids) {
-				b3Shape_SetFriction(id, (float)friction);
+			for (uint32_t i = 0; i < shape_ids.size(); i++) {
+				if (_slot_has_named_surface_material(i)) {
+					WARN_PRINT_ONCE("Box3D: BODY_PARAM_FRICTION ignored on shapes with named Box3D surface materials.");
+					continue;
+				}
+				b3Shape_SetFriction(shape_ids[i], (float)friction);
 			}
 		} break;
 		case PhysicsServer3D::BODY_PARAM_BOUNCE: {
 			bounce = p_value;
-			for (const b3ShapeId &id : shape_ids) {
-				b3Shape_SetRestitution(id, (float)bounce);
+			for (uint32_t i = 0; i < shape_ids.size(); i++) {
+				if (_slot_has_named_surface_material(i)) {
+					WARN_PRINT_ONCE("Box3D: BODY_PARAM_BOUNCE ignored on shapes with named Box3D surface materials.");
+					continue;
+				}
+				b3Shape_SetRestitution(shape_ids[i], (float)bounce);
 			}
 		} break;
 		case PhysicsServer3D::BODY_PARAM_MASS: {

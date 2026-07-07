@@ -46,6 +46,24 @@ PhysicsServer3D::ShapeType Box3DPhysicsServer3D::shape_get_type(RID p_shape) con
 	return shape->get_type();
 }
 
+void Box3DPhysicsServer3D::shape_set_surface_material(RID p_shape, int p_material_id) {
+	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
+	ERR_FAIL_NULL(shape);
+	shape->set_surface_material(p_material_id);
+}
+
+void Box3DPhysicsServer3D::shape_set_surface_map(RID p_shape, const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices) {
+	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
+	ERR_FAIL_NULL(shape);
+	shape->set_surface_map(p_material_ids, p_triangle_indices);
+}
+
+PackedByteArray Box3DPhysicsServer3D::shape_get_mesh_material_indices(RID p_shape) const {
+	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
+	ERR_FAIL_NULL_V(shape, PackedByteArray());
+	return shape->get_mesh_material_indices();
+}
+
 // --- Spaces ---
 
 RID Box3DPhysicsServer3D::space_create() {
@@ -187,6 +205,12 @@ void Box3DPhysicsServer3D::body_set_shape_disabled(RID p_body, int p_shape_idx, 
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
 	body->set_shape_disabled(p_shape_idx, p_disabled);
+}
+
+void Box3DPhysicsServer3D::body_set_surface_material(RID p_body, int p_shape_idx, int p_material_id) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_surface_material(p_shape_idx, p_material_id);
 }
 
 int Box3DPhysicsServer3D::body_get_shape_count(RID p_body) const {

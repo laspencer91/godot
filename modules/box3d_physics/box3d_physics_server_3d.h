@@ -69,6 +69,9 @@ public:
 	virtual void shape_set_data(RID p_shape, const Variant &p_data) override;
 	virtual Variant shape_get_data(RID p_shape) const override;
 	virtual ShapeType shape_get_type(RID p_shape) const override;
+	void shape_set_surface_material(RID p_shape, int p_material_id);
+	void shape_set_surface_map(RID p_shape, const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices);
+	PackedByteArray shape_get_mesh_material_indices(RID p_shape) const;
 
 	// Spaces.
 	virtual RID space_create() override;
@@ -93,6 +96,7 @@ public:
 	virtual void body_set_shape(RID p_body, int p_shape_idx, RID p_shape) override;
 	virtual void body_set_shape_transform(RID p_body, int p_shape_idx, const Transform3D &p_transform) override;
 	virtual void body_set_shape_disabled(RID p_body, int p_shape_idx, bool p_disabled) override;
+	void body_set_surface_material(RID p_body, int p_shape_idx, int p_material_id);
 	virtual int body_get_shape_count(RID p_body) const override;
 	virtual RID body_get_shape(RID p_body, int p_shape_idx) const override;
 	virtual Transform3D body_get_shape_transform(RID p_body, int p_shape_idx) const override;

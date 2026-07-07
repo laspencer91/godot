@@ -25,6 +25,8 @@ public:
 		Box3DShape3D *shape = nullptr;
 		Transform3D xform;
 		bool disabled = false;
+		bool has_surface_material = false;
+		int surface_material_id = 0;
 	};
 
 private:
@@ -68,6 +70,7 @@ private:
 	void _update_mass();
 	b3BodyType _box3d_type() const;
 	b3MotionLocks _motion_locks() const;
+	bool _slot_has_named_surface_material(uint32_t p_slot) const;
 
 public:
 	~Box3DBody3D();
@@ -95,6 +98,7 @@ public:
 	void set_shape(int p_index, RID p_shape_rid, Box3DShape3D *p_shape);
 	void set_shape_transform(int p_index, const Transform3D &p_xform);
 	void set_shape_disabled(int p_index, bool p_disabled);
+	void set_surface_material(int p_shape_idx, int p_material_id);
 	int get_shape_count() const { return slots.size(); }
 	const ShapeSlot *get_shape_slot(int p_index) const;
 	void shapes_changed(); // Rebuild all b3 shapes (shape data edited, filters changed, ...).

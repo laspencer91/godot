@@ -31,6 +31,10 @@ class Box3DShape3D {
 	bool box_built = false;
 	b3HullData *hull = nullptr; // Convex polygon + cylinder approximation.
 	b3MeshData *mesh = nullptr; // Concave polygon (trimesh). Referenced, not cloned, by Box3D.
+	bool has_surface_material = false;
+	int surface_material_id = 0;
+	PackedInt64Array mesh_material_ids;
+	PackedByteArray mesh_triangle_material_indices;
 
 	HashSet<Box3DBody3D *> owners;
 
@@ -45,6 +49,12 @@ public:
 
 	void set_data(const Variant &p_data);
 	Variant get_data() const { return data; }
+	void set_surface_material(int p_material_id);
+	bool has_named_surface_material() const { return has_surface_material; }
+	int get_surface_material_id() const { return surface_material_id; }
+	void set_surface_map(const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices);
+	const PackedInt64Array &get_mesh_material_ids() const { return mesh_material_ids; }
+	PackedByteArray get_mesh_material_indices() const;
 
 	void add_owner(Box3DBody3D *p_body) { owners.insert(p_body); }
 	void remove_owner(Box3DBody3D *p_body) { owners.erase(p_body); }
