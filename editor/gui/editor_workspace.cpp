@@ -175,6 +175,15 @@ int WorkspacePane::get_leaf_count() const {
 	return count;
 }
 
+WorkspacePane *WorkspacePane::of(Node *p_node) {
+	for (Node *n = p_node; n; n = n->get_parent()) {
+		if (WorkspacePane *pane = Object::cast_to<WorkspacePane>(n)) {
+			return pane;
+		}
+	}
+	return nullptr;
+}
+
 WorkspacePane::WorkspacePane() {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
@@ -506,22 +515,13 @@ WorkspacePane *EditorWorkspace::move_tab_into_pane(TabbedDocumentHost *p_source,
 
 	// A cross-pane move can empty the source pane; drain it through the close pipeline (root never closes).
 	if (!same_host && p_source->get_document_count() == 0) {
-		if (WorkspacePane *source_pane = _pane_of_content(p_source)) {
+		if (WorkspacePane *source_pane = WorkspacePane::of(p_source)) {
 			queue_close_pane(source_pane);
 		}
 	}
 
 	set_focused_pane(result);
 	return result;
-}
-
-WorkspacePane *EditorWorkspace::_pane_of_content(Node *p_content) const {
-	for (Node *n = p_content; n; n = n->get_parent()) {
-		if (WorkspacePane *pane = Object::cast_to<WorkspacePane>(n)) {
-			return pane;
-		}
-	}
-	return nullptr;
 }
 
 EditorWorkspace::EditorWorkspace() {

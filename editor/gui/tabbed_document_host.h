@@ -134,10 +134,11 @@ public:
 	int adopt_tab(EditorDocument *p_document, DocumentView *p_view);
 
 	// G6: drag-to-split drop handling, driven by this pane's PaneDropOverlay. can_accept_tab_drop
-	// validates that a native TabBar drag payload resolves to a live source host; accept_tab_drop
-	// performs the move for the given PaneDropOverlay::Zone (passed as int).
+	// validates that a native TabBar drag payload resolves to a live source host + in-range tab;
+	// accept_tab_drop is a pure pass-through of the overlay's resolved split intent to
+	// EditorWorkspace::move_tab_into_pane (whose signature this triple matches).
 	bool can_accept_tab_drop(const Variant &p_data) const;
-	void accept_tab_drop(const Variant &p_data, int p_zone);
+	void accept_tab_drop(const Variant &p_data, bool p_center, bool p_vertical, bool p_new_on_second);
 
 	TabbedDocumentHost();
 };

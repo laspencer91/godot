@@ -98,7 +98,13 @@ void PaneDropOverlay::drop_data(const Point2 &p_point, const Variant &p_data) {
 	if (!owner_host || !_accepts(p_data)) {
 		return;
 	}
-	owner_host->accept_tab_drop(p_data, _zone_at(p_point));
+	// The overlay owns zone semantics: translate the hovered zone into the split intent the workspace
+	// primitive expects, so the host stays a pure pass-through.
+	const Zone z = _zone_at(p_point);
+	const bool center = (z == ZONE_CENTER);
+	const bool vertical = (z == ZONE_UP || z == ZONE_DOWN);
+	const bool new_on_second = (z == ZONE_RIGHT || z == ZONE_DOWN);
+	owner_host->accept_tab_drop(p_data, center, vertical, new_on_second);
 	_set_drag_active(false);
 }
 

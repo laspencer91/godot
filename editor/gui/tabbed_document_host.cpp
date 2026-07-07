@@ -341,12 +341,7 @@ int TabbedDocumentHost::adopt_tab(EditorDocument *p_document, DocumentView *p_vi
 }
 
 WorkspacePane *TabbedDocumentHost::_owning_pane() const {
-	for (Node *n = get_parent(); n; n = n->get_parent()) {
-		if (WorkspacePane *pane = Object::cast_to<WorkspacePane>(n)) {
-			return pane;
-		}
-	}
-	return nullptr;
+	return WorkspacePane::of(get_parent()); // G6: shared parent-chain walk.
 }
 
 TabbedDocumentHost *TabbedDocumentHost::_host_from_drag_data(const Variant &p_data, int &r_tab, const Node *p_ref) {
@@ -366,7 +361,11 @@ TabbedDocumentHost *TabbedDocumentHost::_host_from_drag_data(const Variant &p_da
 	Node *from = p_ref->get_node_or_null(d["from_path"]);
 	for (Node *n = from; n; n = n->get_parent()) {
 		if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(n)) {
-			r_tab = d["tab_index"];
+			const int tab = d["tab_index"];
+			if (tab < 0 || tab >= host->get_document_count()) {
+				return nullptr; // Stale/out-of-range index -> not a valid drop.
+			}
+			r_tab = tab;
 			return host;
 		}
 	}
@@ -375,14 +374,13 @@ TabbedDocumentHost *TabbedDocumentHost::_host_from_drag_data(const Variant &p_da
 
 bool TabbedDocumentHost::can_accept_tab_drop(const Variant &p_data) const {
 	int tab = -1;
-	const TabbedDocumentHost *src = _host_from_drag_data(p_data, tab, this);
-	return src && tab >= 0 && tab < src->get_document_count();
+	return _host_from_drag_data(p_data, tab, this) != nullptr;
 }
 
-void TabbedDocumentHost::accept_tab_drop(const Variant &p_data, int p_zone) {
+void TabbedDocumentHost::accept_tab_drop(const Variant &p_data, bool p_center, bool p_vertical, bool p_new_on_second) {
 	int tab = -1;
 	TabbedDocumentHost *src = _host_from_drag_data(p_data, tab, this);
-	if (!src || tab < 0 || tab >= src->get_document_count()) {
+	if (!src) {
 		return;
 	}
 	WorkspacePane *pane = _owning_pane();
@@ -390,10 +388,7 @@ void TabbedDocumentHost::accept_tab_drop(const Variant &p_data, int p_zone) {
 	if (!ws) {
 		return;
 	}
-	const bool center = (p_zone == PaneDropOverlay::ZONE_CENTER);
-	const bool split_vertical = (p_zone == PaneDropOverlay::ZONE_UP || p_zone == PaneDropOverlay::ZONE_DOWN);
-	const bool new_on_second = (p_zone == PaneDropOverlay::ZONE_RIGHT || p_zone == PaneDropOverlay::ZONE_DOWN);
-	ws->move_tab_into_pane(src, tab, pane, center, split_vertical, new_on_second);
+	ws->move_tab_into_pane(src, tab, pane, p_center, p_vertical, p_new_on_second);
 }
 
 void TabbedDocumentHost::_on_tab_rmb(int p_idx) {

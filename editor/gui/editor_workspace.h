@@ -93,6 +93,10 @@ public:
 	WorkspacePane *get_second() const { return second; }
 	int get_leaf_count() const;
 
+	// G6: nearest WorkspacePane at or above p_node (null if none). Shared by the workspace and the
+	// tabbed hosts so the parent-chain walk lives in one place.
+	static WorkspacePane *of(Node *p_node);
+
 	// G2 S8: this SPLIT pane becomes its surviving child. p_removed's whole subtree is
 	// freed (DocumentViews run their PREDELETE detach work); the survivor's payload —
 	// leaf content or inner split — is re-homed into this pane.
@@ -173,6 +177,5 @@ public:
 private:
 	WorkspacePane *_find_pane_showing(WorkspacePane *p_pane, EditorDocument *p_document) const;
 	WorkspacePane *_find_tabbed_leaf(WorkspacePane *p_pane) const;
-	WorkspacePane *_pane_of_content(Node *p_content) const; // G6: nearest WorkspacePane ancestor of a content node.
 	void _close_pane_by_id(ObjectID p_pane_id);
 };
