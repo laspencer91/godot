@@ -415,6 +415,9 @@ void EditorNode::shortcut_input(const Ref<InputEvent> &p_event) {
 	if ((k.is_valid() && k->is_pressed() && !k->is_echo()) || Object::cast_to<InputEventShortcut>(*p_event)) {
 		bool is_handled = true;
 		if (ED_IS_SHORTCUT("editor/filter_files", p_event)) {
+			if (workspace_file_drawer) { // G4: the FileSystem dock is only visible while the drawer is open.
+				workspace_file_drawer->set_open(true);
+			}
 			FileSystemDock::get_singleton()->focus_on_filter();
 		} else if (ED_IS_SHORTCUT("editor/editor_2d", p_event)) {
 			editor_main_screen->select(EditorMainScreen::EDITOR_2D);
@@ -6475,6 +6478,16 @@ void EditorNode::_save_central_editor_layout_to_config(Ref<ConfigFile> p_config_
 	// Main editor (plugin).
 
 	editor_main_screen->save_layout_to_config(p_config_file, EDITOR_NODE_CONFIG_SECTION);
+
+	// G4: the drawer geometry + its (unmanaged) FileSystem dock layout, persisted directly since the
+	// dock no longer flows through EditorDockManager::save_docks_to_config.
+	if (workspace_file_drawer) {
+		workspace_file_drawer->save_state_to_config(p_config_file, EDITOR_NODE_CONFIG_SECTION);
+	}
+	if (FileSystemDock::get_singleton()) {
+		// save_layout_to_config is public on EditorDock but protected on FileSystemDock; go through the base.
+		static_cast<EditorDock *>(FileSystemDock::get_singleton())->save_layout_to_config(p_config_file, "FileSystem");
+	}
 }
 
 void EditorNode::_load_central_editor_layout_from_config(Ref<ConfigFile> p_config_file) {
@@ -6492,6 +6505,14 @@ void EditorNode::_load_central_editor_layout_from_config(Ref<ConfigFile> p_confi
 	// Main editor (plugin).
 
 	editor_main_screen->load_layout_from_config(p_config_file, EDITOR_NODE_CONFIG_SECTION);
+
+	// G4: restore the drawer geometry + FileSystem dock layout (see the matching save above).
+	if (FileSystemDock::get_singleton()) {
+		static_cast<EditorDock *>(FileSystemDock::get_singleton())->load_layout_from_config(p_config_file, "FileSystem");
+	}
+	if (workspace_file_drawer) {
+		workspace_file_drawer->load_state_from_config(p_config_file, EDITOR_NODE_CONFIG_SECTION);
+	}
 }
 
 void EditorNode::_save_window_settings_to_config(Ref<ConfigFile> p_layout, const String &p_section) {
@@ -7931,7 +7952,14 @@ void EditorNode::_feature_profile_changed() {
 		editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_GROUPS_DOCK));
 		// The Import dock is useless without the FileSystem dock. Ensure the configuration is valid.
 		bool fs_dock_disabled = profile->is_feature_disabled(EditorFeatureProfile::FEATURE_FILESYSTEM_DOCK);
-		editor_dock_manager->set_dock_enabled(FileSystemDock::get_singleton(), !fs_dock_disabled);
+		// G4: FileSystem lives in the workspace drawer, not the dock manager -- gate the bottom-bar
+		// toggle (and force the drawer closed) instead of set_dock_enabled on an unmanaged dock.
+		if (filesystem_drawer_button) {
+			filesystem_drawer_button->set_visible(!fs_dock_disabled);
+		}
+		if (fs_dock_disabled && workspace_file_drawer) {
+			workspace_file_drawer->set_open(false, false);
+		}
 		editor_dock_manager->set_dock_enabled(ImportDock::get_singleton(), !fs_dock_disabled && !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_IMPORT_DOCK));
 		editor_dock_manager->set_dock_enabled(history_dock, !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_HISTORY_DOCK));
 
@@ -7947,7 +7975,9 @@ void EditorNode::_feature_profile_changed() {
 		editor_dock_manager->set_dock_enabled(ImportDock::get_singleton(), true);
 		editor_dock_manager->set_dock_enabled(SignalsDock::get_singleton(), true);
 		editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), true);
-		editor_dock_manager->set_dock_enabled(FileSystemDock::get_singleton(), true);
+		if (filesystem_drawer_button) { // G4: FileSystem is drawer-hosted; re-enable via its toggle.
+			filesystem_drawer_button->set_visible(true);
+		}
 		editor_dock_manager->set_dock_enabled(history_dock, true);
 		editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_3D, true);
 		editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_SCRIPT, true);
@@ -8837,15 +8867,7 @@ EditorNode::EditorNode() {
 	workspace_file_drawer = memnew(WorkspaceFileDrawer);
 	center_vb->add_child(workspace_file_drawer);
 	workspace_file_drawer->set_host(center_vb);
-	{
-		// G4 commit 1: placeholder content so the overlay/slide/toggle can be verified in isolation.
-		// Replaced by the real FileSystemDock in commit 2.
-		Label *drawer_placeholder = memnew(Label);
-		drawer_placeholder->set_text(TTR("FileSystem drawer (placeholder)"));
-		drawer_placeholder->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
-		drawer_placeholder->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
-		workspace_file_drawer->add_panel(drawer_placeholder, TTR("FileSystem"));
-	}
+	// The FileSystemDock is reparented into the drawer below, once it is constructed.
 
 	right_l_vsplit = memnew(DockSplitContainer);
 	right_l_vsplit->set_name("DockVSplitRightL");
@@ -9295,7 +9317,10 @@ EditorNode::EditorNode() {
 	filesystem_dock->connect("instantiate", callable_mp(this, &EditorNode::_instantiate_request));
 	filesystem_dock->connect("display_mode_changed", callable_mp(this, &EditorNode::_save_editor_layout));
 	get_project_settings()->connect_filesystem_dock_signals(filesystem_dock);
-	editor_dock_manager->add_dock(filesystem_dock);
+	// G4: the FileSystem dock lives in the slide-up drawer, not a side dock slot. It is unmanaged by
+	// EditorDockManager -- its singleton is still set in the ctor, so the ~100 get_singleton() callers
+	// keep working; its own layout is persisted directly (see _save/_load_central_editor_layout).
+	workspace_file_drawer->add_panel(filesystem_dock, TTR("FileSystem"));
 
 	memnew(InspectorDock(editor_data));
 	editor_dock_manager->add_dock(InspectorDock::get_singleton());
@@ -9333,9 +9358,9 @@ EditorNode::EditorNode() {
 		default_layout->set_value(docks_section, "dock_3_selected_tab_idx", 0);
 	}
 	{
-		const String filesystem_key = filesystem_dock->get_effective_layout_key();
+		// G4: FileSystem is no longer a side dock (it lives in the drawer), so slot 4 holds History only.
 		const String history_key = history_dock->get_effective_layout_key();
-		default_layout->set_value(docks_section, "dock_4", vformat("%s,%s", filesystem_key, history_key));
+		default_layout->set_value(docks_section, "dock_4", history_key);
 		default_layout->set_value(docks_section, "dock_4_selected_tab_idx", 0);
 	}
 	{

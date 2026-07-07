@@ -149,10 +149,16 @@ void WorkspaceFileDrawer::_update_theme() {
 	sb.instantiate();
 	const Color base = get_theme_color(SNAME("base_color"), EditorStringName(Editor));
 	sb->set_bg_color(base.lightened(0.03));
-	sb->set_corner_radius_all(6 * EDSCALE);
+	// Round only the top corners (the bottom sits off-screen). Content is inset well past the radius
+	// below so no opaque inner panel reaches into the rounded corner (clip is rectangular, not rounded).
+	const int radius = 5 * EDSCALE;
+	sb->set_corner_radius(CORNER_TOP_LEFT, radius);
+	sb->set_corner_radius(CORNER_TOP_RIGHT, radius);
+	sb->set_corner_radius(CORNER_BOTTOM_LEFT, 0);
+	sb->set_corner_radius(CORNER_BOTTOM_RIGHT, 0);
 	sb->set_border_width_all(Math::round(EDSCALE));
 	sb->set_border_color(base.lightened(0.28));
-	sb->set_content_margin_all(6 * EDSCALE);
+	sb->set_content_margin_all(10 * EDSCALE);
 	sb->set_shadow_color(Color(0, 0, 0, 0.38));
 	sb->set_shadow_size(6 * EDSCALE);
 	add_theme_style_override(SceneStringName(panel), sb);
@@ -214,5 +220,11 @@ WorkspaceFileDrawer::WorkspaceFileDrawer() {
 
 	tab_host = memnew(TabContainer);
 	tab_host->set_v_size_flags(SIZE_EXPAND_FILL);
+	// The tab host's own square content/tab-bar backgrounds would poke through the drawer's rounded
+	// corners (clip is rectangular, not rounded). Blank them so only the drawer panel paints there.
+	Ref<StyleBoxEmpty> empty_sb;
+	empty_sb.instantiate();
+	tab_host->add_theme_style_override(SNAME("panel"), empty_sb);
+	tab_host->add_theme_style_override(SNAME("tabbar_background"), empty_sb);
 	body->add_child(tab_host);
 }
