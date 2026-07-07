@@ -4,6 +4,8 @@
 
 #include "box3d_physics_server_3d.h"
 
+#include "box3d_direct_space_state_3d.h"
+
 // --- Shapes ---
 
 RID Box3DPhysicsServer3D::_create_shape(ShapeType p_type) {
@@ -37,6 +39,7 @@ PhysicsServer3D::ShapeType Box3DPhysicsServer3D::shape_get_type(RID p_shape) con
 
 RID Box3DPhysicsServer3D::space_create() {
 	Box3DSpace3D *space = memnew(Box3DSpace3D);
+	space->setup_direct_state(&shape_owner, &body_owner);
 	return space_owner.make_rid(space);
 }
 
@@ -56,6 +59,13 @@ bool Box3DPhysicsServer3D::space_is_active(RID p_space) const {
 	return active_spaces.has(space);
 }
 
+PhysicsDirectSpaceState3D *Box3DPhysicsServer3D::space_get_direct_state(RID p_space) {
+	Box3DSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, nullptr);
+	ERR_FAIL_COND_V_MSG((using_threads && !doing_sync) || space->is_stepping(), nullptr, "Space state is inaccessible right now, wait for iteration or physics process notification.");
+	return space->get_direct_state();
+}
+
 // --- Areas ---
 
 RID Box3DPhysicsServer3D::area_create() {
@@ -68,12 +78,14 @@ RID Box3DPhysicsServer3D::area_create() {
 void Box3DPhysicsServer3D::area_set_space(RID p_area, RID p_space) {
 	Box3DArea3D *area = area_owner.get_or_null(p_area);
 	ERR_FAIL_NULL(area);
+	area->space_rid = p_space;
 	area->space = space_owner.get_or_null(p_space);
 }
 
 RID Box3DPhysicsServer3D::area_get_space(RID p_area) const {
-	// Placeholder areas don't track their space RID yet (milestone 4).
-	return RID();
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, RID());
+	return area->space_rid;
 }
 
 void Box3DPhysicsServer3D::area_set_param(RID p_area, AreaParameter p_param, const Variant &p_value) {
@@ -116,14 +128,14 @@ void Box3DPhysicsServer3D::body_set_space(RID p_body, RID p_space) {
 		space = space_owner.get_or_null(p_space);
 		ERR_FAIL_NULL(space);
 	}
+	body->set_space_rid(p_space);
 	body->set_space(space);
 }
 
 RID Box3DPhysicsServer3D::body_get_space(RID p_body) const {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL_V(body, RID());
-	// Reverse lookup not stored yet; bodies keep the space pointer only.
-	return RID();
+	return body->get_space_rid();
 }
 
 void Box3DPhysicsServer3D::body_set_mode(RID p_body, BodyMode p_mode) {
@@ -143,7 +155,7 @@ void Box3DPhysicsServer3D::body_add_shape(RID p_body, RID p_shape, const Transfo
 	ERR_FAIL_NULL(body);
 	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
 	ERR_FAIL_NULL(shape);
-	body->add_shape(shape, p_transform, p_disabled);
+	body->add_shape(p_shape, shape, p_transform, p_disabled);
 }
 
 void Box3DPhysicsServer3D::body_set_shape(RID p_body, int p_shape_idx, RID p_shape) {
@@ -151,7 +163,7 @@ void Box3DPhysicsServer3D::body_set_shape(RID p_body, int p_shape_idx, RID p_sha
 	ERR_FAIL_NULL(body);
 	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
 	ERR_FAIL_NULL(shape);
-	body->set_shape(p_shape_idx, shape);
+	body->set_shape(p_shape_idx, p_shape, shape);
 }
 
 void Box3DPhysicsServer3D::body_set_shape_transform(RID p_body, int p_shape_idx, const Transform3D &p_transform) {
@@ -173,8 +185,10 @@ int Box3DPhysicsServer3D::body_get_shape_count(RID p_body) const {
 }
 
 RID Box3DPhysicsServer3D::body_get_shape(RID p_body, int p_shape_idx) const {
-	// Shape RIDs aren't stored back on slots yet; scene code rarely needs this. TODO milestone 2.
-	return RID();
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, RID());
+	const Box3DBody3D::ShapeSlot *slot = body->get_shape_slot(p_shape_idx);
+	return slot ? slot->rid : RID();
 }
 
 Transform3D Box3DPhysicsServer3D::body_get_shape_transform(RID p_body, int p_shape_idx) const {
@@ -232,6 +246,12 @@ uint32_t Box3DPhysicsServer3D::body_get_collision_mask(RID p_body) const {
 	return body->get_collision_mask();
 }
 
+void Box3DPhysicsServer3D::body_set_enable_continuous_collision_detection(RID p_body, bool p_enable) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_enable_continuous_collision_detection(p_enable);
+}
+
 void Box3DPhysicsServer3D::body_set_param(RID p_body, BodyParameter p_param, const Variant &p_value) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
@@ -284,6 +304,84 @@ Variant Box3DPhysicsServer3D::body_get_state(RID p_body, BodyState p_state) cons
 	return Variant();
 }
 
+void Box3DPhysicsServer3D::body_apply_central_impulse(RID p_body, const Vector3 &p_impulse) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->apply_central_impulse(p_impulse);
+}
+
+void Box3DPhysicsServer3D::body_apply_impulse(RID p_body, const Vector3 &p_impulse, const Vector3 &p_position) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->apply_impulse(p_impulse, p_position);
+}
+
+void Box3DPhysicsServer3D::body_apply_torque_impulse(RID p_body, const Vector3 &p_impulse) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->apply_torque_impulse(p_impulse);
+}
+
+void Box3DPhysicsServer3D::body_apply_central_force(RID p_body, const Vector3 &p_force) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->apply_central_force(p_force);
+}
+
+void Box3DPhysicsServer3D::body_apply_force(RID p_body, const Vector3 &p_force, const Vector3 &p_position) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->apply_force(p_force, p_position);
+}
+
+void Box3DPhysicsServer3D::body_apply_torque(RID p_body, const Vector3 &p_torque) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->apply_torque(p_torque);
+}
+
+void Box3DPhysicsServer3D::body_add_constant_central_force(RID p_body, const Vector3 &p_force) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->add_constant_central_force(p_force);
+}
+
+void Box3DPhysicsServer3D::body_add_constant_force(RID p_body, const Vector3 &p_force, const Vector3 &p_position) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->add_constant_force(p_force, p_position);
+}
+
+void Box3DPhysicsServer3D::body_add_constant_torque(RID p_body, const Vector3 &p_torque) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->add_constant_torque(p_torque);
+}
+
+void Box3DPhysicsServer3D::body_set_constant_force(RID p_body, const Vector3 &p_force) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_constant_force(p_force);
+}
+
+Vector3 Box3DPhysicsServer3D::body_get_constant_force(RID p_body) const {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, Vector3());
+	return body->get_constant_force();
+}
+
+void Box3DPhysicsServer3D::body_set_constant_torque(RID p_body, const Vector3 &p_torque) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_constant_torque(p_torque);
+}
+
+Vector3 Box3DPhysicsServer3D::body_get_constant_torque(RID p_body) const {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, Vector3());
+	return body->get_constant_torque();
+}
+
 void Box3DPhysicsServer3D::body_set_state_sync_callback(RID p_body, const Callable &p_callable) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
@@ -293,6 +391,7 @@ void Box3DPhysicsServer3D::body_set_state_sync_callback(RID p_body, const Callab
 PhysicsDirectBodyState3D *Box3DPhysicsServer3D::body_get_direct_state(RID p_body) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL_V(body, nullptr);
+	ERR_FAIL_COND_V_MSG((using_threads && !doing_sync) || (body->get_space() && body->get_space()->is_stepping()), nullptr, "Body state is inaccessible right now, wait for iteration or physics process notification.");
 	return body->get_direct_state();
 }
 

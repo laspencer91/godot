@@ -6,15 +6,19 @@
 
 #include "core/templates/hash_set.h"
 #include "core/templates/local_vector.h"
+#include "core/templates/rid_owner.h"
 #include "servers/physics_3d/physics_server_3d.h"
 
 #include "box3d/box3d.h"
 
 class Box3DBody3D;
+class Box3DDirectSpaceState3D;
+class Box3DShape3D;
 
 class Box3DSpace3D {
 	b3WorldId world = {};
 	real_t last_step = 0.0;
+	bool stepping = false;
 
 	// Default-area parameters (World3D routes these through area_set_param on the space RID).
 	real_t default_gravity = 9.8;
@@ -23,7 +27,9 @@ class Box3DSpace3D {
 	real_t default_angular_damp = 0.1;
 
 	LocalVector<Box3DBody3D *> dirty_bodies;
+	HashSet<Box3DBody3D *> bodies;
 	HashSet<Box3DBody3D *> pending_kinematic;
+	Box3DDirectSpaceState3D *direct_state = nullptr;
 
 	void _update_world_gravity();
 
@@ -34,11 +40,15 @@ public:
 	b3WorldId get_world() const { return world; }
 	real_t get_last_step() const { return last_step; }
 	Vector3 get_gravity() const { return default_gravity_vector * default_gravity; }
+	bool is_stepping() const { return stepping; }
+	Box3DDirectSpaceState3D *get_direct_state() const { return direct_state; }
+	void setup_direct_state(RID_PtrOwner<Box3DShape3D> *p_shape_owner, RID_PtrOwner<Box3DBody3D> *p_body_owner);
 
 	void step(real_t p_step);
 	void call_queries();
 
 	void kinematic_target_queued(Box3DBody3D *p_body) { pending_kinematic.insert(p_body); }
+	void body_added(Box3DBody3D *p_body) { bodies.insert(p_body); }
 	void body_removed(Box3DBody3D *p_body);
 
 	void set_default_area_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value);

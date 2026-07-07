@@ -7,6 +7,7 @@
 #include "box3d_body_3d.h"
 #include "box3d_conversions.h"
 
+#include "core/io/image.h"
 #include "core/templates/local_vector.h"
 
 void Box3DShape3D::_clear_geometry() {
@@ -97,7 +98,79 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 		} break;
 
 		case PhysicsServer3D::SHAPE_HEIGHTMAP: {
-			WARN_PRINT_ONCE("Box3D: heightmap shapes not implemented yet; shape will not collide.");
+			Dictionary d = p_data;
+			ERR_FAIL_COND_MSG(!d.has("width") || !d.has("depth") || !d.has("heights"), "Box3D: heightmap data must contain width, depth, and heights.");
+
+			const int width = d["width"];
+			const int depth = d["depth"];
+			ERR_FAIL_COND_MSG(width < 2 || depth < 2, "Box3D: heightmap shape needs at least a 2x2 grid.");
+
+			Variant heights_variant = d["heights"];
+			Vector<real_t> heights;
+#ifdef REAL_T_IS_DOUBLE
+			if (heights_variant.get_type() == Variant::PACKED_FLOAT64_ARRAY) {
+#else
+			if (heights_variant.get_type() == Variant::PACKED_FLOAT32_ARRAY) {
+#endif
+				heights = heights_variant;
+			} else if (heights_variant.get_type() == Variant::OBJECT) {
+				Ref<Image> image = heights_variant;
+				ERR_FAIL_COND_MSG(image.is_null() || image->get_format() != Image::FORMAT_RF, "Box3D: heightmap Image data must use FORMAT_RF.");
+				PackedByteArray image_data = image->get_data();
+				heights.resize(image->get_width() * image->get_height());
+				real_t *height_write = heights.ptrw();
+				const float *image_read = (const float *)image_data.ptr();
+				for (int i = 0; i < heights.size(); i++) {
+					height_write[i] = image_read[i];
+				}
+			} else {
+				ERR_FAIL_MSG("Box3D: heightmap heights must be a packed float array or FORMAT_RF image.");
+			}
+
+			ERR_FAIL_COND_MSG(heights.size() != width * depth, "Box3D: heightmap heights size must equal width * depth.");
+
+			LocalVector<b3Vec3> vertices;
+			LocalVector<int32_t> indices;
+			vertices.resize(width * depth);
+			indices.resize((width - 1) * (depth - 1) * 6);
+
+			const real_t x_offset = (real_t)(width - 1) * 0.5;
+			const real_t z_offset = (real_t)(depth - 1) * 0.5;
+			for (int z = 0; z < depth; z++) {
+				for (int x = 0; x < width; x++) {
+					const int idx = z * width + x;
+					vertices[idx] = to_box3d(Vector3((real_t)x - x_offset, heights[idx], (real_t)z - z_offset));
+				}
+			}
+
+			int index = 0;
+			for (int z = 0; z < depth - 1; z++) {
+				for (int x = 0; x < width - 1; x++) {
+					const int i00 = z * width + x;
+					const int i10 = z * width + x + 1;
+					const int i01 = (z + 1) * width + x;
+					const int i11 = (z + 1) * width + x + 1;
+
+					indices[index++] = i00;
+					indices[index++] = i01;
+					indices[index++] = i10;
+					indices[index++] = i10;
+					indices[index++] = i01;
+					indices[index++] = i11;
+				}
+			}
+
+			b3MeshDef mesh_def = {};
+			mesh_def.vertices = vertices.ptr();
+			mesh_def.indices = indices.ptr();
+			mesh_def.vertexCount = vertices.size();
+			mesh_def.triangleCount = indices.size() / 3;
+			mesh_def.weldVertices = true;
+			mesh_def.weldTolerance = 0.0001f;
+			mesh_def.useMedianSplit = true;
+			mesh_def.identifyEdges = true;
+			mesh = b3CreateMesh(&mesh_def, nullptr, 0);
+			ERR_FAIL_NULL_MSG(mesh, "Box3D: failed to build heightmap mesh.");
 		} break;
 
 		case PhysicsServer3D::SHAPE_WORLD_BOUNDARY: {

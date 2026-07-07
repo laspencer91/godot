@@ -18,6 +18,7 @@ class Box3DBody3D;
 // and each attached body creates its own b3ShapeId from it (see Box3DBody3D).
 class Box3DShape3D {
 	friend class Box3DBody3D;
+	friend class Box3DDirectSpaceState3D;
 
 	PhysicsServer3D::ShapeType type = PhysicsServer3D::SHAPE_CUSTOM;
 	Variant data;

@@ -6,6 +6,7 @@
 
 #include "box3d_body_3d.h"
 #include "box3d_conversions.h"
+#include "box3d_direct_space_state_3d.h"
 
 // TODO(box3d): substep count + worker count become physics/box3d/* project settings.
 static const int BOX3D_SUBSTEPS = 4;
@@ -19,6 +20,9 @@ Box3DSpace3D::Box3DSpace3D() {
 
 Box3DSpace3D::~Box3DSpace3D() {
 	// Bodies must already be detached (Godot frees bodies before their space).
+	if (direct_state) {
+		memdelete(direct_state);
+	}
 	b3DestroyWorld(world);
 }
 
@@ -27,8 +31,16 @@ void Box3DSpace3D::_update_world_gravity() {
 }
 
 void Box3DSpace3D::body_removed(Box3DBody3D *p_body) {
+	bodies.erase(p_body);
 	pending_kinematic.erase(p_body);
 	dirty_bodies.erase(p_body);
+}
+
+void Box3DSpace3D::setup_direct_state(RID_PtrOwner<Box3DShape3D> *p_shape_owner, RID_PtrOwner<Box3DBody3D> *p_body_owner) {
+	if (!direct_state) {
+		direct_state = memnew(Box3DDirectSpaceState3D);
+	}
+	direct_state->setup(this, p_shape_owner, p_body_owner);
 }
 
 void Box3DSpace3D::step(real_t p_step) {
@@ -37,7 +49,13 @@ void Box3DSpace3D::step(real_t p_step) {
 	}
 	pending_kinematic.clear();
 
+	for (Box3DBody3D *body : bodies) {
+		body->apply_constant_forces();
+	}
+
+	stepping = true;
 	b3World_Step(world, (float)p_step, BOX3D_SUBSTEPS);
+	stepping = false;
 	last_step = p_step;
 
 	// Pull move events; buffer state-sync work for flush_queries().

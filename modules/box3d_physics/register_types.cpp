@@ -16,7 +16,7 @@ static PhysicsServer3D *create_box3d_physics_server() {
 #else
 	bool run_on_separate_thread = false;
 #endif
-	Box3DPhysicsServer3D *server = memnew(Box3DPhysicsServer3D);
+	Box3DPhysicsServer3D *server = memnew(Box3DPhysicsServer3D(run_on_separate_thread));
 	return memnew(PhysicsServer3DWrapMT(server, run_on_separate_thread));
 }
 

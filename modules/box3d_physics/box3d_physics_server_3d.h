@@ -23,6 +23,7 @@
 class Box3DArea3D {
 public:
 	RID rid;
+	RID space_rid;
 	Box3DSpace3D *space = nullptr;
 	HashMap<int, Variant> params;
 };
@@ -39,10 +40,15 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 
 	bool active = true;
 	bool flushing_queries = false;
+	bool using_threads = false;
+	bool doing_sync = false;
 
 	RID _create_shape(ShapeType p_type);
 
 public:
+	explicit Box3DPhysicsServer3D(bool p_using_threads = false) :
+			using_threads(p_using_threads) {}
+
 	// Shapes.
 	virtual RID world_boundary_shape_create() override { return _create_shape(SHAPE_WORLD_BOUNDARY); }
 	virtual RID separation_ray_shape_create() override { return _create_shape(SHAPE_SEPARATION_RAY); }
@@ -62,6 +68,7 @@ public:
 	virtual RID space_create() override;
 	virtual void space_set_active(RID p_space, bool p_active) override;
 	virtual bool space_is_active(RID p_space) const override;
+	virtual PhysicsDirectSpaceState3D *space_get_direct_state(RID p_space) override;
 
 	// Areas (parameter storage only for now; space RID routes to default area).
 	virtual RID area_create() override;
@@ -91,10 +98,24 @@ public:
 	virtual uint32_t body_get_collision_layer(RID p_body) const override;
 	virtual void body_set_collision_mask(RID p_body, uint32_t p_mask) override;
 	virtual uint32_t body_get_collision_mask(RID p_body) const override;
+	virtual void body_set_enable_continuous_collision_detection(RID p_body, bool p_enable) override;
 	virtual void body_set_param(RID p_body, BodyParameter p_param, const Variant &p_value) override;
 	virtual Variant body_get_param(RID p_body, BodyParameter p_param) const override;
 	virtual void body_set_state(RID p_body, BodyState p_state, const Variant &p_variant) override;
 	virtual Variant body_get_state(RID p_body, BodyState p_state) const override;
+	virtual void body_apply_central_impulse(RID p_body, const Vector3 &p_impulse) override;
+	virtual void body_apply_impulse(RID p_body, const Vector3 &p_impulse, const Vector3 &p_position = Vector3()) override;
+	virtual void body_apply_torque_impulse(RID p_body, const Vector3 &p_impulse) override;
+	virtual void body_apply_central_force(RID p_body, const Vector3 &p_force) override;
+	virtual void body_apply_force(RID p_body, const Vector3 &p_force, const Vector3 &p_position = Vector3()) override;
+	virtual void body_apply_torque(RID p_body, const Vector3 &p_torque) override;
+	virtual void body_add_constant_central_force(RID p_body, const Vector3 &p_force) override;
+	virtual void body_add_constant_force(RID p_body, const Vector3 &p_force, const Vector3 &p_position = Vector3()) override;
+	virtual void body_add_constant_torque(RID p_body, const Vector3 &p_torque) override;
+	virtual void body_set_constant_force(RID p_body, const Vector3 &p_force) override;
+	virtual Vector3 body_get_constant_force(RID p_body) const override;
+	virtual void body_set_constant_torque(RID p_body, const Vector3 &p_torque) override;
+	virtual Vector3 body_get_constant_torque(RID p_body) const override;
 	virtual void body_set_state_sync_callback(RID p_body, const Callable &p_callable) override;
 	virtual PhysicsDirectBodyState3D *body_get_direct_state(RID p_body) override;
 
@@ -102,8 +123,8 @@ public:
 	virtual void free_rid(RID p_rid) override;
 	virtual void set_active(bool p_active) override { active = p_active; }
 	virtual void step(real_t p_step) override;
-	virtual void sync() override {}
+	virtual void sync() override { doing_sync = true; }
 	virtual void flush_queries() override;
-	virtual void end_sync() override {}
+	virtual void end_sync() override { doing_sync = false; }
 	virtual bool is_flushing_queries() const override { return flushing_queries; }
 };

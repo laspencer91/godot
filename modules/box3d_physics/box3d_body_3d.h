@@ -12,13 +12,16 @@
 class Box3DShape3D;
 class Box3DSpace3D;
 class Box3DDirectBodyState3D;
+class Box3DDirectSpaceState3D;
 
 class Box3DBody3D {
 	friend class Box3DDirectBodyState3D;
+	friend class Box3DDirectSpaceState3D;
 	friend class Box3DSpace3D;
 
 public:
 	struct ShapeSlot {
+		RID rid;
 		Box3DShape3D *shape = nullptr;
 		Transform3D xform;
 		bool disabled = false;
@@ -26,11 +29,13 @@ public:
 
 private:
 	RID rid;
+	RID space_rid;
 	ObjectID instance_id;
 
 	Box3DSpace3D *space = nullptr;
 	b3BodyId body_id = {}; // Null id when not in a space.
 	LocalVector<b3ShapeId> shape_ids;
+	LocalVector<b3MeshData *> instance_meshes;
 	LocalVector<ShapeSlot> slots;
 
 	PhysicsServer3D::BodyMode mode = PhysicsServer3D::BODY_MODE_RIGID;
@@ -46,6 +51,10 @@ private:
 	real_t gravity_scale = 1.0;
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
+	bool continuous_cd = false;
+
+	Vector3 constant_force;
+	Vector3 constant_torque;
 
 	Callable state_sync_callback;
 	Box3DDirectBodyState3D *direct_state = nullptr;
@@ -65,6 +74,9 @@ public:
 
 	void set_rid(const RID &p_rid) { rid = p_rid; }
 	RID get_rid() const { return rid; }
+	void set_space_rid(const RID &p_rid) { space_rid = p_rid; }
+	RID get_space_rid() const { return space_rid; }
+	b3BodyId get_body_id() const { return body_id; }
 	void set_instance_id(ObjectID p_id) { instance_id = p_id; }
 	ObjectID get_instance_id() const { return instance_id; }
 
@@ -76,11 +88,11 @@ public:
 	PhysicsServer3D::BodyMode get_mode() const { return mode; }
 
 	// Shape list management (server-facing).
-	void add_shape(Box3DShape3D *p_shape, const Transform3D &p_xform, bool p_disabled);
+	void add_shape(RID p_shape_rid, Box3DShape3D *p_shape, const Transform3D &p_xform, bool p_disabled);
 	void remove_shape_at(int p_index);
 	void remove_shape(Box3DShape3D *p_shape); // Removes every slot using p_shape.
 	void clear_shapes();
-	void set_shape(int p_index, Box3DShape3D *p_shape);
+	void set_shape(int p_index, RID p_shape_rid, Box3DShape3D *p_shape);
 	void set_shape_transform(int p_index, const Transform3D &p_xform);
 	void set_shape_disabled(int p_index, bool p_disabled);
 	int get_shape_count() const { return slots.size(); }
@@ -107,6 +119,21 @@ public:
 	uint32_t get_collision_layer() const { return collision_layer; }
 	void set_collision_mask(uint32_t p_mask);
 	uint32_t get_collision_mask() const { return collision_mask; }
+	void set_enable_continuous_collision_detection(bool p_enable);
+
+	void apply_central_impulse(const Vector3 &p_impulse);
+	void apply_impulse(const Vector3 &p_impulse, const Vector3 &p_position);
+	void apply_torque_impulse(const Vector3 &p_impulse);
+	void apply_central_force(const Vector3 &p_force);
+	void apply_force(const Vector3 &p_force, const Vector3 &p_position);
+	void apply_torque(const Vector3 &p_torque);
+	void add_constant_central_force(const Vector3 &p_force);
+	void add_constant_force(const Vector3 &p_force, const Vector3 &p_position);
+	void add_constant_torque(const Vector3 &p_torque);
+	void set_constant_force(const Vector3 &p_force);
+	Vector3 get_constant_force() const { return constant_force; }
+	void set_constant_torque(const Vector3 &p_torque);
+	Vector3 get_constant_torque() const { return constant_torque; }
 
 	void set_state_sync_callback(const Callable &p_callable) { state_sync_callback = p_callable; }
 	Box3DDirectBodyState3D *get_direct_state();
@@ -114,6 +141,7 @@ public:
 	// Space step integration.
 	void sync_from_move_event(const b3WorldTransform &p_transform, bool p_fell_asleep);
 	void apply_kinematic_target(float p_step);
+	void apply_constant_forces();
 	void call_state_sync();
 };
 
@@ -140,5 +168,24 @@ public:
 	virtual real_t get_inverse_mass() const override;
 	virtual Vector3 get_total_gravity() const override;
 	virtual Vector3 get_velocity_at_local_position(const Vector3 &p_position) const override;
+	virtual void apply_central_impulse(const Vector3 &p_impulse) override;
+	virtual void apply_impulse(const Vector3 &p_impulse, const Vector3 &p_position = Vector3()) override;
+	virtual void apply_torque_impulse(const Vector3 &p_impulse) override;
+	virtual void apply_central_force(const Vector3 &p_force) override;
+	virtual void apply_force(const Vector3 &p_force, const Vector3 &p_position = Vector3()) override;
+	virtual void apply_torque(const Vector3 &p_torque) override;
+	virtual void add_constant_central_force(const Vector3 &p_force) override;
+	virtual void add_constant_force(const Vector3 &p_force, const Vector3 &p_position = Vector3()) override;
+	virtual void add_constant_torque(const Vector3 &p_torque) override;
+	virtual void set_constant_force(const Vector3 &p_force) override;
+	virtual Vector3 get_constant_force() const override;
+	virtual void set_constant_torque(const Vector3 &p_torque) override;
+	virtual Vector3 get_constant_torque() const override;
+	virtual void set_sleep_state(bool p_sleep) override;
+	virtual void set_collision_layer(uint32_t p_layer) override;
+	virtual uint32_t get_collision_layer() const override;
+	virtual void set_collision_mask(uint32_t p_mask) override;
+	virtual uint32_t get_collision_mask() const override;
 	virtual real_t get_step() const override;
+	virtual RequiredResult<PhysicsDirectSpaceState3D> get_space_state() override;
 };

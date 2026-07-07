@@ -5,10 +5,14 @@
 #include "box3d_body_3d.h"
 
 #include "box3d_conversions.h"
+#include "box3d_direct_space_state_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
 
 #include "box3d/collision.h"
+#include "box3d/math_functions.h"
+
+static constexpr uint64_t BOX3D_QUERY_FILTER_BIT = UINT64_C(1) << 63;
 
 Box3DBody3D::~Box3DBody3D() {
 	set_space(nullptr);
@@ -62,6 +66,7 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 	space = p_space;
 
 	if (space) {
+		space->body_added(this);
 		b3BodyDef def = b3DefaultBodyDef();
 		def.type = _box3d_type();
 		def.position = to_box3d(transform.origin);
@@ -71,6 +76,7 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 		def.gravityScale = (float)gravity_scale;
 		def.enableSleep = can_sleep;
 		def.isAwake = !sleeping;
+		def.isBullet = continuous_cd;
 		def.motionLocks = _motion_locks();
 		def.userData = this;
 		body_id = b3CreateBody(space->get_world(), &def);
@@ -97,6 +103,43 @@ void Box3DBody3D::_destroy_all_shapes() {
 		}
 	}
 	shape_ids.clear();
+	for (b3MeshData *mesh : instance_meshes) {
+		if (mesh) {
+			b3DestroyMesh(mesh);
+		}
+	}
+	instance_meshes.clear();
+}
+
+static b3MeshData *_clone_mesh_with_transform(const b3MeshData *p_mesh, const Transform3D &p_transform) {
+	const b3Vec3 *src_vertices = b3GetMeshVertices(p_mesh);
+	const b3MeshTriangle *src_triangles = b3GetMeshTriangles(p_mesh);
+	ERR_FAIL_NULL_V(src_vertices, nullptr);
+	ERR_FAIL_NULL_V(src_triangles, nullptr);
+
+	LocalVector<b3Vec3> vertices;
+	LocalVector<int32_t> indices;
+	vertices.resize(p_mesh->vertexCount);
+	indices.resize(p_mesh->triangleCount * 3);
+
+	for (int i = 0; i < p_mesh->vertexCount; i++) {
+		vertices[i] = to_box3d(p_transform.xform(to_godot(src_vertices[i])));
+	}
+	for (int i = 0; i < p_mesh->triangleCount; i++) {
+		indices[i * 3 + 0] = src_triangles[i].index1;
+		indices[i * 3 + 1] = src_triangles[i].index2;
+		indices[i * 3 + 2] = src_triangles[i].index3;
+	}
+
+	b3MeshDef mesh_def = {};
+	mesh_def.vertices = vertices.ptr();
+	mesh_def.indices = indices.ptr();
+	mesh_def.vertexCount = vertices.size();
+	mesh_def.triangleCount = p_mesh->triangleCount;
+	mesh_def.weldVertices = false;
+	mesh_def.identifyEdges = true;
+
+	return b3CreateMesh(&mesh_def, nullptr, 0);
 }
 
 void Box3DBody3D::_build_all_shapes() {
@@ -109,9 +152,12 @@ void Box3DBody3D::_build_all_shapes() {
 	def.baseMaterial.friction = (float)friction;
 	def.baseMaterial.restitution = (float)bounce;
 	def.filter.categoryBits = (uint64_t)collision_layer;
-	def.filter.maskBits = (uint64_t)collision_mask;
+	def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
 
 	for (uint32_t i = 0; i < slots.size(); i++) {
+		shape_ids.push_back(b3_nullShapeId);
+		instance_meshes.push_back(nullptr);
+
 		const ShapeSlot &slot = slots[i];
 		if (slot.disabled || slot.shape == nullptr) {
 			continue;
@@ -154,12 +200,39 @@ void Box3DBody3D::_build_all_shapes() {
 
 			case PhysicsServer3D::SHAPE_CONCAVE_POLYGON: {
 				if (s->mesh) {
-					ERR_FAIL_COND_MSG(mode != PhysicsServer3D::BODY_MODE_STATIC && mode != PhysicsServer3D::BODY_MODE_KINEMATIC,
-							"Box3D: concave (trimesh) shapes are only supported on static/kinematic bodies.");
-					if (!slot.xform.is_equal_approx(Transform3D())) {
-						WARN_PRINT_ONCE("Box3D: per-instance transforms on trimesh shapes are not baked yet; shape placed at body origin.");
+					if (mode != PhysicsServer3D::BODY_MODE_STATIC && mode != PhysicsServer3D::BODY_MODE_KINEMATIC) {
+						WARN_PRINT("Box3D: concave (trimesh) shapes are only supported on static/kinematic bodies.");
+						continue;
 					}
-					shape_id = b3CreateMeshShape(body_id, &def, s->mesh, unit_scale);
+					b3MeshData *mesh = s->mesh;
+					if (!slot.xform.is_equal_approx(Transform3D())) {
+						mesh = _clone_mesh_with_transform(s->mesh, slot.xform);
+						if (mesh == nullptr) {
+							WARN_PRINT("Box3D: failed to bake trimesh instance transform.");
+							continue;
+						}
+						instance_meshes[i] = mesh;
+					}
+					shape_id = b3CreateMeshShape(body_id, &def, mesh, unit_scale);
+				}
+			} break;
+
+			case PhysicsServer3D::SHAPE_HEIGHTMAP: {
+				if (s->mesh) {
+					if (mode != PhysicsServer3D::BODY_MODE_STATIC && mode != PhysicsServer3D::BODY_MODE_KINEMATIC) {
+						WARN_PRINT("Box3D: heightmap shapes are only supported on static/kinematic bodies.");
+						continue;
+					}
+					b3MeshData *mesh = s->mesh;
+					if (!slot.xform.is_equal_approx(Transform3D())) {
+						mesh = _clone_mesh_with_transform(s->mesh, slot.xform);
+						if (mesh == nullptr) {
+							WARN_PRINT("Box3D: failed to bake heightmap instance transform.");
+							continue;
+						}
+						instance_meshes[i] = mesh;
+					}
+					shape_id = b3CreateMeshShape(body_id, &def, mesh, unit_scale);
 				}
 			} break;
 
@@ -169,7 +242,7 @@ void Box3DBody3D::_build_all_shapes() {
 		}
 
 		if (B3_IS_NON_NULL(shape_id)) {
-			shape_ids.push_back(shape_id);
+			shape_ids[i] = shape_id;
 		}
 	}
 
@@ -193,8 +266,9 @@ void Box3DBody3D::_update_mass() {
 	b3Body_SetMassData(body_id, mass_data);
 }
 
-void Box3DBody3D::add_shape(Box3DShape3D *p_shape, const Transform3D &p_xform, bool p_disabled) {
+void Box3DBody3D::add_shape(RID p_shape_rid, Box3DShape3D *p_shape, const Transform3D &p_xform, bool p_disabled) {
 	ShapeSlot slot;
+	slot.rid = p_shape_rid;
 	slot.shape = p_shape;
 	slot.xform = p_xform;
 	slot.disabled = p_disabled;
@@ -240,11 +314,12 @@ void Box3DBody3D::clear_shapes() {
 	shapes_changed();
 }
 
-void Box3DBody3D::set_shape(int p_index, Box3DShape3D *p_shape) {
+void Box3DBody3D::set_shape(int p_index, RID p_shape_rid, Box3DShape3D *p_shape) {
 	ERR_FAIL_INDEX(p_index, (int)slots.size());
 	if (slots[p_index].shape) {
 		slots[p_index].shape->remove_owner(this);
 	}
+	slots[p_index].rid = p_shape_rid;
 	slots[p_index].shape = p_shape;
 	p_shape->add_owner(this);
 	shapes_changed();
@@ -295,6 +370,18 @@ void Box3DBody3D::apply_kinematic_target(float p_step) {
 	b3Transform target = to_box3d(kinematic_target);
 	b3Body_SetTargetTransform(body_id, target, p_step, true);
 	has_kinematic_target = false;
+}
+
+void Box3DBody3D::apply_constant_forces() {
+	if (!in_space() || mode == PhysicsServer3D::BODY_MODE_STATIC || mode == PhysicsServer3D::BODY_MODE_KINEMATIC) {
+		return;
+	}
+	if (!constant_force.is_zero_approx()) {
+		b3Body_ApplyForceToCenter(body_id, to_box3d(constant_force), true);
+	}
+	if (!constant_torque.is_zero_approx()) {
+		b3Body_ApplyTorque(body_id, to_box3d(constant_torque), true);
+	}
 }
 
 void Box3DBody3D::set_linear_velocity(const Vector3 &p_velocity) {
@@ -394,6 +481,80 @@ void Box3DBody3D::set_collision_mask(uint32_t p_mask) {
 	shapes_changed();
 }
 
+void Box3DBody3D::set_enable_continuous_collision_detection(bool p_enable) {
+	continuous_cd = p_enable;
+	if (in_space()) {
+		b3Body_SetBullet(body_id, p_enable);
+	}
+}
+
+void Box3DBody3D::apply_central_impulse(const Vector3 &p_impulse) {
+	if (in_space()) {
+		b3Body_ApplyLinearImpulseToCenter(body_id, to_box3d(p_impulse), true);
+	} else if (mass > 0.0) {
+		linear_velocity_cache += p_impulse / mass;
+	}
+}
+
+void Box3DBody3D::apply_impulse(const Vector3 &p_impulse, const Vector3 &p_position) {
+	if (in_space()) {
+		const b3Pos world_point = b3OffsetPos(b3Body_GetPosition(body_id), to_box3d(p_position));
+		b3Body_ApplyLinearImpulse(body_id, to_box3d(p_impulse), world_point, true);
+	} else if (mass > 0.0) {
+		linear_velocity_cache += p_impulse / mass;
+	}
+}
+
+void Box3DBody3D::apply_torque_impulse(const Vector3 &p_impulse) {
+	if (in_space()) {
+		b3Body_ApplyAngularImpulse(body_id, to_box3d(p_impulse), true);
+	}
+}
+
+void Box3DBody3D::apply_central_force(const Vector3 &p_force) {
+	if (in_space()) {
+		b3Body_ApplyForceToCenter(body_id, to_box3d(p_force), true);
+	}
+}
+
+void Box3DBody3D::apply_force(const Vector3 &p_force, const Vector3 &p_position) {
+	if (in_space()) {
+		const b3Pos world_point = b3OffsetPos(b3Body_GetPosition(body_id), to_box3d(p_position));
+		b3Body_ApplyForce(body_id, to_box3d(p_force), world_point, true);
+	}
+}
+
+void Box3DBody3D::apply_torque(const Vector3 &p_torque) {
+	if (in_space()) {
+		b3Body_ApplyTorque(body_id, to_box3d(p_torque), true);
+	}
+}
+
+void Box3DBody3D::add_constant_central_force(const Vector3 &p_force) {
+	constant_force += p_force;
+}
+
+void Box3DBody3D::add_constant_force(const Vector3 &p_force, const Vector3 &p_position) {
+	constant_force += p_force;
+	Vector3 com_relative = p_position;
+	if (in_space()) {
+		com_relative -= to_godot(b3Body_GetWorldVector(body_id, b3Body_GetLocalCenter(body_id)));
+	}
+	constant_torque += com_relative.cross(p_force);
+}
+
+void Box3DBody3D::add_constant_torque(const Vector3 &p_torque) {
+	constant_torque += p_torque;
+}
+
+void Box3DBody3D::set_constant_force(const Vector3 &p_force) {
+	constant_force = p_force;
+}
+
+void Box3DBody3D::set_constant_torque(const Vector3 &p_torque) {
+	constant_torque = p_torque;
+}
+
 Box3DDirectBodyState3D *Box3DBody3D::get_direct_state() {
 	if (!direct_state) {
 		direct_state = memnew(Box3DDirectBodyState3D);
@@ -470,6 +631,82 @@ Vector3 Box3DDirectBodyState3D::get_velocity_at_local_position(const Vector3 &p_
 	return to_godot(b3Body_GetWorldPointVelocity(body->body_id, to_box3d(world_point)));
 }
 
+void Box3DDirectBodyState3D::apply_central_impulse(const Vector3 &p_impulse) {
+	body->apply_central_impulse(p_impulse);
+}
+
+void Box3DDirectBodyState3D::apply_impulse(const Vector3 &p_impulse, const Vector3 &p_position) {
+	body->apply_impulse(p_impulse, p_position);
+}
+
+void Box3DDirectBodyState3D::apply_torque_impulse(const Vector3 &p_impulse) {
+	body->apply_torque_impulse(p_impulse);
+}
+
+void Box3DDirectBodyState3D::apply_central_force(const Vector3 &p_force) {
+	body->apply_central_force(p_force);
+}
+
+void Box3DDirectBodyState3D::apply_force(const Vector3 &p_force, const Vector3 &p_position) {
+	body->apply_force(p_force, p_position);
+}
+
+void Box3DDirectBodyState3D::apply_torque(const Vector3 &p_torque) {
+	body->apply_torque(p_torque);
+}
+
+void Box3DDirectBodyState3D::add_constant_central_force(const Vector3 &p_force) {
+	body->add_constant_central_force(p_force);
+}
+
+void Box3DDirectBodyState3D::add_constant_force(const Vector3 &p_force, const Vector3 &p_position) {
+	body->add_constant_force(p_force, p_position);
+}
+
+void Box3DDirectBodyState3D::add_constant_torque(const Vector3 &p_torque) {
+	body->add_constant_torque(p_torque);
+}
+
+void Box3DDirectBodyState3D::set_constant_force(const Vector3 &p_force) {
+	body->set_constant_force(p_force);
+}
+
+Vector3 Box3DDirectBodyState3D::get_constant_force() const {
+	return body->get_constant_force();
+}
+
+void Box3DDirectBodyState3D::set_constant_torque(const Vector3 &p_torque) {
+	body->set_constant_torque(p_torque);
+}
+
+Vector3 Box3DDirectBodyState3D::get_constant_torque() const {
+	return body->get_constant_torque();
+}
+
+void Box3DDirectBodyState3D::set_sleep_state(bool p_sleep) {
+	body->set_sleep_state(p_sleep);
+}
+
+void Box3DDirectBodyState3D::set_collision_layer(uint32_t p_layer) {
+	body->set_collision_layer(p_layer);
+}
+
+uint32_t Box3DDirectBodyState3D::get_collision_layer() const {
+	return body->get_collision_layer();
+}
+
+void Box3DDirectBodyState3D::set_collision_mask(uint32_t p_mask) {
+	body->set_collision_mask(p_mask);
+}
+
+uint32_t Box3DDirectBodyState3D::get_collision_mask() const {
+	return body->get_collision_mask();
+}
+
 real_t Box3DDirectBodyState3D::get_step() const {
 	return body->get_space() ? body->get_space()->get_last_step() : 0.0;
+}
+
+RequiredResult<PhysicsDirectSpaceState3D> Box3DDirectBodyState3D::get_space_state() {
+	return body->get_space() ? body->get_space()->get_direct_state() : nullptr;
 }
