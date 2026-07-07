@@ -40,18 +40,19 @@
 #include "scene/gui/label.h"
 #include "scene/gui/tab_container.h"
 #include "scene/resources/style_box_flat.h"
+#include "scene/scene_string_names.h"
 
 void WorkspaceFileDrawer::set_host(Control *p_host) {
 	if (host == p_host) {
 		return;
 	}
-	const Callable cb = callable_mp(this, &WorkspaceFileDrawer::_on_host_rect_changed);
-	if (host && host->is_connected(SNAME("item_rect_changed"), cb)) {
-		host->disconnect(SNAME("item_rect_changed"), cb);
+	const Callable cb = callable_mp(this, &WorkspaceFileDrawer::_relayout);
+	if (host && host->is_connected(SceneStringName(item_rect_changed), cb)) {
+		host->disconnect(SceneStringName(item_rect_changed), cb);
 	}
 	host = p_host;
 	if (host) {
-		host->connect(SNAME("item_rect_changed"), cb);
+		host->connect(SceneStringName(item_rect_changed), cb);
 	}
 	_relayout();
 }
@@ -70,6 +71,11 @@ void WorkspaceFileDrawer::add_panel(Control *p_panel, const String &p_title) {
 
 void WorkspaceFileDrawer::_relayout() {
 	if (!host || !is_inside_tree()) {
+		return;
+	}
+	if (!is_visible()) {
+		// Closed drawers are hidden and never mid-animation (open shows before tweening, close hides
+		// after), so skip host-rect churn here; geometry is recomputed the moment we reopen.
 		return;
 	}
 	const Rect2 hr = host->get_global_rect();
@@ -96,6 +102,9 @@ void WorkspaceFileDrawer::_set_shown_amount(float p_amount) {
 }
 
 void WorkspaceFileDrawer::set_open(bool p_open, bool p_animate) {
+	if (p_open && !enabled) {
+		return; // A profile-disabled drawer never opens (guards the filter-files shortcut etc.).
+	}
 	const bool was_open = drawer_open;
 	drawer_open = p_open;
 
@@ -130,9 +139,14 @@ void WorkspaceFileDrawer::set_open(bool p_open, bool p_animate) {
 	}
 }
 
-void WorkspaceFileDrawer::set_drawer_height(float p_fraction) {
-	height_fraction = CLAMP(p_fraction, 0.2f, 0.8f);
-	_relayout();
+void WorkspaceFileDrawer::set_enabled(bool p_enabled) {
+	if (enabled == p_enabled) {
+		return;
+	}
+	enabled = p_enabled;
+	if (!enabled) {
+		set_open(false, false);
+	}
 }
 
 void WorkspaceFileDrawer::_on_close_pressed() {
@@ -164,7 +178,7 @@ void WorkspaceFileDrawer::_update_theme() {
 	add_theme_style_override(SceneStringName(panel), sb);
 
 	if (close_button) {
-		close_button->set_button_icon(get_theme_icon(SNAME("Close"), EditorStringName(EditorIcons)));
+		close_button->set_button_icon(get_editor_theme_icon(SNAME("Close")));
 	}
 
 	applying_theme = false;
@@ -186,7 +200,9 @@ void WorkspaceFileDrawer::_notification(int p_what) {
 		case NOTIFICATION_ENTER_TREE:
 		case NOTIFICATION_THEME_CHANGED: {
 			_update_theme();
-			_relayout();
+			if (!applying_theme) { // Skip the relayout on the re-entrant THEME_CHANGED from add_theme_style_override.
+				_relayout();
+			}
 		} break;
 	}
 }
@@ -201,13 +217,13 @@ WorkspaceFileDrawer::WorkspaceFileDrawer() {
 	set_visible(false);
 	set_mouse_filter(MOUSE_FILTER_STOP);
 
-	body = memnew(VBoxContainer);
+	VBoxContainer *body = memnew(VBoxContainer);
 	add_child(body);
 
 	HBoxContainer *header = memnew(HBoxContainer);
 	body->add_child(header);
 
-	title_label = memnew(Label);
+	Label *title_label = memnew(Label);
 	title_label->set_text(TTR("FileSystem"));
 	title_label->set_h_size_flags(SIZE_EXPAND_FILL);
 	header->add_child(title_label);

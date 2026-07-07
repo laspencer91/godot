@@ -7952,13 +7952,13 @@ void EditorNode::_feature_profile_changed() {
 		editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_GROUPS_DOCK));
 		// The Import dock is useless without the FileSystem dock. Ensure the configuration is valid.
 		bool fs_dock_disabled = profile->is_feature_disabled(EditorFeatureProfile::FEATURE_FILESYSTEM_DOCK);
-		// G4: FileSystem lives in the workspace drawer, not the dock manager -- gate the bottom-bar
-		// toggle (and force the drawer closed) instead of set_dock_enabled on an unmanaged dock.
+		// G4: FileSystem lives in the workspace drawer, not the dock manager. The drawer owns its
+		// enabled state (force-closes + refuses to reopen when disabled); the toggle just mirrors it.
+		if (workspace_file_drawer) {
+			workspace_file_drawer->set_enabled(!fs_dock_disabled);
+		}
 		if (filesystem_drawer_button) {
 			filesystem_drawer_button->set_visible(!fs_dock_disabled);
-		}
-		if (fs_dock_disabled && workspace_file_drawer) {
-			workspace_file_drawer->set_open(false, false);
 		}
 		editor_dock_manager->set_dock_enabled(ImportDock::get_singleton(), !fs_dock_disabled && !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_IMPORT_DOCK));
 		editor_dock_manager->set_dock_enabled(history_dock, !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_HISTORY_DOCK));
@@ -7975,7 +7975,10 @@ void EditorNode::_feature_profile_changed() {
 		editor_dock_manager->set_dock_enabled(ImportDock::get_singleton(), true);
 		editor_dock_manager->set_dock_enabled(SignalsDock::get_singleton(), true);
 		editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), true);
-		if (filesystem_drawer_button) { // G4: FileSystem is drawer-hosted; re-enable via its toggle.
+		if (workspace_file_drawer) { // G4: FileSystem is drawer-hosted; re-enable the drawer + its toggle.
+			workspace_file_drawer->set_enabled(true);
+		}
+		if (filesystem_drawer_button) {
 			filesystem_drawer_button->set_visible(true);
 		}
 		editor_dock_manager->set_dock_enabled(history_dock, true);
@@ -9398,8 +9401,6 @@ EditorNode::EditorNode() {
 	log = memnew(EditorLog);
 	editor_dock_manager->add_dock(log);
 
-	// G4: unified bottom-bar toggle for the FileSystem drawer, beside the Output/Debugger/Audio
-	// dock toggles. The button drives the overlay; the drawer reports back so the two stay in sync.
 	// G4: unified bottom-bar toggle for the FileSystem drawer, beside the Output/Debugger/Audio
 	// dock toggles. The button drives the overlay; the drawer reports back so the two stay in sync.
 	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), ED_GET_SHORTCUT("editor/toggle_file_drawer"));

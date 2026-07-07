@@ -34,10 +34,8 @@
 
 class Button;
 class ConfigFile;
-class Label;
 class TabContainer;
 class Tween;
-class VBoxContainer;
 
 // WorkspaceFileDrawer is the slide-up file-exploration overlay (G4). It is an
 // Unreal-Content-Drawer-style panel that floats OVER the lower part of the
@@ -58,12 +56,11 @@ class WorkspaceFileDrawer : public PanelContainer {
 	// global rect to size/position ourselves over it.
 	Control *host = nullptr;
 
-	VBoxContainer *body = nullptr; // Header + content column, filling the panel.
-	Label *title_label = nullptr;
 	Button *close_button = nullptr;
 	TabContainer *tab_host = nullptr; // Hosts the drawer's panels (FileSystem in v1).
 
 	bool drawer_open = false;
+	bool enabled = true; // Feature-profile gate; a disabled drawer force-closes and refuses to open.
 	// Re-entrancy guard: add_theme_style_override() re-fires NOTIFICATION_THEME_CHANGED synchronously,
 	// which would recurse back into _update_theme() (stack overflow). Set while applying overrides.
 	bool applying_theme = false;
@@ -73,7 +70,6 @@ class WorkspaceFileDrawer : public PanelContainer {
 
 	void _relayout(); // Recompute our global rect from host rect + shown_amount.
 	void _set_shown_amount(float p_amount); // Tween target setter -> store + relayout.
-	void _on_host_rect_changed() { _relayout(); }
 	void _on_close_pressed();
 	void _update_theme();
 
@@ -90,11 +86,10 @@ public:
 	void add_panel(Control *p_panel, const String &p_title);
 
 	void set_open(bool p_open, bool p_animate = true);
-	bool is_open() const { return drawer_open; }
-	void toggle() { set_open(!drawer_open); }
 
-	void set_drawer_height(float p_fraction);
-	float get_drawer_height() const { return height_fraction; }
+	// Feature-profile gate. A disabled drawer force-closes and refuses to reopen, so no shortcut or
+	// button path can surface a profile-hidden FileSystem dock. Owned here as the single source of truth.
+	void set_enabled(bool p_enabled);
 
 	void save_state_to_config(Ref<ConfigFile> p_config, const String &p_section) const;
 	void load_state_from_config(const Ref<ConfigFile> &p_config, const String &p_section);
