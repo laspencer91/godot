@@ -620,6 +620,8 @@ class Node3DEditorView;
 class Node3DEditor : public VBoxContainer {
 	GDCLASS(Node3DEditor, VBoxContainer);
 
+	friend class Node3DEditorView; // G2 M7.2: the view (de)registers itself in editor_views.
+
 public:
 	static const unsigned int VIEWPORTS_COUNT = 4;
 
@@ -661,6 +663,12 @@ private:
 	// v1: exactly one, created in the ctor; later: one per workspace pane. The viewport
 	// accessors below forward to it. viewport_base/viewports/last_used/freelook moved here.
 	Node3DEditorView *main_view = nullptr;
+
+	// G2 M7.2: every live Node3DEditorView — the singleton main_view plus every per-pane view minted
+	// by create_view_bound_to (registered in the view ctor, removed in its dtor). update_transform_gizmo
+	// drives gizmo rendering across all of them (hidden viewports self-skip), so a selected node's
+	// transform gizmo shows in the focused pane, not just the main view.
+	LocalVector<Node3DEditorView *> editor_views;
 
 	VSplitContainer *shader_split = nullptr;
 	HSplitContainer *left_panel_split = nullptr;

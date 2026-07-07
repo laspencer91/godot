@@ -7431,8 +7431,14 @@ void Node3DEditor::update_transform_gizmo() {
 	gizmo.transform.origin = (count > 0) ? gizmo_center / count : Vector3();
 	gizmo.transform.basis = gizmo_basis;
 
-	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		get_editor_viewport(i)->update_transform_gizmo_view();
+	// G2 M7.2: update the transform gizmo across ALL live views (main + per-pane), not just the main
+	// view, so the focused pane renders the gizmo. Each viewport self-skips when not visible in tree.
+	for (Node3DEditorView *view : editor_views) {
+		for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+			if (Node3DEditorViewport *vp = view->get_editor_viewport(i)) {
+				vp->update_transform_gizmo_view();
+			}
+		}
 	}
 }
 
@@ -9997,6 +10003,7 @@ Node3DEditorViewport *Node3DEditor::get_freelook_viewport() const {
 
 Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 	editor = p_editor;
+	editor->editor_views.push_back(this); // G2 M7.2: join the gizmo-render fan-out (see editor_views).
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
 	// Fill the split slot with the viewport quad, no inset (matches the old direct child).
@@ -10011,6 +10018,9 @@ Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 }
 
 Node3DEditorView::~Node3DEditorView() {
+	if (editor) {
+		editor->editor_views.erase(this); // G2 M7.2: leave the gizmo-render fan-out.
+	}
 	// Resource lifetime = object lifetime, not tree membership: freeing here (rather than on
 	// EXIT_TREE) keeps decoration alive across reparenting between workspace panes.
 	if (decorations_initialized) {
