@@ -523,13 +523,10 @@ Ref<Resource> ResourceLoader::load(const String &p_path, const String &p_type_hi
 		// is always initiated by the engine. That makes certain aspects simpler, such as
 		// cyclic load detection and awaiting.
 		thread_mode = LOAD_THREAD_SPAWN_SINGLE;
-	} else if (p_cache_mode != CACHE_MODE_IGNORE && p_cache_mode != CACHE_MODE_IGNORE_DEEP) {
+	} else {
 		// Keep the top-level parse inline on the calling thread (no added latency for
 		// zero-dependency loads), but let external resources be distributed to the
 		// worker pool so they load in parallel.
-		// Cache-ignoring loads keep the fully serial path, since their dependency
-		// tasks may end up unregistered (task_if_unregistered), which
-		// _load_complete_inner() cannot await while still in progress.
 		use_sub_threads = _use_sub_threads_for_blocking_loads();
 	}
 	Ref<LoadToken> load_token = _load_start(p_path, p_type_hint, thread_mode, p_cache_mode, false, use_sub_threads);
@@ -837,7 +834,14 @@ Ref<Resource> ResourceLoader::_load_complete_inner(LoadToken &p_load_token, Erro
 			ERR_FAIL_V_MSG(Ref<Resource>(), "Bug in ResourceLoader logic, please report.");
 		}
 
-		ThreadLoadTask &load_task = thread_load_tasks[p_load_token.local_path];
+		load_task_ptr = &thread_load_tasks[p_load_token.local_path];
+	}
+
+	{
+		// An in-progress load must be awaited regardless of whether its task is
+		// registered in the map; a task kept out of it (task_if_unregistered, from a
+		// cache-ignoring load) can be in progress all the same.
+		ThreadLoadTask &load_task = *load_task_ptr;
 
 		if (load_task.status == THREAD_LOAD_IN_PROGRESS) {
 			DEV_ASSERT((load_task.task_id == 0) != (load_task.thread_id == 0));
@@ -917,7 +921,7 @@ Ref<Resource> ResourceLoader::_load_complete_inner(LoadToken &p_load_token, Erro
 				load_task.awaiters_count++;
 				do {
 					load_task.cond_var->wait(p_thread_load_lock);
-					DEV_ASSERT(thread_load_tasks.has(p_load_token.local_path) && p_load_token.get_reference_count());
+					DEV_ASSERT((p_load_token.task_if_unregistered || thread_load_tasks.has(p_load_token.local_path)) && p_load_token.get_reference_count());
 				} while (load_task.need_wait);
 				load_task.awaiters_count--;
 				if (load_task.awaiters_count == 0) {
@@ -929,12 +933,10 @@ Ref<Resource> ResourceLoader::_load_complete_inner(LoadToken &p_load_token, Erro
 			}
 		}
 
-		if (cleaning_tasks) {
+		if (cleaning_tasks && !p_load_token.task_if_unregistered) {
 			load_task.resource = Ref<Resource>();
 			load_task.error = FAILED;
 		}
-
-		load_task_ptr = &load_task;
 	}
 
 	Ref<Resource> resource = load_task_ptr->resource;
