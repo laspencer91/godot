@@ -184,6 +184,68 @@ WorkspacePane *WorkspacePane::of(Node *p_node) {
 	return nullptr;
 }
 
+Dictionary WorkspacePane::to_dict() const {
+	// G2 M6.1: emit this subtree as a schema-v1 node. A member (not a free function) so it can read the
+	// private split state; recurses through both children of a split.
+	Dictionary d;
+	if (is_leaf()) {
+		d["t"] = "leaf";
+		d["id"] = (int)pane_id;
+		return d;
+	}
+	d["t"] = "split";
+	d["vert"] = split_container->is_vertical();
+	d["off"] = split_container->get_split_offset();
+	d["a"] = first ? first->to_dict() : Dictionary();
+	d["b"] = second ? second->to_dict() : Dictionary();
+	return d;
+}
+
+WorkspacePane *WorkspacePane::from_dict(const Dictionary &p_dict, EditorWorkspace *p_workspace, bool &r_ok) {
+	// G2 M6.1: rebuild one subtree. Any anomaly flips r_ok false; the caller frees the returned partial
+	// tree (a WorkspacePane frees its whole child chain), so we can return the node built so far.
+	if (!r_ok) {
+		return nullptr;
+	}
+	const String t = p_dict.get("t", String());
+	WorkspacePane *pane = p_workspace ? p_workspace->make_pane() : memnew(WorkspacePane);
+
+	if (t == "leaf") {
+		pane->set_pane_id((uint32_t)(int)p_dict.get("id", 0));
+		pane->set_content(memnew(TabbedDocumentHost)); // Empty; the session store adds the tabs (M6.3).
+		return pane;
+	}
+	if (t == "split") {
+		WorkspacePane *a = from_dict(p_dict.get("a", Dictionary()), p_workspace, r_ok);
+		WorkspacePane *b = from_dict(p_dict.get("b", Dictionary()), p_workspace, r_ok);
+		if (!r_ok || !a || !b) {
+			r_ok = false;
+			if (a) {
+				memdelete(a);
+			}
+			if (b) {
+				memdelete(b);
+			}
+			return pane;
+		}
+		SplitContainer *sc = memnew(SplitContainer);
+		sc->set_vertical((bool)p_dict.get("vert", false));
+		sc->set_h_size_flags(SIZE_EXPAND_FILL);
+		sc->set_v_size_flags(SIZE_EXPAND_FILL);
+		pane->split_container = sc;
+		pane->first = a;
+		pane->second = b;
+		sc->add_child(a);
+		sc->add_child(b);
+		pane->add_child(sc);
+		sc->set_split_offset((int)p_dict.get("off", 0)); // Applied (and clamped to size) on the next sort.
+		return pane;
+	}
+
+	r_ok = false; // Unknown node kind.
+	return pane;
+}
+
 WorkspacePane::WorkspacePane() {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
@@ -197,6 +259,7 @@ void EditorWorkspace::_bind_methods() {
 WorkspacePane *EditorWorkspace::make_pane() {
 	WorkspacePane *pane = memnew(WorkspacePane);
 	pane->set_workspace(this);
+	pane->set_pane_id(next_pane_id++); // G2 M6.1: stable id for the session store (overwritten on restore).
 	return pane;
 }
 
@@ -522,6 +585,49 @@ WorkspacePane *EditorWorkspace::move_tab_into_pane(TabbedDocumentHost *p_source,
 
 	set_focused_pane(result);
 	return result;
+}
+
+Dictionary EditorWorkspace::save_geometry() const {
+	// G2 M6.1: schema-v1 wrapper around the recursive root node. "next" persists the id counter so
+	// restored ids never collide with post-restore splits.
+	Dictionary d;
+	d["v"] = 1;
+	d["next"] = (int)next_pane_id;
+	d["root"] = root_pane ? root_pane->to_dict() : Dictionary();
+	return d;
+}
+
+bool EditorWorkspace::load_geometry(const Dictionary &p_geometry) {
+	// G2 M6.1: rebuild the whole tree, or refuse (leaving the live tree intact) on any anomaly.
+	if ((int)p_geometry.get("v", 0) != 1) {
+		return false;
+	}
+	bool ok = true;
+	WorkspacePane *new_root = WorkspacePane::from_dict(p_geometry.get("root", Dictionary()), this, ok);
+	if (!ok || !new_root) {
+		if (new_root) {
+			memdelete(new_root); // Frees the partial subtree; the current tree is untouched.
+		}
+		return false;
+	}
+
+	// Swap the rebuilt tree in for the live one.
+	if (root_pane) {
+		remove_child(root_pane);
+		memdelete(root_pane);
+	}
+	root_pane = new_root;
+	add_child(root_pane);
+
+	// Restore the id counter to the saved value (from_dict overwrote every auto-assigned id with the
+	// stored one, so the counter's transient bumps during rebuild don't matter). The saved "next" is
+	// always past every stored id, so a later split can't collide — and save->load->save round-trips.
+	next_pane_id = MAX((uint32_t)(int)p_geometry.get("next", 1), 1u);
+
+	last_tabbed_pane = _find_tabbed_leaf(root_pane);
+	focused_pane = nullptr; // Force set_focused_pane past its no-op guard.
+	set_focused_pane(last_tabbed_pane ? last_tabbed_pane : root_pane);
+	return true;
 }
 
 EditorWorkspace::EditorWorkspace() {

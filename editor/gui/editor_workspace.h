@@ -32,6 +32,7 @@
 
 #include "core/input/input_event.h"
 #include "core/object/object_id.h"
+#include "core/variant/dictionary.h"
 #include "scene/gui/box_container.h"
 
 class EditorDocument;
@@ -58,6 +59,12 @@ class WorkspacePane : public VBoxContainer {
 	// are also wired back to it. Set by EditorWorkspace when the pane is created.
 	EditorWorkspace *workspace = nullptr;
 
+	// G2 M6.1: stable per-pane id, unique within a saved layout, so the session store can map
+	// documents/tabs back onto the right leaf across restart. Assigned by EditorWorkspace::make_pane
+	// from a monotonic counter; 0 means "not yet assigned" (a bare memnew(WorkspacePane) outside the
+	// workspace). Never reused within one layout file.
+	uint32_t pane_id = 0;
+
 	// LEAF state: the content this pane displays (fills the pane), reparented in
 	// via set_content(). Null while this pane is a SPLIT.
 	Control *content = nullptr;
@@ -76,6 +83,9 @@ protected:
 public:
 	void set_workspace(EditorWorkspace *p_workspace) { workspace = p_workspace; }
 	EditorWorkspace *get_workspace() const { return workspace; }
+
+	uint32_t get_pane_id() const { return pane_id; } // G2 M6.1
+	void set_pane_id(uint32_t p_id) { pane_id = p_id; } // G2 M6.1
 
 	bool is_leaf() const { return split_container == nullptr; }
 
@@ -97,6 +107,15 @@ public:
 	// tabbed hosts so the parent-chain walk lives in one place.
 	static WorkspacePane *of(Node *p_node);
 
+	// G2 M6.1: recursive geometry serialization. to_dict() emits this subtree as a schema-v1 node —
+	// a leaf { "t":"leaf", "id":int } or a split { "t":"split", "vert":bool, "off":int, "a":<node>,
+	// "b":<node> }. from_dict() rebuilds such a subtree (leaves get an empty TabbedDocumentHost;
+	// content is assigned later by the session store, M6.3); on any structural anomaly it flips
+	// r_ok false and the caller frees the partial tree. Members of WorkspacePane so they reach the
+	// private split state directly.
+	Dictionary to_dict() const;
+	static WorkspacePane *from_dict(const Dictionary &p_dict, EditorWorkspace *p_workspace, bool &r_ok);
+
 	// G2 S8: this SPLIT pane becomes its surviving child. p_removed's whole subtree is
 	// freed (DocumentViews run their PREDELETE detach work); the survivor's payload —
 	// leaf content or inner split — is re-homed into this pane.
@@ -111,6 +130,10 @@ class EditorWorkspace : public VBoxContainer {
 	WorkspacePane *root_pane = nullptr;
 	WorkspacePane *focused_pane = nullptr;
 	WorkspacePane *last_tabbed_pane = nullptr;
+
+	// G2 M6.1: monotonic source of stable pane ids (see WorkspacePane::pane_id). Never reset within a
+	// session; load_geometry advances it past every restored id so a post-restore split can't collide.
+	uint32_t next_pane_id = 1;
 
 	// Running counter so temporary debug placeholder panes get distinct labels.
 	int debug_pane_counter = 0;
@@ -171,6 +194,13 @@ public:
 	// side) and the tab lands in a fresh host there. A cross-pane move that empties the source pane
 	// closes it. Returns the pane the tab ended up in (null if refused). split_pane_with_tab delegates here.
 	WorkspacePane *move_tab_into_pane(TabbedDocumentHost *p_source, int p_tab, WorkspacePane *p_target, bool p_center, bool p_vertical, bool p_new_on_second);
+
+	// G2 M6.1: round-trip the split-tree geometry. save_geometry() returns a schema-v1 dictionary
+	// { "v":1, "next":int, "root":<node> } (see WorkspacePane::to_dict). load_geometry() rebuilds the
+	// whole pane tree from such a dictionary — leaves are empty tab hosts (the session store fills them,
+	// M6.3) — and returns false, leaving the current tree untouched, on any version/structural anomaly.
+	Dictionary save_geometry() const;
+	bool load_geometry(const Dictionary &p_geometry);
 
 	EditorWorkspace();
 
