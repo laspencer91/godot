@@ -1093,6 +1093,9 @@ public:
 	// Control the pane header reparents in; park_shared_toolbar() returns it to its stock home.
 	Control *get_shared_toolbar() const;
 	void park_shared_toolbar();
+	// G2 M7.2a-fix: re-point the toolbar's shortcut contexts (tool Q/W/E/R, snap, view menu) at the
+	// focused pane so its keyboard shortcuts fire there; null resets to this singleton.
+	void set_toolbar_shortcut_context(Node *p_context);
 
 	void set_freelook_viewport(Node3DEditorViewport *p_viewport);
 	Node3DEditorViewport *get_freelook_viewport() const;

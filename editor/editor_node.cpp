@@ -4638,6 +4638,7 @@ void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 			tb->reparent(host);
 			host->move_child(tb, 0);
 		}
+		spatial->set_toolbar_shortcut_context(p_view); // G2 M7.2a-fix: tool shortcuts fire in the pane.
 		if (canvas) {
 			canvas->park_shared_toolbar();
 		}
@@ -4647,6 +4648,7 @@ void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 			tb->reparent(host);
 			host->move_child(tb, 0);
 		}
+		canvas->set_toolbar_shortcut_context(p_view); // G2 M7.2a-fix: tool shortcuts fire in the pane.
 		if (spatial) {
 			spatial->park_shared_toolbar();
 		}

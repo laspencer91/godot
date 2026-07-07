@@ -10014,10 +10014,30 @@ Control *Node3DEditor::get_shared_toolbar() const {
 }
 
 void Node3DEditor::park_shared_toolbar() {
-	// G2 M7.2a: return the toolbar flow to its stock home when no scene pane hosts it.
+	// G2 M7.2a: return the toolbar flow to its stock home when no scene pane hosts it, and re-point its
+	// shortcut contexts back at this singleton editor.
 	if (main_flow && toolbar_home && main_flow->get_parent() != toolbar_home) {
 		main_flow->reparent(toolbar_home);
 		toolbar_home->move_child(main_flow, 0);
+	}
+	set_toolbar_shortcut_context(this);
+}
+
+static void _set_shortcut_context_recursive(Node *p_node, Node *p_context) {
+	if (Control *c = Object::cast_to<Control>(p_node)) {
+		c->set_shortcut_context(p_context);
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		_set_shortcut_context_recursive(p_node->get_child(i), p_context);
+	}
+}
+
+void Node3DEditor::set_toolbar_shortcut_context(Node *p_context) {
+	// G2 M7.2a-fix: the tool buttons set_shortcut_context(this) at creation, so their Q/W/E/R (and
+	// snap / view-menu) shortcuts only fire while this singleton is in the focus path. Re-point them at
+	// the focused scene pane while the toolbar is mounted there, so shortcuts work in the pane.
+	if (main_flow) {
+		_set_shortcut_context_recursive(main_flow, p_context ? p_context : this);
 	}
 }
 
