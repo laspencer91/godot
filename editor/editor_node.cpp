@@ -6468,6 +6468,12 @@ void EditorNode::_load_editor_layout() {
 		ep.step(TTR("Loading central editor layout..."), 3, true);
 		_load_central_editor_layout_from_config(config);
 
+		// G2 M6.2: the workspace restore stood the scene auto-reveal down while it ran (is_workspace_restore_pending),
+		// and the progress-bar pump can consume the queued _ensure_active_scene_tab calls during that window.
+		// Re-trigger it now that restore is done so the active scene still lands in a pane (idempotent: it just
+		// focuses the tab if the session already placed it). Deferred to run after the restore's own deferreds.
+		callable_mp(this, &EditorNode::_ensure_active_scene_tab).call_deferred();
+
 		ep.step(TTR("Loading plugin window layout..."), 4, true);
 		editor_data.set_plugin_window_layout(config);
 

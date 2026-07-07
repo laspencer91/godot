@@ -95,20 +95,6 @@ WorkspacePane *WorkspacePane::split(bool p_vertical, Control *p_new_content, boo
 	return new_pane;
 }
 
-void WorkspacePane::_notification(int p_what) {
-	switch (p_what) {
-		case NOTIFICATION_DRAW: {
-			if (!workspace || workspace->get_focused_pane() != this || workspace->get_root_pane()->get_leaf_count() <= 1) {
-				return;
-			}
-
-			// G2 M1.1: workspace focus is a pane-level concept; draw only when multiple panes exist.
-			const Color accent_color = get_theme_color(SNAME("accent_color"), EditorStringName(Editor));
-			draw_rect(Rect2(Vector2(), get_size()).grow(-1), accent_color, false, 2 * EDSCALE);
-		} break;
-	}
-}
-
 void WorkspacePane::input(const Ref<InputEvent> &p_event) {
 	if (!workspace || !is_leaf() || !is_visible_in_tree()) {
 		return;

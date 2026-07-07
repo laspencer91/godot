@@ -78,7 +78,6 @@ class WorkspacePane : public VBoxContainer {
 
 protected:
 	static void _bind_methods() {}
-	void _notification(int p_what);
 	virtual void input(const Ref<InputEvent> &p_event) override;
 
 public:
