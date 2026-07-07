@@ -124,11 +124,12 @@ run_case "restore_workspace" -e
 # never exercises the SAVE side. This case does: restore open scenes (the active one is revealed into
 # a pane by M7.1), quit (which must WRITE that scene into the workspace tabs), then restore again. It
 # guards the regression where SceneDocument::get_path() returned "" and every scene was silently
-# dropped from the saved layout. Two scenes: the single-open-scene auto-reveal is a separate M7.1 gap.
+# dropped from the saved layout. A SINGLE open scene also guards the empty-slot-reuse reveal fix (a
+# lone scene must still land in a pane, not be left on the legacy screen-host tab).
 RT="$WORK/roundtrip"
 mkdir -p "$RT/.godot/editor"
 cp "$SMOKE_DIR"/*.tscn "$SMOKE_DIR/project.godot" "$RT"/
-printf '[EditorNode]\n\nopen_scenes=PackedStringArray("res://test_2d.tscn", "res://test_3d.tscn")\ncurrent_scene="res://test_3d.tscn"\n' > "$RT/.godot/editor/editor_layout.cfg"
+printf '[EditorNode]\n\nopen_scenes=PackedStringArray("res://test_3d.tscn")\ncurrent_scene="res://test_3d.tscn"\n' > "$RT/.godot/editor/editor_layout.cfg"
 HOST_RT="$(host_path "$RT")"
 "$BIN" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/save.log" 2>&1
 # The scene must appear in a pane's "docs" list (not just open_scenes) after the save.

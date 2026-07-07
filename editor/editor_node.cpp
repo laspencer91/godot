@@ -5137,6 +5137,11 @@ Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, b
 	scene_tabs->update_scene_tabs();
 	if (!restoring_scenes) {
 		_add_to_recent_scenes(lpath);
+		// G2: reveal the opened scene into a pane. The add-a-tab branch above already queues this via
+		// _set_current_scene, but the empty-slot-reuse branch (a project's first/only scene) does not —
+		// without this, opening a single scene would leave it invisible on the legacy screen-host tab.
+		// Deferred + idempotent (focuses the tab if already present). Restore uses its own reveal path.
+		callable_mp(this, &EditorNode::_ensure_active_scene_tab).call_deferred();
 	}
 
 	return OK;
