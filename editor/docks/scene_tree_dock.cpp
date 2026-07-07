@@ -3437,6 +3437,12 @@ bool SceneTreeDock::_check_node_recursive(Variant &r_variant, Node *p_node, Node
 
 void SceneTreeDock::set_edited_scene(Node *p_scene) {
 	edited_scene = p_scene;
+	// G2 D7a: a bound per-pane dock pins its tree to this document's root so it keeps its own scene
+	// across global tab/scene switches. The global dock (bound_document == nullptr) leaves the tree on
+	// the global edited scene — unchanged behavior.
+	if (bound_document && scene_tree) {
+		scene_tree->set_scene_root_override(p_scene);
+	}
 	_update_create_root_dialog_visibility();
 }
 

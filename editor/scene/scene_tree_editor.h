@@ -46,6 +46,11 @@ class SceneTreeEditor : public Control {
 
 	EditorSelection *editor_selection = nullptr;
 
+	// G2 D7a: when set (a per-pane bound tree), this document's scene root is the tree's scene instead
+	// of the single global SceneTree::get_edited_scene_root() — so each pane keeps its own tree across
+	// tab/scene switches. Empty on the global tree, which follows the active edited scene as before.
+	ObjectID scene_root_override;
+
 	enum SceneTreeEditorButton {
 		BUTTON_SUBSCENE = 0,
 		BUTTON_VISIBILITY = 1,
@@ -247,6 +252,9 @@ public:
 	Node *get_selected();
 	void set_can_rename(bool p_can_rename) { can_rename = p_can_rename; }
 	void set_editor_selection(EditorSelection *p_selection);
+	// G2 D7a: pin this tree to a specific scene root (a bound per-pane tree). Null clears the pin,
+	// reverting to the global edited scene.
+	void set_scene_root_override(Node *p_root);
 
 	void set_show_enabled_subscene(bool p_show) { show_enabled_subscene = p_show; }
 	void set_valid_types(const Vector<StringName> &p_valid);

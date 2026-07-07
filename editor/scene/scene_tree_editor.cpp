@@ -60,9 +60,23 @@
 #include "scene/resources/packed_scene.h"
 
 Node *SceneTreeEditor::get_scene_node() const {
+	// G2 D7a: a bound per-pane tree resolves to its own document's root; the global tree falls back to
+	// the single active edited scene.
+	if (scene_root_override.is_valid()) {
+		if (Node *root = ObjectDB::get_instance<Node>(scene_root_override)) {
+			return root;
+		}
+	}
 	ERR_FAIL_COND_V(!is_inside_tree(), nullptr);
 
 	return get_tree()->get_edited_scene_root();
+}
+
+void SceneTreeEditor::set_scene_root_override(Node *p_root) {
+	scene_root_override = p_root ? p_root->get_instance_id() : ObjectID();
+	if (is_inside_tree()) {
+		_update_tree();
+	}
 }
 
 PackedStringArray SceneTreeEditor::_get_node_configuration_warnings(Node *p_node) {
