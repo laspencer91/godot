@@ -39,14 +39,89 @@
 #include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
+#include "editor/editor_string_names.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "editor/script/script_editor_plugin.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/foldable_container.h"
-#include "scene/gui/scroll_container.h"
 #include "scene/gui/split_container.h"
+#include "scene/gui/texture_rect.h"
+#include "scene/resources/style_box_flat.h"
+
+// G2 styling: give an accordion section the GDStudio "card" look — a raised, rounded header (with
+// leading icon and hover/collapsed variants) over a slightly recessed content panel. Colors come from
+// the active editor theme so it tracks light/dark. Kept local since only the pane docks use it.
+static Ref<StyleBoxFlat> _dock_section_sb(const Color &p_bg, int p_radius, bool p_round_top, bool p_round_bottom, int p_pad_h, int p_pad_v, bool p_raised = false) {
+	Ref<StyleBoxFlat> sb;
+	sb.instantiate();
+	sb->set_bg_color(p_bg);
+	if (p_round_top) {
+		sb->set_corner_radius(CORNER_TOP_LEFT, p_radius);
+		sb->set_corner_radius(CORNER_TOP_RIGHT, p_radius);
+	}
+	if (p_round_bottom) {
+		sb->set_corner_radius(CORNER_BOTTOM_LEFT, p_radius);
+		sb->set_corner_radius(CORNER_BOTTOM_RIGHT, p_radius);
+	}
+	sb->set_content_margin(SIDE_LEFT, p_pad_h);
+	sb->set_content_margin(SIDE_RIGHT, p_pad_h);
+	sb->set_content_margin(SIDE_TOP, p_pad_v);
+	sb->set_content_margin(SIDE_BOTTOM, p_pad_v);
+	if (p_raised) {
+		// A 1px top-edge highlight (light from above) + a faint drop shadow lifts the header card off
+		// the column — the "very subtle gradient" pop without a baked texture (keeps the crisp corners).
+		sb->set_border_width(SIDE_TOP, MAX(1, int(EDSCALE)));
+		sb->set_border_color(p_bg.lightened(0.35));
+		sb->set_shadow_color(Color(0, 0, 0, 0.16));
+		sb->set_shadow_size(MAX(2, int(3 * EDSCALE)));
+		sb->set_shadow_offset(Size2(0, MAX(1, int(EDSCALE))));
+	}
+	return sb;
+}
+
+static void _style_dock_section(FoldableContainer *p_section, const StringName &p_icon_name) {
+	Control *gui_base = EditorNode::get_singleton()->get_gui_base();
+	const Color base = gui_base->get_theme_color(SNAME("base_color"), EditorStringName(Editor));
+	const int radius = 5 * EDSCALE;
+	const int pad_h = 10 * EDSCALE;
+	const int pad_v = 6 * EDSCALE;
+
+	if (p_icon_name != StringName()) {
+		Ref<Texture2D> icon = gui_base->get_theme_icon(p_icon_name, EditorStringName(EditorIcons));
+		if (icon.is_valid()) {
+			TextureRect *rect = memnew(TextureRect);
+			rect->set_texture(icon);
+			rect->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
+			rect->set_custom_minimum_size(Size2(16, 16) * EDSCALE);
+			p_section->add_title_bar_control(rect);
+		}
+	}
+
+	const Color header = base.lightened(0.10);
+	const Color header_hover = base.lightened(0.16);
+	p_section->add_theme_style_override(SNAME("title_panel"), _dock_section_sb(header, radius, true, false, pad_h, pad_v, true));
+	p_section->add_theme_style_override(SNAME("title_hover_panel"), _dock_section_sb(header_hover, radius, true, false, pad_h, pad_v, true));
+	p_section->add_theme_style_override(SNAME("title_collapsed_panel"), _dock_section_sb(header, radius, true, true, pad_h, pad_v, true));
+	p_section->add_theme_style_override(SNAME("title_collapsed_hover_panel"), _dock_section_sb(header_hover, radius, true, true, pad_h, pad_v, true));
+	p_section->add_theme_style_override(SNAME("panel"), _dock_section_sb(base.darkened(0.04), radius, false, true, 4 * EDSCALE, 4 * EDSCALE));
+}
+
+void DocumentView::_add_accordion_section(FoldableContainer *p_section, const StringName &p_icon, bool p_expanded) {
+	_style_dock_section(p_section, p_icon);
+	p_section->set_folded(!p_expanded);
+	// Expanded → share the column; collapsed → header only. Kept in sync on fold by _on_section_folded.
+	p_section->set_v_size_flags(p_expanded ? SIZE_EXPAND_FILL : SIZE_FILL);
+	p_section->connect("folding_changed", callable_mp(this, &DocumentView::_on_section_folded).bind(p_section));
+}
+
+void DocumentView::_on_section_folded(bool p_folded, FoldableContainer *p_section) {
+	// Responsive accordion: expanded sections share the column proportionally; collapsing one shrinks
+	// it to just its header, freeing that space for the rest (so e.g. folding Inspector lifts Signals
+	// and Groups up). No fixed heights, so nothing stays locked or clips.
+	p_section->set_v_size_flags(p_folded ? SIZE_FILL : SIZE_EXPAND_FILL);
+}
 
 DocumentView::DocumentView(EditorDocument *p_document) {
 	set_h_size_flags(SIZE_EXPAND_FILL);
@@ -132,44 +207,45 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		// (Scene Tree + Inspector expanded, Signals + Groups folded), on the RIGHT of the surface.
 		VBoxContainer *dock_column = memnew(VBoxContainer);
 		dock_column->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
+		dock_column->add_theme_constant_override("separation", 6 * EDSCALE); // gaps → sections read as stacked cards.
 
-		// Scene Tree section (D7a's tree, now folded into the accordion, expanded).
+		// Scene Tree section (D7a's tree, folded into the accordion, expanded by default).
 		scene_tree_dock = memnew(SceneTreeDock(p_document->get_root(), p_document->get_selection(), ed, false));
 		scene_tree_dock->set_bound_document(p_document);
 		scene_tree_dock->set_edited_scene(p_document->get_root());
 		scene_tree_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *tree_section = memnew(FoldableContainer);
 		tree_section->set_title(TTR("Scene Tree"));
-		tree_section->set_custom_minimum_size(Size2(0, 260 * EDSCALE)); // internal tree scrolls; column scrolls past.
 		tree_section->add_child(scene_tree_dock);
+		_add_accordion_section(tree_section, SNAME("PackedScene"), true);
 		dock_column->add_child(tree_section);
 
-		// Inspector section (bound per-pane inspector, expanded).
+		// Inspector section (bound per-pane inspector, expanded by default).
 		inspector_dock = memnew(InspectorDock(ed, false));
 		inspector_dock->set_bound_document(p_document);
 		inspector_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *inspector_section = memnew(FoldableContainer);
 		inspector_section->set_title(TTR("Inspector"));
-		inspector_section->set_custom_minimum_size(Size2(0, 320 * EDSCALE)); // internal inspector scrolls.
 		inspector_section->add_child(inspector_dock);
+		_add_accordion_section(inspector_section, SNAME("Object"), true);
 		dock_column->add_child(inspector_section);
 
-		// G3: Signals section (bound ConnectionsDock, folded by default).
+		// G3: Signals section (bound ConnectionsDock, collapsed by default).
 		signals_dock = memnew(SignalsDock(false));
 		signals_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *signals_section = memnew(FoldableContainer);
 		signals_section->set_title(TTR("Signals"));
-		signals_section->set_folded(true);
 		signals_section->add_child(signals_dock);
+		_add_accordion_section(signals_section, SNAME("Signals"), false);
 		dock_column->add_child(signals_section);
 
-		// G3: Groups section (bound GroupsEditor dock, folded by default).
+		// G3: Groups section (bound GroupsEditor dock, collapsed by default).
 		groups_dock = memnew(GroupsDock(false));
 		groups_dock->set_v_size_flags(SIZE_EXPAND_FILL);
 		FoldableContainer *groups_section = memnew(FoldableContainer);
 		groups_section->set_title(TTR("Groups"));
-		groups_section->set_folded(true);
 		groups_section->add_child(groups_dock);
+		_add_accordion_section(groups_section, SNAME("Groups"), false);
 		dock_column->add_child(groups_section);
 
 		// Drive the bound inspector from THIS document's selection (independent of the active pane).
@@ -189,18 +265,13 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
 		surface_vbox->add_child(editor_surface);
 
-		// G2 styling: the accordion can exceed the pane height (e.g. Signals + Groups both expanded),
-		// so host it in a vertical ScrollContainer — otherwise the bottom sections clip off-screen.
-		ScrollContainer *dock_scroll = memnew(ScrollContainer);
-		dock_scroll->set_horizontal_scroll_mode(ScrollContainer::SCROLL_MODE_DISABLED);
-		dock_scroll->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
-		dock_column->set_h_size_flags(SIZE_EXPAND_FILL);
-		dock_scroll->add_child(dock_column);
-
-		// Compose: [toolbar|viewport] | dock column (docks on the right, per the design).
+		// Compose: [toolbar|viewport] | dock column (docks on the right, per the design). The accordion
+		// sizes responsively — expanded sections share the column via SIZE_EXPAND_FILL, collapsed ones
+		// shrink to their header (see _add_accordion_section / _on_section_folded) and each section's
+		// content scrolls internally, so no outer ScrollContainer is needed.
 		HSplitContainer *scene_split = memnew(HSplitContainer);
 		scene_split->add_child(surface_vbox);
-		scene_split->add_child(dock_scroll);
+		scene_split->add_child(dock_column);
 		editor_surface = scene_split;
 	}
 

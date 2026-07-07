@@ -38,16 +38,37 @@
 #include "editor/gui/editor_workspace.h" // G2 S8: pane split/close from the tab bar.
 #include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
 #include "editor/editor_string_names.h"
+#include "editor/themes/editor_scale.h"
 #include "scene/gui/margin_container.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/popup_menu.h"
 #include "scene/gui/tab_bar.h"
+#include "scene/resources/style_box_flat.h"
 
 void TabbedDocumentHost::_notification(int p_what) {
-	if (p_what == NOTIFICATION_THEME_CHANGED && tabbar_panel) {
-		// G2 styling: match the native scene-tab strip's background (EditorSceneTabs uses the same
-		// "tabbar_background" stylebox from the TabContainer theme).
-		tabbar_panel->add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("tabbar_background"), SNAME("TabContainer")));
+	if (p_what != NOTIFICATION_THEME_CHANGED || !tabbar_panel) {
+		return;
+	}
+	// The native tab-bar background, minus its top content-margin — that inset was showing a lighter
+	// band above the tabs.
+	Ref<StyleBox> tab_bg = get_theme_stylebox(SNAME("tabbar_background"), SNAME("TabContainer"));
+	if (tab_bg.is_valid()) {
+		Ref<StyleBox> bg = tab_bg->duplicate();
+		bg->set_content_margin(SIDE_TOP, 0);
+		bg->set_content_margin(SIDE_BOTTOM, 0);
+		tabbar_panel->add_theme_style_override(SceneStringName(panel), bg);
+	}
+	// Tabs: keep the editor's native tab styleboxes (their colors + corners already read well) and add
+	// only the subtle top-edge highlight to the selected tab, matching the dock-section cards. Hand-
+	// rolling the colors looked muddy, so we build on the theme's own stylebox instead.
+	Ref<StyleBox> sel_src = get_theme_stylebox(SNAME("tab_selected"), SNAME("TabBar"));
+	if (sel_src.is_valid()) {
+		Ref<StyleBoxFlat> sel = sel_src->duplicate();
+		if (sel.is_valid()) {
+			sel->set_border_width(SIDE_TOP, MAX(1, int(EDSCALE)));
+			sel->set_border_color(sel->get_bg_color().lightened(0.30));
+			tab_bar->add_theme_style_override(SNAME("tab_selected"), sel);
+		}
 	}
 }
 

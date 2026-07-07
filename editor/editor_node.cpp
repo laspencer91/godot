@@ -741,7 +741,16 @@ void EditorNode::_update_theme(bool p_skip_creation) {
 			main_menu_button->set_button_icon(theme->get_icon(SNAME("TripleBar"), EditorStringName(EditorIcons)));
 		}
 
-		editor_main_screen->add_theme_style_override(SceneStringName(panel), theme->get_stylebox(SNAME("Content"), EditorStringName(EditorStyles)));
+		// G2 styling: the main editor area is the workspace now, and each pane carries its own tab bar at
+		// the very top. Drop the Content stylebox's TOP inset — that padding showed as a gray band above
+		// the pane (where the legacy scene-tab strip used to sit). Side/bottom framing is kept.
+		Ref<StyleBox> content_sb = theme->get_stylebox(SNAME("Content"), EditorStringName(EditorStyles));
+		if (content_sb.is_valid()) {
+			Ref<StyleBox> content_no_top = content_sb->duplicate();
+			content_no_top->set_content_margin(SIDE_TOP, 0);
+			content_sb = content_no_top;
+		}
+		editor_main_screen->add_theme_style_override(SceneStringName(panel), content_sb);
 		bottom_panel->_theme_changed();
 		distraction_free->set_button_icon(theme->get_icon(SNAME("DistractionFree"), EditorStringName(EditorIcons)));
 		update_distraction_free_button_theme();

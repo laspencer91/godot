@@ -34,6 +34,7 @@
 
 class EditorDocument;
 class EditorDocumentView;
+class FoldableContainer;
 class GroupsDock;
 class InspectorDock;
 class SceneTreeDock;
@@ -81,6 +82,12 @@ class DocumentView : public MarginContainer {
 	Control *toolbar_host = nullptr;
 
 	void _bound_selection_changed();
+
+	// G2 styling: build + register one accordion dock section (styling, initial fold state, and the
+	// fold→expand-flag binding). _on_section_folded keeps expanded sections sharing the column while
+	// collapsed ones shrink to their header, so folding one frees space for the rest.
+	void _add_accordion_section(FoldableContainer *p_section, const StringName &p_icon, bool p_expanded);
+	void _on_section_folded(bool p_folded, FoldableContainer *p_section);
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The
 	// ScriptEditor mounts its menu strip / find bar here while this view's tab is current.
