@@ -46,6 +46,7 @@ class AcceptDialog;
 class ColorPicker;
 class ConfirmationDialog;
 class Control;
+class LineEdit;
 class FileDialog;
 class HBoxContainer;
 class ImageTexture;
@@ -227,6 +228,12 @@ public:
 		RESOURCE_SAVE,
 		RESOURCE_SAVE_AS,
 		SETTINGS_PICK_MAIN_SCENE,
+
+		// G2 M6.3: Workspace menu. WORKSPACE_LOAD_LAYOUT_BASE + index selects a saved named layout
+		// (kept well clear of the ids above so the dynamic Load items never collide).
+		WORKSPACE_SAVE_LAYOUT,
+		WORKSPACE_RESET_LAYOUT,
+		WORKSPACE_LOAD_LAYOUT_BASE = 10000,
 	};
 
 	struct ExecuteThreadArgs {
@@ -348,6 +355,19 @@ private:
 	PopupMenu *settings_menu = nullptr;
 	PopupMenu *help_menu = nullptr;
 	PopupMenu *tool_menu = nullptr;
+
+	// G2 M6.3: Workspace menu (save/load/reset the pane layout).
+	PopupMenu *workspace_menu = nullptr;
+	ConfirmationDialog *workspace_save_dialog = nullptr;
+	LineEdit *workspace_save_name = nullptr;
+	Vector<String> workspace_layout_names; // Ordered, index-aligned with the dynamic Load items.
+	// Load/Reset apply through a restart (rebuilding the tree live would re-enter the 2D/3D editors with
+	// multiple scene worlds and crash — the same reason M6 restore runs before scenes load). These carry
+	// the layout to persist on the way out; a one-shot override consumed by the next _save_editor_layout.
+	bool pending_layout_write = false;
+	Dictionary pending_layout_workspace; // Empty => omit the workspace key (Reset).
+	PackedStringArray pending_layout_scenes;
+	String pending_layout_current;
 	PopupMenu *export_as_menu = nullptr;
 	Button *export_button = nullptr;
 
@@ -676,6 +696,14 @@ private:
 
 	void _save_central_editor_layout_to_config(Ref<ConfigFile> p_config_file);
 	void _load_central_editor_layout_from_config(Ref<ConfigFile> p_config_file);
+
+	// G2 M6.3: Workspace menu handlers + the named-layout store (res://.godot/editor/workspace_layouts.cfg).
+	void _update_workspace_menu(); // Rebuilds the dynamic Load list on about_to_popup.
+	void _workspace_menu_option(int p_id);
+	void _on_workspace_save_name_confirmed();
+	void _save_workspace_layout(const String &p_name); // Serialize the current layout under p_name (no restart).
+	void _load_workspace_layout(const String &p_name); // Stage p_name + restart to apply via the boot path.
+	void _reset_workspace_layout(); // Stage a cleared workspace + restart (back to a single default pane).
 
 	void _save_window_settings_to_config(Ref<ConfigFile> p_layout, const String &p_section);
 

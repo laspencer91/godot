@@ -6407,6 +6407,13 @@ void EditorNode::_save_editor_layout() {
 }
 
 void EditorNode::_save_open_scenes_to_config(Ref<ConfigFile> p_layout) {
+	if (pending_layout_write) {
+		// G2 M6.3: a Workspace Load/Reset is applying via restart — persist the staged scene set instead
+		// of the live one, so the boot restore opens exactly the named layout's scenes.
+		p_layout->set_value(EDITOR_NODE_CONFIG_SECTION, "open_scenes", pending_layout_scenes);
+		p_layout->set_value(EDITOR_NODE_CONFIG_SECTION, "current_scene", pending_layout_current);
+		return;
+	}
 	PackedStringArray scenes;
 	for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
 		String path = editor_data.get_scene_path(i);
@@ -6496,6 +6503,18 @@ void EditorNode::_save_central_editor_layout_to_config(Ref<ConfigFile> p_config_
 
 	editor_main_screen->save_layout_to_config(p_config_file, EDITOR_NODE_CONFIG_SECTION);
 
+	// G2 M6.3: a Workspace Load/Reset is applying via restart — overwrite the just-written live workspace
+	// blob with the staged one (empty => Reset: drop the key so the boot path falls back to a single pane).
+	// One-shot: consumed here (this is the last save-writer in _save_editor_layout).
+	if (pending_layout_write) {
+		if (pending_layout_workspace.is_empty()) {
+			p_config_file->erase_section_key(EDITOR_NODE_CONFIG_SECTION, "workspace");
+		} else {
+			p_config_file->set_value(EDITOR_NODE_CONFIG_SECTION, "workspace", pending_layout_workspace);
+		}
+		pending_layout_write = false;
+	}
+
 	// G4: the drawer geometry + its (unmanaged) FileSystem dock layout, persisted directly since the
 	// dock no longer flows through EditorDockManager::save_docks_to_config.
 	if (workspace_file_drawer) {
@@ -6530,6 +6549,132 @@ void EditorNode::_load_central_editor_layout_from_config(Ref<ConfigFile> p_confi
 	if (workspace_file_drawer) {
 		workspace_file_drawer->load_state_from_config(p_config_file, EDITOR_NODE_CONFIG_SECTION);
 	}
+}
+
+// G2 M6.3: the per-project named-layout store.
+static String _workspace_layouts_cfg_path() {
+	return EditorPaths::get_singleton()->get_project_settings_dir().path_join("workspace_layouts.cfg");
+}
+
+void EditorNode::_update_workspace_menu() {
+	workspace_menu->clear();
+	workspace_menu->add_item(TTR("Save Layout As..."), WORKSPACE_SAVE_LAYOUT);
+	workspace_menu->add_item(TTR("Reset Layout"), WORKSPACE_RESET_LAYOUT);
+
+	// Dynamic Load list from the named store; index-aligned with workspace_layout_names.
+	workspace_layout_names.clear();
+	Ref<ConfigFile> cf;
+	cf.instantiate();
+	if (cf->load(_workspace_layouts_cfg_path()) == OK) {
+		Vector<String> sections = cf->get_sections();
+		if (!sections.is_empty()) {
+			workspace_menu->add_separator(TTR("Load"));
+			for (const String &name : sections) {
+				workspace_menu->add_item(name, WORKSPACE_LOAD_LAYOUT_BASE + workspace_layout_names.size());
+				workspace_layout_names.push_back(name);
+			}
+		}
+	}
+}
+
+void EditorNode::_workspace_menu_option(int p_id) {
+	switch (p_id) {
+		case WORKSPACE_SAVE_LAYOUT: {
+			if (!workspace_save_dialog) {
+				workspace_save_dialog = memnew(ConfirmationDialog);
+				workspace_save_dialog->set_title(TTR("Save Workspace Layout"));
+				workspace_save_dialog->set_ok_button_text(TTR("Save"));
+				VBoxContainer *vb = memnew(VBoxContainer);
+				workspace_save_dialog->add_child(vb);
+				Label *label = memnew(Label);
+				label->set_text(TTR("Layout name:"));
+				vb->add_child(label);
+				workspace_save_name = memnew(LineEdit);
+				workspace_save_name->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
+				vb->add_child(workspace_save_name);
+				workspace_save_dialog->register_text_enter(workspace_save_name);
+				workspace_save_dialog->connect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_on_workspace_save_name_confirmed));
+				gui_base->add_child(workspace_save_dialog);
+			}
+			workspace_save_name->set_text("");
+			workspace_save_dialog->popup_centered();
+			workspace_save_name->grab_focus();
+		} break;
+		case WORKSPACE_RESET_LAYOUT: {
+			_reset_workspace_layout();
+		} break;
+		default: {
+			const int idx = p_id - WORKSPACE_LOAD_LAYOUT_BASE;
+			if (idx >= 0 && idx < workspace_layout_names.size()) {
+				_load_workspace_layout(workspace_layout_names[idx]);
+			}
+		} break;
+	}
+}
+
+void EditorNode::_on_workspace_save_name_confirmed() {
+	const String name = workspace_save_name->get_text().strip_edges();
+	if (!name.is_empty()) {
+		_save_workspace_layout(name);
+	}
+}
+
+void EditorNode::_save_workspace_layout(const String &p_name) {
+	if (!editor_main_screen) {
+		return;
+	}
+	Ref<ConfigFile> cf;
+	cf.instantiate();
+	cf->load(_workspace_layouts_cfg_path()); // Amend the existing store if present.
+
+	// Capture the current geometry + tabs blob the same way the editor layout does, then re-home it under
+	// the layout's name alongside the open-scene set it references.
+	Ref<ConfigFile> tmp;
+	tmp.instantiate();
+	editor_main_screen->save_layout_to_config(tmp, EDITOR_NODE_CONFIG_SECTION);
+	cf->set_value(p_name, "workspace", tmp->get_value(EDITOR_NODE_CONFIG_SECTION, "workspace", Dictionary()));
+
+	PackedStringArray scenes;
+	for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
+		const String path = editor_data.get_scene_path(i);
+		if (!path.is_empty()) {
+			scenes.push_back(path);
+		}
+	}
+	cf->set_value(p_name, "open_scenes", scenes);
+	cf->set_value(p_name, "current_scene", editor_data.get_scene_path(editor_data.get_edited_scene()));
+	cf->save(_workspace_layouts_cfg_path());
+}
+
+void EditorNode::_load_workspace_layout(const String &p_name) {
+	Ref<ConfigFile> cf;
+	cf.instantiate();
+	if (cf->load(_workspace_layouts_cfg_path()) != OK || !cf->has_section(p_name)) {
+		return;
+	}
+	// Stage the named layout and restart: rebuilding the pane tree live would re-enter the 2D/3D editors
+	// with multiple scene worlds and crash (see M6 restore). The boot path applies it safely at 0 worlds.
+	pending_layout_workspace = cf->get_value(p_name, "workspace", Dictionary());
+	pending_layout_scenes = cf->get_value(p_name, "open_scenes", PackedStringArray());
+	pending_layout_current = cf->get_value(p_name, "current_scene", String());
+	pending_layout_write = true;
+	restart_editor();
+}
+
+void EditorNode::_reset_workspace_layout() {
+	// Stage a cleared workspace (keep the open scenes) and restart — boot with no workspace key falls back
+	// to a single default pane and reveals the active scene.
+	pending_layout_workspace = Dictionary();
+	pending_layout_scenes.clear();
+	for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
+		const String path = editor_data.get_scene_path(i);
+		if (!path.is_empty()) {
+			pending_layout_scenes.push_back(path);
+		}
+	}
+	pending_layout_current = editor_data.get_scene_path(editor_data.get_edited_scene());
+	pending_layout_write = true;
+	restart_editor();
 }
 
 void EditorNode::_save_window_settings_to_config(Ref<ConfigFile> p_layout, const String &p_section) {
@@ -9206,6 +9351,12 @@ EditorNode::EditorNode() {
 	help_menu = memnew(PopupMenu);
 	help_menu->connect(SceneStringName(id_pressed), callable_mp(this, &EditorNode::_menu_option));
 	_add_to_main_menu(TTRC("Help"), help_menu);
+
+	// G2 M6.3: Workspace menu — save / load / reset the pane layout.
+	workspace_menu = memnew(PopupMenu);
+	workspace_menu->connect(SceneStringName(id_pressed), callable_mp(this, &EditorNode::_workspace_menu_option));
+	workspace_menu->connect("about_to_popup", callable_mp(this, &EditorNode::_update_workspace_menu));
+	_add_to_main_menu(TTRC("Workspace"), workspace_menu);
 
 	_update_main_menu_type();
 
