@@ -37,6 +37,7 @@
 class EditorDocument;
 class EditorWorkspace;
 class SplitContainer;
+class TabbedDocumentHost;
 
 // Workspace layer for the dividable multi-document editor (G2).
 //
@@ -155,15 +156,23 @@ public:
 	// inside the pane's own signal emissions (tab close, context menu).
 	void queue_close_pane(WorkspacePane *p_pane);
 
-	// G2 S8: split p_pane and MOVE its p_tab into a fresh TabbedDocumentHost on the new
-	// (second) side. The tab's DocumentView is re-homed, not closed and reopened, so no
-	// close side effects fire. Returns the new pane (null if the move was refused).
-	WorkspacePane *split_pane_with_tab(WorkspacePane *p_pane, int p_tab, bool p_vertical);
+	// G2 S8: split p_pane and MOVE its p_tab into a fresh TabbedDocumentHost on the new side. The
+	// tab's DocumentView is re-homed, not closed and reopened, so no close side effects fire. The new
+	// pane lands on the second (right/bottom) side when p_new_on_second, else first (left/top) -- G6's
+	// drag-to-split compass uses this to reach all four directions. Returns the new pane (null if refused).
+	WorkspacePane *split_pane_with_tab(WorkspacePane *p_pane, int p_tab, bool p_vertical, bool p_new_on_second = true);
+
+	// G6: the drag-to-split primitive. Move p_source's tab p_tab onto p_target: p_center adopts it as a
+	// tab of p_target's own host; otherwise p_target is split (p_vertical / p_new_on_second choose the
+	// side) and the tab lands in a fresh host there. A cross-pane move that empties the source pane
+	// closes it. Returns the pane the tab ended up in (null if refused). split_pane_with_tab delegates here.
+	WorkspacePane *move_tab_into_pane(TabbedDocumentHost *p_source, int p_tab, WorkspacePane *p_target, bool p_center, bool p_vertical, bool p_new_on_second);
 
 	EditorWorkspace();
 
 private:
 	WorkspacePane *_find_pane_showing(WorkspacePane *p_pane, EditorDocument *p_document) const;
 	WorkspacePane *_find_tabbed_leaf(WorkspacePane *p_pane) const;
+	WorkspacePane *_pane_of_content(Node *p_content) const; // G6: nearest WorkspacePane ancestor of a content node.
 	void _close_pane_by_id(ObjectID p_pane_id);
 };

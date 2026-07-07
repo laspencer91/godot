@@ -458,31 +458,70 @@ void EditorWorkspace::queue_close_pane(WorkspacePane *p_pane) {
 	callable_mp(this, &EditorWorkspace::_close_pane_by_id).call_deferred(p_pane->get_instance_id());
 }
 
-WorkspacePane *EditorWorkspace::split_pane_with_tab(WorkspacePane *p_pane, int p_tab, bool p_vertical) {
-	// G2 S8: context-menu split — the clicked tab MOVES into a fresh tabbed host on the
-	// new side; its DocumentView is re-homed live, so editing state is untouched.
+WorkspacePane *EditorWorkspace::split_pane_with_tab(WorkspacePane *p_pane, int p_tab, bool p_vertical, bool p_new_on_second) {
+	// G2 S8 / G6: the tab-bar context-menu split is just a same-pane edge move; delegate to the general
+	// drag-to-split primitive so both paths share the detach/split/adopt logic.
 	ERR_FAIL_NULL_V(p_pane, nullptr);
 	TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content());
 	ERR_FAIL_NULL_V(host, nullptr);
-	ERR_FAIL_INDEX_V(p_tab, host->get_document_count(), nullptr);
-	if (host->get_document_count() < 2) {
-		return nullptr; // Moving the only tab out would leave a dead pane behind.
+	return move_tab_into_pane(host, p_tab, p_pane, false, p_vertical, p_new_on_second);
+}
+
+WorkspacePane *EditorWorkspace::move_tab_into_pane(TabbedDocumentHost *p_source, int p_tab, WorkspacePane *p_target, bool p_center, bool p_vertical, bool p_new_on_second) {
+	// G6: shared by the tab-bar context menu (same source & target) and the drag-to-split compass
+	// (source may be another pane). The dragged tab's DocumentView is re-homed live — no close/reopen.
+	ERR_FAIL_NULL_V(p_source, nullptr);
+	ERR_FAIL_NULL_V(p_target, nullptr);
+	TabbedDocumentHost *target_host = Object::cast_to<TabbedDocumentHost>(p_target->get_content());
+	ERR_FAIL_NULL_V(target_host, nullptr);
+	ERR_FAIL_INDEX_V(p_tab, p_source->get_document_count(), nullptr);
+
+	const bool same_host = (p_source == target_host);
+	if (p_center && same_host) {
+		return p_target; // Dropping a tab back onto its own pane's center: nothing to move.
+	}
+	if (!p_center && same_host && p_source->get_document_count() < 2) {
+		return nullptr; // Splitting out the only tab would just bounce back into an empty pane.
 	}
 
-	EditorDocument *doc = host->get_document(p_tab);
-	DocumentView *view = host->detach_tab(p_tab);
+	EditorDocument *doc = p_source->get_document(p_tab);
+	DocumentView *view = p_source->detach_tab(p_tab);
 	ERR_FAIL_NULL_V(view, nullptr);
 
-	TabbedDocumentHost *new_host = memnew(TabbedDocumentHost);
-	WorkspacePane *new_pane = p_pane->split(p_vertical, new_host, true);
-	if (!new_pane) {
-		host->adopt_tab(doc, view); // Split refused; put the tab back.
-		memdelete(new_host);
-		return nullptr;
+	WorkspacePane *result = nullptr;
+	if (p_center) {
+		target_host->adopt_tab(doc, view);
+		result = p_target;
+	} else {
+		TabbedDocumentHost *new_host = memnew(TabbedDocumentHost);
+		WorkspacePane *new_pane = p_target->split(p_vertical, new_host, p_new_on_second);
+		if (!new_pane) {
+			memdelete(new_host);
+			p_source->adopt_tab(doc, view); // Split refused; put the tab back.
+			return nullptr;
+		}
+		new_host->adopt_tab(doc, view);
+		result = new_pane;
 	}
-	new_host->adopt_tab(doc, view);
-	set_focused_pane(new_pane);
-	return new_pane;
+
+	// A cross-pane move can empty the source pane; drain it through the close pipeline (root never closes).
+	if (!same_host && p_source->get_document_count() == 0) {
+		if (WorkspacePane *source_pane = _pane_of_content(p_source)) {
+			queue_close_pane(source_pane);
+		}
+	}
+
+	set_focused_pane(result);
+	return result;
+}
+
+WorkspacePane *EditorWorkspace::_pane_of_content(Node *p_content) const {
+	for (Node *n = p_content; n; n = n->get_parent()) {
+		if (WorkspacePane *pane = Object::cast_to<WorkspacePane>(n)) {
+			return pane;
+		}
+	}
+	return nullptr;
 }
 
 EditorWorkspace::EditorWorkspace() {

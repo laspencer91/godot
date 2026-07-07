@@ -36,6 +36,7 @@
 class Control;
 class DocumentView;
 class EditorDocument;
+class PaneDropOverlay;
 class PanelContainer;
 class PopupMenu;
 class TabBar;
@@ -59,6 +60,7 @@ class TabbedDocumentHost : public VBoxContainer {
 	PanelContainer *tabbar_panel = nullptr;
 	TabBar *tab_bar = nullptr;
 	Control *content_host = nullptr; // Fills the pane; parent of every DocumentView.
+	PaneDropOverlay *drop_overlay = nullptr; // G6: drag-to-split compass over the content area (kept topmost).
 
 	Vector<EditorDocument *> documents; // One per tab, index-aligned with the TabBar. Not owned.
 	Vector<DocumentView *> views; // Parallel to documents; lazily created, owned via content_host.
@@ -84,6 +86,8 @@ class TabbedDocumentHost : public VBoxContainer {
 	void _on_tab_rmb(int p_idx); // G2 S8
 	void _on_menu_pressed(int p_id); // G2 S8
 	WorkspacePane *_owning_pane() const; // G2 S8: nearest WorkspacePane ancestor (null outside a workspace).
+	void _raise_overlay(); // G6: keep drop_overlay the topmost child of content_host (drawn over views).
+	static TabbedDocumentHost *_host_from_drag_data(const Variant &p_data, int &r_tab, const Node *p_ref); // G6
 
 protected:
 	static void _bind_methods() {}
@@ -128,6 +132,12 @@ public:
 	// selects it. Used by EditorWorkspace::split_pane_with_tab.
 	DocumentView *detach_tab(int p_idx);
 	int adopt_tab(EditorDocument *p_document, DocumentView *p_view);
+
+	// G6: drag-to-split drop handling, driven by this pane's PaneDropOverlay. can_accept_tab_drop
+	// validates that a native TabBar drag payload resolves to a live source host; accept_tab_drop
+	// performs the move for the given PaneDropOverlay::Zone (passed as int).
+	bool can_accept_tab_drop(const Variant &p_data) const;
+	void accept_tab_drop(const Variant &p_data, int p_zone);
 
 	TabbedDocumentHost();
 };

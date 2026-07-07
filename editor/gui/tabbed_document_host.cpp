@@ -36,6 +36,7 @@
 #include "editor/editor_node.h"
 #include "editor/gui/document_view.h"
 #include "editor/gui/editor_workspace.h" // G2 S8: pane split/close from the tab bar.
+#include "editor/gui/pane_drop_overlay.h" // G6: drag-to-split compass.
 #include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
 #include "editor/editor_string_names.h"
 #include "editor/themes/editor_scale.h"
@@ -106,6 +107,18 @@ TabbedDocumentHost::TabbedDocumentHost() {
 	content_host->add_theme_constant_override("margin_top", 0);
 	content_host->add_theme_constant_override("margin_bottom", 0);
 	add_child(content_host);
+
+	// G6: the drag-to-split compass overlays the content area. It is mouse-transparent until a tab drag
+	// arms it, and must stay the topmost child so it paints over (and intercepts drops before) the views.
+	drop_overlay = memnew(PaneDropOverlay);
+	drop_overlay->set_owner_host(this);
+	content_host->add_child(drop_overlay);
+}
+
+void TabbedDocumentHost::_raise_overlay() {
+	if (drop_overlay && drop_overlay->get_parent() == content_host) {
+		content_host->move_child(drop_overlay, content_host->get_child_count() - 1);
+	}
 }
 
 int TabbedDocumentHost::add_document(EditorDocument *p_document, const String &p_title) {
@@ -160,6 +173,7 @@ DocumentView *TabbedDocumentHost::_ensure_view(int p_idx) {
 		views.write[p_idx] = view;
 		content_host->add_child(view);
 		view->set_visible(false); // _show() reveals exactly one.
+		_raise_overlay(); // G6: keep the drop compass above the newly added view.
 	}
 	return views[p_idx];
 }
@@ -320,6 +334,7 @@ int TabbedDocumentHost::adopt_tab(EditorDocument *p_document, DocumentView *p_vi
 	views.push_back(p_view);
 	content_host->add_child(p_view);
 	p_view->set_visible(false); // set_current reveals it.
+	_raise_overlay(); // G6: keep the drop compass above the adopted view.
 	tab_bar->add_tab(p_document->get_title());
 	set_current(idx);
 	return idx;
@@ -332,6 +347,53 @@ WorkspacePane *TabbedDocumentHost::_owning_pane() const {
 		}
 	}
 	return nullptr;
+}
+
+TabbedDocumentHost *TabbedDocumentHost::_host_from_drag_data(const Variant &p_data, int &r_tab, const Node *p_ref) {
+	// G6: decode a native TabBar rearrange payload ({type:"tab", tab_type:"tab_bar_tab", tab_index,
+	// from_path}) into the source host + tab index. Returns null for any non-workspace-tab drag.
+	r_tab = -1;
+	if (p_data.get_type() != Variant::DICTIONARY || !p_ref) {
+		return nullptr;
+	}
+	const Dictionary d = p_data;
+	if (String(d.get("type", String())) != "tab" || String(d.get("tab_type", String())) != "tab_bar_tab") {
+		return nullptr;
+	}
+	if (!d.has("from_path") || !d.has("tab_index")) {
+		return nullptr;
+	}
+	Node *from = p_ref->get_node_or_null(d["from_path"]);
+	for (Node *n = from; n; n = n->get_parent()) {
+		if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(n)) {
+			r_tab = d["tab_index"];
+			return host;
+		}
+	}
+	return nullptr;
+}
+
+bool TabbedDocumentHost::can_accept_tab_drop(const Variant &p_data) const {
+	int tab = -1;
+	const TabbedDocumentHost *src = _host_from_drag_data(p_data, tab, this);
+	return src && tab >= 0 && tab < src->get_document_count();
+}
+
+void TabbedDocumentHost::accept_tab_drop(const Variant &p_data, int p_zone) {
+	int tab = -1;
+	TabbedDocumentHost *src = _host_from_drag_data(p_data, tab, this);
+	if (!src || tab < 0 || tab >= src->get_document_count()) {
+		return;
+	}
+	WorkspacePane *pane = _owning_pane();
+	EditorWorkspace *ws = pane ? pane->get_workspace() : nullptr;
+	if (!ws) {
+		return;
+	}
+	const bool center = (p_zone == PaneDropOverlay::ZONE_CENTER);
+	const bool split_vertical = (p_zone == PaneDropOverlay::ZONE_UP || p_zone == PaneDropOverlay::ZONE_DOWN);
+	const bool new_on_second = (p_zone == PaneDropOverlay::ZONE_RIGHT || p_zone == PaneDropOverlay::ZONE_DOWN);
+	ws->move_tab_into_pane(src, tab, pane, center, split_vertical, new_on_second);
 }
 
 void TabbedDocumentHost::_on_tab_rmb(int p_idx) {
