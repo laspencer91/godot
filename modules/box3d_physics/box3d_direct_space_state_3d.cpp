@@ -4,7 +4,9 @@
 
 #include "box3d_direct_space_state_3d.h"
 
+#include "box3d_area_3d.h"
 #include "box3d_body_3d.h"
+#include "box3d_collision_object_3d.h"
 #include "box3d_conversions.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
@@ -58,7 +60,7 @@ int Box3DDirectSpaceState3D::_get_shape_index(b3ShapeId p_shape_id) {
 	return (int)(uintptr_t)b3Shape_GetUserData(p_shape_id);
 }
 
-Box3DBody3D *Box3DDirectSpaceState3D::_get_body(b3ShapeId p_shape_id) {
+Box3DCollisionObject3D *Box3DDirectSpaceState3D::_get_object(b3ShapeId p_shape_id) {
 	if (!b3Shape_IsValid(p_shape_id)) {
 		return nullptr;
 	}
@@ -66,7 +68,15 @@ Box3DBody3D *Box3DDirectSpaceState3D::_get_body(b3ShapeId p_shape_id) {
 	if (!b3Body_IsValid(body_id)) {
 		return nullptr;
 	}
-	return static_cast<Box3DBody3D *>(b3Body_GetUserData(body_id));
+	return static_cast<Box3DCollisionObject3D *>(b3Body_GetUserData(body_id));
+}
+
+Box3DBody3D *Box3DDirectSpaceState3D::_get_body(b3ShapeId p_shape_id) {
+	Box3DCollisionObject3D *object = _get_object(p_shape_id);
+	if (object == nullptr || object->get_type() != Box3DCollisionObject3D::TYPE_BODY) {
+		return nullptr;
+	}
+	return static_cast<Box3DBody3D *>(object);
 }
 
 Object *Box3DDirectSpaceState3D::_get_instance(ObjectID p_id) {
@@ -87,38 +97,40 @@ void Box3DDirectSpaceState3D::_warn_ignored_shape_margin(real_t p_margin) {
 }
 
 bool Box3DDirectSpaceState3D::_can_query_shape(b3ShapeId p_shape_id, const HashSet<RID> &p_exclude, bool p_collide_with_bodies, bool p_collide_with_areas) const {
-	(void)p_collide_with_areas;
-	Box3DBody3D *body = _get_body(p_shape_id);
-	if (body == nullptr) {
+	Box3DCollisionObject3D *object = _get_object(p_shape_id);
+	if (object == nullptr) {
 		return false;
 	}
-	if (!p_collide_with_bodies) {
+	if (object->get_type() == Box3DCollisionObject3D::TYPE_BODY && !p_collide_with_bodies) {
 		return false;
 	}
-	if (p_exclude.has(body->get_rid())) {
+	if (object->get_type() == Box3DCollisionObject3D::TYPE_AREA && !p_collide_with_areas) {
+		return false;
+	}
+	if (p_exclude.has(object->get_rid())) {
 		return false;
 	}
 	return true;
 }
 
 void Box3DDirectSpaceState3D::_fill_shape_result(b3ShapeId p_shape_id, ShapeResult &r_result) const {
-	Box3DBody3D *body = _get_body(p_shape_id);
-	ERR_FAIL_NULL(body);
+	Box3DCollisionObject3D *object = _get_object(p_shape_id);
+	ERR_FAIL_NULL(object);
 
-	r_result.rid = body->get_rid();
-	r_result.collider_id = body->get_instance_id();
+	r_result.rid = object->get_rid();
+	r_result.collider_id = object->get_instance_id();
 	r_result.collider = _get_instance(r_result.collider_id);
 	r_result.shape = _get_shape_index(p_shape_id);
 }
 
 void Box3DDirectSpaceState3D::_fill_ray_result(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, int p_triangle_index, RayResult &r_result) const {
-	Box3DBody3D *body = _get_body(p_shape_id);
-	ERR_FAIL_NULL(body);
+	Box3DCollisionObject3D *object = _get_object(p_shape_id);
+	ERR_FAIL_NULL(object);
 
 	r_result.position = to_godot(p_point);
 	r_result.normal = to_godot(p_normal);
-	r_result.rid = body->get_rid();
-	r_result.collider_id = body->get_instance_id();
+	r_result.rid = object->get_rid();
+	r_result.collider_id = object->get_instance_id();
 	r_result.collider = _get_instance(r_result.collider_id);
 	r_result.shape = _get_shape_index(p_shape_id);
 	r_result.face_index = p_triangle_index;

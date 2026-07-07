@@ -4,6 +4,7 @@
 
 #include "box3d_body_3d.h"
 
+#include "box3d_area_3d.h"
 #include "box3d_conversions.h"
 #include "box3d_direct_space_state_3d.h"
 #include "box3d_shape_3d.h"
@@ -14,6 +15,10 @@
 #include "box3d/math_functions.h"
 
 static constexpr uint64_t BOX3D_QUERY_FILTER_BIT = UINT64_C(1) << 63;
+
+Box3DBody3D::Box3DBody3D() :
+		Box3DCollisionObject3D(TYPE_BODY) {
+}
 
 Box3DBody3D::~Box3DBody3D() {
 	set_space(nullptr);
@@ -75,6 +80,8 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 		def.linearVelocity = to_box3d(linear_velocity_cache);
 		def.angularVelocity = to_box3d(angular_velocity_cache);
 		def.gravityScale = (float)gravity_scale;
+		def.linearDamping = (float)linear_damp;
+		def.angularDamping = (float)angular_damp;
 		def.enableSleep = can_sleep;
 		def.isAwake = !sleeping;
 		def.isBullet = continuous_cd;
@@ -181,6 +188,8 @@ void Box3DBody3D::_build_all_shapes() {
 		def.baseMaterial.restitution = (float)bounce;
 		def.filter.categoryBits = (uint64_t)collision_layer;
 		def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
+		def.enableSensorEvents = true;
+		def.enableContactEvents = reports_contacts();
 		def.userData = (void *)(uintptr_t)i; // Godot shape index for query results.
 
 		Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
@@ -425,9 +434,112 @@ void Box3DBody3D::apply_kinematic_target(float p_step) {
 	has_kinematic_target = false;
 }
 
-void Box3DBody3D::apply_constant_forces() {
+bool Box3DBody3D::AreaRef::operator<(const AreaRef &p_ref) const {
+	const int a_priority = area ? area->get_priority() : 0;
+	const int b_priority = p_ref.area ? p_ref.area->get_priority() : 0;
+	if (a_priority == b_priority) {
+		return area < p_ref.area;
+	}
+	return a_priority < b_priority;
+}
+
+static void _combine_area_scalar(PhysicsServer3D::AreaSpaceOverrideMode p_mode, real_t p_value, real_t &r_total, bool &r_done) {
+	switch (p_mode) {
+		case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE:
+		case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE:
+			r_total += p_value;
+			r_done = p_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+			break;
+		case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE:
+		case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE:
+			r_total = p_value;
+			r_done = p_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE;
+			break;
+		default:
+			break;
+	}
+}
+
+void Box3DBody3D::apply_environment_forces(float p_step) {
 	if (!in_space() || mode == PhysicsServer3D::BODY_MODE_STATIC || mode == PhysicsServer3D::BODY_MODE_KINEMATIC) {
 		return;
+	}
+	total_gravity = Vector3();
+	total_linear_damp = 0.0;
+	total_angular_damp = 0.0;
+
+	if (omit_force_integration) {
+		b3Body_SetGravityScale(body_id, 0.0f);
+		b3Body_SetLinearDamping(body_id, 0.0f);
+		b3Body_SetAngularDamping(body_id, 0.0f);
+		return;
+	}
+
+	bool gravity_done = false;
+	bool linear_damp_done = false;
+	bool angular_damp_done = false;
+
+	if (!areas.is_empty()) {
+		areas.sort();
+		for (int i = (int)areas.size() - 1; i >= 0; i--) {
+			Box3DArea3D *area = areas[i].area;
+			if (area == nullptr) {
+				continue;
+			}
+			if (!gravity_done) {
+				const PhysicsServer3D::AreaSpaceOverrideMode area_override_mode = area->get_gravity_override_mode();
+				if (area_override_mode != PhysicsServer3D::AREA_SPACE_OVERRIDE_DISABLED) {
+					Vector3 area_gravity;
+					area->compute_gravity(get_transform().origin, area_gravity);
+					switch (area_override_mode) {
+						case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE:
+						case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE:
+							total_gravity += area_gravity;
+							gravity_done = area_override_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+							break;
+						case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE:
+						case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE:
+							total_gravity = area_gravity;
+							gravity_done = area_override_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE;
+							break;
+						default:
+							break;
+					}
+				}
+			}
+			if (!linear_damp_done) {
+				_combine_area_scalar(area->get_linear_damp_override_mode(), area->get_linear_damp(), total_linear_damp, linear_damp_done);
+			}
+			if (!angular_damp_done) {
+				_combine_area_scalar(area->get_angular_damp_override_mode(), area->get_angular_damp(), total_angular_damp, angular_damp_done);
+			}
+			if (gravity_done && linear_damp_done && angular_damp_done) {
+				break;
+			}
+		}
+	}
+
+	if (!gravity_done) {
+		total_gravity += space->get_gravity();
+	}
+	if (!linear_damp_done) {
+		total_linear_damp += space->get_default_linear_damp();
+	}
+	if (!angular_damp_done) {
+		total_angular_damp += space->get_default_angular_damp();
+	}
+
+	total_gravity *= gravity_scale;
+	total_linear_damp = linear_damp_mode == PhysicsServer3D::BODY_DAMP_MODE_REPLACE ? linear_damp : total_linear_damp + linear_damp;
+	total_angular_damp = angular_damp_mode == PhysicsServer3D::BODY_DAMP_MODE_REPLACE ? angular_damp : total_angular_damp + angular_damp;
+
+	const bool use_world_gravity = areas.is_empty();
+	b3Body_SetGravityScale(body_id, use_world_gravity ? (float)gravity_scale : 0.0f);
+	b3Body_SetLinearDamping(body_id, (float)total_linear_damp);
+	b3Body_SetAngularDamping(body_id, (float)total_angular_damp);
+
+	if (!use_world_gravity && !total_gravity.is_zero_approx()) {
+		b3Body_ApplyForceToCenter(body_id, to_box3d(total_gravity * b3Body_GetMass(body_id)), true);
 	}
 	if (!constant_force.is_zero_approx()) {
 		b3Body_ApplyForceToCenter(body_id, to_box3d(constant_force), true);
@@ -511,8 +623,25 @@ void Box3DBody3D::set_param(PhysicsServer3D::BodyParameter p_param, const Varian
 				b3Body_SetGravityScale(body_id, (float)gravity_scale);
 			}
 		} break;
+		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP_MODE: {
+			linear_damp_mode = (PhysicsServer3D::BodyDampMode)(int)p_value;
+		} break;
+		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP_MODE: {
+			angular_damp_mode = (PhysicsServer3D::BodyDampMode)(int)p_value;
+		} break;
+		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP: {
+			linear_damp = p_value;
+			if (in_space()) {
+				b3Body_SetLinearDamping(body_id, (float)linear_damp);
+			}
+		} break;
+		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP: {
+			angular_damp = p_value;
+			if (in_space()) {
+				b3Body_SetAngularDamping(body_id, (float)angular_damp);
+			}
+		} break;
 		default: {
-			// Remaining parameters land with areas/damping work (milestone 2).
 		} break;
 	}
 }
@@ -527,6 +656,14 @@ Variant Box3DBody3D::get_param(PhysicsServer3D::BodyParameter p_param) const {
 			return mass;
 		case PhysicsServer3D::BODY_PARAM_GRAVITY_SCALE:
 			return gravity_scale;
+		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP_MODE:
+			return linear_damp_mode;
+		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP_MODE:
+			return angular_damp_mode;
+		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP:
+			return linear_damp;
+		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP:
+			return angular_damp;
 		default:
 			return Variant();
 	}
@@ -616,12 +753,86 @@ void Box3DBody3D::set_constant_torque(const Vector3 &p_torque) {
 	constant_torque = p_torque;
 }
 
+void Box3DBody3D::set_force_integration_callback(const Callable &p_callable, const Variant &p_udata) {
+	force_integration_callback = p_callable;
+	force_integration_udata = p_udata;
+}
+
+void Box3DBody3D::set_omit_force_integration(bool p_omit) {
+	omit_force_integration = p_omit;
+}
+
+void Box3DBody3D::set_max_contacts_reported(int p_count) {
+	ERR_FAIL_COND(p_count < 0);
+	ERR_FAIL_COND(p_count > MAX_CONTACTS_REPORTED_3D_MAX);
+	contacts.resize(p_count);
+	contact_count = 0;
+	for (const b3ShapeId &shape_id : shape_ids) {
+		if (B3_IS_NON_NULL(shape_id)) {
+			b3Shape_EnableContactEvents(shape_id, p_count > 0);
+		}
+	}
+}
+
+void Box3DBody3D::clear_reported_contacts() {
+	contact_count = 0;
+}
+
+void Box3DBody3D::add_contact(const Contact &p_contact) {
+	const int max_contacts = contacts.size();
+	if (max_contacts == 0) {
+		return;
+	}
+	int index = contact_count;
+	if (contact_count < max_contacts) {
+		contact_count++;
+	} else {
+		real_t least_depth = 1e20;
+		index = 0;
+		for (int i = 0; i < max_contacts; i++) {
+			if (contacts[i].depth < least_depth) {
+				least_depth = contacts[i].depth;
+				index = i;
+			}
+		}
+		if (least_depth >= p_contact.depth) {
+			return;
+		}
+	}
+	contacts.write[index] = p_contact;
+}
+
 Box3DDirectBodyState3D *Box3DBody3D::get_direct_state() {
 	if (!direct_state) {
 		direct_state = memnew(Box3DDirectBodyState3D);
 		direct_state->body = this;
 	}
 	return direct_state;
+}
+
+void Box3DBody3D::add_area(Box3DArea3D *p_area) {
+	for (AreaRef &ref : areas) {
+		if (ref.area == p_area) {
+			ref.ref_count++;
+			return;
+		}
+	}
+	AreaRef ref;
+	ref.area = p_area;
+	ref.ref_count = 1;
+	areas.push_back(ref);
+}
+
+void Box3DBody3D::remove_area(Box3DArea3D *p_area) {
+	for (uint32_t i = 0; i < areas.size(); i++) {
+		if (areas[i].area == p_area) {
+			areas[i].ref_count--;
+			if (areas[i].ref_count <= 0) {
+				areas.remove_at(i);
+			}
+			return;
+		}
+	}
 }
 
 void Box3DBody3D::sync_from_move_event(const b3WorldTransform &p_transform, bool p_fell_asleep) {
@@ -634,6 +845,21 @@ void Box3DBody3D::sync_from_move_event(const b3WorldTransform &p_transform, bool
 }
 
 void Box3DBody3D::call_state_sync() {
+	if (force_integration_callback.is_valid()) {
+		Variant direct_state_variant = get_direct_state();
+		Variant ret;
+		Callable::CallError ce;
+		if (force_integration_udata.get_type() == Variant::NIL) {
+			const Variant *args[1] = { &direct_state_variant };
+			force_integration_callback.callp(args, 1, ret, ce);
+		} else {
+			const Variant *args[2] = { &direct_state_variant, &force_integration_udata };
+			force_integration_callback.callp(args, 2, ret, ce);
+		}
+		if (ce.error != Callable::CallError::CALL_OK) {
+			ERR_PRINT_ONCE("Error calling Box3D force integration callback.");
+		}
+	}
 	if (state_sync_callback.is_valid()) {
 		state_sync_callback.call(get_direct_state());
 	}
@@ -677,11 +903,51 @@ real_t Box3DDirectBodyState3D::get_inverse_mass() const {
 	return m > 0.0f ? 1.0 / m : 0.0;
 }
 
-Vector3 Box3DDirectBodyState3D::get_total_gravity() const {
-	if (!body->get_space()) {
+Vector3 Box3DDirectBodyState3D::get_inverse_inertia() const {
+	if (!body->in_space()) {
 		return Vector3();
 	}
-	return body->get_space()->get_gravity() * body->gravity_scale;
+	const b3MassData mass_data = b3Body_GetMassData(body->body_id);
+	return Vector3(
+			mass_data.inertia.cx.x != 0.0f ? 1.0f / mass_data.inertia.cx.x : 0.0f,
+			mass_data.inertia.cy.y != 0.0f ? 1.0f / mass_data.inertia.cy.y : 0.0f,
+			mass_data.inertia.cz.z != 0.0f ? 1.0f / mass_data.inertia.cz.z : 0.0f);
+}
+
+Basis Box3DDirectBodyState3D::get_inverse_inertia_tensor() const {
+	Basis basis;
+	basis.scale(get_inverse_inertia());
+	return basis;
+}
+
+Basis Box3DDirectBodyState3D::get_principal_inertia_axes() const {
+	return Basis();
+}
+
+Vector3 Box3DDirectBodyState3D::get_center_of_mass() const {
+	if (!body->in_space()) {
+		return Vector3();
+	}
+	return to_godot(b3Body_GetWorldPoint(body->body_id, b3Body_GetLocalCenter(body->body_id)));
+}
+
+Vector3 Box3DDirectBodyState3D::get_center_of_mass_local() const {
+	if (!body->in_space()) {
+		return Vector3();
+	}
+	return to_godot(b3Body_GetLocalCenter(body->body_id));
+}
+
+Vector3 Box3DDirectBodyState3D::get_total_gravity() const {
+	return body->total_gravity;
+}
+
+real_t Box3DDirectBodyState3D::get_total_linear_damp() const {
+	return body->total_linear_damp;
+}
+
+real_t Box3DDirectBodyState3D::get_total_angular_damp() const {
+	return body->total_angular_damp;
 }
 
 Vector3 Box3DDirectBodyState3D::get_velocity_at_local_position(const Vector3 &p_position) const {
@@ -762,6 +1028,60 @@ void Box3DDirectBodyState3D::set_collision_mask(uint32_t p_mask) {
 
 uint32_t Box3DDirectBodyState3D::get_collision_mask() const {
 	return body->get_collision_mask();
+}
+
+int Box3DDirectBodyState3D::get_contact_count() const {
+	return body->contact_count;
+}
+
+Vector3 Box3DDirectBodyState3D::get_contact_local_position(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector3());
+	return body->contacts[p_contact_idx].local_pos;
+}
+
+Vector3 Box3DDirectBodyState3D::get_contact_local_normal(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector3());
+	return body->contacts[p_contact_idx].local_normal;
+}
+
+Vector3 Box3DDirectBodyState3D::get_contact_impulse(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector3());
+	return body->contacts[p_contact_idx].impulse;
+}
+
+int Box3DDirectBodyState3D::get_contact_local_shape(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, -1);
+	return body->contacts[p_contact_idx].local_shape;
+}
+
+Vector3 Box3DDirectBodyState3D::get_contact_local_velocity_at_position(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector3());
+	return body->contacts[p_contact_idx].local_velocity_at_pos;
+}
+
+RID Box3DDirectBodyState3D::get_contact_collider(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, RID());
+	return body->contacts[p_contact_idx].collider;
+}
+
+Vector3 Box3DDirectBodyState3D::get_contact_collider_position(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector3());
+	return body->contacts[p_contact_idx].collider_pos;
+}
+
+ObjectID Box3DDirectBodyState3D::get_contact_collider_id(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, ObjectID());
+	return body->contacts[p_contact_idx].collider_instance_id;
+}
+
+int Box3DDirectBodyState3D::get_contact_collider_shape(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, -1);
+	return body->contacts[p_contact_idx].collider_shape;
+}
+
+Vector3 Box3DDirectBodyState3D::get_contact_collider_velocity_at_position(int p_contact_idx) const {
+	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector3());
+	return body->contacts[p_contact_idx].collider_velocity_at_pos;
 }
 
 real_t Box3DDirectBodyState3D::get_step() const {

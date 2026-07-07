@@ -12,11 +12,14 @@
 #include "box3d/collision.h"
 
 class Box3DBody3D;
+class Box3DArea3D;
+class Box3DCollisionObject3D;
 
 // One instance per Godot shape RID. Godot shapes are shared across bodies; Box3D
 // shapes belong to bodies — so this class owns the reusable geometry (hull/mesh data)
 // and each attached body creates its own b3ShapeId from it (see Box3DBody3D).
 class Box3DShape3D {
+	friend class Box3DArea3D;
 	friend class Box3DBody3D;
 	friend class Box3DDirectSpaceState3D;
 
@@ -36,7 +39,7 @@ class Box3DShape3D {
 	PackedInt64Array mesh_material_ids;
 	PackedByteArray mesh_triangle_material_indices;
 
-	HashSet<Box3DBody3D *> owners;
+	HashSet<Box3DCollisionObject3D *> owners;
 
 	void _clear_geometry();
 
@@ -57,7 +60,7 @@ public:
 	int get_face_material_id(int p_face_index) const;
 	PackedByteArray get_mesh_material_indices() const;
 
-	void add_owner(Box3DBody3D *p_body) { owners.insert(p_body); }
-	void remove_owner(Box3DBody3D *p_body) { owners.erase(p_body); }
-	const HashSet<Box3DBody3D *> &get_owners() const { return owners; }
+	void add_owner(Box3DCollisionObject3D *p_object) { owners.insert(p_object); }
+	void remove_owner(Box3DCollisionObject3D *p_object) { owners.erase(p_object); }
+	const HashSet<Box3DCollisionObject3D *> &get_owners() const { return owners; }
 };

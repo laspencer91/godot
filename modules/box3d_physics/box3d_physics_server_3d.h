@@ -14,19 +14,10 @@
 #include "core/templates/rid_owner.h"
 #include "servers/physics_3d/physics_server_3d_dummy.h"
 
+#include "box3d_area_3d.h"
 #include "box3d_body_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
-
-// Placeholder area: stores parameters so Area3D nodes don't break; simulation
-// semantics (sensors, gravity overrides) arrive in milestone 4.
-class Box3DArea3D {
-public:
-	RID rid;
-	RID space_rid;
-	Box3DSpace3D *space = nullptr;
-	HashMap<int, Variant> params;
-};
 
 class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	GDCLASS(Box3DPhysicsServer3D, PhysicsServer3DDummy);
@@ -55,6 +46,7 @@ public:
 
 	static Box3DPhysicsServer3D *get_singleton() { return singleton; }
 	Box3DSpace3D *get_space(RID p_rid) const { return space_owner.get_or_null(p_rid); }
+	Box3DBody3D *get_body(RID p_rid) const { return body_owner.get_or_null(p_rid); }
 	bool can_access_space(Box3DSpace3D *p_space) const { return p_space != nullptr && !(using_threads && !doing_sync) && !p_space->is_stepping(); }
 
 	// Shapes.
@@ -82,12 +74,33 @@ public:
 	virtual bool space_is_active(RID p_space) const override;
 	virtual PhysicsDirectSpaceState3D *space_get_direct_state(RID p_space) override;
 
-	// Areas (parameter storage only for now; space RID routes to default area).
+	// Areas.
 	virtual RID area_create() override;
 	virtual void area_set_space(RID p_area, RID p_space) override;
 	virtual RID area_get_space(RID p_area) const override;
+	virtual void area_add_shape(RID p_area, RID p_shape, const Transform3D &p_transform = Transform3D(), bool p_disabled = false) override;
+	virtual void area_set_shape(RID p_area, int p_shape_idx, RID p_shape) override;
+	virtual void area_set_shape_transform(RID p_area, int p_shape_idx, const Transform3D &p_transform) override;
+	virtual int area_get_shape_count(RID p_area) const override;
+	virtual RID area_get_shape(RID p_area, int p_shape_idx) const override;
+	virtual Transform3D area_get_shape_transform(RID p_area, int p_shape_idx) const override;
+	virtual void area_remove_shape(RID p_area, int p_shape_idx) override;
+	virtual void area_clear_shapes(RID p_area) override;
+	virtual void area_set_shape_disabled(RID p_area, int p_shape_idx, bool p_disabled) override;
+	virtual void area_attach_object_instance_id(RID p_area, ObjectID p_id) override;
+	virtual ObjectID area_get_object_instance_id(RID p_area) const override;
 	virtual void area_set_param(RID p_area, AreaParameter p_param, const Variant &p_value) override;
 	virtual Variant area_get_param(RID p_area, AreaParameter p_param) const override;
+	virtual void area_set_transform(RID p_area, const Transform3D &p_transform) override;
+	virtual Transform3D area_get_transform(RID p_area) const override;
+	virtual void area_set_collision_layer(RID p_area, uint32_t p_layer) override;
+	virtual uint32_t area_get_collision_layer(RID p_area) const override;
+	virtual void area_set_collision_mask(RID p_area, uint32_t p_mask) override;
+	virtual uint32_t area_get_collision_mask(RID p_area) const override;
+	virtual void area_set_monitorable(RID p_area, bool p_monitorable) override;
+	virtual void area_set_monitor_callback(RID p_area, const Callable &p_callback) override;
+	virtual void area_set_area_monitor_callback(RID p_area, const Callable &p_callback) override;
+	virtual void area_set_ray_pickable(RID p_area, bool p_enable) override;
 
 	// Bodies.
 	virtual RID body_create() override;
@@ -129,7 +142,14 @@ public:
 	virtual Vector3 body_get_constant_force(RID p_body) const override;
 	virtual void body_set_constant_torque(RID p_body, const Vector3 &p_torque) override;
 	virtual Vector3 body_get_constant_torque(RID p_body) const override;
+	virtual void body_set_max_contacts_reported(RID p_body, int p_contacts) override;
+	virtual int body_get_max_contacts_reported(RID p_body) const override;
+	virtual void body_set_contacts_reported_depth_threshold(RID p_body, real_t p_threshold) override;
+	virtual real_t body_get_contacts_reported_depth_threshold(RID p_body) const override;
+	virtual void body_set_omit_force_integration(RID p_body, bool p_omit) override;
+	virtual bool body_is_omitting_force_integration(RID p_body) const override;
 	virtual void body_set_state_sync_callback(RID p_body, const Callable &p_callable) override;
+	virtual void body_set_force_integration_callback(RID p_body, const Callable &p_callable, const Variant &p_udata = Variant()) override;
 	virtual PhysicsDirectBodyState3D *body_get_direct_state(RID p_body) override;
 
 	// Lifecycle.

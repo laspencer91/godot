@@ -5,6 +5,7 @@
 #include "box3d_shape_3d.h"
 
 #include "box3d_body_3d.h"
+#include "box3d_collision_object_3d.h"
 #include "box3d_conversions.h"
 
 #include "core/io/image.h"
@@ -203,16 +204,16 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 	}
 
 	// Rebuild every body this shape is attached to.
-	for (Box3DBody3D *body : owners) {
-		body->shapes_changed();
+	for (Box3DCollisionObject3D *object : owners) {
+		object->shapes_changed();
 	}
 }
 
 void Box3DShape3D::set_surface_material(int p_material_id) {
 	has_surface_material = p_material_id > 0;
 	surface_material_id = MAX(0, p_material_id);
-	for (Box3DBody3D *body : owners) {
-		body->shapes_changed();
+	for (Box3DCollisionObject3D *object : owners) {
+		object->shapes_changed();
 	}
 }
 

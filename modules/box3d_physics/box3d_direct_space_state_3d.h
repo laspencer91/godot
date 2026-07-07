@@ -11,6 +11,7 @@
 #include "box3d/box3d.h"
 
 class Box3DBody3D;
+class Box3DCollisionObject3D;
 class Box3DShape3D;
 class Box3DSpace3D;
 
@@ -45,6 +46,7 @@ public:
 	RID_PtrOwner<Box3DBody3D> *body_owner = nullptr;
 
 	static int _get_shape_index(b3ShapeId p_shape_id);
+	static Box3DCollisionObject3D *_get_object(b3ShapeId p_shape_id);
 	static Box3DBody3D *_get_body(b3ShapeId p_shape_id);
 	static Object *_get_instance(ObjectID p_id);
 	static b3QueryFilter _make_filter(uint32_t p_collision_mask);

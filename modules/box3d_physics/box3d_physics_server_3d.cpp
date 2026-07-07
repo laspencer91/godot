@@ -30,8 +30,9 @@ bool Box3DPhysicsServer3D::_can_mutate_body_shapes(const Box3DBody3D *p_body) co
 }
 
 bool Box3DPhysicsServer3D::_can_mutate_shape_owners(const Box3DShape3D *p_shape) const {
-	for (Box3DBody3D *body : p_shape->get_owners()) {
-		if (!_can_mutate_body_shapes(body)) {
+	for (Box3DCollisionObject3D *object : p_shape->get_owners()) {
+		Box3DSpace3D *space = object->get_space();
+		if (space != nullptr && !can_access_space(space)) {
 			return false;
 		}
 	}
@@ -122,21 +123,98 @@ PhysicsDirectSpaceState3D *Box3DPhysicsServer3D::space_get_direct_state(RID p_sp
 RID Box3DPhysicsServer3D::area_create() {
 	Box3DArea3D *area = memnew(Box3DArea3D);
 	RID rid = area_owner.make_rid(area);
-	area->rid = rid;
+	area->set_rid(rid);
 	return rid;
 }
 
 void Box3DPhysicsServer3D::area_set_space(RID p_area, RID p_space) {
 	Box3DArea3D *area = area_owner.get_or_null(p_area);
 	ERR_FAIL_NULL(area);
-	area->space_rid = p_space;
-	area->space = space_owner.get_or_null(p_space);
+	Box3DSpace3D *space = nullptr;
+	if (p_space.is_valid()) {
+		space = space_owner.get_or_null(p_space);
+		ERR_FAIL_NULL(space);
+	}
+	area->set_space_rid(p_space);
+	area->set_space(space);
 }
 
 RID Box3DPhysicsServer3D::area_get_space(RID p_area) const {
 	Box3DArea3D *area = area_owner.get_or_null(p_area);
 	ERR_FAIL_NULL_V(area, RID());
-	return area->space_rid;
+	return area->get_space_rid();
+}
+
+void Box3DPhysicsServer3D::area_add_shape(RID p_area, RID p_shape, const Transform3D &p_transform, bool p_disabled) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
+	ERR_FAIL_NULL(shape);
+	area->add_shape(p_shape, shape, p_transform, p_disabled);
+}
+
+void Box3DPhysicsServer3D::area_set_shape(RID p_area, int p_shape_idx, RID p_shape) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
+	ERR_FAIL_NULL(shape);
+	area->set_shape(p_shape_idx, p_shape, shape);
+}
+
+void Box3DPhysicsServer3D::area_set_shape_transform(RID p_area, int p_shape_idx, const Transform3D &p_transform) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_shape_transform(p_shape_idx, p_transform);
+}
+
+int Box3DPhysicsServer3D::area_get_shape_count(RID p_area) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, 0);
+	return area->get_shape_count();
+}
+
+RID Box3DPhysicsServer3D::area_get_shape(RID p_area, int p_shape_idx) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, RID());
+	const Box3DArea3D::ShapeSlot *slot = area->get_shape_slot(p_shape_idx);
+	return slot ? slot->rid : RID();
+}
+
+Transform3D Box3DPhysicsServer3D::area_get_shape_transform(RID p_area, int p_shape_idx) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, Transform3D());
+	const Box3DArea3D::ShapeSlot *slot = area->get_shape_slot(p_shape_idx);
+	return slot ? slot->xform : Transform3D();
+}
+
+void Box3DPhysicsServer3D::area_remove_shape(RID p_area, int p_shape_idx) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->remove_shape_at(p_shape_idx);
+}
+
+void Box3DPhysicsServer3D::area_clear_shapes(RID p_area) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->clear_shapes();
+}
+
+void Box3DPhysicsServer3D::area_set_shape_disabled(RID p_area, int p_shape_idx, bool p_disabled) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_shape_disabled(p_shape_idx, p_disabled);
+}
+
+void Box3DPhysicsServer3D::area_attach_object_instance_id(RID p_area, ObjectID p_id) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_instance_id(p_id);
+}
+
+ObjectID Box3DPhysicsServer3D::area_get_object_instance_id(RID p_area) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, ObjectID());
+	return area->get_instance_id();
 }
 
 void Box3DPhysicsServer3D::area_set_param(RID p_area, AreaParameter p_param, const Variant &p_value) {
@@ -148,7 +226,7 @@ void Box3DPhysicsServer3D::area_set_param(RID p_area, AreaParameter p_param, con
 	}
 	Box3DArea3D *area = area_owner.get_or_null(p_area);
 	ERR_FAIL_NULL(area);
-	area->params[(int)p_param] = p_value;
+	area->set_param(p_param, p_value);
 }
 
 Variant Box3DPhysicsServer3D::area_get_param(RID p_area, AreaParameter p_param) const {
@@ -158,8 +236,67 @@ Variant Box3DPhysicsServer3D::area_get_param(RID p_area, AreaParameter p_param) 
 	}
 	Box3DArea3D *area = area_owner.get_or_null(p_area);
 	ERR_FAIL_NULL_V(area, Variant());
-	const Variant *value = area->params.getptr((int)p_param);
-	return value ? *value : Variant();
+	return area->get_param(p_param);
+}
+
+void Box3DPhysicsServer3D::area_set_transform(RID p_area, const Transform3D &p_transform) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_transform(p_transform);
+}
+
+Transform3D Box3DPhysicsServer3D::area_get_transform(RID p_area) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, Transform3D());
+	return area->get_transform();
+}
+
+void Box3DPhysicsServer3D::area_set_collision_layer(RID p_area, uint32_t p_layer) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_collision_layer(p_layer);
+}
+
+uint32_t Box3DPhysicsServer3D::area_get_collision_layer(RID p_area) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, 0);
+	return area->get_collision_layer();
+}
+
+void Box3DPhysicsServer3D::area_set_collision_mask(RID p_area, uint32_t p_mask) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_collision_mask(p_mask);
+}
+
+uint32_t Box3DPhysicsServer3D::area_get_collision_mask(RID p_area) const {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL_V(area, 0);
+	return area->get_collision_mask();
+}
+
+void Box3DPhysicsServer3D::area_set_monitorable(RID p_area, bool p_monitorable) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_monitorable(p_monitorable);
+}
+
+void Box3DPhysicsServer3D::area_set_monitor_callback(RID p_area, const Callable &p_callback) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_monitor_callback(p_callback);
+}
+
+void Box3DPhysicsServer3D::area_set_area_monitor_callback(RID p_area, const Callable &p_callback) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_area_monitor_callback(p_callback);
+}
+
+void Box3DPhysicsServer3D::area_set_ray_pickable(RID p_area, bool p_enable) {
+	Box3DArea3D *area = area_owner.get_or_null(p_area);
+	ERR_FAIL_NULL(area);
+	area->set_ray_pickable(p_enable);
 }
 
 // --- Bodies ---
@@ -440,10 +577,52 @@ Vector3 Box3DPhysicsServer3D::body_get_constant_torque(RID p_body) const {
 	return body->get_constant_torque();
 }
 
+void Box3DPhysicsServer3D::body_set_max_contacts_reported(RID p_body, int p_contacts) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_max_contacts_reported(p_contacts);
+}
+
+int Box3DPhysicsServer3D::body_get_max_contacts_reported(RID p_body) const {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, 0);
+	return body->get_max_contacts_reported();
+}
+
+void Box3DPhysicsServer3D::body_set_contacts_reported_depth_threshold(RID p_body, real_t p_threshold) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_contacts_reported_depth_threshold(p_threshold);
+}
+
+real_t Box3DPhysicsServer3D::body_get_contacts_reported_depth_threshold(RID p_body) const {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, 0.0);
+	return body->get_contacts_reported_depth_threshold();
+}
+
+void Box3DPhysicsServer3D::body_set_omit_force_integration(RID p_body, bool p_omit) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_omit_force_integration(p_omit);
+}
+
+bool Box3DPhysicsServer3D::body_is_omitting_force_integration(RID p_body) const {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, false);
+	return body->is_omitting_force_integration();
+}
+
 void Box3DPhysicsServer3D::body_set_state_sync_callback(RID p_body, const Callable &p_callable) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
 	body->set_state_sync_callback(p_callable);
+}
+
+void Box3DPhysicsServer3D::body_set_force_integration_callback(RID p_body, const Callable &p_callable, const Variant &p_udata) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_force_integration_callback(p_callable, p_udata);
 }
 
 PhysicsDirectBodyState3D *Box3DPhysicsServer3D::body_get_direct_state(RID p_body) {
@@ -457,10 +636,14 @@ PhysicsDirectBodyState3D *Box3DPhysicsServer3D::body_get_direct_state(RID p_body
 
 void Box3DPhysicsServer3D::free_rid(RID p_rid) {
 	if (Box3DShape3D *shape = shape_owner.get_or_null(p_rid)) {
-		// Detach from every body still using it.
+		// Detach from every object still using it.
 		while (shape->get_owners().size() > 0) {
-			Box3DBody3D *body = *shape->get_owners().begin();
-			body->remove_shape(shape);
+			Box3DCollisionObject3D *object = *shape->get_owners().begin();
+			if (object->get_type() == Box3DCollisionObject3D::TYPE_BODY) {
+				static_cast<Box3DBody3D *>(object)->remove_shape(shape);
+			} else if (object->get_type() == Box3DCollisionObject3D::TYPE_AREA) {
+				static_cast<Box3DArea3D *>(object)->remove_shape(shape);
+			}
 		}
 		shape_owner.free(p_rid);
 		memdelete(shape);

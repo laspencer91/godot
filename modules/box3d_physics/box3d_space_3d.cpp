@@ -4,7 +4,9 @@
 
 #include "box3d_space_3d.h"
 
+#include "box3d_area_3d.h"
 #include "box3d_body_3d.h"
+#include "box3d_collision_object_3d.h"
 #include "box3d_conversions.h"
 #include "box3d_direct_space_state_3d.h"
 
@@ -36,6 +38,14 @@ void Box3DSpace3D::body_removed(Box3DBody3D *p_body) {
 	dirty_bodies.erase(p_body);
 }
 
+void Box3DSpace3D::area_removed(Box3DArea3D *p_area) {
+	areas.erase(p_area);
+	dirty_areas.erase(p_area);
+	for (Box3DBody3D *body : bodies) {
+		body->remove_area(p_area);
+	}
+}
+
 void Box3DSpace3D::setup_direct_state(RID_PtrOwner<Box3DShape3D> *p_shape_owner, RID_PtrOwner<Box3DBody3D> *p_body_owner) {
 	if (!direct_state) {
 		direct_state = memnew(Box3DDirectSpaceState3D);
@@ -50,7 +60,8 @@ void Box3DSpace3D::step(real_t p_step) {
 	pending_kinematic.clear();
 
 	for (Box3DBody3D *body : bodies) {
-		body->apply_constant_forces();
+		body->clear_reported_contacts();
+		body->apply_environment_forces((float)p_step);
 	}
 
 	stepping = true;
@@ -72,6 +83,16 @@ void Box3DSpace3D::step(real_t p_step) {
 			dirty_bodies.push_back(body);
 		}
 	}
+
+	b3SensorEvents sensor_events = b3World_GetSensorEvents(world);
+	for (int i = 0; i < sensor_events.beginCount; i++) {
+		_process_sensor_event(true, sensor_events.beginEvents[i].sensorShapeId, sensor_events.beginEvents[i].visitorShapeId);
+	}
+	for (int i = 0; i < sensor_events.endCount; i++) {
+		_process_sensor_event(false, sensor_events.endEvents[i].sensorShapeId, sensor_events.endEvents[i].visitorShapeId);
+	}
+
+	_harvest_body_contacts();
 }
 
 void Box3DSpace3D::call_queries() {
@@ -80,6 +101,111 @@ void Box3DSpace3D::call_queries() {
 		body->call_state_sync();
 	}
 	dirty_bodies.clear();
+
+	for (Box3DArea3D *area : dirty_areas) {
+		area->call_queries();
+	}
+	dirty_areas.clear();
+}
+
+static int _box3d_shape_index(b3ShapeId p_shape_id) {
+	return (int)(uintptr_t)b3Shape_GetUserData(p_shape_id);
+}
+
+static Box3DCollisionObject3D *_box3d_shape_object(b3ShapeId p_shape_id) {
+	if (!b3Shape_IsValid(p_shape_id)) {
+		return nullptr;
+	}
+	const b3BodyId body_id = b3Shape_GetBody(p_shape_id);
+	if (!b3Body_IsValid(body_id)) {
+		return nullptr;
+	}
+	return static_cast<Box3DCollisionObject3D *>(b3Body_GetUserData(body_id));
+}
+
+void Box3DSpace3D::_process_sensor_event(bool p_added, b3ShapeId p_sensor_shape, b3ShapeId p_visitor_shape) {
+	Box3DCollisionObject3D *sensor_object = _box3d_shape_object(p_sensor_shape);
+	Box3DCollisionObject3D *visitor_object = _box3d_shape_object(p_visitor_shape);
+	if (sensor_object == nullptr || visitor_object == nullptr || sensor_object->get_type() != Box3DCollisionObject3D::TYPE_AREA) {
+		return;
+	}
+
+	Box3DArea3D *sensor_area = static_cast<Box3DArea3D *>(sensor_object);
+	const int sensor_shape = _box3d_shape_index(p_sensor_shape);
+	const int visitor_shape = _box3d_shape_index(p_visitor_shape);
+
+	if (visitor_object->get_type() == Box3DCollisionObject3D::TYPE_BODY) {
+		Box3DBody3D *body = static_cast<Box3DBody3D *>(visitor_object);
+		if (p_added) {
+			body->add_area(sensor_area);
+		} else {
+			body->remove_area(sensor_area);
+		}
+		sensor_area->queue_body_event(p_added, body->get_rid(), body->get_instance_id(), visitor_shape, sensor_shape);
+	} else if (visitor_object->get_type() == Box3DCollisionObject3D::TYPE_AREA) {
+		Box3DArea3D *area = static_cast<Box3DArea3D *>(visitor_object);
+		sensor_area->queue_area_event(p_added, area->get_rid(), area->get_instance_id(), visitor_shape, sensor_shape);
+	}
+
+	if (!dirty_areas.has(sensor_area)) {
+		dirty_areas.push_back(sensor_area);
+	}
+}
+
+static Vector3 _box3d_contact_point(const b3BodyId &p_body, const b3ManifoldPoint &p_point, bool p_shape_a) {
+	const b3Vec3 anchor = p_shape_a ? p_point.anchorA : p_point.anchorB;
+	return to_godot(b3OffsetPos(b3Body_GetWorldPoint(p_body, b3Body_GetLocalCenter(p_body)), anchor));
+}
+
+void Box3DSpace3D::_harvest_body_contacts() {
+	LocalVector<b3ContactData> contact_data;
+	for (Box3DBody3D *body : bodies) {
+		if (!body->reports_contacts() || !body->in_space()) {
+			continue;
+		}
+		contact_data.resize(body->get_max_contacts_reported());
+		const int data_count = b3Body_GetContactData(body->get_body_id(), contact_data.ptr(), contact_data.size());
+		for (int i = 0; i < data_count; i++) {
+			const b3ContactData &data = contact_data[i];
+			const bool body_is_a = B3_ID_EQUALS(b3Shape_GetBody(data.shapeIdA), body->get_body_id());
+			const b3ShapeId self_shape = body_is_a ? data.shapeIdA : data.shapeIdB;
+			const b3ShapeId other_shape = body_is_a ? data.shapeIdB : data.shapeIdA;
+			Box3DCollisionObject3D *other_object = _box3d_shape_object(other_shape);
+			if (other_object == nullptr || other_object->get_type() != Box3DCollisionObject3D::TYPE_BODY) {
+				continue;
+			}
+			Box3DBody3D *other_body = static_cast<Box3DBody3D *>(other_object);
+			for (int j = 0; j < data.manifoldCount; j++) {
+				const b3Manifold &manifold = data.manifolds[j];
+				for (int k = 0; k < manifold.pointCount; k++) {
+					const b3ManifoldPoint &point = manifold.points[k];
+					if (point.totalNormalImpulse <= 0.0f) {
+						continue;
+					}
+					const Vector3 self_point = _box3d_contact_point(body->get_body_id(), point, body_is_a);
+					const Vector3 other_point = _box3d_contact_point(other_body->get_body_id(), point, !body_is_a);
+					const Vector3 normal = to_godot(manifold.normal) * (body_is_a ? -1.0 : 1.0);
+					Box3DBody3D::Contact contact;
+					contact.local_pos = body->get_transform().affine_inverse().xform(self_point);
+					contact.local_normal = body->get_transform().basis.inverse().xform(normal).normalized();
+					contact.impulse = normal * point.totalNormalImpulse;
+					contact.local_shape = _box3d_shape_index(self_shape);
+					contact.local_velocity_at_pos = to_godot(b3Body_GetWorldPointVelocity(body->get_body_id(), to_box3d(self_point)));
+					contact.collider = other_body->get_rid();
+					contact.collider_pos = other_body->get_transform().origin;
+					contact.collider_instance_id = other_body->get_instance_id();
+					contact.collider_shape = _box3d_shape_index(other_shape);
+					contact.collider_velocity_at_pos = to_godot(b3Body_GetWorldPointVelocity(other_body->get_body_id(), to_box3d(other_point)));
+					contact.depth = MAX((real_t)0.0, (real_t)-point.separation);
+					body->add_contact(contact);
+				}
+			}
+		}
+		if (body->contact_count > 0 && !body->in_dirty_list) {
+			body->in_dirty_list = true;
+			dirty_bodies.push_back(body);
+		}
+	}
 }
 
 void Box3DSpace3D::set_default_area_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value) {

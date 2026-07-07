@@ -138,6 +138,8 @@ void Box3DCharacterMover::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &Box3DCharacterMover::get_collision_mask);
 	ClassDB::bind_method(D_METHOD("set_floor_max_angle", "radians"), &Box3DCharacterMover::set_floor_max_angle);
 	ClassDB::bind_method(D_METHOD("get_floor_max_angle"), &Box3DCharacterMover::get_floor_max_angle);
+	ClassDB::bind_method(D_METHOD("set_push_strength", "strength"), &Box3DCharacterMover::set_push_strength);
+	ClassDB::bind_method(D_METHOD("get_push_strength"), &Box3DCharacterMover::get_push_strength);
 	ClassDB::bind_method(D_METHOD("set_exclusions", "bodies"), &Box3DCharacterMover::set_exclusions);
 	ClassDB::bind_method(D_METHOD("cast_motion", "position", "translation"), &Box3DCharacterMover::cast_motion);
 	ClassDB::bind_method(D_METHOD("collide", "position"), &Box3DCharacterMover::collide);
@@ -147,6 +149,7 @@ void Box3DCharacterMover::_bind_methods() {
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "floor_max_angle", PROPERTY_HINT_RANGE, "0,1.5707963267949,0.001,radians"), "set_floor_max_angle", "get_floor_max_angle");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "push_strength", PROPERTY_HINT_RANGE, "0,10,0.01,or_greater"), "set_push_strength", "get_push_strength");
 }
 
 Box3DCharacterMover::Box3DCharacterMover() {
@@ -197,6 +200,10 @@ void Box3DCharacterMover::set_collision_mask(uint32_t p_mask) {
 
 void Box3DCharacterMover::set_floor_max_angle(real_t p_angle) {
 	floor_max_angle = CLAMP(p_angle, 0.0, 1.5707963267948966);
+}
+
+void Box3DCharacterMover::set_push_strength(real_t p_strength) {
+	push_strength = MAX((real_t)0.0, p_strength);
 }
 
 void Box3DCharacterMover::set_exclusions(const TypedArray<RID> &p_bodies) {
@@ -287,6 +294,28 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	}
 
 	const Vector3 clipped_velocity = clip_velocity(p_velocity, solved_planes);
+	if (push_strength > 0.0 && p_delta > 0.0) {
+		Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+		for (int i = 0; server != nullptr && i < solved_planes.size(); i++) {
+			Dictionary plane = solved_planes[i];
+			if (!plane.has("rid") || !plane.has("normal") || !plane.has("point")) {
+				continue;
+			}
+			Box3DBody3D *body = server->get_body((RID)plane["rid"]);
+			if (body == nullptr || body->get_mode() != PhysicsServer3D::BODY_MODE_RIGID) {
+				continue;
+			}
+			const Vector3 normal = plane["normal"];
+			const Vector3 point = plane["point"];
+			const Vector3 body_velocity = to_godot(b3Body_GetWorldPointVelocity(body->get_body_id(), to_box3d(point)));
+			const real_t approach_speed = -(p_velocity - body_velocity).dot(normal);
+			if (approach_speed <= 0.0) {
+				continue;
+			}
+			const Vector3 impulse = -normal * approach_speed * push_strength;
+			body->apply_impulse(impulse, point - body->get_transform().origin);
+		}
+	}
 	const real_t floor_threshold = Math::cos(floor_max_angle);
 
 	Vector3 floor_normal;
