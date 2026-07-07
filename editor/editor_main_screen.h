@@ -75,19 +75,20 @@ private:
 	int _get_current_main_editor() const;
 	void _select_index(int p_index);
 
-	// G2 M6.2: workspace-session persistence, restored in two phases (see begin_workspace_restore). The
-	// tab set from phase 1 is stashed here for phase 2 (empty when no restore is in flight).
-	Dictionary _pending_session;
+	// G2 M6.2: workspace-session persistence, restored in two phases (see begin_workspace_restore). Phase 1
+	// stashes the saved tab set here for phase 2; a non-empty value IS the "restore in flight" state that
+	// is_workspace_restore_pending() reports (so the M7.1 scene auto-reveal stands down meanwhile).
+	Dictionary _pending_tabs;
 	// _collect_pane_tabs walks the live tree and records each leaf's tab doc-paths + current (keyed by
 	// pane_id) into r_tabs; _populate_pane_tabs (phase 2) fills each rebuilt leaf; _resolve_session_document
-	// maps a saved path back to a live document (the screen-host doc locally, else via EditorNode);
-	// _screen_host_pane_id finds which saved leaf held the screen-host; set_workspace_focus_after_restore
+	// maps a saved path back to a live document (the screen-host doc locally, else via EditorData);
+	// _screen_host_pane_id finds which saved leaf held the screen-host; _set_workspace_focus_after_restore
 	// drives focus once the panes are filled.
-	void _collect_pane_tabs(WorkspacePane *p_pane, Dictionary &r_tabs) const;
-	void _populate_pane_tabs(WorkspacePane *p_pane, const Dictionary &p_tabs);
+	void _collect_pane_tabs(Dictionary &r_tabs) const;
+	void _populate_pane_tabs(const Dictionary &p_tabs);
 	EditorDocument *_resolve_session_document(const String &p_path);
 	uint32_t _screen_host_pane_id(const Dictionary &p_tabs) const;
-	void set_workspace_focus_after_restore();
+	void _set_workspace_focus_after_restore();
 
 protected:
 	void _notification(int p_what);
@@ -103,6 +104,10 @@ public:
 	// called ahead of scene restore; load_layout_from_config then runs phase 2 (the scene/script tabs).
 	// Returns true if a saved workspace session was found and applied.
 	bool begin_workspace_restore(Ref<ConfigFile> p_config_file, const String &p_section);
+
+	// G2 M6.2: true between phase 1 and phase 2 of a workspace-session restore. The M7.1 scene auto-reveal
+	// checks this and stands down so the session (not the default reveal) decides each scene's pane.
+	bool is_workspace_restore_pending() const { return !_pending_tabs.is_empty(); }
 
 	void set_button_enabled(int p_index, bool p_enabled);
 	bool is_button_enabled(int p_index) const;

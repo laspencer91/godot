@@ -239,6 +239,12 @@ public:
 	ScriptDocument *get_or_create_script_document(const Ref<Resource> &p_resource);
 	HelpDocument *get_or_create_help_document(const String &p_class);
 	EditorDocument *find_aux_document_by_path(const String &p_path) const;
+
+	// G2 M6.2: map a saved workspace tab path back to a live document (session restore) — an already-open
+	// scene (by path), a help document (help://Class), or a script/text resource (existing aux doc, else
+	// loaded). Null for an unresolvable/missing path. (The screen-host doc is not in EditorData; its
+	// owner resolves that one.)
+	EditorDocument *get_or_create_document_for_path(const String &p_path);
 	void close_aux_document(EditorDocument *p_document);
 
 	String get_scene_title(int p_idx, bool p_always_strip_extension = false) const;

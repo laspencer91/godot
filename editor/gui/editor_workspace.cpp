@@ -459,6 +459,26 @@ WorkspacePane *EditorWorkspace::_find_pane_by_id(WorkspacePane *p_pane, uint32_t
 	return _find_pane_by_id(p_pane->get_second(), p_id);
 }
 
+Vector<WorkspacePane *> EditorWorkspace::get_tabbed_leaves() const {
+	Vector<WorkspacePane *> leaves;
+	_gather_tabbed_leaves(root_pane, leaves);
+	return leaves;
+}
+
+void EditorWorkspace::_gather_tabbed_leaves(WorkspacePane *p_pane, Vector<WorkspacePane *> &r_leaves) const {
+	if (!p_pane) {
+		return;
+	}
+	if (p_pane->is_leaf()) {
+		if (Object::cast_to<TabbedDocumentHost>(p_pane->get_content())) {
+			r_leaves.push_back(p_pane);
+		}
+		return;
+	}
+	_gather_tabbed_leaves(p_pane->get_first(), r_leaves);
+	_gather_tabbed_leaves(p_pane->get_second(), r_leaves);
+}
+
 WorkspacePane *EditorWorkspace::resolve_target_pane_for_documents() {
 	// (a) The focused pane, if it already hosts tabs — this is what keeps "open a script from a
 	// script" in the SAME pane (the focused pane IS a TabbedDocumentHost while you edit a script).

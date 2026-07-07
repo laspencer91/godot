@@ -602,9 +602,6 @@ private:
 	void _ensure_active_scene_tab();
 	// G2 M7.2b: one-shot — the first _ensure_active_scene_tab focuses the scene's pane (boot-to-scene).
 	bool boot_scene_focus_pending = true;
-	// G2 M6.2: while a saved workspace session is being restored (deferred, after scene restore), the
-	// default per-scene auto-reveal stands down — the session decides which pane each scene lands in.
-	bool workspace_session_restore_pending = false;
 	void _nav_to_selected_scene();
 	bool _validate_scene_recursive(const String &p_filename, Node *p_node);
 	void _save_scene(String p_file, int idx = -1);
@@ -876,16 +873,6 @@ public:
 
 	SubViewport *get_scene_root(); // Active document's scene_root (placeholder when none is active).
 	void register_document_context(EditorDocument *p_doc); // Parents a document's scene_root into the live tree.
-
-	// G2 M6.2: map a saved workspace tab path back to a live EditorDocument for session restore — an
-	// already-restored open scene (by path), a help document (help://Class), or a script/text resource
-	// (existing aux doc, else loaded). Returns null for an unresolvable/missing path (tab skipped). The
-	// screen-host doc is resolved by EditorMainScreen itself (it owns that one).
-	EditorDocument *resolve_workspace_document(const String &p_path);
-
-	// G2 M6.2: EditorMainScreen sets this true when it schedules the deferred workspace-session restore,
-	// so the default scene auto-reveal (_ensure_active_scene_tab) stands down until the restore runs.
-	void set_workspace_session_restore_pending(bool p_pending) { workspace_session_restore_pending = p_pending; }
 	// G2 M7.2a: mount the (now-current) scene pane's matching 2D/3D toolbar into its header slot; park
 	// both toolbars home when the current surface is not a scene pane. Pushed from the same tab-select
 	// / pane-focus points that drive ScriptEditor::set_current_surface.

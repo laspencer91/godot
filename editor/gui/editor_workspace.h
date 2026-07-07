@@ -32,6 +32,7 @@
 
 #include "core/input/input_event.h"
 #include "core/object/object_id.h"
+#include "core/templates/vector.h"
 #include "core/variant/dictionary.h"
 #include "scene/gui/box_container.h"
 
@@ -171,6 +172,10 @@ public:
 	// session restore to re-home a document into the exact leaf it was saved in.
 	WorkspacePane *find_pane_by_id(uint32_t p_id) const;
 
+	// G2 M6.2: every leaf pane whose content is a TabbedDocumentHost, in tree order. Lets the session
+	// store iterate panes without re-implementing the split/leaf recursion outside the workspace.
+	Vector<WorkspacePane *> get_tabbed_leaves() const;
+
 	// G2 S5: resolve where a revealed document should open (seam #3): (a) the focused pane if it hosts
 	// tabs; else (b) the most-recently-focused tabbed leaf; else (c) split the focused leaf and mint a
 	// fresh TabbedDocumentHost on the new side. The returned pane's content is a TabbedDocumentHost
@@ -211,6 +216,7 @@ public:
 private:
 	WorkspacePane *_find_pane_showing(WorkspacePane *p_pane, EditorDocument *p_document) const;
 	WorkspacePane *_find_pane_by_id(WorkspacePane *p_pane, uint32_t p_id) const; // G2 M6.2
+	void _gather_tabbed_leaves(WorkspacePane *p_pane, Vector<WorkspacePane *> &r_leaves) const; // G2 M6.2
 	WorkspacePane *_find_tabbed_leaf(WorkspacePane *p_pane) const;
 	void _close_pane_by_id(ObjectID p_pane_id);
 };

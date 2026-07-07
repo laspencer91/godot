@@ -920,6 +920,31 @@ EditorDocument *EditorData::find_aux_document_by_path(const String &p_path) cons
 	return nullptr;
 }
 
+EditorDocument *EditorData::get_or_create_document_for_path(const String &p_path) {
+	// G2 M6.2: resolve one saved workspace tab path against the live document set (see the header note).
+	if (p_path.is_empty()) {
+		return nullptr;
+	}
+	// Scenes: match an already-open scene by path — scene-restore owns opening, we never reopen here.
+	const int scene_idx = get_edited_scene_from_path(p_path);
+	if (scene_idx >= 0) {
+		return get_document(scene_idx);
+	}
+	// Help: help://Class.
+	if (p_path.begins_with("help://")) {
+		return get_or_create_help_document(p_path.trim_prefix("help://"));
+	}
+	// Script/text: an existing aux document, else load the resource and mint one. Missing file -> skip.
+	if (EditorDocument *aux = find_aux_document_by_path(p_path)) {
+		return aux;
+	}
+	if (!FileAccess::exists(p_path)) {
+		return nullptr;
+	}
+	Ref<Resource> res = ResourceLoader::load(p_path);
+	return res.is_valid() ? get_or_create_script_document(res) : nullptr;
+}
+
 void EditorData::close_aux_document(EditorDocument *p_document) {
 	if (!p_document) {
 		return;
