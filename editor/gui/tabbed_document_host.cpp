@@ -78,6 +78,12 @@ TabbedDocumentHost::TabbedDocumentHost() {
 	content_host = memnew(MarginContainer);
 	content_host->set_h_size_flags(SIZE_EXPAND_FILL);
 	content_host->set_v_size_flags(SIZE_EXPAND_FILL);
+	// G2 styling: no inset around the pane content — the default MarginContainer theme margins read as
+	// a thin gray band between the tab bar / toolbar and the viewport.
+	content_host->add_theme_constant_override("margin_left", 0);
+	content_host->add_theme_constant_override("margin_right", 0);
+	content_host->add_theme_constant_override("margin_top", 0);
+	content_host->add_theme_constant_override("margin_bottom", 0);
 	add_child(content_host);
 }
 
