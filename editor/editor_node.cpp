@@ -90,6 +90,7 @@
 #include "editor/gui/editor_toaster.h"
 #include "editor/gui/progress_dialog.h"
 #include "editor/gui/window_wrapper.h"
+#include "editor/gui/workspace_file_drawer.h"
 #include "editor/import/3d/editor_import_collada.h"
 #include "editor/import/3d/resource_importer_obj.h"
 #include "editor/import/3d/resource_importer_scene.h"
@@ -8829,6 +8830,23 @@ EditorNode::EditorNode() {
 	center_vb->add_child(center_split);
 	center_split->connect("drag_ended", callable_mp(this, &EditorNode::_bottom_panel_resized));
 
+	// G4: the file-exploration drawer is a top-level overlay over the central column. It is added
+	// as the last child of center_vb (which its top-level flag excludes from the VBox layout) so it
+	// paints above the workspace while tracking center_vb's rect. center_vb is a local, so wire the
+	// host now; the FileSystem panel + bottom-bar toggle are hooked up below once bottom_panel exists.
+	workspace_file_drawer = memnew(WorkspaceFileDrawer);
+	center_vb->add_child(workspace_file_drawer);
+	workspace_file_drawer->set_host(center_vb);
+	{
+		// G4 commit 1: placeholder content so the overlay/slide/toggle can be verified in isolation.
+		// Replaced by the real FileSystemDock in commit 2.
+		Label *drawer_placeholder = memnew(Label);
+		drawer_placeholder->set_text(TTR("FileSystem drawer (placeholder)"));
+		drawer_placeholder->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+		drawer_placeholder->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
+		workspace_file_drawer->add_panel(drawer_placeholder, TTR("FileSystem"));
+	}
+
 	right_l_vsplit = memnew(DockSplitContainer);
 	right_l_vsplit->set_name("DockVSplitRightL");
 	right_l_vsplit->set_vertical(true);
@@ -8925,6 +8943,7 @@ EditorNode::EditorNode() {
 	ED_SHORTCUT_AND_COMMAND("editor/distraction_free_mode", TTRC("Distraction Free Mode"), KeyModifierMask::CTRL | KeyModifierMask::SHIFT | Key::F11);
 	ED_SHORTCUT_OVERRIDE("editor/distraction_free_mode", "macos", KeyModifierMask::META | KeyModifierMask::SHIFT | Key::D);
 	ED_SHORTCUT_AND_COMMAND("editor/toggle_last_opened_bottom_panel", TTRC("Toggle Last Opened Bottom Panel"), KeyModifierMask::CMD_OR_CTRL | Key::J);
+	ED_SHORTCUT_AND_COMMAND("editor/toggle_file_drawer", TTRC("Toggle FileSystem Drawer")); // G4: no default accelerator to avoid clashes.
 	distraction_free->set_shortcut(ED_GET_SHORTCUT("editor/distraction_free_mode"));
 	distraction_free->set_tooltip_text(TTRC("Toggle distraction-free mode."));
 	distraction_free->set_toggle_mode(true);
@@ -9353,6 +9372,14 @@ EditorNode::EditorNode() {
 
 	log = memnew(EditorLog);
 	editor_dock_manager->add_dock(log);
+
+	// G4: unified bottom-bar toggle for the FileSystem drawer, beside the Output/Debugger/Audio
+	// dock toggles. The button drives the overlay; the drawer reports back so the two stay in sync.
+	// G4: unified bottom-bar toggle for the FileSystem drawer, beside the Output/Debugger/Audio
+	// dock toggles. The button drives the overlay; the drawer reports back so the two stay in sync.
+	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), ED_GET_SHORTCUT("editor/toggle_file_drawer"));
+	filesystem_drawer_button->connect(SceneStringName(toggled), callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::set_open).bind(true));
+	workspace_file_drawer->connect("open_toggled", callable_mp(static_cast<BaseButton *>(filesystem_drawer_button), &BaseButton::set_pressed_no_signal));
 
 	center_split->connect(SceneStringName(resized), callable_mp(this, &EditorNode::_vp_resized));
 

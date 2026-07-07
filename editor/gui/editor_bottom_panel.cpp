@@ -238,6 +238,23 @@ EditorDock *EditorBottomPanel::_get_dock_from_control(Control *p_control) const 
 	return Object::cast_to<EditorDock>(p_control->get_parent());
 }
 
+Button *EditorBottomPanel::add_bottom_bar_toggle(const String &p_text, const Ref<Texture2D> &p_icon, const Ref<Shortcut> &p_shortcut) {
+	Button *tb = memnew(Button);
+	tb->set_theme_type_variation("BottomPanelButton");
+	tb->set_toggle_mode(true);
+	tb->set_text(p_text);
+	if (p_icon.is_valid()) {
+		tb->set_button_icon(p_icon);
+	}
+	if (p_shortcut.is_valid()) {
+		tb->set_shortcut(p_shortcut);
+	}
+	// Front of bottom_hbox = leftmost of the bar's non-tab controls, right after the dock tabs.
+	bottom_hbox->add_child(tb);
+	bottom_hbox->move_child(tb, 0);
+	return tb;
+}
+
 Button *EditorBottomPanel::add_item(String p_text, Control *p_item, const Ref<Shortcut> &p_shortcut, bool p_at_front) {
 	EditorDock *dock = memnew(EditorDock);
 	dock->add_child(p_item);

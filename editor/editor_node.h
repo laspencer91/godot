@@ -63,6 +63,7 @@ class Tree;
 class VBoxContainer;
 class VSplitContainer;
 class Window;
+class WorkspaceFileDrawer;
 
 class AudioStreamImportSettingsDialog;
 class AudioStreamPreviewGenerator;
@@ -431,6 +432,10 @@ private:
 	Callable palette_file_selected_callback;
 
 	EditorBottomPanel *bottom_panel = nullptr;
+
+	// G4: slide-up file-exploration overlay + its unified bottom-bar toggle button.
+	WorkspaceFileDrawer *workspace_file_drawer = nullptr;
+	Button *filesystem_drawer_button = nullptr;
 
 	Tree *disk_changed_list = nullptr;
 	LocalVector<String> disk_changed_scenes;

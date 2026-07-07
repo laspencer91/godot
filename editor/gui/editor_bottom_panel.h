@@ -91,6 +91,11 @@ public:
 	void save_layout_to_config(Ref<ConfigFile> p_config_file, const String &p_section) const;
 	void load_layout_from_config(Ref<ConfigFile> p_config_file, const String &p_section);
 
+	// G4: add a standalone toggle button to the unified bottom bar (the row that also holds the
+	// dock tabs / toaster). Unlike add_item it hosts NO panel content -- the caller drives its own
+	// surface (e.g. the WorkspaceFileDrawer overlay) off the returned button's `toggled` signal.
+	Button *add_bottom_bar_toggle(const String &p_text, const Ref<Texture2D> &p_icon = Ref<Texture2D>(), const Ref<Shortcut> &p_shortcut = nullptr);
+
 	Button *add_item(String p_text, Control *p_item, const Ref<Shortcut> &p_shortcut = nullptr, bool p_at_front = false);
 	void remove_item(Control *p_item);
 	void make_item_visible(Control *p_item, bool p_visible = true, bool p_ignore_lock = false);
