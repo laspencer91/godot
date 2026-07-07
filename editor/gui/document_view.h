@@ -83,10 +83,11 @@ class DocumentView : public MarginContainer {
 
 	void _bound_selection_changed();
 
-	// G2 styling: build + register one accordion dock section (styling, initial fold state, and the
-	// fold→expand-flag binding). _on_section_folded keeps expanded sections sharing the column while
-	// collapsed ones shrink to their header, so folding one frees space for the rest.
-	void _add_accordion_section(FoldableContainer *p_section, const StringName &p_icon, bool p_expanded);
+	// G2 styling: build one accordion dock "card" for p_dock — a styled FoldableContainer (rounded
+	// header + leading icon), initial fold state, the fold→expand-flag binding — and add it to p_column.
+	// _on_section_folded keeps expanded sections sharing the column while collapsed ones shrink to their
+	// header, so folding one frees space for the rest.
+	void _add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded);
 	void _on_section_folded(bool p_folded, FoldableContainer *p_section);
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The

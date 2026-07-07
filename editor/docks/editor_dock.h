@@ -87,6 +87,9 @@ private:
 
 	bool is_open = false;
 	bool enabled = true;
+	// G2 D8: a retired dock is registered but permanently hidden — its role moved to per-pane docks.
+	// EditorDockManager refuses to (re-)open/enable it, so the global copy never shadows the per-pane one.
+	bool retired = false;
 	int previous_tab_index = -1;
 	WindowWrapper *dock_window = nullptr;
 	DockTabContainer *parent_dock_container = nullptr;

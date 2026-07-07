@@ -584,18 +584,12 @@ void EditorDockManager::load_docks_from_config(Ref<ConfigFile> p_layout, const S
 
 void EditorDockManager::mark_dock_retired(EditorDock *p_dock) {
 	ERR_FAIL_NULL(p_dock);
-	p_dock->set_meta(SNAME("_g2_retired"), true);
+	p_dock->retired = true;
 }
 
 void EditorDockManager::set_dock_enabled(EditorDock *p_dock, bool p_enabled) {
 	ERR_FAIL_NULL(p_dock);
 	ERR_FAIL_COND_MSG(!all_docks.has(p_dock), vformat("Cannot set enabled unknown dock '%s'.", p_dock->get_display_title()));
-
-	// G2 D8: a retired dock (its role moved to per-pane docks) never re-enables — this defeats the
-	// feature-profile pass and layout restore that would otherwise bring the global copy back.
-	if (p_enabled && p_dock->has_meta(SNAME("_g2_retired"))) {
-		return;
-	}
 
 	if (p_dock->enabled == p_enabled) {
 		return;
@@ -631,6 +625,13 @@ void EditorDockManager::close_dock(EditorDock *p_dock) {
 void EditorDockManager::open_dock(EditorDock *p_dock, bool p_set_current) {
 	ERR_FAIL_NULL(p_dock);
 	ERR_FAIL_COND_MSG(!all_docks.has(p_dock), vformat("Cannot open unknown dock '%s'.", p_dock->get_display_title()));
+
+	// G2 D8: a retired dock never opens (its role moved to per-pane docks). This is the deep choke
+	// point, so no caller — set_dock_enabled, the feature-profile pass, or layout restore — can surface
+	// the redundant global copy over the per-pane accordion.
+	if (p_dock->retired) {
+		return;
+	}
 
 	if (p_dock->is_open) {
 		// Show the dock if it is already open.

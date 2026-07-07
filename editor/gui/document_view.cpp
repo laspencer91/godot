@@ -50,28 +50,31 @@
 #include "scene/gui/texture_rect.h"
 #include "scene/resources/style_box_flat.h"
 
-// G2 styling: give an accordion section the GDStudio "card" look — a raised, rounded header (with
-// leading icon and hover/collapsed variants) over a slightly recessed content panel. Colors come from
-// the active editor theme so it tracks light/dark. Kept local since only the pane docks use it.
-static Ref<StyleBoxFlat> _dock_section_sb(const Color &p_bg, int p_radius, bool p_round_top, bool p_round_bottom, int p_pad_h, int p_pad_v, bool p_raised = false) {
+// G2 styling: one "card" stylebox for a dock section. Only the fill color, header-vs-content role, and
+// bottom rounding vary across the five styleboxes a section uses; radius and padding are fixed. Headers
+// get the raised top-edge highlight + faint shadow (the "subtle gradient" lift); the panel is flat.
+static Ref<StyleBoxFlat> _dock_card_sb(const Color &p_bg, bool p_header, bool p_round_bottom) {
+	const int radius = 5 * EDSCALE;
 	Ref<StyleBoxFlat> sb;
 	sb.instantiate();
 	sb->set_bg_color(p_bg);
-	if (p_round_top) {
-		sb->set_corner_radius(CORNER_TOP_LEFT, p_radius);
-		sb->set_corner_radius(CORNER_TOP_RIGHT, p_radius);
+	if (p_header) {
+		sb->set_corner_radius(CORNER_TOP_LEFT, radius);
+		sb->set_corner_radius(CORNER_TOP_RIGHT, radius);
 	}
 	if (p_round_bottom) {
-		sb->set_corner_radius(CORNER_BOTTOM_LEFT, p_radius);
-		sb->set_corner_radius(CORNER_BOTTOM_RIGHT, p_radius);
+		sb->set_corner_radius(CORNER_BOTTOM_LEFT, radius);
+		sb->set_corner_radius(CORNER_BOTTOM_RIGHT, radius);
 	}
-	sb->set_content_margin(SIDE_LEFT, p_pad_h);
-	sb->set_content_margin(SIDE_RIGHT, p_pad_h);
-	sb->set_content_margin(SIDE_TOP, p_pad_v);
-	sb->set_content_margin(SIDE_BOTTOM, p_pad_v);
-	if (p_raised) {
-		// A 1px top-edge highlight (light from above) + a faint drop shadow lifts the header card off
-		// the column — the "very subtle gradient" pop without a baked texture (keeps the crisp corners).
+	const int pad_v = (p_header ? 6 : 4) * EDSCALE;
+	const int pad_h = (p_header ? 10 : 4) * EDSCALE;
+	sb->set_content_margin(SIDE_LEFT, pad_h);
+	sb->set_content_margin(SIDE_RIGHT, pad_h);
+	sb->set_content_margin(SIDE_TOP, pad_v);
+	sb->set_content_margin(SIDE_BOTTOM, pad_v);
+	if (p_header) {
+		// 1px top-edge highlight (light from above) + faint drop shadow lifts the header card off the
+		// column — the "subtle gradient" pop without a baked texture (keeps the crisp corners).
 		sb->set_border_width(SIDE_TOP, MAX(1, int(EDSCALE)));
 		sb->set_border_color(p_bg.lightened(0.35));
 		sb->set_shadow_color(Color(0, 0, 0, 0.16));
@@ -81,39 +84,41 @@ static Ref<StyleBoxFlat> _dock_section_sb(const Color &p_bg, int p_radius, bool 
 	return sb;
 }
 
-static void _style_dock_section(FoldableContainer *p_section, const StringName &p_icon_name) {
+void DocumentView::_add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded) {
+	// Build one GDStudio-style dock "card": a raised rounded header (leading icon + top-edge highlight)
+	// over a recessed content panel. Colors are read from the editor theme at construction time — they
+	// do NOT re-tint on a later theme change (accepted tradeoff until this moves to a DockSection theme
+	// variation, which would also drop the per-pane stylebox rebuild).
+	p_dock->set_v_size_flags(SIZE_EXPAND_FILL);
+	FoldableContainer *section = memnew(FoldableContainer);
+	section->set_title(p_title);
+	section->add_child(p_dock);
+
 	Control *gui_base = EditorNode::get_singleton()->get_gui_base();
 	const Color base = gui_base->get_theme_color(SNAME("base_color"), EditorStringName(Editor));
-	const int radius = 5 * EDSCALE;
-	const int pad_h = 10 * EDSCALE;
-	const int pad_v = 6 * EDSCALE;
+	const Color header = base.lightened(0.10);
+	const Color header_hover = base.lightened(0.16);
+	section->add_theme_style_override(SNAME("title_panel"), _dock_card_sb(header, true, false));
+	section->add_theme_style_override(SNAME("title_hover_panel"), _dock_card_sb(header_hover, true, false));
+	section->add_theme_style_override(SNAME("title_collapsed_panel"), _dock_card_sb(header, true, true));
+	section->add_theme_style_override(SNAME("title_collapsed_hover_panel"), _dock_card_sb(header_hover, true, true));
+	section->add_theme_style_override(SNAME("panel"), _dock_card_sb(base.darkened(0.04), false, true));
 
-	if (p_icon_name != StringName()) {
-		Ref<Texture2D> icon = gui_base->get_theme_icon(p_icon_name, EditorStringName(EditorIcons));
+	if (p_icon != StringName()) {
+		Ref<Texture2D> icon = gui_base->get_theme_icon(p_icon, EditorStringName(EditorIcons));
 		if (icon.is_valid()) {
 			TextureRect *rect = memnew(TextureRect);
 			rect->set_texture(icon);
 			rect->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
 			rect->set_custom_minimum_size(Size2(16, 16) * EDSCALE);
-			p_section->add_title_bar_control(rect);
+			section->add_title_bar_control(rect);
 		}
 	}
 
-	const Color header = base.lightened(0.10);
-	const Color header_hover = base.lightened(0.16);
-	p_section->add_theme_style_override(SNAME("title_panel"), _dock_section_sb(header, radius, true, false, pad_h, pad_v, true));
-	p_section->add_theme_style_override(SNAME("title_hover_panel"), _dock_section_sb(header_hover, radius, true, false, pad_h, pad_v, true));
-	p_section->add_theme_style_override(SNAME("title_collapsed_panel"), _dock_section_sb(header, radius, true, true, pad_h, pad_v, true));
-	p_section->add_theme_style_override(SNAME("title_collapsed_hover_panel"), _dock_section_sb(header_hover, radius, true, true, pad_h, pad_v, true));
-	p_section->add_theme_style_override(SNAME("panel"), _dock_section_sb(base.darkened(0.04), radius, false, true, 4 * EDSCALE, 4 * EDSCALE));
-}
-
-void DocumentView::_add_accordion_section(FoldableContainer *p_section, const StringName &p_icon, bool p_expanded) {
-	_style_dock_section(p_section, p_icon);
-	p_section->set_folded(!p_expanded);
-	// Expanded → share the column; collapsed → header only. Kept in sync on fold by _on_section_folded.
-	p_section->set_v_size_flags(p_expanded ? SIZE_EXPAND_FILL : SIZE_FILL);
-	p_section->connect("folding_changed", callable_mp(this, &DocumentView::_on_section_folded).bind(p_section));
+	section->set_folded(!p_expanded);
+	_on_section_folded(!p_expanded, section); // single source for the fold→expand-flag rule (no signal yet).
+	section->connect("folding_changed", callable_mp(this, &DocumentView::_on_section_folded).bind(section));
+	p_column->add_child(section);
 }
 
 void DocumentView::_on_section_folded(bool p_folded, FoldableContainer *p_section) {
@@ -209,44 +214,22 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		dock_column->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
 		dock_column->add_theme_constant_override("separation", 6 * EDSCALE); // gaps → sections read as stacked cards.
 
-		// Scene Tree section (D7a's tree, folded into the accordion, expanded by default).
+		// Each section is a styled FoldableContainer "card" built by _add_accordion_section; only the dock
+		// construction differs. Scene Tree + Inspector start expanded, Signals + Groups collapsed.
 		scene_tree_dock = memnew(SceneTreeDock(p_document->get_root(), p_document->get_selection(), ed, false));
 		scene_tree_dock->set_bound_document(p_document);
 		scene_tree_dock->set_edited_scene(p_document->get_root());
-		scene_tree_dock->set_v_size_flags(SIZE_EXPAND_FILL);
-		FoldableContainer *tree_section = memnew(FoldableContainer);
-		tree_section->set_title(TTR("Scene Tree"));
-		tree_section->add_child(scene_tree_dock);
-		_add_accordion_section(tree_section, SNAME("PackedScene"), true);
-		dock_column->add_child(tree_section);
+		_add_accordion_section(dock_column, scene_tree_dock, TTR("Scene Tree"), SNAME("PackedScene"), true);
 
-		// Inspector section (bound per-pane inspector, expanded by default).
 		inspector_dock = memnew(InspectorDock(ed, false));
 		inspector_dock->set_bound_document(p_document);
-		inspector_dock->set_v_size_flags(SIZE_EXPAND_FILL);
-		FoldableContainer *inspector_section = memnew(FoldableContainer);
-		inspector_section->set_title(TTR("Inspector"));
-		inspector_section->add_child(inspector_dock);
-		_add_accordion_section(inspector_section, SNAME("Object"), true);
-		dock_column->add_child(inspector_section);
+		_add_accordion_section(dock_column, inspector_dock, TTR("Inspector"), SNAME("Object"), true);
 
-		// G3: Signals section (bound ConnectionsDock, collapsed by default).
 		signals_dock = memnew(SignalsDock(false));
-		signals_dock->set_v_size_flags(SIZE_EXPAND_FILL);
-		FoldableContainer *signals_section = memnew(FoldableContainer);
-		signals_section->set_title(TTR("Signals"));
-		signals_section->add_child(signals_dock);
-		_add_accordion_section(signals_section, SNAME("Signals"), false);
-		dock_column->add_child(signals_section);
+		_add_accordion_section(dock_column, signals_dock, TTR("Signals"), SNAME("Signals"), false);
 
-		// G3: Groups section (bound GroupsEditor dock, collapsed by default).
 		groups_dock = memnew(GroupsDock(false));
-		groups_dock->set_v_size_flags(SIZE_EXPAND_FILL);
-		FoldableContainer *groups_section = memnew(FoldableContainer);
-		groups_section->set_title(TTR("Groups"));
-		groups_section->add_child(groups_dock);
-		_add_accordion_section(groups_section, SNAME("Groups"), false);
-		dock_column->add_child(groups_section);
+		_add_accordion_section(dock_column, groups_dock, TTR("Groups"), SNAME("Groups"), false);
 
 		// Drive the bound inspector from THIS document's selection (independent of the active pane).
 		p_document->get_selection()->connect("selection_changed", callable_mp(this, &DocumentView::_bound_selection_changed));
