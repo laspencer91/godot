@@ -53,7 +53,7 @@
 			<param index="1" name="velocity" type="Vector3" />
 			<param index="2" name="delta" type="float" />
 			<description>
-				Moves from feet [param position] by [param velocity] over [param delta]. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]planes[/code], [code]cast_fraction[/code], and [code]iterations[/code].
+				Moves from feet [param position] by [param velocity] over [param delta]. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]floor_material_id[/code], [code]floor_material_name[/code], [code]floor_material[/code], [code]planes[/code], [code]cast_fraction[/code], and [code]iterations[/code]. Floor material fields are probe-derived.
 			</description>
 		</method>
 		<method name="set_capsule">

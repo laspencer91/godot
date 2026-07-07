@@ -14,6 +14,38 @@
 #include "core/object/class_db.h"
 #include "scene/3d/physics/collision_object_3d.h"
 
+static PackedInt64Array _resolve_surface_map_material_ids(Box3DPhysics *p_box3d_physics, const Ref<Box3DSurfaceMap> &p_surface_map) {
+	PackedInt64Array material_ids;
+	ERR_FAIL_COND_V(p_surface_map.is_null(), material_ids);
+
+	const PackedStringArray material_names = p_surface_map->get_material_names();
+	material_ids.resize(material_names.size());
+	int64_t *write = material_ids.ptrw();
+	for (int i = 0; i < material_names.size(); i++) {
+		const StringName name = material_names[i];
+		const int material_id = p_box3d_physics->get_material_id(name);
+		if (name != StringName() && material_id == 0) {
+			WARN_PRINT(vformat("Box3D: unknown surface material '%s' in Box3DSurfaceMap.", String(name)));
+		}
+		write[i] = material_id;
+	}
+	return material_ids;
+}
+
+static void _apply_surface_map_to_owner(Box3DPhysics *p_box3d_physics, CollisionObject3D *p_body, uint32_t p_owner, int p_shape_idx, const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices) {
+	const int shape_count = p_body->shape_owner_get_shape_count(p_owner);
+	for (int i = 0; i < shape_count; i++) {
+		const int body_shape_idx = p_body->shape_owner_get_shape_index(p_owner, i);
+		if (p_shape_idx != -1 && body_shape_idx != p_shape_idx) {
+			continue;
+		}
+		Ref<Shape3D> shape = p_body->shape_owner_get_shape(p_owner, i);
+		if (shape.is_valid()) {
+			p_box3d_physics->shape_set_surface_map(shape->get_rid(), p_material_ids, p_triangle_indices);
+		}
+	}
+}
+
 void Box3DSurfaceMaterial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_material_name", "name"), &Box3DSurfaceMaterial::set_material_name);
 	ClassDB::bind_method(D_METHOD("get_material_name"), &Box3DSurfaceMaterial::get_material_name);
@@ -82,6 +114,7 @@ void Box3DPhysics::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("shape_set_surface_map", "shape", "material_ids", "triangle_indices"), &Box3DPhysics::shape_set_surface_map);
 	ClassDB::bind_method(D_METHOD("body_set_surface_material", "body", "shape_idx", "material_id"), &Box3DPhysics::body_set_surface_material);
 	ClassDB::bind_method(D_METHOD("get_shape_mesh_material_indices", "shape"), &Box3DPhysics::get_shape_mesh_material_indices);
+	ClassDB::bind_method(D_METHOD("get_face_material", "shape", "face_index"), &Box3DPhysics::get_face_material);
 }
 
 Box3DPhysics::Box3DPhysics() {
@@ -198,15 +231,49 @@ PackedByteArray Box3DPhysics::get_shape_mesh_material_indices(RID p_shape) const
 	return server->shape_get_mesh_material_indices(p_shape);
 }
 
+Ref<Box3DSurfaceMaterial> Box3DPhysics::get_face_material(RID p_shape, int p_face_index) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, Ref<Box3DSurfaceMaterial>());
+	return get_material(server->shape_get_face_material_id(p_shape, p_face_index));
+}
+
+String Box3DPhysics::get_material_name_hint() const {
+	if (library.is_null()) {
+		return String();
+	}
+	PackedStringArray names;
+	TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
+	for (int i = 0; i < materials.size(); i++) {
+		Ref<Box3DSurfaceMaterial> surface_material = materials[i];
+		if (surface_material.is_valid() && surface_material->get_material_name() != StringName()) {
+			names.push_back(String(surface_material->get_material_name()));
+		}
+	}
+	return String(",").join(names);
+}
+
 void Box3DSurfaceOverride3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_material", "material"), &Box3DSurfaceOverride3D::set_material);
 	ClassDB::bind_method(D_METHOD("get_material"), &Box3DSurfaceOverride3D::get_material);
+	ClassDB::bind_method(D_METHOD("set_surface_map", "surface_map"), &Box3DSurfaceOverride3D::set_surface_map);
+	ClassDB::bind_method(D_METHOD("get_surface_map"), &Box3DSurfaceOverride3D::get_surface_map);
 	ClassDB::bind_method(D_METHOD("set_shape_owner", "shape_owner"), &Box3DSurfaceOverride3D::set_shape_owner);
 	ClassDB::bind_method(D_METHOD("get_shape_owner"), &Box3DSurfaceOverride3D::get_shape_owner);
 	ClassDB::bind_method(D_METHOD("apply"), &Box3DSurfaceOverride3D::apply);
 
-	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "material"), "set_material", "get_material");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "material", PROPERTY_HINT_ENUM, ""), "set_material", "get_material");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "surface_map", PROPERTY_HINT_RESOURCE_TYPE, "Box3DSurfaceMap"), "set_surface_map", "get_surface_map");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_owner"), "set_shape_owner", "get_shape_owner");
+}
+
+void Box3DSurfaceOverride3D::_validate_property(PropertyInfo &p_property) const {
+	if (p_property.name == StringName("material")) {
+		Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+		if (box3d_physics != nullptr) {
+			p_property.hint = PROPERTY_HINT_ENUM;
+			p_property.hint_string = box3d_physics->get_material_name_hint();
+		}
+	}
 }
 
 void Box3DSurfaceOverride3D::_notification(int p_what) {
@@ -217,6 +284,13 @@ void Box3DSurfaceOverride3D::_notification(int p_what) {
 
 void Box3DSurfaceOverride3D::set_material(const StringName &p_material) {
 	material = p_material;
+	if (is_inside_tree()) {
+		apply();
+	}
+}
+
+void Box3DSurfaceOverride3D::set_surface_map(const Ref<Box3DSurfaceMap> &p_surface_map) {
+	surface_map = p_surface_map;
 	if (is_inside_tree()) {
 		apply();
 	}
@@ -236,5 +310,25 @@ void Box3DSurfaceOverride3D::apply() {
 	CollisionObject3D *parent_body = Object::cast_to<CollisionObject3D>(get_parent());
 	ERR_FAIL_NULL_MSG(parent_body, "Box3DSurfaceOverride3D must be a child of a CollisionObject3D.");
 
-	box3d_physics->body_set_surface_material(parent_body->get_rid(), shape_owner, box3d_physics->get_material_id(material));
+	const int material_id = box3d_physics->get_material_id(material);
+	if (material != StringName() && material_id == 0) {
+		WARN_PRINT(vformat("Box3D: unknown surface material '%s' on Box3DSurfaceOverride3D.", String(material)));
+	}
+	box3d_physics->body_set_surface_material(parent_body->get_rid(), shape_owner, material_id);
+
+	if (surface_map.is_valid()) {
+		const PackedInt64Array material_ids = _resolve_surface_map_material_ids(box3d_physics, surface_map);
+		const PackedByteArray triangle_indices = surface_map->get_triangle_indices();
+		if (shape_owner == -1) {
+			List<uint32_t> owners;
+			parent_body->get_shape_owners(&owners);
+			for (const uint32_t &owner : owners) {
+				_apply_surface_map_to_owner(box3d_physics, parent_body, owner, shape_owner, material_ids, triangle_indices);
+			}
+		} else {
+			const uint32_t owner = parent_body->shape_find_owner(shape_owner);
+			ERR_FAIL_COND(owner == UINT32_MAX);
+			_apply_surface_map_to_owner(box3d_physics, parent_body, owner, shape_owner, material_ids, triangle_indices);
+		}
+	}
 }

@@ -17,6 +17,9 @@ class Box3DSpace3D;
 class Box3DDirectSpaceState3D : public PhysicsDirectSpaceState3D {
 	GDCLASS(Box3DDirectSpaceState3D, PhysicsDirectSpaceState3D);
 
+protected:
+	static void _bind_methods();
+
 public:
 	struct QueryShape {
 		enum Kind {
@@ -51,9 +54,11 @@ public:
 	void _fill_shape_result(b3ShapeId p_shape_id, ShapeResult &r_result) const;
 	void _fill_ray_result(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, int p_triangle_index, RayResult &r_result) const;
 	bool _build_query_shape(RID p_shape_rid, const Transform3D &p_transform, QueryShape &r_query_shape) const;
+	bool _intersect_ray_internal(const RayParameters &p_parameters, RayResult &r_result, uint64_t *r_user_material_id = nullptr) const;
 
 	void setup(Box3DSpace3D *p_space, RID_PtrOwner<Box3DShape3D> *p_shape_owner, RID_PtrOwner<Box3DBody3D> *p_body_owner);
 
+	Dictionary intersect_ray_ex(const Ref<PhysicsRayQueryParameters3D> &p_ray_query) const;
 	virtual bool intersect_ray(const RayParameters &p_parameters, RayResult &r_result) override;
 	virtual int intersect_point(const PointParameters &p_parameters, ShapeResult *r_results, int p_result_max) override;
 	virtual int intersect_shape(const ShapeParameters &p_parameters, ShapeResult *r_results, int p_result_max) override;

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DSurfaceMaterial" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Named Box3D surface material.
+	</brief_description>
+	<description>
+		[Box3DSurfaceMaterial] defines physics response and game metadata for one named surface. [member material_id] is written to Box3D as [code]userMaterialId[/code].
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="custom" type="Dictionary" setter="set_custom" getter="get_custom">
+			Game-specific material data such as penetration, footstep, or impact settings.
+		</member>
+		<member name="debug_color" type="Color" setter="set_debug_color" getter="get_debug_color">
+			Optional Box3D debug color.
+		</member>
+		<member name="friction" type="float" setter="set_friction" getter="get_friction" default="0.6">
+			Box3D surface friction.
+		</member>
+		<member name="material_id" type="int" setter="set_material_id" getter="get_material_id" default="0">
+			Stable material id. [code]0[/code] is reserved for the default material.
+		</member>
+		<member name="material_name" type="StringName" setter="set_material_name" getter="get_material_name">
+			Stable material name used by authoring tools and scripts.
+		</member>
+		<member name="restitution" type="float" setter="set_restitution" getter="get_restitution" default="0.0">
+			Box3D restitution.
+		</member>
+		<member name="rolling_resistance" type="float" setter="set_rolling_resistance" getter="get_rolling_resistance" default="0.0">
+			Box3D rolling resistance.
+		</member>
+		<member name="tangent_velocity" type="Vector3" setter="set_tangent_velocity" getter="get_tangent_velocity">
+			Box3D tangent velocity for conveyor-style surfaces.
+		</member>
+		<member name="texture_patterns" type="PackedStringArray" setter="set_texture_patterns" getter="get_texture_patterns">
+			Case-insensitive wildcard patterns used by import tools to match texture names.
+		</member>
+	</members>
+</class>

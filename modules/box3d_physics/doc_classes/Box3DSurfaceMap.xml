@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DSurfaceMap" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Per-triangle Box3D surface material map.
+	</brief_description>
+	<description>
+		[Box3DSurfaceMap] stores a material-name palette and per-triangle byte indices for mesh collision shapes.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="material_names" type="PackedStringArray" setter="set_material_names" getter="get_material_names">
+			Material names indexed by [member triangle_indices].
+		</member>
+		<member name="triangle_indices" type="PackedByteArray" setter="set_triangle_indices" getter="get_triangle_indices">
+			One byte per mesh triangle, indexing [member material_names].
+		</member>
+	</members>
+</class>

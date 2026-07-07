@@ -9,6 +9,7 @@
 #include "box3d_direct_space_state_3d.h"
 #include "box3d_physics_server_3d.h"
 #include "box3d_space_3d.h"
+#include "box3d_surface_materials.h"
 
 #include "core/object/class_db.h"
 
@@ -36,6 +37,28 @@ struct Box3DMoverPlaneContext {
 	Array planes;
 	Vector3 origin;
 };
+
+struct Box3DMoverFloorProbeContext {
+	const HashSet<RID> *exclusions = nullptr;
+	RID target_rid;
+	int target_shape = -1;
+	int material_id = 0;
+	bool hit = false;
+};
+
+static void _add_floor_material_fields(Dictionary &r_result, int p_material_id) {
+	r_result["floor_material_id"] = p_material_id;
+
+	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	if (box3d_physics == nullptr || p_material_id <= 0) {
+		r_result["floor_material_name"] = StringName();
+		r_result["floor_material"] = Ref<Box3DSurfaceMaterial>();
+		return;
+	}
+
+	r_result["floor_material_name"] = box3d_physics->get_material_name(p_material_id);
+	r_result["floor_material"] = box3d_physics->get_material(p_material_id);
+}
 
 static Dictionary _plane_to_dictionary(b3ShapeId p_shape_id, const b3PlaneResult &p_plane, const Vector3 &p_origin) {
 	Dictionary d;
@@ -67,6 +90,24 @@ static bool _mover_plane_callback(b3ShapeId p_shape_id, const b3PlaneResult *p_p
 		ctx->planes.push_back(_plane_to_dictionary(p_shape_id, p_planes[i], ctx->origin));
 	}
 	return true;
+}
+
+static float _mover_floor_probe_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, uint64_t p_user_material_id, int p_triangle_index, int p_child_index, void *p_context) {
+	Box3DMoverFloorProbeContext *ctx = static_cast<Box3DMoverFloorProbeContext *>(p_context);
+	Box3DBody3D *body = Box3DDirectSpaceState3D::_get_body(p_shape_id);
+	if (body == nullptr || (ctx->exclusions != nullptr && ctx->exclusions->has(body->get_rid()))) {
+		return -1.0f;
+	}
+	if (ctx->target_rid.is_valid() && body->get_rid() != ctx->target_rid) {
+		return -1.0f;
+	}
+	if (ctx->target_shape >= 0 && Box3DDirectSpaceState3D::_get_shape_index(p_shape_id) != ctx->target_shape) {
+		return -1.0f;
+	}
+
+	ctx->material_id = p_user_material_id <= (uint64_t)INT_MAX ? (int)p_user_material_id : 0;
+	ctx->hit = true;
+	return p_fraction;
 }
 
 static b3CollisionPlane _dictionary_to_collision_plane(const Dictionary &p_plane) {
@@ -249,6 +290,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	const real_t floor_threshold = Math::cos(floor_max_angle);
 
 	Vector3 floor_normal;
+	Dictionary floor_plane;
 	bool on_floor = false;
 	bool on_wall = false;
 	bool on_ceiling = false;
@@ -259,6 +301,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 			on_floor = true;
 			if (normal.y > floor_normal.y) {
 				floor_normal = normal;
+				floor_plane = plane;
 			}
 		} else if (normal.y < -floor_threshold) {
 			on_ceiling = true;
@@ -277,5 +320,19 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	result["planes"] = solved_planes;
 	result["cast_fraction"] = last_fraction;
 	result["iterations"] = total_iterations;
+	if (on_floor && floor_plane.has("point")) {
+		Box3DSpace3D *query_space = _get_space();
+		Box3DMoverFloorProbeContext ctx;
+		ctx.exclusions = &exclusions;
+		ctx.target_rid = floor_plane.has("rid") ? (RID)floor_plane["rid"] : RID();
+		ctx.target_shape = floor_plane.has("shape") ? (int)floor_plane["shape"] : -1;
+		const Vector3 floor_point = floor_plane["point"];
+		const Vector3 from = floor_point + Vector3(0.0, 0.05, 0.0);
+		const Vector3 translation = Vector3(0.0, -0.25, 0.0);
+		b3World_CastRay(query_space->get_world(), to_box3d(from), to_box3d(translation), _make_filter(), _mover_floor_probe_callback, &ctx);
+		_add_floor_material_fields(result, ctx.hit ? ctx.material_id : 0);
+	} else {
+		_add_floor_material_fields(result, 0);
+	}
 	return result;
 }

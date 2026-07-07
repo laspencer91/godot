@@ -74,6 +74,12 @@ void Box3DPhysicsServer3D::shape_set_surface_map(RID p_shape, const PackedInt64A
 	shape->set_surface_map(p_material_ids, p_triangle_indices);
 }
 
+int Box3DPhysicsServer3D::shape_get_face_material_id(RID p_shape, int p_face_index) const {
+	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
+	ERR_FAIL_NULL_V(shape, 0);
+	return shape->get_face_material_id(p_face_index);
+}
+
 PackedByteArray Box3DPhysicsServer3D::shape_get_mesh_material_indices(RID p_shape) const {
 	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
 	ERR_FAIL_NULL_V(shape, PackedByteArray());

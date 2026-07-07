@@ -73,6 +73,7 @@ public:
 	virtual ShapeType shape_get_type(RID p_shape) const override;
 	void shape_set_surface_material(RID p_shape, int p_material_id);
 	void shape_set_surface_map(RID p_shape, const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices);
+	int shape_get_face_material_id(RID p_shape, int p_face_index) const;
 	PackedByteArray shape_get_mesh_material_indices(RID p_shape) const;
 
 	// Spaces.

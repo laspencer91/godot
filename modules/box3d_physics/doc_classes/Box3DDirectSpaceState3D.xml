@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DDirectSpaceState3D" inherits="PhysicsDirectSpaceState3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Box3D direct space query object.
+	</brief_description>
+	<description>
+		[Box3DDirectSpaceState3D] is returned by [World3D.direct_space_state] when the Box3D physics server is active. It supports the stock [PhysicsDirectSpaceState3D] query API plus Box3D-specific material query helpers.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="intersect_ray_ex" qualifiers="const">
+			<return type="Dictionary" />
+			<param index="0" name="parameters" type="PhysicsRayQueryParameters3D" />
+			<description>
+				Runs the same ray query as [method PhysicsDirectSpaceState3D.intersect_ray], and returns the stock hit keys plus [code]material_id[/code], [code]material_name[/code], and [code]material[/code]. Returns an empty dictionary on a miss.
+			</description>
+		</method>
+	</methods>
+</class>

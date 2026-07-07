@@ -110,21 +110,27 @@ public:
 	void shape_set_surface_map(RID p_shape, const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices);
 	void body_set_surface_material(RID p_body, int p_shape_idx, int p_material_id);
 	PackedByteArray get_shape_mesh_material_indices(RID p_shape) const;
+	Ref<Box3DSurfaceMaterial> get_face_material(RID p_shape, int p_face_index) const;
+	String get_material_name_hint() const;
 };
 
 class Box3DSurfaceOverride3D : public Node {
 	GDCLASS(Box3DSurfaceOverride3D, Node);
 
 	StringName material;
+	Ref<Box3DSurfaceMap> surface_map;
 	int shape_owner = -1;
 
 protected:
 	static void _bind_methods();
+	void _validate_property(PropertyInfo &p_property) const;
 	void _notification(int p_what);
 
 public:
 	void set_material(const StringName &p_material);
 	StringName get_material() const { return material; }
+	void set_surface_map(const Ref<Box3DSurfaceMap> &p_surface_map);
+	Ref<Box3DSurfaceMap> get_surface_map() const { return surface_map; }
 	void set_shape_owner(int p_shape_owner);
 	int get_shape_owner() const { return shape_owner; }
 	void apply();

@@ -54,6 +54,7 @@ public:
 	int get_surface_material_id() const { return surface_material_id; }
 	void set_surface_map(const PackedInt64Array &p_material_ids, const PackedByteArray &p_triangle_indices);
 	const PackedInt64Array &get_mesh_material_ids() const { return mesh_material_ids; }
+	int get_face_material_id(int p_face_index) const;
 	PackedByteArray get_mesh_material_indices() const;
 
 	void add_owner(Box3DBody3D *p_body) { owners.insert(p_body); }

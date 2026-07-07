@@ -8,13 +8,45 @@
 #include "box3d_conversions.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
+#include "box3d_surface_materials.h"
 
+#include "core/object/class_db.h"
 #include "core/object/object.h"
 
 #include "box3d/collision.h"
 #include "box3d/constants.h"
 
 static constexpr uint64_t BOX3D_QUERY_FILTER_BIT = UINT64_C(1) << 63;
+
+static Dictionary _box3d_ray_result_to_dictionary(const PhysicsDirectSpaceState3D::RayResult &p_result) {
+	Dictionary d;
+	d["position"] = p_result.position;
+	d["normal"] = p_result.normal;
+	d["face_index"] = p_result.face_index;
+	d["collider_id"] = p_result.collider_id;
+	d["collider"] = p_result.collider;
+	d["shape"] = p_result.shape;
+	d["rid"] = p_result.rid;
+	return d;
+}
+
+static void _box3d_add_material_fields(Dictionary &r_result, int p_material_id) {
+	r_result["material_id"] = p_material_id;
+
+	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	if (box3d_physics == nullptr || p_material_id <= 0) {
+		r_result["material_name"] = StringName();
+		r_result["material"] = Ref<Box3DSurfaceMaterial>();
+		return;
+	}
+
+	r_result["material_name"] = box3d_physics->get_material_name(p_material_id);
+	r_result["material"] = box3d_physics->get_material(p_material_id);
+}
+
+void Box3DDirectSpaceState3D::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("intersect_ray_ex", "parameters"), &Box3DDirectSpaceState3D::intersect_ray_ex);
+}
 
 void Box3DDirectSpaceState3D::setup(Box3DSpace3D *p_space, RID_PtrOwner<Box3DShape3D> *p_shape_owner, RID_PtrOwner<Box3DBody3D> *p_body_owner) {
 	space = p_space;
@@ -167,6 +199,7 @@ struct Box3DRayContext {
 	const Box3DDirectSpaceState3D *state = nullptr;
 	const PhysicsDirectSpaceState3D::RayParameters *parameters = nullptr;
 	PhysicsDirectSpaceState3D::RayResult *result = nullptr;
+	uint64_t *user_material_id = nullptr;
 	bool hit = false;
 };
 
@@ -177,11 +210,14 @@ static float _ray_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal,
 	}
 
 	ctx->state->_fill_ray_result(p_shape_id, p_point, p_normal, p_fraction, p_triangle_index, *ctx->result);
+	if (ctx->user_material_id != nullptr) {
+		*ctx->user_material_id = p_user_material_id;
+	}
 	ctx->hit = true;
 	return p_fraction;
 }
 
-bool Box3DDirectSpaceState3D::intersect_ray(const RayParameters &p_parameters, RayResult &r_result) {
+bool Box3DDirectSpaceState3D::_intersect_ray_internal(const RayParameters &p_parameters, RayResult &r_result, uint64_t *r_user_material_id) const {
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "intersect_ray must not be called while the physics space is being stepped.");
 	if (p_parameters.hit_from_inside || p_parameters.hit_back_faces || p_parameters.pick_ray) {
@@ -192,9 +228,28 @@ bool Box3DDirectSpaceState3D::intersect_ray(const RayParameters &p_parameters, R
 	ctx.state = this;
 	ctx.parameters = &p_parameters;
 	ctx.result = &r_result;
+	ctx.user_material_id = r_user_material_id;
 
 	b3World_CastRay(space->get_world(), to_box3d(p_parameters.from), to_box3d(p_parameters.to - p_parameters.from), _make_filter(p_parameters.collision_mask), _ray_callback, &ctx);
 	return ctx.hit;
+}
+
+Dictionary Box3DDirectSpaceState3D::intersect_ray_ex(const Ref<PhysicsRayQueryParameters3D> &p_ray_query) const {
+	ERR_FAIL_COND_V(p_ray_query.is_null(), Dictionary());
+
+	RayResult result;
+	uint64_t user_material_id = 0;
+	if (!_intersect_ray_internal(p_ray_query->get_parameters(), result, &user_material_id)) {
+		return Dictionary();
+	}
+
+	Dictionary d = _box3d_ray_result_to_dictionary(result);
+	_box3d_add_material_fields(d, user_material_id <= (uint64_t)INT_MAX ? (int)user_material_id : 0);
+	return d;
+}
+
+bool Box3DDirectSpaceState3D::intersect_ray(const RayParameters &p_parameters, RayResult &r_result) {
+	return _intersect_ray_internal(p_parameters, r_result);
 }
 
 struct Box3DOverlapContext {
