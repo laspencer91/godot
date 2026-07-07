@@ -171,6 +171,17 @@ class EditorFileSystem : public Node {
 		Vector<ScannedDirectory *> subdirs;
 		List<String> files;
 
+		// Populated only when the platform's DirAccess supports entry metadata
+		// (currently Windows), during the same enumeration pass used to build
+		// `files`/`subdirs` above. Keys are lowercased (`name.to_lower()`): on
+		// Windows the filesystem is case-insensitive, so two entries differing
+		// only in case cannot coexist and lowercase keys stay collision-free.
+		// A nonzero value here lets _process_file_system()/_scan_fs_changes()
+		// skip a redundant FileAccess::get_modified_time() stat; zero/missing
+		// always falls back to the existing stat call.
+		uint64_t modified_time = 0;
+		HashMap<String, uint64_t> file_modified_times;
+
 		~ScannedDirectory();
 	};
 
@@ -274,6 +285,14 @@ class EditorFileSystem : public Node {
 
 	Error _reimport_file(const String &p_file, const HashMap<StringName, Variant> &p_custom_options = HashMap<StringName, Variant>(), const String &p_custom_importer = String(), Variant *generator_parameters = nullptr, bool p_update_file_system = true);
 	Error _reimport_group(const String &p_group_file, const Vector<String> &p_files);
+
+	// Detection-time source md5 cache, keyed by absolute path, filled by _test_for_reimport()
+	// during scan-action processing and consumed by _reimport_file() to avoid re-reading the
+	// whole source file just to recompute the same hash. Read-only once a reimport batch
+	// starts (WorkerThreadPool threads run _reimport_file concurrently); cleared as a whole,
+	// on the main thread, at the end of reimport_files() — never erased entry-by-entry from
+	// _reimport_file().
+	HashMap<String, String> reimport_source_md5_cache;
 
 	bool _test_for_reimport(const String &p_path, const String &p_expected_import_md5);
 	bool _is_test_for_reimport_needed(const String &p_path, uint64_t p_last_modification_time, uint64_t p_modification_time, uint64_t p_last_import_modification_time, uint64_t p_import_modification_time, const Vector<String> &p_import_dest_paths);

@@ -36,6 +36,7 @@
 #include "core/os/os.h"
 #include "core/string/print_string.h"
 #include "drivers/windows/file_access_windows.h"
+#include "drivers/windows/windows_time.h"
 
 #include <windows.h>
 
@@ -109,6 +110,22 @@ String DirAccessWindows::get_next() {
 
 	_cisdir = (p->fu.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
 	_cishidden = (p->fu.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN);
+
+	// Capture the modified time the enumeration already returned for this entry, so
+	// callers that only need mtimes (e.g. EditorFileSystem scans) can skip a redundant
+	// CreateFileW/GetFileTime/CloseHandle stat per file. Reparse points are excluded:
+	// CreateFileW follows the link when stat'ing, but find-data reports the link itself,
+	// so the two could disagree; forcing a fallback (0) keeps behavior identical to today.
+	// Note: on NTFS, the enumeration timestamp for a file with an open write handle may
+	// lag until the handle is closed/flushed. A missed change is caught on the next scan,
+	// the same TOCTOU tolerance the existing stat-based code already has.
+	if (p->fu.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+		_cmodtime = 0;
+	} else if (p->fu.ftLastWriteTime.dwHighDateTime == 0 && p->fu.ftLastWriteTime.dwLowDateTime == 0) {
+		_cmodtime = windows_filetime_to_unix_time(p->fu.ftCreationTime);
+	} else {
+		_cmodtime = windows_filetime_to_unix_time(p->fu.ftLastWriteTime);
+	}
 
 	String name = String::utf16((const char16_t *)(p->fu.cFileName));
 

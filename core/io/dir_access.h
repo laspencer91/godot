@@ -89,6 +89,15 @@ public:
 
 	virtual void list_dir_end() = 0; ///<
 
+	// Internal use only (not bound to the scripting API, like current_is_hidden above it
+	// is queried by engine code that iterates via get_next()). Lets callers that only need
+	// file metadata (e.g. EditorFileSystem scans) skip a redundant stat call when the
+	// platform's directory enumeration already carries it.
+	virtual bool supports_entry_metadata() const { return false; }
+	// Valid for the entry most recently returned by get_next(). 0 means unknown/unsupported;
+	// callers must fall back to FileAccess::get_modified_time() in that case.
+	virtual uint64_t get_current_modified_time() const { return 0; }
+
 	virtual int get_drive_count() = 0;
 	virtual String get_drive(int p_drive) = 0;
 	virtual String get_drive_label(int p_drive) { return String(); }

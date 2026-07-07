@@ -742,6 +742,10 @@ bool EditorFileSystem::_test_for_reimport(const String &p_path, const String &p_
 	}
 
 	String md5 = FileAccess::get_md5(p_path);
+	// Cache the detection-time source md5 so _reimport_file() doesn't need to re-read the whole
+	// source file to recompute the same hash if this file ends up being reimported. Stored
+	// regardless of whether it matched, since only mismatching files reach _reimport_file anyway.
+	reimport_source_md5_cache[p_path] = md5;
 	if (md5 != source_md5) {
 		return true;
 	}
@@ -1164,11 +1168,30 @@ int EditorFileSystem::_scan_new_dir(ScannedDirectory *p_dir, Ref<DirAccess> &da)
 
 	String cd = da->get_current_dir();
 
+	// On platforms whose DirAccess exposes it (currently Windows), directory enumeration
+	// already returns each entry's modified time, so we capture it here for free instead of
+	// having EditorFileSystem::_process_file_system()/_scan_fs_changes() issue a redundant
+	// stat per file later. p_dir->file_modified_times is populated directly (keyed lowercase,
+	// since Windows paths are case-insensitive); subdirectory times are collected into a local
+	// map here and copied into each child ScannedDirectory below, since get_current_modified_time()
+	// is only valid for the most-recently-returned entry and directories are recursed into later.
+	const bool supports_metadata = da->supports_entry_metadata();
+	HashMap<String, uint64_t> dir_modified_times;
+
 	da->list_dir_begin();
 	while (true) {
 		String f = da->get_next();
 		if (f.is_empty()) {
 			break;
+		}
+
+		if (supports_metadata) {
+			uint64_t entry_mtime = da->get_current_modified_time();
+			if (da->current_is_dir()) {
+				dir_modified_times[f.to_lower()] = entry_mtime;
+			} else {
+				p_dir->file_modified_times[f.to_lower()] = entry_mtime;
+			}
 		}
 
 		if (da->current_is_hidden()) {
@@ -1208,6 +1231,12 @@ int EditorFileSystem::_scan_new_dir(ScannedDirectory *p_dir, Ref<DirAccess> &da)
 				ScannedDirectory *sd = memnew(ScannedDirectory);
 				sd->name = dir;
 				sd->full_path = p_dir->full_path.path_join(sd->name);
+				if (supports_metadata) {
+					const uint64_t *mt = dir_modified_times.getptr(dir.to_lower());
+					if (mt) {
+						sd->modified_time = *mt;
+					}
+				}
 
 				nb_files_total_scan += _scan_new_dir(sd, da);
 
@@ -1227,7 +1256,7 @@ int EditorFileSystem::_scan_new_dir(ScannedDirectory *p_dir, Ref<DirAccess> &da)
 }
 
 void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, EditorFileSystemDirectory *p_dir, ScanProgress &p_progress, HashSet<String> *r_processed_files) {
-	p_dir->modified_time = FileAccess::get_modified_time(p_scan_dir->full_path);
+	p_dir->modified_time = p_scan_dir->modified_time ? p_scan_dir->modified_time : FileAccess::get_modified_time(p_scan_dir->full_path);
 
 	for (ScannedDirectory *scan_sub_dir : p_scan_dir->subdirs) {
 		EditorFileSystemDirectory *sub_dir = memnew(EditorFileSystemDirectory);
@@ -1255,11 +1284,24 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 		}
 
 		FileCache *fc = file_cache.getptr(path);
-		uint64_t mt = FileAccess::get_modified_time(path);
+
+		uint64_t mt = 0;
+		const uint64_t *cached_mt = p_scan_dir->file_modified_times.getptr(scan_file.to_lower());
+		if (cached_mt && *cached_mt) {
+			mt = *cached_mt;
+		} else {
+			mt = FileAccess::get_modified_time(path);
+		}
 
 		if (_can_import_file(scan_file)) {
 			//is imported
-			uint64_t import_mt = FileAccess::get_modified_time(path + ".import");
+			uint64_t import_mt = 0;
+			const uint64_t *cached_import_mt = p_scan_dir->file_modified_times.getptr((scan_file + ".import").to_lower());
+			if (cached_import_mt && *cached_import_mt) {
+				import_mt = *cached_import_mt;
+			} else {
+				import_mt = FileAccess::get_modified_time(path + ".import");
+			}
 
 			if (fc) {
 				fi->type = fc->type;
@@ -1436,6 +1478,13 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 	String cd = p_dir->get_path();
 	int diff_nb_files = 0;
 
+	// Lowercased name -> modified time, captured from a single directory enumeration pass
+	// (on platforms where DirAccess exposes it) instead of a stat per file below. A miss or
+	// a zero value always falls back to the existing FileAccess::get_modified_time() call,
+	// so behavior is never different from before this cache existed, only cheaper.
+	HashMap<String, uint64_t> file_mtimes;
+	bool have_file_mtimes = false;
+
 	if (current_mtime != p_dir->modified_time || using_fat32_or_exfat) {
 		updated_dir = true;
 		p_dir->modified_time = current_mtime;
@@ -1460,11 +1509,17 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 		Error ret = da->change_dir(cd);
 		ERR_FAIL_COND_MSG(ret != OK, "Cannot change to '" + cd + "' folder.");
 
+		have_file_mtimes = da->supports_entry_metadata();
+
 		da->list_dir_begin();
 		while (true) {
 			String f = da->get_next();
 			if (f.is_empty()) {
 				break;
+			}
+
+			if (have_file_mtimes) {
+				file_mtimes[f.to_lower()] = da->get_current_modified_time();
 			}
 
 			if (da->current_is_hidden()) {
@@ -1563,7 +1618,37 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 		}
 
 		da->list_dir_end();
+	} else if (p_dir->files.size() > 0) {
+		// The directory itself is unchanged, but we still need each file's (and its .import
+		// sidecar's) modified time below. Do one bulk enumeration pass up front instead of
+		// letting the loop below stat every file individually — one FindFirstFile sweep
+		// replacing up to 2N CreateFileW calls (N files, mt + import_mt each).
+		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
+		if (da->supports_entry_metadata() && da->change_dir(cd) == OK) {
+			have_file_mtimes = true;
+			da->list_dir_begin();
+			while (true) {
+				String f = da->get_next();
+				if (f.is_empty()) {
+					break;
+				}
+				file_mtimes[f.to_lower()] = da->get_current_modified_time();
+			}
+			da->list_dir_end();
+		}
 	}
+
+	// Looks up a cached modified time captured during the enumeration pass(es) above; falls
+	// back to the existing stat call on a miss or a zero (unknown) value.
+	auto get_mtime_cached = [&](const String &p_name, const String &p_full_path) -> uint64_t {
+		if (have_file_mtimes) {
+			const uint64_t *cached = file_mtimes.getptr(p_name.to_lower());
+			if (cached && *cached) {
+				return *cached;
+			}
+		}
+		return FileAccess::get_modified_time(p_full_path);
+	};
 
 	for (int i = 0; i < p_dir->files.size(); i++) {
 		if (updated_dir && !p_dir->files[i]->verified) {
@@ -1584,8 +1669,8 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 			// Same logic as in _process_file_system, the last modifications dates
 			// needs to be trusted to prevent reading all the .import files and the md5
 			// each time the user switch back to Godot.
-			uint64_t mt = FileAccess::get_modified_time(path);
-			uint64_t import_mt = FileAccess::get_modified_time(path + ".import");
+			uint64_t mt = get_mtime_cached(p_dir->files[i]->file, path);
+			uint64_t import_mt = get_mtime_cached(p_dir->files[i]->file + ".import", path + ".import");
 			if (_is_test_for_reimport_needed(path, p_dir->files[i]->modified_time, mt, p_dir->files[i]->import_modified_time, import_mt, p_dir->files[i]->import_dest_paths)) {
 				ItemAction ia;
 				ia.action = ItemAction::ACTION_FILE_TEST_REIMPORT;
@@ -1594,7 +1679,7 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 				scan_actions.push_back(ia);
 			}
 		} else {
-			uint64_t mt = FileAccess::get_modified_time(path);
+			uint64_t mt = get_mtime_cached(p_dir->files[i]->file, path);
 
 			if (mt != p_dir->files[i]->modified_time) {
 				p_dir->files[i]->modified_time = mt; //save new time, but test for reload
@@ -2934,25 +3019,29 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 	// As import is complete, save the .import file.
 
 	Vector<String> dest_paths;
+	// Build the .import content in memory first instead of writing line-by-line: this lets us
+	// write it with a single store_string() call, and compute its md5 below from the String
+	// directly instead of re-opening and re-reading the file back from disk. Each `content +=
+	// X + "\n"` mirrors the corresponding `f->store_line(X)` exactly (store_line appends exactly
+	// one "\n" byte, and FileAccess does no newline translation), so the bytes written are
+	// byte-identical to before.
+	String import_file_content;
 	{
-		Ref<FileAccess> f = FileAccess::open(p_file + ".import", FileAccess::WRITE);
-		ERR_FAIL_COND_V_MSG(f.is_null(), ERR_FILE_CANT_OPEN, "Cannot open file from path '" + p_file + ".import'.");
-
 		// Write manually, as order matters ([remap] has to go first for performance).
-		f->store_line("[remap]");
-		f->store_line("");
-		f->store_line("importer=\"" + importer->get_importer_name() + "\"");
+		import_file_content += "[remap]\n";
+		import_file_content += "\n";
+		import_file_content += "importer=\"" + importer->get_importer_name() + "\"\n";
 		int version = importer->get_format_version();
 		if (version > 0) {
-			f->store_line("importer_version=" + itos(version));
+			import_file_content += "importer_version=" + itos(version) + "\n";
 		}
 		if (!importer->get_resource_type().is_empty()) {
-			f->store_line("type=\"" + importer->get_resource_type() + "\"");
+			import_file_content += "type=\"" + importer->get_resource_type() + "\"\n";
 		}
 
-		f->store_line("uid=\"" + ResourceUID::get_singleton()->id_to_text(uid) + "\""); // Store in readable format.
+		import_file_content += "uid=\"" + ResourceUID::get_singleton()->id_to_text(uid) + "\"\n"; // Store in readable format.
 		if (!group_file.is_empty()) {
-			f->store_line("group_file=\"" + group_file + "\"");
+			import_file_content += "group_file=\"" + group_file + "\"\n";
 		}
 
 		if (err == OK) {
@@ -2963,30 +3052,30 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 				for (const String &E : import_variants) {
 					String path = base_path.c_escape() + "." + E + "." + importer->get_save_extension();
 
-					f->store_line("path." + E + "=\"" + path + "\"");
+					import_file_content += "path." + E + "=\"" + path + "\"\n";
 					dest_paths.push_back(path);
 				}
 			} else {
 				String path = base_path + "." + importer->get_save_extension();
-				f->store_line("path=\"" + path + "\"");
+				import_file_content += "path=\"" + path + "\"\n";
 				dest_paths.push_back(path);
 			}
 
 		} else {
-			f->store_line("valid=false");
+			import_file_content += "valid=false\n";
 		}
 
 		if (meta != Variant()) {
-			f->store_line("metadata=" + meta.get_construct_string());
+			import_file_content += "metadata=" + meta.get_construct_string() + "\n";
 		}
 
 		if (generator_parameters != Variant()) {
-			f->store_line("generator_parameters=" + generator_parameters.get_construct_string());
+			import_file_content += "generator_parameters=" + generator_parameters.get_construct_string() + "\n";
 		}
 
-		f->store_line("");
+		import_file_content += "\n";
 
-		f->store_line("[deps]\n");
+		import_file_content += "[deps]\n\n";
 
 		if (gen_files.size()) {
 			Array genf;
@@ -2997,23 +3086,23 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 
 			String value;
 			VariantWriter::write_to_string(genf, value);
-			f->store_line("files=" + value);
-			f->store_line("");
+			import_file_content += "files=" + value + "\n";
+			import_file_content += "\n";
 		}
 
-		f->store_line("source_file=" + Variant(p_file).get_construct_string());
+		import_file_content += "source_file=" + Variant(p_file).get_construct_string() + "\n";
 
 		if (dest_paths.size()) {
 			Array dp;
 			for (int i = 0; i < dest_paths.size(); i++) {
 				dp.push_back(dest_paths[i]);
 			}
-			f->store_line("dest_files=" + Variant(dp).get_construct_string());
+			import_file_content += "dest_files=" + Variant(dp).get_construct_string() + "\n";
 		}
-		f->store_line("");
+		import_file_content += "\n";
 
-		f->store_line("[params]");
-		f->store_line("");
+		import_file_content += "[params]\n";
+		import_file_content += "\n";
 
 		// Store options in provided order, to avoid file changing. Order is also important because first match is accepted first.
 
@@ -3021,16 +3110,35 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 			String base = E.option.name;
 			String value;
 			VariantWriter::write_to_string(params[base], value);
-			f->store_line(base + "=" + value);
+			import_file_content += base + "=" + value + "\n";
 		}
+
+		Ref<FileAccess> f = FileAccess::open(p_file + ".import", FileAccess::WRITE);
+		ERR_FAIL_COND_V_MSG(f.is_null(), ERR_FILE_CANT_OPEN, "Cannot open file from path '" + p_file + ".import'.");
+		f->store_string(import_file_content);
 	}
+
+	// The .import file was just written from import_file_content above, so its md5 can be
+	// computed directly from the String instead of reading the file back from disk.
+	const String import_md5 = import_file_content.md5_text();
 
 	// Store the md5's of the various files. These are stored separately so that the .import files can be version controlled.
 	{
 		Ref<FileAccess> md5s = FileAccess::open(base_path + ".md5", FileAccess::WRITE);
 		ERR_FAIL_COND_V_MSG(md5s.is_null(), ERR_FILE_CANT_OPEN, "Cannot open MD5 file '" + base_path + ".md5'.");
 
-		md5s->store_line("source_md5=\"" + FileAccess::get_md5(p_file) + "\"");
+		// Reuse the source file's md5 computed at detection time (_test_for_reimport), if
+		// available, instead of re-reading the whole source file here. A cache miss (e.g. a
+		// first import, or a manual reimport that skipped detection) falls back to reading it.
+		String source_md5;
+		const String *cached_source_md5 = reimport_source_md5_cache.getptr(p_file);
+		if (cached_source_md5) {
+			source_md5 = *cached_source_md5;
+		} else {
+			source_md5 = FileAccess::get_md5(p_file);
+		}
+
+		md5s->store_line("source_md5=\"" + source_md5 + "\"");
 		if (dest_paths.size()) {
 			md5s->store_line("dest_md5=\"" + FileAccess::get_multiple_md5(dest_paths) + "\"\n");
 		}
@@ -3043,7 +3151,7 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 		// Update modified times, to avoid reimport.
 		fs->files[cpos]->modified_time = FileAccess::get_modified_time(p_file);
 		fs->files[cpos]->import_modified_time = FileAccess::get_modified_time(p_file + ".import");
-		fs->files[cpos]->import_md5 = FileAccess::get_md5(p_file + ".import");
+		fs->files[cpos]->import_md5 = import_md5;
 		fs->files[cpos]->import_dest_paths = dest_paths;
 		fs->files[cpos]->deps = _get_dependencies(p_file);
 		fs->files[cpos]->type = importer->get_resource_type();
@@ -3411,6 +3519,12 @@ void EditorFileSystem::reimport_files(const Vector<String> &p_files) {
 
 	ResourceUID::get_singleton()->update_cache(); // After reimporting, update the cache.
 	_save_filesystem_cache();
+
+	// All _reimport_file() calls for this batch (including from WorkerThreadPool threads above)
+	// have completed by this point, so it's safe on the main thread to drop the whole
+	// detection-time source md5 cache at once. Entries are never erased individually from
+	// _reimport_file() itself, since that runs concurrently during threaded batches.
+	reimport_source_md5_cache.clear();
 
 	memdelete_notnull(ep);
 

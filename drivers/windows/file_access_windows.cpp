@@ -35,6 +35,7 @@
 #include "core/config/project_settings.h"
 #include "core/os/os.h"
 #include "core/string/print_string.h"
+#include "drivers/windows/windows_time.h"
 
 #include <io.h>
 #include <share.h> // _SH_DENYNO
@@ -429,24 +430,11 @@ uint64_t FileAccessWindows::_get_modified_time(const String &p_file) {
 		CloseHandle(handle);
 
 		if (status) {
-			uint64_t ret = 0;
-
 			// If write time is invalid, fallback to creation time.
 			if (ft_write.dwHighDateTime == 0 && ft_write.dwLowDateTime == 0) {
-				ret = ft_create.dwHighDateTime;
-				ret <<= 32;
-				ret |= ft_create.dwLowDateTime;
+				return windows_filetime_to_unix_time(ft_create);
 			} else {
-				ret = ft_write.dwHighDateTime;
-				ret <<= 32;
-				ret |= ft_write.dwLowDateTime;
-			}
-
-			const uint64_t WINDOWS_TICKS_PER_SECOND = 10000000;
-			const uint64_t TICKS_TO_UNIX_EPOCH = 116444736000000000LL;
-
-			if (ret >= TICKS_TO_UNIX_EPOCH) {
-				return (ret - TICKS_TO_UNIX_EPOCH) / WINDOWS_TICKS_PER_SECOND;
+				return windows_filetime_to_unix_time(ft_write);
 			}
 		}
 	}

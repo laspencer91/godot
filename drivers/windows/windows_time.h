@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  dir_access_windows.h                                                  */
+/*  windows_time.h                                                       */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -32,73 +32,26 @@
 
 #ifdef WINDOWS_ENABLED
 
-#include "core/io/dir_access.h"
+#include <windows.h>
 
-struct DirAccessWindowsPrivate;
+// Shared FILETIME -> Unix epoch (seconds) conversion, used by both
+// FileAccessWindows::_get_modified_time (a CreateFileW + GetFileTime stat)
+// and DirAccessWindows (which already has the FILETIME from directory
+// enumeration and would otherwise need a redundant stat call). Both call
+// sites MUST produce identical results for the same file, since cached
+// modified-time values (e.g. in the editor's filesystem cache) are compared
+// across whichever code path produced them.
+static inline uint64_t windows_filetime_to_unix_time(const FILETIME &p_ft) {
+	uint64_t ticks = (uint64_t)p_ft.dwHighDateTime << 32 | p_ft.dwLowDateTime;
 
-class DirAccessWindows : public DirAccess {
-	GDSOFTCLASS(DirAccessWindows, DirAccess);
-	enum {
-		MAX_DRIVES = 26
-	};
+	const uint64_t WINDOWS_TICKS_PER_SECOND = 10000000;
+	const uint64_t TICKS_TO_UNIX_EPOCH = 116444736000000000LL;
 
-	DirAccessWindowsPrivate *p = nullptr;
-	/* Windows stuff */
+	if (ticks >= TICKS_TO_UNIX_EPOCH) {
+		return (ticks - TICKS_TO_UNIX_EPOCH) / WINDOWS_TICKS_PER_SECOND;
+	}
 
-	struct DriveInfo {
-		String path;
-		String label;
-	};
-
-	LocalVector<DriveInfo> drives;
-	void _update_drives();
-
-	String current_dir;
-
-	bool _cisdir = false;
-	bool _cishidden = false;
-	uint64_t _cmodtime = 0;
-
-protected:
-	virtual String fix_path(const String &p_path) const override;
-
-public:
-	virtual Error list_dir_begin() override; ///< This starts dir listing
-	virtual String get_next() override;
-	virtual bool current_is_dir() const override;
-	virtual bool current_is_hidden() const override;
-	virtual void list_dir_end() override; ///<
-
-	virtual bool supports_entry_metadata() const override { return true; }
-	virtual uint64_t get_current_modified_time() const override { return _cmodtime; }
-
-	virtual int get_drive_count() override;
-	virtual String get_drive(int p_drive) override;
-	virtual String get_drive_label(int p_drive) override;
-
-	virtual Error change_dir(String p_dir) override; ///< can be relative or absolute, return false on success
-	virtual String get_current_dir(bool p_include_drive = true) const override; ///< return current dir location
-
-	virtual bool file_exists(String p_file) override;
-	virtual bool dir_exists(String p_dir) override;
-
-	virtual Error make_dir(String p_dir) override;
-
-	virtual Error rename(String p_path, String p_new_path) override;
-	virtual Error remove(String p_path) override;
-
-	virtual bool is_link(String p_file) override;
-	virtual String read_link(String p_file) override;
-	virtual Error create_link(String p_source, String p_target) override;
-
-	uint64_t get_space_left() override;
-
-	virtual String get_filesystem_type() const override;
-	virtual bool is_case_sensitive(const String &p_path) const override;
-	virtual bool is_equivalent(const String &p_path_a, const String &p_path_b) const override;
-
-	DirAccessWindows();
-	~DirAccessWindows();
-};
+	return 0;
+}
 
 #endif // WINDOWS_ENABLED
