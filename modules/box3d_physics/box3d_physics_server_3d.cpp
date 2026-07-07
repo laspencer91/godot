@@ -6,6 +6,17 @@
 
 #include "box3d_direct_space_state_3d.h"
 
+Box3DPhysicsServer3D::Box3DPhysicsServer3D(bool p_using_threads) :
+		using_threads(p_using_threads) {
+	singleton = this;
+}
+
+Box3DPhysicsServer3D::~Box3DPhysicsServer3D() {
+	if (singleton == this) {
+		singleton = nullptr;
+	}
+}
+
 // --- Shapes ---
 
 RID Box3DPhysicsServer3D::_create_shape(ShapeType p_type) {

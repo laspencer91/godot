@@ -4,10 +4,12 @@
 
 #include "register_types.h"
 
+#include "box3d_character_mover.h"
 #include "box3d_physics_server_3d.h"
 
 #include "core/config/project_settings.h"
 #include "core/object/callable_mp.h"
+#include "core/object/class_db.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
 static PhysicsServer3D *create_box3d_physics_server() {
@@ -24,6 +26,7 @@ void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		return;
 	}
+	GDREGISTER_CLASS(Box3DCharacterMover);
 	PhysicsServer3DManager::get_singleton()->register_server("Box3D", callable_mp_static(&create_box3d_physics_server));
 }
 

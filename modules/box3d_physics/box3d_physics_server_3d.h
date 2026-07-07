@@ -31,6 +31,8 @@ public:
 class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	GDCLASS(Box3DPhysicsServer3D, PhysicsServer3DDummy);
 
+	inline static Box3DPhysicsServer3D *singleton = nullptr;
+
 	mutable RID_PtrOwner<Box3DSpace3D> space_owner;
 	mutable RID_PtrOwner<Box3DArea3D> area_owner;
 	mutable RID_PtrOwner<Box3DBody3D> body_owner;
@@ -46,8 +48,12 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	RID _create_shape(ShapeType p_type);
 
 public:
-	explicit Box3DPhysicsServer3D(bool p_using_threads = false) :
-			using_threads(p_using_threads) {}
+	explicit Box3DPhysicsServer3D(bool p_using_threads = false);
+	~Box3DPhysicsServer3D();
+
+	static Box3DPhysicsServer3D *get_singleton() { return singleton; }
+	Box3DSpace3D *get_space(RID p_rid) const { return space_owner.get_or_null(p_rid); }
+	bool can_access_space(Box3DSpace3D *p_space) const { return p_space != nullptr && !(using_threads && !doing_sync) && !p_space->is_stepping(); }
 
 	// Shapes.
 	virtual RID world_boundary_shape_create() override { return _create_shape(SHAPE_WORLD_BOUNDARY); }
