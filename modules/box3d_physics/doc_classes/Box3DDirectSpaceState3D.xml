@@ -5,6 +5,7 @@
 	</brief_description>
 	<description>
 		[Box3DDirectSpaceState3D] is returned by [World3D.direct_space_state] when the Box3D physics server is active. It supports the stock [PhysicsDirectSpaceState3D] query API plus Box3D-specific material query helpers.
+		For mesh hits, [code]face_index[/code] is Box3D's built mesh triangle index after BVH sorting. It is valid for [method Box3DPhysics.get_face_material], but must not be used to index authored triangle arrays directly.
 	</description>
 	<tutorials>
 	</tutorials>

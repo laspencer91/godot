@@ -226,13 +226,17 @@ void Box3DShape3D::set_surface_map(const PackedInt64Array &p_material_ids, const
 }
 
 int Box3DShape3D::get_face_material_id(int p_face_index) const {
-	if (p_face_index < 0 || p_face_index >= mesh_triangle_material_indices.size()) {
+	if (mesh == nullptr) {
 		return has_surface_material ? surface_material_id : 0;
 	}
-	if (mesh_material_ids.is_empty()) {
+	if (p_face_index < 0 || p_face_index >= mesh->triangleCount || mesh_material_ids.is_empty()) {
 		return has_surface_material ? surface_material_id : 0;
 	}
-	const int material_index = CLAMP((int)mesh_triangle_material_indices[p_face_index], 0, mesh_material_ids.size() - 1);
+	const uint8_t *built_indices = b3GetMeshMaterialIndices(mesh);
+	if (built_indices == nullptr) {
+		return has_surface_material ? surface_material_id : 0;
+	}
+	const int material_index = CLAMP((int)built_indices[p_face_index], 0, mesh_material_ids.size() - 1);
 	return MAX(0, (int)mesh_material_ids[material_index]);
 }
 
