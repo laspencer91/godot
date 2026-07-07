@@ -4607,7 +4607,15 @@ void EditorNode::_ensure_active_scene_tab() {
 	EditorMainScreen *main_screen = get_editor_main_screen();
 	EditorDocument *active_doc = editor_data.get_active_document();
 	if (main_screen && active_doc && active_doc->opens_as_workspace_tab()) {
-		main_screen->reveal(active_doc, DocumentViewKind::DEFAULT, false);
+		// G2 M7.2b: the FIRST time this runs (deferred, after the boot scene-restore settles — a safe
+		// point, unlike the tree-setup crash at READY), focus the scene's pane so the editor opens ON a
+		// scene instead of the blank legacy main screen. Every later call is a background open.
+		bool grab_focus = false;
+		if (boot_scene_focus_pending) {
+			boot_scene_focus_pending = false;
+			grab_focus = true;
+		}
+		main_screen->reveal(active_doc, DocumentViewKind::DEFAULT, grab_focus);
 	}
 }
 

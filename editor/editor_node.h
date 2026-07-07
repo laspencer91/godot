@@ -595,6 +595,8 @@ private:
 	// G2 M7.1: ensure the active scene has a (background) pane tab. Deferred from the scene switch to
 	// avoid reentrancy; no-arg so call_deferred needs no enum/Variant marshalling.
 	void _ensure_active_scene_tab();
+	// G2 M7.2b: one-shot — the first _ensure_active_scene_tab focuses the scene's pane (boot-to-scene).
+	bool boot_scene_focus_pending = true;
 	void _nav_to_selected_scene();
 	bool _validate_scene_recursive(const String &p_filename, Node *p_node);
 	void _save_scene(String p_file, int idx = -1);
