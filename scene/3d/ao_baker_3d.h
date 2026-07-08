@@ -34,6 +34,7 @@
 
 class Mesh;
 class Material;
+class MeshInstance3D;
 
 // Tools node that bakes a contextual ambient-occlusion mask (sampled on UV2) for weathering shaders.
 // It drives the shared GPU lightmapper (LightmapperRD::bake_ao) -- a second, lightweight front-end to
@@ -80,6 +81,9 @@ private:
 	// than shared, to avoid a merge-conflict surface in upstream lightmap_gi.cpp.
 	void _find_meshes(Node *p_at_node, Vector<MeshFound> &r_meshes);
 
+	// Editor helper walk (see get_bake_candidates).
+	void _collect_candidates(Node *p_at_node, Vector<MeshInstance3D *> &r_ready, Vector<MeshInstance3D *> &r_missing_uv2) const;
+
 protected:
 	static void _bind_methods();
 
@@ -109,6 +113,12 @@ public:
 	// Whole-level AO bake (synchronous). Gathers static meshes under this node's parent, bakes the AO
 	// atlas via LightmapperRD::bake_ao, crops per-mesh textures and stores them in ao_masks.
 	BakeError bake();
+
+	// Editor-only helper for the pre-bake dialog: walks the same scope bake() uses and splits the
+	// visible GI-static MeshInstance3Ds into those already carrying UV2 (r_ready, baked as-is) and
+	// those missing it (r_missing_uv2, candidates for auto-unwrap). Unbound; the plugin classifies
+	// the missing ones as fixable vs blocked.
+	void get_bake_candidates(Vector<MeshInstance3D *> &r_ready, Vector<MeshInstance3D *> &r_missing_uv2) const;
 
 	AOBaker3D();
 };

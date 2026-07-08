@@ -30,18 +30,197 @@
 
 #include "ao_baker_3d_editor_plugin.h"
 
-#include "core/object/class_db.h"
+#include "core/io/file_access.h"
+#include "core/io/resource_loader.h"
+#include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/editor_undo_redo_manager.h"
 #include "scene/3d/ao_baker_3d.h"
+#include "scene/3d/mesh_instance_3d.h"
 #include "scene/gui/button.h"
+#include "scene/gui/dialogs.h"
+#include "scene/resources/3d/primitive_meshes.h"
+#include "scene/resources/mesh.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
 #include "modules/modules_enabled.gen.h" // For lightmapper_rd.
 
+bool AOBaker3DEditorPlugin::_can_unwrap_in_place(const Ref<Mesh> &p_mesh, String &r_reason) const {
+	if (p_mesh.is_null()) {
+		r_reason = TTR("no mesh");
+		return false;
+	}
+
+	// Primitive meshes gain UV2 simply by flipping their add_uv2 flag.
+	Ref<PrimitiveMesh> primitive_mesh = p_mesh;
+	if (primitive_mesh.is_valid()) {
+		return true;
+	}
+
+	Ref<ArrayMesh> array_mesh = p_mesh;
+	if (array_mesh.is_null()) {
+		r_reason = TTR("not an ArrayMesh");
+		return false;
+	}
+
+	// Imported / shared meshes must be made local before we can rewrite their UVs (same rule the
+	// Mesh menu's "Unwrap UV2" enforces).
+	const String path = array_mesh->get_path();
+	const int srpos = path.find("::");
+	if (srpos != -1) {
+		const String base = path.substr(0, srpos);
+		if (ResourceLoader::get_resource_type(base) == "PackedScene") {
+			Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
+			if (!edited_scene || edited_scene->get_scene_file_path() != base) {
+				r_reason = TTR("make unique -- belongs to another scene");
+				return false;
+			}
+		} else if (FileAccess::exists(path + ".import")) {
+			r_reason = TTR("make unique -- imported");
+			return false;
+		}
+	} else if (FileAccess::exists(path + ".import")) {
+		r_reason = TTR("make unique -- imported");
+		return false;
+	}
+
+	if (array_mesh->get_blend_shape_count() > 0) {
+		r_reason = TTR("has blend shapes");
+		return false;
+	}
+	for (int i = 0; i < array_mesh->get_surface_count(); i++) {
+		if (array_mesh->surface_get_primitive_type(i) != Mesh::PRIMITIVE_TRIANGLES) {
+			r_reason = TTR("has non-triangle surfaces");
+			return false;
+		}
+		if (!(array_mesh->surface_get_format(i) & Mesh::ARRAY_FORMAT_NORMAL)) {
+			r_reason = TTR("missing normals");
+			return false;
+		}
+	}
+	return true;
+}
+
+Error AOBaker3DEditorPlugin::_unwrap_mesh_instance(MeshInstance3D *p_mi, EditorUndoRedoManager *p_ur, String &r_error) {
+	Ref<Mesh> mesh = p_mi->get_mesh();
+
+	Ref<PrimitiveMesh> primitive_mesh = mesh;
+	if (primitive_mesh.is_valid()) {
+		p_ur->add_do_method(*primitive_mesh, "set_add_uv2", true);
+		p_ur->add_undo_method(*primitive_mesh, "set_add_uv2", primitive_mesh->get_add_uv2());
+		return OK;
+	}
+
+	Ref<ArrayMesh> array_mesh = mesh;
+	if (array_mesh.is_null()) {
+		r_error = TTR("not an ArrayMesh");
+		return ERR_INVALID_DATA;
+	}
+
+	Ref<ArrayMesh> unwrapped_mesh = array_mesh->duplicate(false);
+	const Error err = unwrapped_mesh->lightmap_unwrap(p_mi->get_global_transform());
+	if (err != OK) {
+		r_error = TTR("unwrap failed (mesh may not be manifold)");
+		return err;
+	}
+
+	p_ur->add_do_method(p_mi, "set_mesh", unwrapped_mesh);
+	p_ur->add_do_reference(unwrapped_mesh.ptr());
+	p_ur->add_undo_method(p_mi, "set_mesh", array_mesh);
+	return OK;
+}
+
 void AOBaker3DEditorPlugin::_bake() {
+	if (!baker) {
+		return;
+	}
+
+	Vector<MeshInstance3D *> ready;
+	Vector<MeshInstance3D *> missing_uv2;
+	baker->get_bake_candidates(ready, missing_uv2);
+
+	// The common path: everything is already unwrapped, so bake straight away.
+	if (missing_uv2.is_empty()) {
+		_do_bake();
+		return;
+	}
+
+	// Split the missing meshes into those we can auto-unwrap and those the user must fix by hand.
+	int fixable = 0;
+	Vector<String> blocked;
+	for (int i = 0; i < missing_uv2.size(); i++) {
+		String reason;
+		if (_can_unwrap_in_place(missing_uv2[i]->get_mesh(), reason)) {
+			fixable++;
+		} else {
+			blocked.push_back(vformat("    - %s (%s)", missing_uv2[i]->get_name(), reason));
+		}
+	}
+
+	String msg = vformat(TTR("%d mesh(es) already have UV2 and are ready to bake."), ready.size());
+	if (fixable > 0) {
+		msg += "\n" + vformat(TTR("%d mesh(es) are missing UV2 and will be unwrapped first (this can be undone)."), fixable);
+	}
+	if (!blocked.is_empty()) {
+		msg += "\n\n" + TTR("These meshes can't be unwrapped automatically -- make them local (Make Unique) first:") + "\n" + String("\n").join(blocked);
+	}
+
+	// Nothing bakeable and nothing we can fix: just report and stop.
+	if (fixable == 0 && ready.is_empty()) {
+		EditorNode::get_singleton()->show_warning(msg);
+		return;
+	}
+
+	uv2_prompt->set_text(msg);
+	uv2_prompt->get_ok_button()->set_disabled(fixable == 0);
+	bake_ready_button->set_disabled(ready.is_empty());
+	uv2_prompt->reset_size();
+	uv2_prompt->popup_centered();
+}
+
+void AOBaker3DEditorPlugin::_prompt_custom_action(const String &p_action) {
+	if (p_action == "bake_ready") {
+		uv2_prompt->hide();
+		_do_bake();
+	}
+}
+
+void AOBaker3DEditorPlugin::_unwrap_and_bake() {
+	if (!baker) {
+		return;
+	}
+
+	Vector<MeshInstance3D *> ready;
+	Vector<MeshInstance3D *> missing_uv2;
+	baker->get_bake_candidates(ready, missing_uv2);
+
+	EditorUndoRedoManager *ur = EditorUndoRedoManager::get_singleton();
+	ur->create_action(TTR("Unwrap UV2 for AO"));
+	Vector<String> failures;
+	for (int i = 0; i < missing_uv2.size(); i++) {
+		String reason;
+		if (!_can_unwrap_in_place(missing_uv2[i]->get_mesh(), reason)) {
+			continue; // Blocked mesh -- already reported in the prompt; leave it out of the bake.
+		}
+		String err;
+		if (_unwrap_mesh_instance(missing_uv2[i], ur, err) != OK) {
+			failures.push_back(vformat("    - %s (%s)", missing_uv2[i]->get_name(), err));
+		}
+	}
+	// Applies the queued set_mesh / set_add_uv2 calls synchronously, so the bake below sees the UV2.
+	ur->commit_action();
+
+	if (!failures.is_empty()) {
+		EditorNode::get_singleton()->show_warning(TTR("Some meshes could not be unwrapped and were skipped:") + "\n" + String("\n").join(failures));
+	}
+
+	_do_bake();
+}
+
+void AOBaker3DEditorPlugin::_do_bake() {
 	if (!baker) {
 		return;
 	}
@@ -86,10 +265,17 @@ void AOBaker3DEditorPlugin::make_visible(bool p_visible) {
 }
 
 void AOBaker3DEditorPlugin::_bind_methods() {
-	ClassDB::bind_method("_bake", &AOBaker3DEditorPlugin::_bake);
 }
 
 AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
+	uv2_prompt = memnew(ConfirmationDialog);
+	uv2_prompt->set_title(TTR("Bake AO"));
+	uv2_prompt->get_ok_button()->set_text(TTR("Unwrap & Bake"));
+	bake_ready_button = uv2_prompt->add_button(TTR("Bake Ready Only"), true, "bake_ready");
+	uv2_prompt->connect(SceneStringName(confirmed), callable_mp(this, &AOBaker3DEditorPlugin::_unwrap_and_bake));
+	uv2_prompt->connect("custom_action", callable_mp(this, &AOBaker3DEditorPlugin::_prompt_custom_action));
+	EditorNode::get_singleton()->get_gui_base()->add_child(uv2_prompt);
+
 	bake = memnew(Button);
 	bake->set_theme_type_variation(SceneStringName(FlatButton));
 	bake->set_button_icon(EditorNode::get_singleton()->get_editor_theme()->get_icon(SNAME("Bake"), EditorStringName(EditorIcons)));
@@ -106,6 +292,6 @@ AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
 #endif
 
 	bake->hide();
-	bake->connect(SceneStringName(pressed), Callable(this, "_bake"));
+	bake->connect(SceneStringName(pressed), callable_mp(this, &AOBaker3DEditorPlugin::_bake));
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake);
 }

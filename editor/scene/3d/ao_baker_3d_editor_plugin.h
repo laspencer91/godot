@@ -34,6 +34,10 @@
 
 class AOBaker3D;
 class Button;
+class ConfirmationDialog;
+class EditorUndoRedoManager;
+class Mesh;
+class MeshInstance3D;
 
 class AOBaker3DEditorPlugin : public EditorPlugin {
 	GDCLASS(AOBaker3DEditorPlugin, EditorPlugin);
@@ -41,7 +45,21 @@ class AOBaker3DEditorPlugin : public EditorPlugin {
 	AOBaker3D *baker = nullptr;
 	Button *bake = nullptr;
 
-	void _bake();
+	// Pre-bake prompt shown when some static meshes are missing UV2: offers to auto-unwrap the
+	// fixable ones before baking (OK button) or to bake only the ready meshes (custom button).
+	ConfirmationDialog *uv2_prompt = nullptr;
+	Button *bake_ready_button = nullptr;
+
+	void _bake(); // Entry point: classify meshes, then prompt or bake.
+	void _do_bake(); // Run the actual bake and report the result.
+	void _unwrap_and_bake(); // Prompt confirmed: batch-unwrap the fixable meshes (one undo step) then bake.
+	void _prompt_custom_action(const String &p_action); // "bake_ready" -> bake ready meshes only.
+
+	// True if p_mesh can be UV2-unwrapped in place; otherwise false with a short reason in r_reason.
+	// Mirrors the guards in the Mesh menu's "Unwrap UV2" (imported meshes need Make Unique first, etc.).
+	bool _can_unwrap_in_place(const Ref<Mesh> &p_mesh, String &r_reason) const;
+	// Queue the do/undo for unwrapping one mesh onto p_ur (does not commit). Returns OK or fills r_error.
+	Error _unwrap_mesh_instance(MeshInstance3D *p_mi, EditorUndoRedoManager *p_ur, String &r_error);
 
 protected:
 	static void _bind_methods();

@@ -39,36 +39,41 @@
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
 
+// Whether every triangle surface of p_mesh carries both UV2 and normals (and there is at least one
+// triangle surface). This is exactly the condition a mesh must meet to be baked. A mesh that has
+// triangle surfaces but fails here is a candidate for auto-unwrap; one with no triangle surfaces is
+// not bakeable at all.
+static bool _mesh_ready_for_bake(const Ref<Mesh> &p_mesh, bool *r_has_triangle_surface = nullptr) {
+	bool surfaces_found = false;
+	bool all_have_uv2_and_normal = true;
+	for (int i = 0; i < p_mesh->get_surface_count(); i++) {
+		if (p_mesh->surface_get_primitive_type(i) != Mesh::PRIMITIVE_TRIANGLES) {
+			continue;
+		}
+		surfaces_found = true;
+		const uint64_t format = p_mesh->surface_get_format(i);
+		if (!(format & Mesh::ARRAY_FORMAT_TEX_UV2) || !(format & Mesh::ARRAY_FORMAT_NORMAL)) {
+			all_have_uv2_and_normal = false;
+			break;
+		}
+	}
+	if (r_has_triangle_surface) {
+		*r_has_triangle_surface = surfaces_found;
+	}
+	return surfaces_found && all_have_uv2_and_normal;
+}
+
 void AOBaker3D::_find_meshes(Node *p_at_node, Vector<MeshFound> &r_meshes) {
 	MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_at_node);
 	if (mi && mi->get_gi_mode() == GeometryInstance3D::GI_MODE_STATIC && mi->is_visible_in_tree()) {
 		Ref<Mesh> mesh = mi->get_mesh();
-		if (mesh.is_valid()) {
-			bool all_have_uv2_and_normal = true;
-			bool surfaces_found = false;
-			for (int i = 0; i < mesh->get_surface_count(); i++) {
-				if (mesh->surface_get_primitive_type(i) != Mesh::PRIMITIVE_TRIANGLES) {
-					continue;
-				}
-				if (!(mesh->surface_get_format(i) & Mesh::ARRAY_FORMAT_TEX_UV2)) {
-					all_have_uv2_and_normal = false;
-					break;
-				}
-				if (!(mesh->surface_get_format(i) & Mesh::ARRAY_FORMAT_NORMAL)) {
-					all_have_uv2_and_normal = false;
-					break;
-				}
-				surfaces_found = true;
-			}
-
-			if (surfaces_found && all_have_uv2_and_normal) {
-				MeshFound mf;
-				mf.xform = get_global_transform().affine_inverse() * mi->get_global_transform();
-				mf.node_path = get_path_to(mi);
-				mf.mesh = mesh;
-				mf.lightmap_scale = mi->get_lightmap_texel_scale();
-				r_meshes.push_back(mf);
-			}
+		if (mesh.is_valid() && _mesh_ready_for_bake(mesh)) {
+			MeshFound mf;
+			mf.xform = get_global_transform().affine_inverse() * mi->get_global_transform();
+			mf.node_path = get_path_to(mi);
+			mf.mesh = mesh;
+			mf.lightmap_scale = mi->get_lightmap_texel_scale();
+			r_meshes.push_back(mf);
 		}
 	}
 
@@ -79,6 +84,34 @@ void AOBaker3D::_find_meshes(Node *p_at_node, Vector<MeshFound> &r_meshes) {
 		}
 		_find_meshes(child, r_meshes);
 	}
+}
+
+void AOBaker3D::_collect_candidates(Node *p_at_node, Vector<MeshInstance3D *> &r_ready, Vector<MeshInstance3D *> &r_missing_uv2) const {
+	MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_at_node);
+	if (mi && mi->get_gi_mode() == GeometryInstance3D::GI_MODE_STATIC && mi->is_visible_in_tree()) {
+		Ref<Mesh> mesh = mi->get_mesh();
+		if (mesh.is_valid()) {
+			bool has_triangle_surface = false;
+			if (_mesh_ready_for_bake(mesh, &has_triangle_surface)) {
+				r_ready.push_back(mi);
+			} else if (has_triangle_surface) {
+				// Has bakeable geometry but is missing UV2 (or normals) -- offer to unwrap it.
+				r_missing_uv2.push_back(mi);
+			}
+		}
+	}
+
+	for (int i = 0; i < p_at_node->get_child_count(); i++) {
+		Node *child = p_at_node->get_child(i);
+		if (!child->get_owner()) {
+			continue; // Helper node not part of the saved scene.
+		}
+		_collect_candidates(child, r_ready, r_missing_uv2);
+	}
+}
+
+void AOBaker3D::get_bake_candidates(Vector<MeshInstance3D *> &r_ready, Vector<MeshInstance3D *> &r_missing_uv2) const {
+	_collect_candidates(get_parent() ? get_parent() : (Node *)this, r_ready, r_missing_uv2);
 }
 
 AOBaker3D::BakeError AOBaker3D::bake() {
