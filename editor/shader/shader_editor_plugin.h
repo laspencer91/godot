@@ -48,6 +48,8 @@ class WindowWrapper;
 class ShaderEditorPlugin : public EditorPlugin {
 	GDCLASS(ShaderEditorPlugin, EditorPlugin);
 
+	static ShaderEditorPlugin *singleton;
+
 	struct EditedShader {
 		Ref<Shader> shader;
 		Ref<ShaderInclude> shader_inc;
@@ -130,10 +132,17 @@ protected:
 	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;
 
 public:
+	static ShaderEditorPlugin *get_singleton() { return singleton; }
+
 	virtual String get_plugin_name() const override { return "Shader"; }
 	virtual void edit(Object *p_object) override;
 	virtual bool handles(Object *p_object) const override;
 	virtual void make_visible(bool p_visible) override;
+
+	// G-Shader: mint + wire the editor widget for one shader resource (text -> code editor, visual ->
+	// node-graph editor, via the shader-language factory) and track it, without parenting it anywhere.
+	// The caller places it: the bottom dock today, a workspace tab's DocumentView after GS3.
+	ShaderEditor *create_editor_view(const Ref<Resource> &p_resource);
 
 	ShaderEditor *get_shader_editor(const Ref<Shader> &p_for_shader);
 

@@ -50,6 +50,8 @@
 #include "scene/gui/texture_rect.h"
 #include "servers/display/display_server.h"
 
+ShaderEditorPlugin *ShaderEditorPlugin::singleton = nullptr;
+
 Ref<Resource> ShaderEditorPlugin::_get_current_shader() {
 	int index = shader_tabs->get_current_tab();
 	ERR_FAIL_INDEX_V(index, shader_tabs->get_tab_count(), Ref<Resource>());
@@ -137,23 +139,14 @@ void ShaderEditorPlugin::_move_shader_tab(int p_from, int p_to) {
 	_update_shader_list();
 }
 
-void ShaderEditorPlugin::edit(Object *p_object) {
-	if (!p_object) {
-		return;
-	}
+ShaderEditor *ShaderEditorPlugin::create_editor_view(const Ref<Resource> &p_resource) {
+	// G-Shader: mint + wire the widget for one shader resource and track it in `edited_shaders`,
+	// WITHOUT parenting it. The caller decides placement (the bottom dock today; a workspace tab's
+	// DocumentView after GS3). The text-vs-visual choice is the shader-language factory's job.
+	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
 	EditedShader es;
-	// First, check for ShaderInclude.
-	ShaderInclude *shader_include = Object::cast_to<ShaderInclude>(p_object);
+	ShaderInclude *shader_include = Object::cast_to<ShaderInclude>(p_resource.ptr());
 	if (shader_include != nullptr) {
-		// Check if this shader include is already being edited.
-		for (uint32_t i = 0; i < edited_shaders.size(); i++) {
-			if (edited_shaders[i].shader_inc.ptr() == shader_include) {
-				shader_tabs->set_current_tab(i);
-				shader_list->select(i);
-				_switch_to_editor(edited_shaders[i].shader_editor, true);
-				return;
-			}
-		}
 		es.shader_inc = Ref<ShaderInclude>(shader_include);
 		for (Ref<EditorShaderLanguagePlugin> shader_lang : EditorShaderLanguagePlugin::get_shader_languages_read_only()) {
 			if (shader_lang->handles_shader_include(es.shader_inc)) {
@@ -162,19 +155,8 @@ void ShaderEditorPlugin::edit(Object *p_object) {
 			}
 		}
 	} else {
-		// If it's not a ShaderInclude, check for Shader.
-		Shader *shader = Object::cast_to<Shader>(p_object);
-		ERR_FAIL_NULL_MSG(shader, "ShaderEditorPlugin: Unable to edit object " + p_object->to_string() + " because it is not a Shader or ShaderInclude.");
-		// Check if this shader is already being edited.
-		for (uint32_t i = 0; i < edited_shaders.size(); i++) {
-			if (edited_shaders[i].shader.ptr() == shader) {
-				shader_tabs->set_current_tab(i);
-				shader_list->select(i);
-				_switch_to_editor(edited_shaders[i].shader_editor, true);
-				return;
-			}
-		}
-		// If we did not return, the shader needs to be opened in a new shader editor.
+		Shader *shader = Object::cast_to<Shader>(p_resource.ptr());
+		ERR_FAIL_NULL_V_MSG(shader, nullptr, "ShaderEditorPlugin: Unable to edit resource because it is not a Shader or ShaderInclude.");
 		es.shader = Ref<Shader>(shader);
 		for (Ref<EditorShaderLanguagePlugin> shader_lang : EditorShaderLanguagePlugin::get_shader_languages_read_only()) {
 			if (shader_lang->handles_shader(es.shader)) {
@@ -184,7 +166,7 @@ void ShaderEditorPlugin::edit(Object *p_object) {
 		}
 	}
 
-	ERR_FAIL_NULL_MSG(es.shader_editor, "ShaderEditorPlugin: Unable to edit shader because no suitable editor was found.");
+	ERR_FAIL_NULL_V_MSG(es.shader_editor, nullptr, "ShaderEditorPlugin: Unable to edit shader because no suitable editor was found.");
 	// TextShaderEditor-specific setup code.
 	TextShaderEditor *text_shader_editor = Object::cast_to<TextShaderEditor>(es.shader_editor);
 	if (text_shader_editor) {
@@ -197,13 +179,50 @@ void ShaderEditorPlugin::edit(Object *p_object) {
 		}
 	}
 
-	// `set_toggle_list_control` must be called before adding the editor to the scene tree.
-	es.shader_editor->set_toggle_list_control(shader_list);
-	shader_tabs->add_child(es.shader_editor);
-	shader_tabs->set_current_tab(shader_tabs->get_tab_count() - 1);
 	edited_shaders.push_back(es);
+	return es.shader_editor;
+}
+
+void ShaderEditorPlugin::edit(Object *p_object) {
+	if (!p_object) {
+		return;
+	}
+	// If this shader/include is already open, just focus its existing tab.
+	ShaderInclude *shader_include = Object::cast_to<ShaderInclude>(p_object);
+	if (shader_include != nullptr) {
+		for (uint32_t i = 0; i < edited_shaders.size(); i++) {
+			if (edited_shaders[i].shader_inc.ptr() == shader_include) {
+				shader_tabs->set_current_tab(i);
+				shader_list->select(i);
+				_switch_to_editor(edited_shaders[i].shader_editor, true);
+				return;
+			}
+		}
+	} else {
+		Shader *shader = Object::cast_to<Shader>(p_object);
+		ERR_FAIL_NULL_MSG(shader, "ShaderEditorPlugin: Unable to edit object " + p_object->to_string() + " because it is not a Shader or ShaderInclude.");
+		for (uint32_t i = 0; i < edited_shaders.size(); i++) {
+			if (edited_shaders[i].shader.ptr() == shader) {
+				shader_tabs->set_current_tab(i);
+				shader_list->select(i);
+				_switch_to_editor(edited_shaders[i].shader_editor, true);
+				return;
+			}
+		}
+	}
+
+	// New shader: mint the tracked widget via the factory, then place it in the bottom dock (GS3
+	// replaces this placement with a workspace-tab reveal).
+	ShaderEditor *shader_editor = create_editor_view(Ref<Resource>(Object::cast_to<Resource>(p_object)));
+	if (!shader_editor) {
+		return;
+	}
+	// `set_toggle_list_control` must be called before adding the editor to the scene tree.
+	shader_editor->set_toggle_list_control(shader_list);
+	shader_tabs->add_child(shader_editor);
+	shader_tabs->set_current_tab(shader_tabs->get_tab_count() - 1);
 	_update_shader_list();
-	_switch_to_editor(es.shader_editor, !restoring_layout);
+	_switch_to_editor(shader_editor, !restoring_layout);
 }
 
 bool ShaderEditorPlugin::handles(Object *p_object) const {
@@ -857,6 +876,7 @@ void ShaderEditorPlugin::shortcut_input(const Ref<InputEvent> &p_event) {
 }
 
 ShaderEditorPlugin::ShaderEditorPlugin() {
+	singleton = this;
 	ED_SHORTCUT("shader_editor/new", TTRC("New Shader..."), KeyModifierMask::CMD_OR_CTRL | Key::N);
 	ED_SHORTCUT("shader_editor/new_include", TTRC("New Shader Include..."), KeyModifierMask::CMD_OR_CTRL | KeyModifierMask::SHIFT | Key::N);
 	ED_SHORTCUT("shader_editor/open", TTRC("Load Shader File..."), KeyModifierMask::CMD_OR_CTRL | Key::O);
@@ -935,4 +955,5 @@ ShaderEditorPlugin::ShaderEditorPlugin() {
 ShaderEditorPlugin::~ShaderEditorPlugin() {
 	EditorShaderLanguagePlugin::clear_registered_shader_languages();
 	memdelete(file_menu);
+	singleton = nullptr;
 }
