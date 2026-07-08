@@ -68,10 +68,12 @@
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/grid_container.h"
 #include "scene/gui/item_list.h"
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/progress_bar.h"
+#include "scene/gui/texture_rect.h"
 #include "scene/resources/packed_scene.h"
 #include "servers/display/display_server.h"
 
@@ -499,6 +501,9 @@ void FileSystemDock::set_display_mode(DisplayMode p_display_mode) {
 void FileSystemDock::_update_display_mode(bool p_force) {
 	// Compute the new display mode.
 	if (p_force || old_display_mode != display_mode) {
+		// G4: while a color collection is active the tree is hidden and the flat asset list owns the pane,
+		// so each mode skips its tree/file-list rebuild -- the tail below performs the single build.
+		const bool collection = _is_color_collection_active();
 		switch (display_mode) {
 			case DISPLAY_MODE_TREE_ONLY: {
 				button_toggle_display_mode->set_button_icon(get_editor_theme_icon(SNAME("Panels1")));
@@ -518,7 +523,9 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 				}
 				button_file_list_display_mode->hide();
 
-				_update_tree(get_uncollapsed_paths());
+				if (!collection) {
+					_update_tree(get_uncollapsed_paths());
+				}
 				file_list_vb->hide();
 			} break;
 
@@ -555,11 +562,24 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 
 				toolbar2_hbc->hide();
 				button_file_list_display_mode->show();
-				_update_tree(get_uncollapsed_paths());
 
 				file_list_vb->show();
-				_update_file_list(true);
+				if (!collection) {
+					_update_tree(get_uncollapsed_paths());
+					_update_file_list(true);
+				}
 			} break;
+		}
+
+		// G4: a color collection overrides the split -- hide the directory tree and let the flat asset
+		// list own the whole pane (the single build for this pass). Clearing the filter falls back to the
+		// normal per-display-mode layout.
+		if (collection) {
+			tree_mc->hide();
+			file_list_vb->show();
+			_update_file_list(false);
+		} else {
+			tree_mc->show();
 		}
 
 		old_display_mode = display_mode;
@@ -655,6 +675,10 @@ void FileSystemDock::_notification(int p_what) {
 
 			file_list_search_box->set_right_icon(get_editor_theme_icon(SNAME("Search")));
 			file_list_button_sort->set_button_icon(get_editor_theme_icon(SNAME("Sort")));
+
+			// G4: the color-filter buttons share the Folder glyph, tinted to the accent while a collection
+			// is active (lightweight -- no pane rebuild here).
+			_update_color_filter_button_state();
 
 			if (is_layout_rtl()) {
 				button_hist_next->set_button_icon(get_editor_theme_icon(SNAME("Back")));
@@ -1056,7 +1080,11 @@ void FileSystemDock::_update_file_list(bool p_keep_selection) {
 
 	// Build the FileInfo list.
 	List<FileInfo> file_list;
-	if (current_path == "Favorites") {
+	if (_is_color_collection_active()) {
+		// G4: a color collection ignores the current directory -- gather every asset under folders of the
+		// selected color(s), recursively, into one flat list (no folder rows).
+		_gather_color_collection(EditorFileSystem::get_singleton()->get_filesystem(), "res://", String(), &file_list);
+	} else if (current_path == "Favorites") {
 		// Display the favorites.
 		Vector<String> favorites_list = EditorSettings::get_singleton()->get_favorites();
 		for (const String &favorite : favorites_list) {
@@ -3374,6 +3402,220 @@ void FileSystemDock::_folder_color_index_pressed(int p_index, PopupMenu *p_menu)
 	emit_signal(SNAME("folder_color_changed"));
 }
 
+// G4: folder-color "collections" -- custom labels + filter-to-flat-asset-view. -------------------------
+
+// Ids for the color-filter dropdown. Individual colors use 0..N-1 (their index in folder_colors); these
+// two sit above that range.
+enum {
+	COLOR_FILTER_ID_ALL = 1000,
+	COLOR_FILTER_ID_EDIT_NAMES = 1001,
+};
+
+String FileSystemDock::_get_color_label(const String &p_color_key) const {
+	HashMap<String, String>::ConstIterator it = color_labels.find(p_color_key);
+	if (it && !it->value.strip_edges().is_empty()) {
+		return it->value;
+	}
+	return p_color_key.capitalize();
+}
+
+void FileSystemDock::_load_color_labels() {
+	color_labels.clear();
+	if (ProjectSettings::get_singleton()->has_setting("file_customization/color_labels")) {
+		Dictionary d = ProjectSettings::get_singleton()->get_setting("file_customization/color_labels");
+		for (const Variant &k : d.get_key_list()) {
+			color_labels[k] = d[k];
+		}
+	}
+}
+
+MenuButton *FileSystemDock::_create_color_filter_button() {
+	MenuButton *button = memnew(MenuButton);
+	button->set_flat(false);
+	button->set_theme_type_variation("FlatMenuButton");
+	button->set_tooltip_text(TTRC("Filter files by folder color collection."));
+	button->set_accessibility_name(TTRC("Filter by Folder Color"));
+	PopupMenu *popup = button->get_popup();
+	// Keep the menu open across checkable toggles so several colors can be picked in one visit.
+	popup->set_hide_on_checkable_item_selection(false);
+	popup->connect("about_to_popup", callable_mp(this, &FileSystemDock::_build_color_filter_menu).bind(popup));
+	popup->connect(SceneStringName(id_pressed), callable_mp(this, &FileSystemDock::_color_filter_menu_pressed).bind(popup));
+	return button;
+}
+
+void FileSystemDock::_build_color_filter_menu(PopupMenu *p_menu) {
+	p_menu->clear();
+
+	p_menu->add_check_item(TTR("All"), COLOR_FILTER_ID_ALL);
+	p_menu->set_item_checked(p_menu->get_item_index(COLOR_FILTER_ID_ALL), active_color_filter.is_empty());
+	p_menu->add_separator();
+
+	const Ref<Texture2D> folder_icon = get_editor_theme_icon(SNAME("Folder"));
+	int id = 0;
+	for (const KeyValue<String, Color> &E : folder_colors) {
+		p_menu->add_check_item(_get_color_label(E.key), id);
+		const int idx = p_menu->get_item_index(id);
+		p_menu->set_item_metadata(idx, E.key);
+		p_menu->set_item_icon(idx, folder_icon);
+		p_menu->set_item_icon_modulate(idx, editor_is_dark_icon_and_font ? E.value : E.value * 2);
+		p_menu->set_item_checked(idx, active_color_filter.has(E.key));
+		id++;
+	}
+
+	p_menu->add_separator();
+	p_menu->add_icon_item(get_editor_theme_icon(SNAME("Edit")), TTR("Edit Names..."), COLOR_FILTER_ID_EDIT_NAMES);
+}
+
+void FileSystemDock::_color_filter_menu_pressed(int p_id, PopupMenu *p_menu) {
+	if (p_id == COLOR_FILTER_ID_EDIT_NAMES) {
+		_popup_color_labels_dialog();
+		return;
+	}
+
+	if (p_id == COLOR_FILTER_ID_ALL) {
+		active_color_filter.clear();
+	} else {
+		const String key = p_menu->get_item_metadata(p_menu->get_item_index(p_id));
+		if (active_color_filter.has(key)) {
+			active_color_filter.erase(key);
+		} else {
+			active_color_filter.insert(key);
+		}
+	}
+
+	// Reflect the new state on the still-open popup (color rows carry their key as metadata).
+	p_menu->set_item_checked(p_menu->get_item_index(COLOR_FILTER_ID_ALL), active_color_filter.is_empty());
+	for (int i = 0; i < p_menu->get_item_count(); i++) {
+		const Variant meta = p_menu->get_item_metadata(i);
+		if (meta.get_type() == Variant::STRING) {
+			p_menu->set_item_checked(i, active_color_filter.has(String(meta)));
+		}
+	}
+
+	_update_color_filter_view();
+}
+
+void FileSystemDock::_update_color_filter_button_state() {
+	const bool active = _is_color_collection_active();
+	const Ref<Texture2D> icon = get_editor_theme_icon(SNAME("Folder"));
+	const Color tint = active ? get_theme_color(SNAME("accent_color"), EditorStringName(Editor)) : Color(1, 1, 1);
+	MenuButton *buttons[2] = { tree_color_filter, file_list_color_filter };
+	for (MenuButton *mb : buttons) {
+		mb->set_button_icon(icon);
+		mb->set_self_modulate(tint); // self_modulate stays on the button; it doesn't bleed into the popup.
+		mb->set_tooltip_text(active ? vformat(TTR("Showing %d color collection(s). Click to change."), active_color_filter.size()) : TTR("Filter files by folder color collection."));
+	}
+}
+
+void FileSystemDock::_update_color_filter_view() {
+	_update_color_filter_button_state();
+	// _update_display_mode's tail flattens the pane while a collection is active (and restores the tree
+	// when it clears), so a single forced pass covers both directions.
+	_update_display_mode(true);
+}
+
+void FileSystemDock::_gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches) {
+	if (!p_dir) {
+		return;
+	}
+
+	// A folder's own assignment wins; otherwise it inherits its nearest colored ancestor (so a colored
+	// folder's whole subtree is that color, and an override deeper down re-colors from there down). The
+	// path is threaded down the recursion (keys end with "/"), avoiding a per-node get_path() root-walk.
+	const String effective_color = assigned_folder_colors.get(p_dir_path, p_inherited_color);
+
+	for (int i = 0; i < p_dir->get_subdir_count(); i++) {
+		EditorFileSystemDirectory *subdir = p_dir->get_subdir(i);
+		_gather_color_collection(subdir, p_dir_path + subdir->get_name() + "/", effective_color, r_matches);
+	}
+
+	if (effective_color.is_empty() || !active_color_filter.has(effective_color)) {
+		return;
+	}
+
+	for (int i = 0; i < p_dir->get_file_count(); i++) {
+		FileInfo file_info;
+		file_info.name = p_dir->get_file(i);
+		file_info.path = p_dir->get_file_path(i);
+		file_info.type = p_dir->get_file_type(i);
+		file_info.icon_path = p_dir->get_file_icon_path(i);
+		file_info.import_broken = !p_dir->get_file_import_is_valid(i);
+		file_info.modified_time = p_dir->get_file_modified_time(i);
+
+		if (_is_file_type_disabled_by_feature_profile(file_info.type)) {
+			continue;
+		}
+		// Honor the text filter too when both are active.
+		if (!searched_tokens.is_empty() && !_matches_all_search_tokens(file_info.name)) {
+			continue;
+		}
+		r_matches->push_back(file_info);
+	}
+}
+
+void FileSystemDock::_popup_color_labels_dialog() {
+	if (!color_labels_dialog) {
+		color_labels_dialog = memnew(ConfirmationDialog);
+		color_labels_dialog->set_title(TTR("Edit Color Collection Names"));
+		color_labels_dialog->set_ok_button_text(TTR("Save"));
+		color_labels_dialog->connect(SceneStringName(confirmed), callable_mp(this, &FileSystemDock::_color_labels_dialog_confirmed));
+		add_child(color_labels_dialog);
+
+		VBoxContainer *vb = memnew(VBoxContainer);
+		color_labels_dialog->add_child(vb);
+
+		Label *hint = memnew(Label);
+		hint->set_text(TTR("Give each folder color a meaning (e.g. \"Prefabs\", \"Levels\"). Saved in the project."));
+		vb->add_child(hint);
+
+		GridContainer *grid = memnew(GridContainer);
+		grid->set_columns(2);
+		grid->set_v_size_flags(SIZE_EXPAND_FILL);
+		vb->add_child(grid);
+
+		for (const KeyValue<String, Color> &E : folder_colors) {
+			TextureRect *swatch = memnew(TextureRect);
+			swatch->set_texture(get_editor_theme_icon(SNAME("Folder")));
+			swatch->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
+			swatch->set_custom_minimum_size(Size2(24, 24) * EDSCALE);
+			swatch->set_self_modulate(editor_is_dark_icon_and_font ? E.value : E.value * 2);
+			grid->add_child(swatch);
+
+			LineEdit *le = memnew(LineEdit);
+			le->set_h_size_flags(SIZE_EXPAND_FILL);
+			le->set_placeholder(E.key.capitalize());
+			grid->add_child(le);
+			color_label_edits[E.key] = le;
+		}
+	}
+
+	// Seed each field from the current label (blank == using the default capitalized name).
+	for (const KeyValue<String, LineEdit *> &E : color_label_edits) {
+		HashMap<String, String>::ConstIterator it = color_labels.find(E.key);
+		E.value->set_text(it ? it->value : String());
+	}
+	color_labels_dialog->popup_centered(Size2(420, 0) * EDSCALE);
+}
+
+void FileSystemDock::_color_labels_dialog_confirmed() {
+	Dictionary d;
+	for (const KeyValue<String, LineEdit *> &E : color_label_edits) {
+		const String txt = E.value->get_text().strip_edges();
+		if (!txt.is_empty() && txt != E.key.capitalize()) {
+			color_labels[E.key] = txt;
+			d[E.key] = txt;
+		} else {
+			color_labels.erase(E.key);
+		}
+	}
+	// Mirror _update_folder_colors_setting exactly: store the whole map (or clear the key when empty) and
+	// persist immediately -- otherwise a renamed label lives only in memory until some unrelated save.
+	ProjectSettings::get_singleton()->set_setting("file_customization/color_labels", d.is_empty() ? Variant() : Variant(d));
+	ProjectSettings::get_singleton()->save();
+
+	_update_color_filter_view();
+}
+
 void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vector<String> &p_paths, bool p_display_path_dependent_options) {
 	// Add options for files and folders.
 	ERR_FAIL_COND_MSG(p_paths.is_empty(), "Path cannot be empty.");
@@ -3501,7 +3743,7 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 			folder_colors_menu->add_separator();
 
 			for (const KeyValue<String, Color> &E : folder_colors) {
-				folder_colors_menu->add_icon_item(get_editor_theme_icon(SNAME("Folder")), E.key.capitalize());
+				folder_colors_menu->add_icon_item(get_editor_theme_icon(SNAME("Folder")), _get_color_label(E.key));
 
 				folder_colors_menu->set_item_icon_modulate(-1, editor_is_dark_icon_and_font ? E.value : E.value * 2);
 				folder_colors_menu->set_item_metadata(-1, E.key);
@@ -4357,6 +4599,7 @@ FileSystemDock::FileSystemDock() {
 	folder_colors["gray"] = Color(0.616, 0.616, 0.616); // TTR("Gray")
 
 	assigned_folder_colors = ProjectSettings::get_singleton()->get_setting("file_customization/folder_colors");
+	_load_color_labels(); // G4: custom per-color names for the collection filter.
 
 	editor_is_dark_icon_and_font = EditorThemeManager::is_dark_icon_and_font();
 
@@ -4410,6 +4653,9 @@ FileSystemDock::FileSystemDock() {
 	tree_search_box->set_clear_button_enabled(true);
 	tree_search_box->connect(SceneStringName(text_changed), callable_mp(this, &FileSystemDock::_search_changed).bind(tree_search_box));
 	toolbar2_hbc->add_child(tree_search_box);
+
+	tree_color_filter = _create_color_filter_button();
+	toolbar2_hbc->add_child(tree_color_filter);
 
 	tree_button_sort = _create_file_menu_button();
 	toolbar2_hbc->add_child(tree_button_sort);
@@ -4469,6 +4715,9 @@ FileSystemDock::FileSystemDock() {
 	file_list_search_box->set_clear_button_enabled(true);
 	file_list_search_box->connect(SceneStringName(text_changed), callable_mp(this, &FileSystemDock::_search_changed).bind(file_list_search_box));
 	path_hb->add_child(file_list_search_box);
+
+	file_list_color_filter = _create_color_filter_button();
+	path_hb->add_child(file_list_color_filter);
 
 	file_list_button_sort = _create_file_menu_button();
 	path_hb->add_child(file_list_button_sort);

@@ -149,6 +149,13 @@ private:
 	HashMap<String, Color> folder_colors;
 	Dictionary assigned_folder_colors;
 
+	// G4: folder-color "collections". Colors double as named buckets -- a custom label per color key
+	// (default: capitalized key) lets "blue" read as "Prefabs" etc., stored in project settings. Selecting
+	// one or more colors switches the file pane to a flat, recursive view of every asset under folders of
+	// those colors (active_color_filter empty == All == normal browsing).
+	HashMap<String, String> color_labels;
+	HashSet<String> active_color_filter;
+
 	FileSortOption file_sort = FileSortOption::FILE_SORT_NAME;
 
 	VBoxContainer *scanning_vb = nullptr;
@@ -176,6 +183,13 @@ private:
 
 	LineEdit *file_list_search_box = nullptr;
 	MenuButton *file_list_button_sort = nullptr;
+
+	// G4: color-collection filter dropdowns (one per search row, both driving active_color_filter), plus
+	// the inline label editor launched from either dropdown.
+	MenuButton *tree_color_filter = nullptr;
+	MenuButton *file_list_color_filter = nullptr;
+	ConfirmationDialog *color_labels_dialog = nullptr;
+	HashMap<String, LineEdit *> color_label_edits;
 
 	PackedStringArray searched_tokens;
 	Vector<String> uncollapsed_paths_before_search;
@@ -353,6 +367,19 @@ private:
 	void _file_sort_popup(int p_id);
 
 	void _folder_color_index_pressed(int p_index, PopupMenu *p_menu);
+
+	// G4: folder-color collections.
+	String _get_color_label(const String &p_color_key) const;
+	void _load_color_labels();
+	MenuButton *_create_color_filter_button();
+	void _build_color_filter_menu(PopupMenu *p_menu);
+	void _color_filter_menu_pressed(int p_id, PopupMenu *p_menu);
+	void _update_color_filter_view();
+	void _update_color_filter_button_state();
+	bool _is_color_collection_active() const { return !active_color_filter.is_empty(); }
+	void _gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches);
+	void _popup_color_labels_dialog();
+	void _color_labels_dialog_confirmed();
 	void _file_and_folders_fill_popup(PopupMenu *p_popup, const Vector<String> &p_paths, bool p_display_path_dependent_options = true);
 	void _tree_rmb_select(const Vector2 &p_pos, MouseButton p_button);
 	void _file_list_item_clicked(int p_item, const Vector2 &p_pos, MouseButton p_mouse_button_index);
