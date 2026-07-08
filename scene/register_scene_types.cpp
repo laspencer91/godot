@@ -244,6 +244,7 @@
 #include "scene/3d/importer_mesh_instance_3d.h"
 #include "scene/3d/iterate_ik_3d.h"
 #include "scene/3d/jacobian_ik_3d.h"
+#include "scene/3d/ao_baker_3d.h"
 #include "scene/3d/label_3d.h"
 #include "scene/3d/light_3d.h"
 #include "scene/3d/lightmap_gi.h"
@@ -660,6 +661,7 @@ void register_scene_types() {
 	GDREGISTER_CLASS(LightmapGI);
 	GDREGISTER_CLASS(LightmapGIData);
 	GDREGISTER_CLASS(LightmapProbe);
+	GDREGISTER_CLASS(AOBaker3D);
 	GDREGISTER_ABSTRACT_CLASS(Lightmapper);
 	GDREGISTER_CLASS(GPUParticles3D);
 	GDREGISTER_ABSTRACT_CLASS(GPUParticlesCollision3D);

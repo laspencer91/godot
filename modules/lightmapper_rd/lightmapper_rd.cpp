@@ -2893,9 +2893,17 @@ Variant LightmapperRD::get_bake_mesh_userdata(int p_index) const {
 }
 
 Rect2 LightmapperRD::get_bake_mesh_uv_scale(int p_index) const {
-	ERR_FAIL_COND_V(lightmap_textures.is_empty(), Rect2());
+	// The atlas dimensions are the same whichever product was baked; fall back to the AO textures so
+	// this rect math works for an AO-only bake (where lightmap_textures is empty).
+	Vector2 atlas_size;
+	if (!lightmap_textures.is_empty()) {
+		atlas_size = Vector2(lightmap_textures[0]->get_width(), lightmap_textures[0]->get_height());
+	} else if (!ao_textures.is_empty()) {
+		atlas_size = Vector2(ao_textures[0]->get_width(), ao_textures[0]->get_height());
+	} else {
+		ERR_FAIL_V(Rect2());
+	}
 	Rect2 uv_ofs;
-	Vector2 atlas_size = Vector2(lightmap_textures[0]->get_width(), lightmap_textures[0]->get_height());
 	uv_ofs.position = Vector2(mesh_instances[p_index].offset) / atlas_size;
 	uv_ofs.size = Vector2(mesh_instances[p_index].data.albedo_on_uv2->get_width(), mesh_instances[p_index].data.albedo_on_uv2->get_height()) / atlas_size;
 	return uv_ofs;
