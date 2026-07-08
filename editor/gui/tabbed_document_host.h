@@ -117,6 +117,12 @@ public:
 	// G2 S6a: the current tab's DocumentView (null when no tabs / not yet minted).
 	DocumentView *get_current_view() const;
 
+	// G4: make this host's current tab the editor's active edited scene (no-op for a non-scene current
+	// tab, since only scene documents have an edited-scene index). Used by pane focus so the global
+	// bottom docks (Animation, Terrain) track whichever scene pane you click into, not just the pane
+	// whose tab/viewport you last clicked.
+	void activate_current_document() { _activate_document(current); }
+
 	// G2 S7: close p_document's tab (same pipeline as the tab X, side effects included).
 	// False if the document has no tab here.
 	bool close_document(EditorDocument *p_document);

@@ -386,6 +386,12 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 	if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(focused_pane->get_content())) {
 		last_tabbed_pane = focused_pane;
 
+		// G4: focusing a scene pane makes its scene the active edited scene, so the global bottom docks
+		// (Animation, Terrain) follow whichever pane you click into — not only when you click its tab or
+		// viewport. No-op for a non-scene current tab, and no-op when the scene is already active, so
+		// re-clicking the same pane costs nothing.
+		host->activate_current_document();
+
 		// G2 S6a: the "current script" the ScriptEditor services act on follows pane focus — the
 		// newly focused pane's active tab decides it (a script view, or null for any other kind).
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
