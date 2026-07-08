@@ -38,6 +38,7 @@
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
 #include "scene/gui/label.h"
+#include "scene/gui/split_container.h"
 #include "scene/gui/tab_container.h"
 #include "scene/resources/style_box_flat.h"
 #include "scene/scene_string_names.h"
@@ -69,6 +70,66 @@ void WorkspaceFileDrawer::add_panel(Control *p_panel, const String &p_title) {
 	tab_host->set_tabs_visible(tab_host->get_tab_count() > 1);
 }
 
+void WorkspaceFileDrawer::set_import_panel(Control *p_panel) {
+	ERR_FAIL_NULL(p_panel);
+	if (import_panel == p_panel) {
+		return;
+	}
+	if (p_panel->get_parent()) {
+		p_panel->get_parent()->remove_child(p_panel);
+	}
+	import_panel = p_panel;
+	// FileSystem side expands; the Import side holds a usable minimum width and is user-resizable via the
+	// split grabber. (The drawer widens ~10% while it is open so the browser keeps its room.)
+	import_panel->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
+	split->add_child(import_panel);
+	import_toggle->set_visible(import_enabled);
+	_update_import_visibility();
+}
+
+void WorkspaceFileDrawer::set_import_open(bool p_open) {
+	if (p_open && !import_enabled) {
+		return;
+	}
+	if (import_open == p_open) {
+		return;
+	}
+	import_open = p_open;
+	import_toggle->set_pressed_no_signal(import_open);
+	_update_import_visibility();
+	_relayout(); // The open width differs from the closed width.
+}
+
+void WorkspaceFileDrawer::set_import_enabled(bool p_enabled) {
+	if (import_enabled == p_enabled) {
+		return;
+	}
+	import_enabled = p_enabled;
+	import_toggle->set_visible(import_enabled && import_panel);
+	if (!import_enabled) {
+		set_import_open(false);
+	}
+}
+
+void WorkspaceFileDrawer::on_import_target_changed(bool p_has_content) {
+	// Auto-reveal the panel when the FileSystem selection lands on a reimportable file; leave it to the
+	// user to collapse (don't yank it closed the moment they click a non-importable file).
+	if (p_has_content) {
+		set_import_open(true);
+	}
+}
+
+void WorkspaceFileDrawer::_update_import_visibility() {
+	if (import_panel) {
+		// A hidden split child collapses the divider, so the FileSystem side spans the full width.
+		import_panel->set_visible(import_open && import_enabled);
+	}
+}
+
+void WorkspaceFileDrawer::_on_import_toggled(bool p_pressed) {
+	set_import_open(p_pressed);
+}
+
 void WorkspaceFileDrawer::_relayout() {
 	if (!host || !is_inside_tree()) {
 		return;
@@ -83,7 +144,9 @@ void WorkspaceFileDrawer::_relayout() {
 		return;
 	}
 	const float margin = 10 * EDSCALE;
-	const float max_w = 1700 * EDSCALE; // Owner-tuned width for the centered overlay.
+	// Owner-tuned width for the centered overlay; grows ~10% when the Import side is open so the
+	// FileSystem browser keeps its room.
+	const float max_w = (import_open ? 1870 : 1700) * EDSCALE;
 	float w = MIN(hr.size.x - 2 * margin, max_w);
 	w = MAX(w, 240 * EDSCALE);
 	const float h = CLAMP(hr.size.y * height_fraction, 180 * EDSCALE, MAX(180 * EDSCALE, hr.size.y - margin));
@@ -187,12 +250,14 @@ void WorkspaceFileDrawer::_update_theme() {
 void WorkspaceFileDrawer::save_state_to_config(Ref<ConfigFile> p_config, const String &p_section) const {
 	p_config->set_value(p_section, "file_drawer_open", drawer_open);
 	p_config->set_value(p_section, "file_drawer_height", height_fraction);
+	p_config->set_value(p_section, "file_drawer_import_open", import_open);
 }
 
 void WorkspaceFileDrawer::load_state_from_config(const Ref<ConfigFile> &p_config, const String &p_section) {
 	height_fraction = CLAMP((float)p_config->get_value(p_section, "file_drawer_height", 0.4f), 0.2f, 0.8f);
 	const bool want_open = p_config->get_value(p_section, "file_drawer_open", false);
 	set_open(want_open, false);
+	set_import_open(p_config->get_value(p_section, "file_drawer_import_open", false));
 }
 
 void WorkspaceFileDrawer::_notification(int p_what) {
@@ -228,13 +293,27 @@ WorkspaceFileDrawer::WorkspaceFileDrawer() {
 	title_label->set_h_size_flags(SIZE_EXPAND_FILL);
 	header->add_child(title_label);
 
+	import_toggle = memnew(Button);
+	import_toggle->set_flat(true);
+	import_toggle->set_toggle_mode(true);
+	import_toggle->set_text(TTR("Import"));
+	import_toggle->set_tooltip_text(TTR("Toggle the Import settings panel for the selected file."));
+	import_toggle->set_visible(false); // Shown once an Import panel is installed.
+	import_toggle->connect(SceneStringName(toggled), callable_mp(this, &WorkspaceFileDrawer::_on_import_toggled));
+	header->add_child(import_toggle);
+
 	close_button = memnew(Button);
 	close_button->set_flat(true);
 	close_button->set_tooltip_text(TTR("Close"));
 	close_button->connect(SceneStringName(pressed), callable_mp(this, &WorkspaceFileDrawer::_on_close_pressed));
 	header->add_child(close_button);
 
+	split = memnew(HSplitContainer);
+	split->set_v_size_flags(SIZE_EXPAND_FILL);
+	body->add_child(split);
+
 	tab_host = memnew(TabContainer);
+	tab_host->set_h_size_flags(SIZE_EXPAND_FILL);
 	tab_host->set_v_size_flags(SIZE_EXPAND_FILL);
 	// The tab host's own square content/tab-bar backgrounds would poke through the drawer's rounded
 	// corners (clip is rectangular, not rounded). Blank them so only the drawer panel paints there.
@@ -242,5 +321,5 @@ WorkspaceFileDrawer::WorkspaceFileDrawer() {
 	empty_sb.instantiate();
 	tab_host->add_theme_style_override(SNAME("panel"), empty_sb);
 	tab_host->add_theme_style_override(SNAME("tabbar_background"), empty_sb);
-	body->add_child(tab_host);
+	split->add_child(tab_host);
 }

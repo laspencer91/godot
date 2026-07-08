@@ -8115,8 +8115,12 @@ void EditorNode::_feature_profile_changed() {
 		if (filesystem_drawer_button) {
 			filesystem_drawer_button->set_visible(!fs_dock_disabled);
 		}
-		editor_dock_manager->set_dock_enabled(ImportDock::get_singleton(), !fs_dock_disabled && !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_IMPORT_DOCK));
-		editor_dock_manager->set_dock_enabled(history_dock, !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_HISTORY_DOCK));
+		// G4: the Import panel is drawer-hosted; the drawer owns its enabled state (force-collapses +
+		// hides its toggle when disabled). Still gated by the FileSystem dock, which it details.
+		if (workspace_file_drawer) {
+			workspace_file_drawer->set_import_enabled(!fs_dock_disabled && !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_IMPORT_DOCK));
+		}
+		// G4: History is D8-retired (no global dock), so its feature-profile toggle is gone.
 
 		editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_3D, !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_3D));
 		editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_SCRIPT, !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_SCRIPT));
@@ -8127,16 +8131,15 @@ void EditorNode::_feature_profile_changed() {
 			editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_ASSETLIB, !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_ASSET_LIB));
 		}
 	} else {
-		editor_dock_manager->set_dock_enabled(ImportDock::get_singleton(), true);
 		editor_dock_manager->set_dock_enabled(SignalsDock::get_singleton(), true);
 		editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), true);
-		if (workspace_file_drawer) { // G4: FileSystem is drawer-hosted; re-enable the drawer + its toggle.
+		if (workspace_file_drawer) { // G4: FileSystem + Import are drawer-hosted; re-enable the drawer.
 			workspace_file_drawer->set_enabled(true);
+			workspace_file_drawer->set_import_enabled(true);
 		}
 		if (filesystem_drawer_button) {
 			filesystem_drawer_button->set_visible(true);
 		}
-		editor_dock_manager->set_dock_enabled(history_dock, true);
 		editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_3D, true);
 		editor_main_screen->set_button_enabled(EditorMainScreen::EDITOR_SCRIPT, true);
 		if (!Engine::get_singleton()->is_recovery_mode_hint()) {
@@ -9473,8 +9476,11 @@ EditorNode::EditorNode() {
 	EditorDockManager::mark_dock_retired(SceneTreeDock::get_singleton());
 	editor_dock_manager->set_dock_enabled(SceneTreeDock::get_singleton(), false);
 
+	// G4: the Import dock is a detail view of the FileSystem selection, so it lives as a collapsible
+	// right-hand panel of the FileSystem drawer rather than a global dock slot (installed below, once the
+	// drawer has its FileSystem panel). Unmanaged by EditorDockManager; its singleton is set in the ctor
+	// so the FileSystemDock::_update_import_dock() driver and other get_singleton() callers keep working.
 	memnew(ImportDock);
-	editor_dock_manager->add_dock(ImportDock::get_singleton());
 
 	FileSystemDock *filesystem_dock = memnew(FileSystemDock);
 	filesystem_dock->connect("inherit", callable_mp(this, &EditorNode::_inherit_request));
@@ -9485,6 +9491,10 @@ EditorNode::EditorNode() {
 	// EditorDockManager -- its singleton is still set in the ctor, so the ~100 get_singleton() callers
 	// keep working; its own layout is persisted directly (see _save/_load_central_editor_layout).
 	workspace_file_drawer->add_panel(filesystem_dock, TTR("FileSystem"));
+	// G4: Import rides as the drawer's collapsible right panel, driven by the FileSystem selection (which
+	// already updates the ImportDock singleton directly). The signal auto-reveals it on a reimportable file.
+	workspace_file_drawer->set_import_panel(ImportDock::get_singleton());
+	ImportDock::get_singleton()->connect("edit_target_changed", callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::on_import_target_changed));
 
 	memnew(InspectorDock(editor_data));
 	editor_dock_manager->add_dock(InspectorDock::get_singleton());
@@ -9501,8 +9511,13 @@ EditorNode::EditorNode() {
 	EditorDockManager::mark_dock_retired(GroupsDock::get_singleton()); // G2 D8 (see above).
 	editor_dock_manager->set_dock_enabled(GroupsDock::get_singleton(), false);
 
+	// G4: History (the undo/redo scrubber) is the last global dock to retire -- undo/redo still works via
+	// the keyboard; the visual scrubber is niche and left the dock strip orphaned. D8-retired like the rest
+	// (kept registered so the singleton/layout-key machinery is intact, but never enabled or restorable).
 	history_dock = memnew(HistoryDock);
 	editor_dock_manager->add_dock(history_dock);
+	EditorDockManager::mark_dock_retired(history_dock);
+	editor_dock_manager->set_dock_enabled(history_dock, false);
 
 	// Add some offsets to make LEFT_R and RIGHT_L docks wider than minsize.
 	const int dock_hsize = 280;
@@ -9516,16 +9531,11 @@ EditorNode::EditorNode() {
 	default_layout.instantiate();
 	// Dock numbers are based on DockSlot enum value + 1.
 	{
+		// G4: Import is no longer a slot dock (it lives in the FileSystem drawer), so slot 3 holds
+		// SceneTree only. (Both are workspace-hosted now, so this default is effectively inert.)
 		const String scene_key = SceneTreeDock::get_singleton()->get_effective_layout_key();
-		const String import_key = ImportDock::get_singleton()->get_effective_layout_key();
-		default_layout->set_value(docks_section, "dock_3", vformat("%s,%s", scene_key, import_key));
+		default_layout->set_value(docks_section, "dock_3", scene_key);
 		default_layout->set_value(docks_section, "dock_3_selected_tab_idx", 0);
-	}
-	{
-		// G4: FileSystem is no longer a side dock (it lives in the drawer), so slot 4 holds History only.
-		const String history_key = history_dock->get_effective_layout_key();
-		default_layout->set_value(docks_section, "dock_4", history_key);
-		default_layout->set_value(docks_section, "dock_4_selected_tab_idx", 0);
 	}
 	{
 		const String inspector_key = InspectorDock::get_singleton()->get_effective_layout_key();

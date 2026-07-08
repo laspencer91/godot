@@ -160,6 +160,8 @@ void ImportDock::set_edit_path(const String &p_path) {
 	select_a_resource->hide();
 
 	imported->set_text(p_path.get_file());
+
+	emit_signal(SNAME("edit_target_changed"), true);
 }
 
 void ImportDock::_add_keep_import_option(const String &p_importer_name) {
@@ -359,6 +361,8 @@ void ImportDock::set_edit_multiple_paths(const Vector<String> &p_paths) {
 		advanced->hide();
 		advanced_spacer->hide();
 	}
+
+	emit_signal(SNAME("edit_target_changed"), true);
 }
 
 void ImportDock::reimport_resources(const Vector<String> &p_paths) {
@@ -507,6 +511,8 @@ void ImportDock::clear() {
 	preset->get_popup()->clear();
 	content->hide();
 	select_a_resource->show();
+
+	emit_signal(SNAME("edit_target_changed"), false);
 }
 
 static bool _find_owners(EditorFileSystemDirectory *efsd, const String &p_path) {
@@ -739,6 +745,10 @@ void ImportDock::_property_toggled(const StringName &p_prop, bool p_checked) {
 
 void ImportDock::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("_reimport"), &ImportDock::_reimport);
+
+	// G4: emitted whenever the edited target changes -- true when a reimportable selection now populates
+	// the dock, false when it clears. The FileSystem drawer listens to auto-reveal its Import panel.
+	ADD_SIGNAL(MethodInfo("edit_target_changed", PropertyInfo(Variant::BOOL, "has_content")));
 }
 
 void ImportDock::initialize_import_options() const {

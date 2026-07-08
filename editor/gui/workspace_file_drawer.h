@@ -34,6 +34,7 @@
 
 class Button;
 class ConfigFile;
+class HSplitContainer;
 class TabContainer;
 class Tween;
 
@@ -57,7 +58,18 @@ class WorkspaceFileDrawer : public PanelContainer {
 	Control *host = nullptr;
 
 	Button *close_button = nullptr;
+	HSplitContainer *split = nullptr; // Left: FileSystem tab host. Right: the collapsible Import panel.
 	TabContainer *tab_host = nullptr; // Hosts the drawer's panels (FileSystem in v1).
+
+	// G4: the Import dock lives as a collapsible right-hand panel of the FileSystem drawer -- it is a detail
+	// view of the FileSystem selection, not a standalone document. Not owned (the singleton is parked here).
+	Control *import_panel = nullptr;
+	Button *import_toggle = nullptr;
+	bool import_open = false;
+	bool import_enabled = true; // Feature-profile gate for the Import panel specifically.
+
+	void _update_import_visibility();
+	void _on_import_toggled(bool p_pressed);
 
 	bool drawer_open = false;
 	bool enabled = true; // Feature-profile gate; a disabled drawer force-closes and refuses to open.
@@ -84,6 +96,15 @@ public:
 
 	// Add p_panel as a titled tab in the drawer. Reparents p_panel in.
 	void add_panel(Control *p_panel, const String &p_title);
+
+	// G4: install the Import panel into the drawer's collapsible right side (reparents it in).
+	void set_import_panel(Control *p_panel);
+	// Open/close the Import side. Animatable via the header toggle; also driven by on_import_target_changed.
+	void set_import_open(bool p_open);
+	// Feature-profile gate for the Import panel; a disabled panel force-collapses and hides its toggle.
+	void set_import_enabled(bool p_enabled);
+	// Slot for ImportDock::edit_target_changed -- auto-reveals the panel when a reimportable file is picked.
+	void on_import_target_changed(bool p_has_content);
 
 	void set_open(bool p_open, bool p_animate = true);
 
