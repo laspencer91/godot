@@ -79,6 +79,8 @@ HOST_WORK="$(host_path "$WORK")"
 
 # Work on a throwaway copy so the committed project stays clean (no .godot/).
 cp "$SMOKE_DIR"/*.tscn "$SMOKE_DIR/project.godot" "$WORK"/
+# G-Shader: the shader fixture (+ its .uid) for the shader-tab restore case below.
+cp "$SMOKE_DIR"/*.gdshader "$SMOKE_DIR"/*.gdshader.uid "$WORK"/ 2>/dev/null || true
 
 fail=0
 
@@ -119,6 +121,13 @@ run_case "restore_3_scenes" -e
 # the double-render/leak spam the restore path historically tripped on.
 cp "$SMOKE_DIR/restore_workspace.cfg" "$WORK/.godot/editor/editor_layout.cfg"
 run_case "restore_workspace" -e
+
+# G-Shader: shader-tab restore. Seed a session whose pane holds the screen-host + a text-shader tab,
+# then launch with no scene. A clean run proves a saved shader path resolves to a ShaderDocument and
+# its DocumentView mints the editor widget (create_editor_view) + mounts the File menu without spam —
+# the flip's new code, which the scene-only cases above never touch.
+cp "$SMOKE_DIR/restore_shader.cfg" "$WORK/.godot/editor/editor_layout.cfg"
+run_case "restore_shader" -e
 
 # Save-capture round-trip (M6.2): the restore_workspace fixture hand-authors the tab paths, so it
 # never exercises the SAVE side. This case does: restore open scenes (the active one is revealed into

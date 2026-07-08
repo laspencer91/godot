@@ -343,11 +343,6 @@ void ShaderEditorPlugin::_close_builtin_shaders_from_scene(const String &p_scene
 	}
 }
 
-void ShaderEditorPlugin::_resource_saved(Object *obj) {
-	// G-Shader: the bottom list that used to refresh on (re)save is gone; the workspace tab title is
-	// path-derived. Nothing to do here for now — kept as the resource_saved sink for symmetry.
-}
-
 void ShaderEditorPlugin::_menu_item_pressed(int p_index) {
 	switch (p_index) {
 		case FILE_MENU_NEW: {
@@ -552,7 +547,6 @@ void ShaderEditorPlugin::_setup_file_menu(PopupMenu *p_menu) {
 void ShaderEditorPlugin::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_READY: {
-			EditorNode::get_singleton()->connect("resource_saved", callable_mp(this, &ShaderEditorPlugin::_resource_saved), CONNECT_DEFERRED);
 			EditorNode::get_singleton()->connect("scene_closed", callable_mp(this, &ShaderEditorPlugin::_close_builtin_shaders_from_scene));
 			FileSystemDock::get_singleton()->connect("file_removed", callable_mp(this, &ShaderEditorPlugin::_file_removed));
 			EditorNode::get_singleton()->connect("resource_saved", callable_mp(this, &ShaderEditorPlugin::_res_saved_callback));

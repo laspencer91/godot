@@ -78,7 +78,6 @@ class ShaderEditorPlugin : public EditorPlugin {
 	ShaderCreateDialog *shader_create_dialog = nullptr;
 
 	float text_shader_zoom_factor = 1.0f;
-	bool restoring_layout = false;
 
 	int _find_edited_shader(const ShaderEditor *p_editor) const;
 	int _current_edited_shader() const; // Index of current_shader_editor_id in edited_shaders, or -1.
@@ -86,7 +85,6 @@ class ShaderEditorPlugin : public EditorPlugin {
 	void _park_file_menu(); // Return the File menu to menu_home (no shader tab focused / one is dying).
 	void _setup_file_menu(PopupMenu *p_menu);
 	void _menu_item_pressed(int p_index);
-	void _resource_saved(Object *obj);
 	void _close_current_shader();
 	void _close_builtin_shaders_from_scene(const String &p_scene);
 	void _file_removed(const String &p_removed_file);
