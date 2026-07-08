@@ -38,6 +38,7 @@
 #include "editor/gui/editor_workspace.h" // G2 S8: pane split/close from the tab bar.
 #include "editor/gui/pane_drop_overlay.h" // G6: drag-to-split compass.
 #include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
+#include "editor/shader/shader_editor_plugin.h" // G-Shader: current-shader-view sync.
 #include "editor/editor_string_names.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/margin_container.h"
@@ -235,6 +236,11 @@ void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 	}
 	DocumentView *view = (p_idx >= 0 && p_idx < views.size()) ? views[p_idx] : nullptr;
 	se->set_current_surface(view);
+	// G-Shader: the shader File menu follows the current tab the same way (mounts into a shader tab,
+	// parks otherwise).
+	if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
+		sep->set_current_surface(view ? view->get_editor_surface() : nullptr);
+	}
 	// G2 M7.2a: the shared 2D/3D toolbar follows the current tab into its scene pane's header.
 	if (EditorNode *en = EditorNode::get_singleton()) {
 		en->update_scene_pane_toolbar(view);

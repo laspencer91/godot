@@ -39,6 +39,7 @@
 #include "editor/gui/document_view.h" // G2 S6a: current-script-view sync on pane focus.
 #include "editor/gui/tabbed_document_host.h"
 #include "editor/script/script_editor_plugin.h"
+#include "editor/shader/shader_editor_plugin.h" // G-Shader: current-shader-view sync on pane focus.
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/label.h"
 #include "scene/gui/panel_container.h"
@@ -389,6 +390,11 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 		// newly focused pane's active tab decides it (a script view, or null for any other kind).
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 			se->set_current_surface(host->get_current_view());
+		}
+		// G-Shader: the shader File menu likewise follows pane focus into the focused shader tab.
+		if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
+			DocumentView *view = host->get_current_view();
+			sep->set_current_surface(view ? view->get_editor_surface() : nullptr);
 		}
 		// G2 M7.2a: the shared 2D/3D toolbar follows pane focus into the focused scene pane's header.
 		if (EditorNode *en = EditorNode::get_singleton()) {

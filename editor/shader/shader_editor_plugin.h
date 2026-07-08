@@ -34,16 +34,10 @@
 #include "scene/resources/shader.h"
 
 class CodeTextEditor;
-class EditorDock;
-class HSplitContainer;
-class ItemList;
+class Control;
 class MenuButton;
 class ShaderCreateDialog;
 class ShaderEditor;
-class TabContainer;
-class VBoxContainer;
-class HBoxContainer;
-class WindowWrapper;
 
 class ShaderEditorPlugin : public EditorPlugin {
 	GDCLASS(ShaderEditorPlugin, EditorPlugin);
@@ -70,43 +64,30 @@ class ShaderEditorPlugin : public EditorPlugin {
 		FILE_MENU_INSPECT,
 		FILE_MENU_INSPECT_NATIVE_SHADER_CODE,
 		FILE_MENU_CLOSE,
-		FILE_MENU_CLOSE_ALL,
-		FILE_MENU_CLOSE_OTHER_TABS,
 		FILE_MENU_SHOW_IN_FILE_SYSTEM,
 		FILE_MENU_COPY_PATH,
-		FILE_MENU_TOGGLE_FILES_PANEL,
 	};
 
-	enum PopupMenuType {
-		FILE,
-		CONTEXT,
-		CONTEXT_VALID_ITEM,
-	};
-	HSplitContainer *files_split = nullptr;
-
-	ItemList *shader_list = nullptr;
-	TabContainer *shader_tabs = nullptr;
-
+	// G-Shader: the File menu is chrome that travels into the focused shader tab's editor widget
+	// (ShaderEditor::use_menu_bar). menu_home is where it parks when no shader tab is current;
+	// current_shader_editor_id is the editor currently hosting it (the "current shader" the menu acts on).
 	MenuButton *file_menu = nullptr;
-	PopupMenu *context_menu = nullptr;
-
-	EditorDock *shader_dock = nullptr;
-	Ref<Shortcut> make_floating_shortcut;
+	Control *menu_home = nullptr;
+	ObjectID current_shader_editor_id;
 
 	ShaderCreateDialog *shader_create_dialog = nullptr;
 
 	float text_shader_zoom_factor = 1.0f;
 	bool restoring_layout = false;
 
+	int _find_edited_shader(const ShaderEditor *p_editor) const;
+	int _current_edited_shader() const; // Index of current_shader_editor_id in edited_shaders, or -1.
 	Ref<Resource> _get_current_shader();
-	void _update_shader_list();
-	void _shader_selected(int p_index, bool p_push_item = true);
-	void _shader_list_clicked(int p_item, Vector2 p_local_mouse_pos, MouseButton p_mouse_button_index);
-	void _setup_popup_menu(PopupMenuType p_type, PopupMenu *p_menu);
-	void _make_script_list_context_menu();
+	void _park_file_menu(); // Return the File menu to menu_home (no shader tab focused / one is dying).
+	void _setup_file_menu(PopupMenu *p_menu);
 	void _menu_item_pressed(int p_index);
 	void _resource_saved(Object *obj);
-	void _close_shader(int p_index);
+	void _close_current_shader();
 	void _close_builtin_shaders_from_scene(const String &p_scene);
 	void _file_removed(const String &p_removed_file);
 	void _res_saved_callback(const Ref<Resource> &p_res);
@@ -114,22 +95,12 @@ class ShaderEditorPlugin : public EditorPlugin {
 
 	void _shader_created(Ref<Shader> p_shader);
 	void _shader_include_created(Ref<ShaderInclude> p_shader_inc);
-	void _update_shader_list_status();
-	void _move_shader_tab(int p_from, int p_to);
-
-	Variant get_drag_data_fw(const Point2 &p_point, Control *p_from);
-	bool can_drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from) const;
-	void drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from);
 
 	void _set_text_shader_zoom_factor(float p_zoom_factor);
 	void _update_shader_editor_zoom_factor(CodeTextEditor *p_shader_editor) const;
 
-	void _switch_to_editor(ShaderEditor *p_editor, bool p_focus = false);
-
 protected:
 	void _notification(int p_what);
-
-	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;
 
 public:
 	static ShaderEditorPlugin *get_singleton() { return singleton; }
@@ -141,8 +112,13 @@ public:
 
 	// G-Shader: mint + wire the editor widget for one shader resource (text -> code editor, visual ->
 	// node-graph editor, via the shader-language factory) and track it, without parenting it anywhere.
-	// The caller places it: the bottom dock today, a workspace tab's DocumentView after GS3.
+	// The workspace tab's DocumentView parents it; release_editor_view drops the tracking when it dies.
 	ShaderEditor *create_editor_view(const Ref<Resource> &p_resource);
+	void release_editor_view(ShaderEditor *p_editor);
+
+	// G-Shader: focus hook (driven by TabbedDocumentHost / EditorWorkspace, like ScriptEditor). When a
+	// shader tab becomes current its editor hosts the File menu; any other kind of tab parks it.
+	void set_current_surface(Control *p_surface);
 
 	ShaderEditor *get_shader_editor(const Ref<Shader> &p_for_shader);
 

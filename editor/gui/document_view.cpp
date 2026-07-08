@@ -43,6 +43,8 @@
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "editor/script/script_editor_plugin.h"
+#include "editor/shader/shader_editor.h"
+#include "editor/shader/shader_editor_plugin.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/foldable_container.h"
@@ -165,6 +167,15 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			ScriptDocument *sd = static_cast<ScriptDocument *>(p_document);
 			if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 				editor_surface = se->create_editor_view(sd->get_script_resource());
+			}
+		} break;
+		case EditorDocument::TYPE_SHADER: {
+			// G-Shader: the shader editor widget (text code editor or visual node graph) is minted by
+			// the ShaderEditorPlugin SERVICES singleton via the shader-language factory. The plugin
+			// stays; only the widget is per-tab (released on PREDELETE, below).
+			ShaderDocument *shd = static_cast<ShaderDocument *>(p_document);
+			if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
+				editor_surface = sep->create_editor_view(shd->get_shader_resource());
 			}
 		} break;
 		case EditorDocument::TYPE_HELP: {
@@ -328,6 +339,13 @@ void DocumentView::_notification(int p_what) {
 	if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(editor_surface)) {
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 			se->release_editor_view(seb);
+		}
+	}
+	// G-Shader: same for a shader surface — park the traveling File menu (if hosted here) and drop
+	// the plugin's tracking entry before Node frees this view's children.
+	if (ShaderEditor *she = Object::cast_to<ShaderEditor>(editor_surface)) {
+		if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
+			sep->release_editor_view(she);
 		}
 	}
 	// G2 S5.5: the screen-host view does not own the legacy main-screen stack — park it back under
