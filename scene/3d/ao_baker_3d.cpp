@@ -30,6 +30,7 @@
 
 #include "ao_baker_3d.h"
 
+#include "core/config/engine.h"
 #include "core/io/dir_access.h"
 #include "core/io/image.h"
 #include "core/object/class_db.h"
@@ -404,6 +405,20 @@ void AOBaker3D::_bind_methods() {
 	BIND_ENUM_CONSTANT(BAKE_ERROR_NO_MESHES);
 	BIND_ENUM_CONSTANT(BAKE_ERROR_NO_LIGHTMAPPER);
 	BIND_ENUM_CONSTANT(BAKE_ERROR_BAKE_FAILED);
+}
+
+void AOBaker3D::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_READY: {
+			// At game runtime, re-push this scene's atlas into its meshes' materials. Per-instance
+			// transforms are serialized and restored automatically, but the ao_atlas texture uniform
+			// on a material SHARED across scenes would otherwise hold whichever scene baked last --
+			// re-applying on load makes the currently-loaded scene win. No-op in the editor.
+			if (!Engine::get_singleton()->is_editor_hint() && ao_atlas.is_valid()) {
+				apply_to_meshes();
+			}
+		} break;
+	}
 }
 
 AOBaker3D::AOBaker3D() {

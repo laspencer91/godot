@@ -91,6 +91,7 @@ private:
 
 protected:
 	static void _bind_methods();
+	void _notification(int p_what);
 
 public:
 	void set_ao_ray_count(int p_ao_ray_count);
