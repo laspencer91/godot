@@ -188,6 +188,7 @@ void Box3DBody3D::_build_all_shapes() {
 		def.baseMaterial.restitution = (float)bounce;
 		def.filter.categoryBits = (uint64_t)collision_layer;
 		def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
+		def.enableCustomFiltering = !collision_exceptions.is_empty();
 		def.enableSensorEvents = true;
 		def.enableContactEvents = reports_contacts();
 		def.userData = (void *)(uintptr_t)i; // Godot shape index for query results.
@@ -681,6 +682,16 @@ void Box3DBody3D::set_collision_layer(uint32_t p_layer) {
 
 void Box3DBody3D::set_collision_mask(uint32_t p_mask) {
 	collision_mask = p_mask;
+	shapes_changed();
+}
+
+void Box3DBody3D::add_collision_exception(RID p_body) {
+	collision_exceptions.insert(p_body);
+	shapes_changed();
+}
+
+void Box3DBody3D::remove_collision_exception(RID p_body) {
+	collision_exceptions.erase(p_body);
 	shapes_changed();
 }
 

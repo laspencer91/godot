@@ -124,6 +124,9 @@ public:
 	virtual uint32_t body_get_collision_layer(RID p_body) const override;
 	virtual void body_set_collision_mask(RID p_body, uint32_t p_mask) override;
 	virtual uint32_t body_get_collision_mask(RID p_body) const override;
+	virtual void body_add_collision_exception(RID p_body, RID p_body_b) override;
+	virtual void body_remove_collision_exception(RID p_body, RID p_body_b) override;
+	virtual void body_get_collision_exceptions(RID p_body, List<RID> *p_exceptions) override;
 	virtual void body_set_enable_continuous_collision_detection(RID p_body, bool p_enable) override;
 	virtual void body_set_param(RID p_body, BodyParameter p_param, const Variant &p_value) override;
 	virtual Variant body_get_param(RID p_body, BodyParameter p_param) const override;
@@ -151,6 +154,7 @@ public:
 	virtual void body_set_state_sync_callback(RID p_body, const Callable &p_callable) override;
 	virtual void body_set_force_integration_callback(RID p_body, const Callable &p_callable, const Variant &p_udata = Variant()) override;
 	virtual PhysicsDirectBodyState3D *body_get_direct_state(RID p_body) override;
+	virtual bool body_test_motion(RID p_body, const MotionParameters &p_parameters, MotionResult *r_result = nullptr) override;
 
 	// Lifecycle.
 	virtual void free_rid(RID p_rid) override;

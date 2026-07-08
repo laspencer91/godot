@@ -13,10 +13,34 @@
 // TODO(box3d): substep count + worker count become physics/box3d/* project settings.
 static const int BOX3D_SUBSTEPS = 4;
 
+static Box3DCollisionObject3D *_box3d_shape_object(b3ShapeId p_shape_id) {
+	if (!b3Shape_IsValid(p_shape_id)) {
+		return nullptr;
+	}
+	const b3BodyId body_id = b3Shape_GetBody(p_shape_id);
+	if (!b3Body_IsValid(body_id)) {
+		return nullptr;
+	}
+	return static_cast<Box3DCollisionObject3D *>(b3Body_GetUserData(body_id));
+}
+
+static bool _box3d_custom_filter_callback(b3ShapeId p_shape_a, b3ShapeId p_shape_b, void *p_context) {
+	Box3DCollisionObject3D *object_a = _box3d_shape_object(p_shape_a);
+	Box3DCollisionObject3D *object_b = _box3d_shape_object(p_shape_b);
+	if (object_a == nullptr || object_b == nullptr || object_a->get_type() != Box3DCollisionObject3D::TYPE_BODY || object_b->get_type() != Box3DCollisionObject3D::TYPE_BODY) {
+		return true;
+	}
+
+	const Box3DBody3D *body_a = static_cast<Box3DBody3D *>(object_a);
+	const Box3DBody3D *body_b = static_cast<Box3DBody3D *>(object_b);
+	return !body_a->has_collision_exception(body_b->get_rid()) && !body_b->has_collision_exception(body_a->get_rid());
+}
+
 Box3DSpace3D::Box3DSpace3D() {
 	b3WorldDef def = b3DefaultWorldDef();
 	def.workerCount = 1; // Single-threaded until task-system integration lands.
 	world = b3CreateWorld(&def);
+	b3World_SetCustomFilterCallback(world, _box3d_custom_filter_callback, this);
 	_update_world_gravity();
 }
 
@@ -110,17 +134,6 @@ void Box3DSpace3D::call_queries() {
 
 static int _box3d_shape_index(b3ShapeId p_shape_id) {
 	return (int)(uintptr_t)b3Shape_GetUserData(p_shape_id);
-}
-
-static Box3DCollisionObject3D *_box3d_shape_object(b3ShapeId p_shape_id) {
-	if (!b3Shape_IsValid(p_shape_id)) {
-		return nullptr;
-	}
-	const b3BodyId body_id = b3Shape_GetBody(p_shape_id);
-	if (!b3Body_IsValid(body_id)) {
-		return nullptr;
-	}
-	return static_cast<Box3DCollisionObject3D *>(b3Body_GetUserData(body_id));
 }
 
 void Box3DSpace3D::_process_sensor_event(bool p_added, b3ShapeId p_sensor_shape, b3ShapeId p_visitor_shape) {

@@ -441,6 +441,28 @@ uint32_t Box3DPhysicsServer3D::body_get_collision_mask(RID p_body) const {
 	return body->get_collision_mask();
 }
 
+void Box3DPhysicsServer3D::body_add_collision_exception(RID p_body, RID p_body_b) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	ERR_FAIL_COND_MSG(!_can_mutate_body_shapes(body), "Box3D: collision exception changes are inaccessible right now, wait for iteration or physics process notification.");
+	body->add_collision_exception(p_body_b);
+}
+
+void Box3DPhysicsServer3D::body_remove_collision_exception(RID p_body, RID p_body_b) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	ERR_FAIL_COND_MSG(!_can_mutate_body_shapes(body), "Box3D: collision exception changes are inaccessible right now, wait for iteration or physics process notification.");
+	body->remove_collision_exception(p_body_b);
+}
+
+void Box3DPhysicsServer3D::body_get_collision_exceptions(RID p_body, List<RID> *p_exceptions) {
+	const Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	for (const RID &exception : body->get_collision_exceptions()) {
+		p_exceptions->push_back(exception);
+	}
+}
+
 void Box3DPhysicsServer3D::body_set_enable_continuous_collision_detection(RID p_body, bool p_enable) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
@@ -630,6 +652,15 @@ PhysicsDirectBodyState3D *Box3DPhysicsServer3D::body_get_direct_state(RID p_body
 	ERR_FAIL_NULL_V(body, nullptr);
 	ERR_FAIL_COND_V_MSG((using_threads && !doing_sync) || (body->get_space() && body->get_space()->is_stepping()), nullptr, "Body state is inaccessible right now, wait for iteration or physics process notification.");
 	return body->get_direct_state();
+}
+
+bool Box3DPhysicsServer3D::body_test_motion(RID p_body, const MotionParameters &p_parameters, MotionResult *r_result) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL_V(body, false);
+	Box3DSpace3D *space = body->get_space();
+	ERR_FAIL_NULL_V(space, false);
+	ERR_FAIL_COND_V_MSG((using_threads && !doing_sync) || space->is_stepping(), false, "body_test_motion is inaccessible right now, wait for iteration or physics process notification.");
+	return space->get_direct_state()->body_test_motion(*body, p_parameters, r_result);
 }
 
 // --- Lifecycle ---

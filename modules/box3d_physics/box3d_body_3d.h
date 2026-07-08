@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/templates/hash_set.h"
 #include "core/templates/local_vector.h"
 #include "core/templates/vector.h"
 #include "servers/physics_3d/physics_server_3d_dummy.h"
@@ -57,6 +58,7 @@ private:
 	real_t gravity_scale = 1.0;
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
+	HashSet<RID> collision_exceptions;
 	bool continuous_cd = false;
 
 	Vector3 constant_force;
@@ -163,6 +165,10 @@ public:
 	uint32_t get_collision_layer() const { return collision_layer; }
 	void set_collision_mask(uint32_t p_mask);
 	uint32_t get_collision_mask() const { return collision_mask; }
+	void add_collision_exception(RID p_body);
+	void remove_collision_exception(RID p_body);
+	bool has_collision_exception(RID p_body) const { return collision_exceptions.has(p_body); }
+	const HashSet<RID> &get_collision_exceptions() const { return collision_exceptions; }
 	void set_enable_continuous_collision_detection(bool p_enable);
 
 	void apply_central_impulse(const Vector3 &p_impulse);
