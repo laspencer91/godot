@@ -60,6 +60,11 @@ private:
 	float bias = 0.0005f;
 	int max_texture_size = 4096;
 
+	// Debug: if set, each per-mesh mask is also written as a PNG here on bake (so the AO can be eyeballed
+	// in the FileSystem dock before any weathering shader exists). Not the real save path -- that's
+	// Phase 2. Empty by default.
+	String debug_output_directory;
+
 	// NodePath (relative to this node) -> Ref<Texture2D> AO mask. Persisted with the scene; consumed by
 	// the future weathering-material auto-wiring tooling.
 	Dictionary ao_masks;
@@ -95,6 +100,8 @@ public:
 	float get_bias() const;
 	void set_max_texture_size(int p_size);
 	int get_max_texture_size() const;
+	void set_debug_output_directory(const String &p_dir);
+	String get_debug_output_directory() const;
 
 	void set_ao_masks(const Dictionary &p_masks);
 	Dictionary get_ao_masks() const;

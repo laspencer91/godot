@@ -30,8 +30,9 @@
 
 #include "ao_baker_3d.h"
 
-#include "core/object/class_db.h"
+#include "core/io/dir_access.h"
 #include "core/io/image.h"
+#include "core/object/class_db.h"
 #include "scene/3d/lightmapper.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/resources/image_texture.h"
@@ -208,6 +209,30 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 	}
 
 	ao_masks = new_masks;
+
+	// Debug: dump each mask to a PNG so the AO can be inspected before a weathering shader exists.
+	if (!debug_output_directory.is_empty()) {
+		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
+		if (da.is_valid()) {
+			da->make_dir_recursive(debug_output_directory);
+		}
+		Array keys = new_masks.keys();
+		for (int i = 0; i < keys.size(); i++) {
+			NodePath np = keys[i];
+			Ref<Texture2D> tex = new_masks[keys[i]];
+			if (tex.is_null()) {
+				continue;
+			}
+			Ref<Image> img = tex->get_image();
+			if (img.is_null()) {
+				continue;
+			}
+			int n = np.get_name_count();
+			String base = n > 0 ? String(np.get_name(n - 1)) : ("mesh_" + itos(i));
+			img->save_png(debug_output_directory.path_join(vformat("ao_%s_%d.png", base, i)));
+		}
+	}
+
 	return BAKE_ERROR_OK;
 }
 
@@ -227,6 +252,8 @@ void AOBaker3D::set_bias(float p_bias) { bias = MAX(p_bias, 0.0f); }
 float AOBaker3D::get_bias() const { return bias; }
 void AOBaker3D::set_max_texture_size(int p_size) { max_texture_size = MAX(p_size, 256); }
 int AOBaker3D::get_max_texture_size() const { return max_texture_size; }
+void AOBaker3D::set_debug_output_directory(const String &p_dir) { debug_output_directory = p_dir; }
+String AOBaker3D::get_debug_output_directory() const { return debug_output_directory; }
 
 void AOBaker3D::set_ao_masks(const Dictionary &p_masks) { ao_masks = p_masks; }
 Dictionary AOBaker3D::get_ao_masks() const { return ao_masks; }
@@ -248,6 +275,8 @@ void AOBaker3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_bias"), &AOBaker3D::get_bias);
 	ClassDB::bind_method(D_METHOD("set_max_texture_size", "size"), &AOBaker3D::set_max_texture_size);
 	ClassDB::bind_method(D_METHOD("get_max_texture_size"), &AOBaker3D::get_max_texture_size);
+	ClassDB::bind_method(D_METHOD("set_debug_output_directory", "dir"), &AOBaker3D::set_debug_output_directory);
+	ClassDB::bind_method(D_METHOD("get_debug_output_directory"), &AOBaker3D::get_debug_output_directory);
 	ClassDB::bind_method(D_METHOD("set_ao_masks", "masks"), &AOBaker3D::set_ao_masks);
 	ClassDB::bind_method(D_METHOD("get_ao_masks"), &AOBaker3D::get_ao_masks);
 	ClassDB::bind_method(D_METHOD("bake"), &AOBaker3D::bake);
@@ -262,6 +291,7 @@ void AOBaker3D::_bind_methods() {
 	ADD_GROUP("Advanced", "");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bias", PROPERTY_HINT_RANGE, "0.0,0.01,0.00001"), "set_bias", "get_bias");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_texture_size", PROPERTY_HINT_RANGE, "256,16384,1"), "set_max_texture_size", "get_max_texture_size");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "debug_output_directory", PROPERTY_HINT_DIR), "set_debug_output_directory", "get_debug_output_directory");
 	// Baked output: stored/loaded with the scene, hidden from the inspector, no undo churn.
 	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "ao_masks", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NO_EDITOR), "set_ao_masks", "get_ao_masks");
 

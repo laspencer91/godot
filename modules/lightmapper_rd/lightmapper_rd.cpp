@@ -2852,6 +2852,32 @@ LightmapperRD::BakeError LightmapperRD::bake_ao(int p_ao_ray_count, float p_ao_m
 		ao_textures.push_back(img);
 	}
 
+	// Free GPU resources before tearing down the local device (mirrors bake()'s FREE_* macros; the
+	// pipelines and uniform sets cascade-free with their shaders via RD dependency tracking).
+	rd->free_rid(albedo_array_tex);
+	rd->free_rid(emission_array_tex);
+	rd->free_rid(normal_tex);
+	rd->free_rid(position_tex);
+	rd->free_rid(unocclude_tex);
+	rd->free_rid(ao_tex);
+	rd->free_rid(ao_tex2);
+	rd->free_rid(bake_parameters_buffer);
+	rd->free_rid(vertex_buffer);
+	rd->free_rid(triangle_buffer);
+	rd->free_rid(lights_buffer);
+	rd->free_rid(triangle_indices_buffer);
+	rd->free_rid(cluster_indices_buffer);
+	rd->free_rid(cluster_aabbs_buffer);
+	rd->free_rid(grid_texture);
+	rd->free_rid(seams_buffer);
+	rd->free_rid(probe_positions_buffer);
+	rd->free_rid(rasterize_shader);
+	rd->free_rid(sampler);
+	rd->free_rid(area_light_atlas_sampler);
+	rd->free_rid(raster_depth_buffer);
+	rd->free_rid(compute_shader_unocclude);
+	rd->free_rid(compute_shader_ao);
+
 	cleanup_device();
 	return BAKE_OK;
 }
