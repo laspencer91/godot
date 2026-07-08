@@ -157,16 +157,11 @@ bool EditorMainScreen::begin_workspace_restore(Ref<ConfigFile> p_config_file, co
 
 	Dictionary tabs = session.get("tabs", Dictionary());
 
-	// Re-home the screen-host into its saved pane (fresh mint from the parked vbox — clean at 0 worlds).
-	WorkspacePane *host_pane = workspace->find_pane_by_id(_screen_host_pane_id(tabs));
-	TabbedDocumentHost *host = host_pane ? Object::cast_to<TabbedDocumentHost>(host_pane->get_content()) : nullptr;
-	if (!host) {
-		host_pane = workspace->get_last_tabbed_pane();
-		host = host_pane ? Object::cast_to<TabbedDocumentHost>(host_pane->get_content()) : nullptr;
-	}
-	if (host) {
-		host->ensure_document(screen_host_document);
-	}
+	// G4: the screen-host ("Editor") tab is on-demand now, so it is NOT restored as a tab. Its stack
+	// (main_screen_vbox) stays parked under the hidden in-tree holder (see the constructor); an AssetLib /
+	// Game / plugin reveal re-summons the tab from there. A stale screen-host entry in a pre-G4 saved
+	// session is harmless — _restore_workspace_tabs already skips it, and _collect_pane_tabs no longer
+	// records it, so it drops out on the next save.
 
 	// Hand the tab set to phase 2. A non-empty _pending_tabs IS the "restore in flight" state that
 	// is_workspace_restore_pending() reports, so the M7.1 scene auto-reveal stands down until phase 2.
@@ -185,6 +180,9 @@ void EditorMainScreen::_collect_pane_tabs(Dictionary &r_tabs) const {
 			EditorDocument *doc = host->get_document(i);
 			if (!doc || doc->get_path().is_empty()) {
 				continue;
+			}
+			if (doc == screen_host_document) {
+				continue; // G4: on-demand screen-host is never persisted as a tab.
 			}
 			if (i == host->get_current()) {
 				current_path = doc->get_path();
@@ -213,25 +211,9 @@ EditorDocument *EditorMainScreen::_resolve_session_document(const String &p_path
 	return EditorNode::get_editor_data().get_or_create_document_for_path(p_path);
 }
 
-uint32_t EditorMainScreen::_screen_host_pane_id(const Dictionary &p_tabs) const {
-	// G2 M6.2: which saved leaf held the screen-host tab (0 if none recorded it).
-	const String host_path = screen_host_document ? screen_host_document->get_path() : String();
-	Array keys = p_tabs.keys();
-	for (int j = 0; j < keys.size(); j++) {
-		Dictionary entry = p_tabs[keys[j]];
-		Array docs = entry.get("docs", Array());
-		for (int i = 0; i < docs.size(); i++) {
-			if (String(docs[i]) == host_path) {
-				return (uint32_t)String(keys[j]).to_int();
-			}
-		}
-	}
-	return 0;
-}
-
 void EditorMainScreen::_populate_pane_tabs(const Dictionary &p_tabs) {
-	// G2 M6.2 (phase 2): fill each tabbed leaf with its saved documents. The screen-host is skipped —
-	// phase 1 (begin_workspace_restore) placed it at 0 open scenes, so main_screen_vbox isn't moved again.
+	// G2 M6.2 (phase 2): fill each tabbed leaf with its saved documents. The screen-host is skipped
+	// (G4: on-demand only — it stays parked, never restored as a tab; a stale saved entry is ignored).
 	for (WorkspacePane *pane : workspace->get_tabbed_leaves()) {
 		const String key = itos(pane->get_pane_id());
 		if (!p_tabs.has(key)) {
@@ -246,7 +228,7 @@ void EditorMainScreen::_populate_pane_tabs(const Dictionary &p_tabs) {
 				host->ensure_document(doc); // Appends a (hidden) tab + mints the pane-bound view; no focus steal.
 			}
 		}
-		// Select the saved current tab now that this pane's documents (including any adopted screen-host) exist.
+		// Select the saved current tab now that this pane's documents exist.
 		if (EditorDocument *current = _resolve_session_document(entry.get("cur", String()))) {
 			if (host->has_document(current)) {
 				host->focus_document(current);
@@ -641,20 +623,25 @@ EditorMainScreen::EditorMainScreen() {
 	screen_park_holder->set_visible(false);
 	add_child(screen_park_holder);
 
-	// G2 S5.5: the main editor area is the workspace tree, and the root pane hosts a TAB HOST from
-	// startup: tab 0 is the screen-host document, whose view carries the legacy main-screen stack
-	// (main_screen_vbox) — so the first script/scene reveal opens as a sibling tab in this pane,
-	// never a split. Plugins/addons still parent into get_control() == main_screen_vbox.
+	// G4: the screen-host ("Editor") tab is NOT opened at startup — it carries only the legacy
+	// singleton screens (AssetLib / Game / third-party main-screen plugins), which are all on-demand
+	// now, so an always-present empty tab was just clutter next to the user's scenes. It is summoned
+	// on demand by reveal_main_plugin() (Game while an embedded game runs; AssetLib from the Editor
+	// menu). Until then main_screen_vbox parks under the hidden (but IN-TREE) holder, so get_control()
+	// stays live AND the main-screen plugins parented into it — notably the Node3DEditor singleton,
+	// whose gizmo services require SceneTree membership (the _spatial_editor_group call target) — keep
+	// working. The first scene/script reveal lands in the root pane's (initially empty) tab host; the
+	// workspace's focused_pane already defaults to the root pane, so it never splits.
 	workspace = memnew(EditorWorkspace);
 	add_child(workspace);
 
 	screen_host_document = memnew(ScreenHostDocument);
 	screen_host_document->set_screen_stack(main_screen_vbox);
 	screen_host_document->set_park_holder_id(screen_park_holder->get_instance_id());
+	screen_park_holder->add_child(main_screen_vbox); // Park it in-tree; no screen-host view hosts it yet.
 
 	TabbedDocumentHost *root_host = memnew(TabbedDocumentHost);
 	workspace->get_root_pane()->set_content(root_host);
-	root_host->add_document(screen_host_document, screen_host_document->get_title());
 }
 
 EditorMainScreen::~EditorMainScreen() {

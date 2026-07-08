@@ -82,12 +82,10 @@ private:
 	// _collect_pane_tabs walks the live tree and records each leaf's tab doc-paths + current (keyed by
 	// pane_id) into r_tabs; _populate_pane_tabs (phase 2) fills each rebuilt leaf; _resolve_session_document
 	// maps a saved path back to a live document (the screen-host doc locally, else via EditorData);
-	// _screen_host_pane_id finds which saved leaf held the screen-host; _set_workspace_focus_after_restore
-	// drives focus once the panes are filled.
+	// _set_workspace_focus_after_restore drives focus once the panes are filled.
 	void _collect_pane_tabs(Dictionary &r_tabs) const;
 	void _populate_pane_tabs(const Dictionary &p_tabs);
 	EditorDocument *_resolve_session_document(const String &p_path);
-	uint32_t _screen_host_pane_id(const Dictionary &p_tabs) const;
 	void _set_workspace_focus_after_restore();
 
 protected:
