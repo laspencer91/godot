@@ -35,6 +35,7 @@
 class Mesh;
 class Material;
 class MeshInstance3D;
+class Texture2DArray;
 
 // Tools node that bakes a contextual ambient-occlusion mask (sampled on UV2) for weathering shaders.
 // It drives the shared GPU lightmapper (LightmapperRD::bake_ao) -- a second, lightweight front-end to
@@ -66,9 +67,13 @@ private:
 	// Phase 2. Empty by default.
 	String debug_output_directory;
 
-	// NodePath (relative to this node) -> Ref<Texture2D> AO mask. Persisted with the scene; consumed by
-	// the future weathering-material auto-wiring tooling.
-	Dictionary ao_masks;
+	// Baked output, lightmap-style: ONE scene-space AO atlas shared by every baked mesh, plus a
+	// per-mesh transform into it. Persisted with the scene. A weathering material samples the shared
+	// atlas -- meshes do not each carry their own texture.
+	Ref<Texture2DArray> ao_atlas;
+	// NodePath (relative to this node) -> Array{ Vector4 uv_rect (xy=offset, zw=scale), int slice }.
+	// Pushed to each MeshInstance3D as instance shader parameters by apply_to_meshes().
+	Dictionary ao_transforms;
 
 	struct MeshFound {
 		Ref<Mesh> mesh;
@@ -107,8 +112,20 @@ public:
 	void set_debug_output_directory(const String &p_dir);
 	String get_debug_output_directory() const;
 
-	void set_ao_masks(const Dictionary &p_masks);
-	Dictionary get_ao_masks() const;
+	void set_ao_atlas(const Ref<Texture2DArray> &p_atlas);
+	Ref<Texture2DArray> get_ao_atlas() const;
+	void set_ao_transforms(const Dictionary &p_transforms);
+	Dictionary get_ao_transforms() const;
+
+	// Shader-parameter names a weathering shader reads (see apply_to_meshes()).
+	static const char *INSTANCE_PARAM_ATLAS; // sampler2DArray material uniform: the shared AO atlas.
+	static const char *INSTANCE_PARAM_UV_RECT; // vec4 instance uniform: xy = UV2 offset, zw = UV2 scale.
+	static const char *INSTANCE_PARAM_SLICE; // float instance uniform: atlas array layer.
+
+	// Push each baked mesh's atlas transform onto its MeshInstance3D as instance shader parameters,
+	// so a single shared weathering material can sample the right slice/rect per instance. Returns
+	// the number of meshes wired. Called automatically at the end of bake().
+	int apply_to_meshes();
 
 	// Whole-level AO bake (synchronous). Gathers static meshes under this node's parent, bakes the AO
 	// atlas via LightmapperRD::bake_ao, crops per-mesh textures and stores them in ao_masks.

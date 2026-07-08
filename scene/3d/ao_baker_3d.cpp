@@ -39,6 +39,10 @@
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
 
+const char *AOBaker3D::INSTANCE_PARAM_ATLAS = "ao_atlas";
+const char *AOBaker3D::INSTANCE_PARAM_UV_RECT = "ao_uv_rect";
+const char *AOBaker3D::INSTANCE_PARAM_SLICE = "ao_slice";
+
 // Whether every triangle surface of p_mesh carries both UV2 and normals (and there is at least one
 // triangle surface). This is exactly the condition a mesh must meet to be baked. A mesh that has
 // triangle surfaces but fails here is a candidate for auto-unwrap; one with no triangle surfaces is
@@ -208,65 +212,127 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 		return BAKE_ERROR_BAKE_FAILED;
 	}
 
-	// Crop each mesh's rect out of its atlas slice into a standalone R8 mask, keyed by the mesh's
-	// NodePath (from the userdata dictionary). The mesh's raw UV2 samples this directly.
-	Dictionary new_masks;
-	const int mesh_count = lightmapper->get_bake_mesh_count();
+	// Keep the whole scene-space atlas (all slices) as ONE Texture2DArray, and record each mesh's
+	// rect + slice into it. This mirrors how the lightmapper stores its result: a shared texture the
+	// material samples, plus a per-instance transform -- NOT a texture per mesh.
 	const int ao_slices = lightmapper->get_bake_ao_texture_count();
-	for (int i = 0; i < mesh_count; i++) {
-		const int slice = lightmapper->get_bake_mesh_texture_slice(i);
-		if (slice < 0 || slice >= ao_slices) {
-			continue;
+	Vector<Ref<Image>> slice_images;
+	for (int s = 0; s < ao_slices; s++) {
+		Ref<Image> img = lightmapper->get_bake_ao_texture(s);
+		if (img.is_valid()) {
+			slice_images.push_back(img);
 		}
-		Ref<Image> atlas = lightmapper->get_bake_ao_texture(slice);
-		if (atlas.is_null()) {
-			continue;
-		}
-		const int aw = atlas->get_width();
-		const int ah = atlas->get_height();
-		const Rect2 uv = lightmapper->get_bake_mesh_uv_scale(i);
-		const Point2i ofs = Point2i(Math::round(uv.position.x * aw), Math::round(uv.position.y * ah));
-		const Size2i sz = Size2i(Math::round(uv.size.x * aw), Math::round(uv.size.y * ah));
-		if (sz.x <= 0 || sz.y <= 0) {
-			continue;
-		}
-
-		Ref<Image> cropped;
-		cropped.instantiate();
-		cropped->initialize_data(sz.x, sz.y, false, Image::FORMAT_R8);
-		cropped->blit_rect(atlas, Rect2i(ofs, sz), Point2i(0, 0));
-
-		Dictionary ud = lightmapper->get_bake_mesh_userdata(i);
-		NodePath np = ud.get("path", NodePath());
-		new_masks[np] = ImageTexture::create_from_image(cropped);
+	}
+	if (slice_images.is_empty()) {
+		return BAKE_ERROR_BAKE_FAILED;
 	}
 
-	ao_masks = new_masks;
+	Ref<Texture2DArray> atlas;
+	atlas.instantiate();
+	if (atlas->create_from_images(slice_images) != OK) {
+		return BAKE_ERROR_BAKE_FAILED;
+	}
+	ao_atlas = atlas;
 
-	// Debug: dump each mask to a PNG so the AO can be inspected before a weathering shader exists.
+	Dictionary new_transforms;
+	const int mesh_count = lightmapper->get_bake_mesh_count();
+	for (int i = 0; i < mesh_count; i++) {
+		const int slice = lightmapper->get_bake_mesh_texture_slice(i);
+		if (slice < 0 || slice >= slice_images.size()) {
+			continue;
+		}
+		const Rect2 uv = lightmapper->get_bake_mesh_uv_scale(i);
+		const NodePath np = ((Dictionary)lightmapper->get_bake_mesh_userdata(i)).get("path", NodePath());
+
+		Array entry;
+		entry.push_back(Vector4(uv.position.x, uv.position.y, uv.size.x, uv.size.y));
+		entry.push_back(slice);
+		new_transforms[np] = entry;
+	}
+	ao_transforms = new_transforms;
+
+	// Debug: dump each mesh's rect (sliced out of the atlas) to a PNG so the AO can be eyeballed in
+	// the FileSystem dock before a weathering shader exists. Not the storage format -- just a preview.
 	if (!debug_output_directory.is_empty()) {
 		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
 		if (da.is_valid()) {
 			da->make_dir_recursive(debug_output_directory);
 		}
-		Array keys = new_masks.keys();
+		Array keys = new_transforms.keys();
 		for (int i = 0; i < keys.size(); i++) {
-			NodePath np = keys[i];
-			Ref<Texture2D> tex = new_masks[keys[i]];
-			if (tex.is_null()) {
+			const NodePath np = keys[i];
+			const Array entry = new_transforms[keys[i]];
+			const Vector4 rect = entry[0];
+			const int slice = entry[1];
+			Ref<Image> src = slice_images[slice];
+			const int aw = src->get_width();
+			const int ah = src->get_height();
+			const Point2i ofs = Point2i(Math::round(rect.x * aw), Math::round(rect.y * ah));
+			const Size2i sz = Size2i(Math::round(rect.z * aw), Math::round(rect.w * ah));
+			if (sz.x <= 0 || sz.y <= 0) {
 				continue;
 			}
-			Ref<Image> img = tex->get_image();
-			if (img.is_null()) {
-				continue;
-			}
-			int n = np.get_name_count();
-			String base = n > 0 ? String(np.get_name(n - 1)) : ("mesh_" + itos(i));
-			img->save_png(debug_output_directory.path_join(vformat("ao_%s_%d.png", base, i)));
+			Ref<Image> crop;
+			crop.instantiate();
+			crop->initialize_data(sz.x, sz.y, false, src->get_format());
+			crop->blit_rect(src, Rect2i(ofs, sz), Point2i(0, 0));
+			const int n = np.get_name_count();
+			const String base = n > 0 ? String(np.get_name(n - 1)) : ("mesh_" + itos(i));
+			crop->save_png(debug_output_directory.path_join(vformat("ao_%s_%d.png", base, i)));
 		}
 	}
 
+	apply_to_meshes();
 	return BAKE_ERROR_OK;
+}
+
+// Set the shared atlas onto every ShaderMaterial in a material's next_pass chain (harmless on
+// materials that don't declare the uniform -- the value is just ignored). r_any tracks whether at
+// least one ShaderMaterial was reached, so we can report meshes that won't show grime.
+static void _set_atlas_on_material_chain(Ref<Material> p_mat, const Ref<Texture2DArray> &p_atlas, bool &r_any) {
+	int guard = 0; // Bound the walk in case a next_pass chain is malformed.
+	while (p_mat.is_valid() && guard++ < 16) {
+		Ref<ShaderMaterial> sm = p_mat;
+		if (sm.is_valid()) {
+			sm->set_shader_parameter(AOBaker3D::INSTANCE_PARAM_ATLAS, p_atlas);
+			r_any = true;
+		}
+		p_mat = p_mat->get_next_pass();
+	}
+}
+
+int AOBaker3D::apply_to_meshes() {
+	int textured = 0;
+	Array keys = ao_transforms.keys();
+	for (int i = 0; i < keys.size(); i++) {
+		const NodePath np = keys[i];
+		MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(get_node_or_null(np));
+		if (!mi) {
+			continue;
+		}
+		const Array entry = ao_transforms[keys[i]];
+		if (entry.size() < 2) {
+			continue;
+		}
+
+		// Per-instance transform (always applied -- floats are legal instance uniforms).
+		mi->set_instance_shader_parameter(INSTANCE_PARAM_UV_RECT, entry[0]);
+		mi->set_instance_shader_parameter(INSTANCE_PARAM_SLICE, (float)(int)entry[1]);
+
+		// Shared atlas -> the mesh's weathering ShaderMaterial(s), if any (material_override, surface
+		// materials, and their next_pass chains). Never replaces a material; only fills the uniform.
+		bool wired = false;
+		_set_atlas_on_material_chain(mi->get_material_override(), ao_atlas, wired);
+		Ref<Mesh> mesh = mi->get_mesh();
+		const int surf_count = mesh.is_valid() ? mesh->get_surface_count() : 0;
+		for (int s = 0; s < surf_count; s++) {
+			_set_atlas_on_material_chain(mi->get_active_material(s), ao_atlas, wired);
+		}
+		if (wired) {
+			textured++;
+		}
+	}
+	return textured;
 }
 
 void AOBaker3D::set_ao_ray_count(int p_ao_ray_count) { ao_ray_count = CLAMP(p_ao_ray_count, 16, 8192); }
@@ -288,8 +354,10 @@ int AOBaker3D::get_max_texture_size() const { return max_texture_size; }
 void AOBaker3D::set_debug_output_directory(const String &p_dir) { debug_output_directory = p_dir; }
 String AOBaker3D::get_debug_output_directory() const { return debug_output_directory; }
 
-void AOBaker3D::set_ao_masks(const Dictionary &p_masks) { ao_masks = p_masks; }
-Dictionary AOBaker3D::get_ao_masks() const { return ao_masks; }
+void AOBaker3D::set_ao_atlas(const Ref<Texture2DArray> &p_atlas) { ao_atlas = p_atlas; }
+Ref<Texture2DArray> AOBaker3D::get_ao_atlas() const { return ao_atlas; }
+void AOBaker3D::set_ao_transforms(const Dictionary &p_transforms) { ao_transforms = p_transforms; }
+Dictionary AOBaker3D::get_ao_transforms() const { return ao_transforms; }
 
 void AOBaker3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_ao_ray_count", "ao_ray_count"), &AOBaker3D::set_ao_ray_count);
@@ -310,8 +378,11 @@ void AOBaker3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_max_texture_size"), &AOBaker3D::get_max_texture_size);
 	ClassDB::bind_method(D_METHOD("set_debug_output_directory", "dir"), &AOBaker3D::set_debug_output_directory);
 	ClassDB::bind_method(D_METHOD("get_debug_output_directory"), &AOBaker3D::get_debug_output_directory);
-	ClassDB::bind_method(D_METHOD("set_ao_masks", "masks"), &AOBaker3D::set_ao_masks);
-	ClassDB::bind_method(D_METHOD("get_ao_masks"), &AOBaker3D::get_ao_masks);
+	ClassDB::bind_method(D_METHOD("set_ao_atlas", "atlas"), &AOBaker3D::set_ao_atlas);
+	ClassDB::bind_method(D_METHOD("get_ao_atlas"), &AOBaker3D::get_ao_atlas);
+	ClassDB::bind_method(D_METHOD("set_ao_transforms", "transforms"), &AOBaker3D::set_ao_transforms);
+	ClassDB::bind_method(D_METHOD("get_ao_transforms"), &AOBaker3D::get_ao_transforms);
+	ClassDB::bind_method(D_METHOD("apply_to_meshes"), &AOBaker3D::apply_to_meshes);
 	ClassDB::bind_method(D_METHOD("bake"), &AOBaker3D::bake);
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "ao_ray_count", PROPERTY_HINT_RANGE, "16,8192,1"), "set_ao_ray_count", "get_ao_ray_count");
@@ -326,7 +397,8 @@ void AOBaker3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_texture_size", PROPERTY_HINT_RANGE, "256,16384,1"), "set_max_texture_size", "get_max_texture_size");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "debug_output_directory", PROPERTY_HINT_DIR), "set_debug_output_directory", "get_debug_output_directory");
 	// Baked output: stored/loaded with the scene, hidden from the inspector, no undo churn.
-	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "ao_masks", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NO_EDITOR), "set_ao_masks", "get_ao_masks");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "ao_atlas", PROPERTY_HINT_RESOURCE_TYPE, "Texture2DArray", PROPERTY_USAGE_NO_EDITOR), "set_ao_atlas", "get_ao_atlas");
+	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "ao_transforms", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NO_EDITOR), "set_ao_transforms", "get_ao_transforms");
 
 	BIND_ENUM_CONSTANT(BAKE_ERROR_OK);
 	BIND_ENUM_CONSTANT(BAKE_ERROR_NO_MESHES);

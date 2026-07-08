@@ -230,8 +230,15 @@ void AOBaker3DEditorPlugin::_do_bake() {
 
 	switch (err) {
 		case AOBaker3D::BAKE_ERROR_OK: {
-			// ao_masks has STORAGE usage, so it persists when the scene is saved (Ctrl+S).
-			print_line(vformat("Done baking AO in %d ms (%d masks).", time_taken, baker->get_ao_masks().size()));
+			// The atlas + per-mesh transforms have STORAGE usage, so they persist on save (Ctrl+S).
+			// bake() already wired instance params + the atlas into weathering materials; count how
+			// many meshes actually have a ShaderMaterial to receive it so the rest aren't a mystery.
+			const int total = baker->get_ao_transforms().size();
+			const int wired = baker->apply_to_meshes();
+			print_line(vformat("Done baking AO in %d ms (%d meshes into shared atlas; %d wired into weathering materials).", time_taken, total, wired));
+			if (wired < total) {
+				print_line(vformat("  %d mesh(es) have no ShaderMaterial yet -- assign a weathering shader (or next_pass) that samples 'ao_atlas' to see grime.", total - wired));
+			}
 		} break;
 		case AOBaker3D::BAKE_ERROR_NO_MESHES: {
 			EditorNode::get_singleton()->show_warning(TTR("No meshes to bake AO for. Meshes need UV2 data and their Global Illumination property set to Static."));
