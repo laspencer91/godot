@@ -94,7 +94,9 @@ public:
 	// G4: add a standalone toggle button to the unified bottom bar (the row that also holds the
 	// dock tabs / toaster). Unlike add_item it hosts NO panel content -- the caller drives its own
 	// surface (e.g. the WorkspaceFileDrawer overlay) off the returned button's `toggled` signal.
-	Button *add_bottom_bar_toggle(const String &p_text, const Ref<Texture2D> &p_icon = Ref<Texture2D>(), const Ref<Shortcut> &p_shortcut = nullptr);
+	// p_leading places it at the far LEFT of the row (ahead of the dock tabs, with a divider);
+	// otherwise it lands just right of the tabs, before the toaster.
+	Button *add_bottom_bar_toggle(const String &p_text, const Ref<Texture2D> &p_icon = Ref<Texture2D>(), const Ref<Shortcut> &p_shortcut = nullptr, bool p_leading = false);
 
 	Button *add_item(String p_text, Control *p_item, const Ref<Shortcut> &p_shortcut = nullptr, bool p_at_front = false);
 	void remove_item(Control *p_item);

@@ -62,7 +62,11 @@ void EditorMainScreen::_notification(int p_what) {
 				}
 			}
 
-			select(-1);
+			// G4: with 2D/3D/Script retired and Game/AssetLib on-demand, the strip can legitimately have
+			// no visible button at boot. Leave the main-screen backdrop empty (selected_plugin stays null)
+			// rather than latching onto whatever happens to be first — previously the Game screen, which
+			// surfaced an unwanted embedded-player tab on load. The workspace panes carry the real editing
+			// surfaces; a screen is summoned on demand (reveal_main_plugin) or by opening a scene/script.
 		} break;
 		case NOTIFICATION_THEME_CHANGED: {
 			for (int i = 0; i < buttons.size(); i++) {
@@ -269,21 +273,31 @@ void EditorMainScreen::_set_workspace_focus_after_restore() {
 
 void EditorMainScreen::set_button_enabled(int p_index, bool p_enabled) {
 	ERR_FAIL_INDEX(p_index, buttons.size());
+	Button *b = buttons[p_index];
 	// G2 M7.2b: a retired strip button (2D/3D/Script) stays hidden regardless of profile enable state
 	// — its editing surface lives in the workspace panes now, not the strip.
-	if (!buttons[p_index]->has_meta("_g2_strip_retired")) {
-		buttons[p_index]->set_visible(p_enabled);
+	// G4: an on-demand button (Game/AssetLib) is never *shown* by the profile sync — only
+	// reveal_main_plugin() gives it strip presence — but a profile *disable* may still pull it off.
+	if (b->has_meta("_g2_strip_retired")) {
+		// Always hidden; leave as-is.
+	} else if (b->has_meta("_g2_on_demand")) {
+		if (!p_enabled) {
+			b->hide();
+		}
+	} else {
+		b->set_visible(p_enabled);
 	}
-	if (!p_enabled && buttons[p_index]->is_pressed()) {
+	if (!p_enabled && b->is_pressed()) {
 		select(EDITOR_2D);
 	}
 }
 
 bool EditorMainScreen::is_button_enabled(int p_index) const {
 	ERR_FAIL_INDEX_V(p_index, buttons.size(), false);
-	// G2 M7.2b: a retired button has no strip presence but its feature is enabled via the workspace,
-	// so report it enabled (callers gate features on this, not on strip visibility).
-	if (buttons[p_index]->has_meta("_g2_strip_retired")) {
+	// G2 M7.2b / G4: retired (2D/3D/Script) and on-demand (Game/AssetLib) buttons have no permanent
+	// strip presence, but their features remain reachable (via the workspace / an on-demand reveal),
+	// so report them enabled — callers gate features on this, not on strip visibility.
+	if (buttons[p_index]->has_meta("_g2_strip_retired") || buttons[p_index]->has_meta("_g2_on_demand")) {
 		return true;
 	}
 	return buttons[p_index]->is_visible();
@@ -333,6 +347,18 @@ void EditorMainScreen::select_by_name(const String &p_name) {
 
 void EditorMainScreen::select(int p_index) {
 	// G2 D1 shim: platform/mono callers must keep working - do not remove.
+	_select_index(p_index);
+}
+
+void EditorMainScreen::reveal_main_plugin(int p_index) {
+	// G4: summon an on-demand singleton screen (Game while an embedded game runs; AssetLib from the
+	// Editor menu). Give its button strip presence so _select_index accepts it (and so it can be
+	// tabbed back to), home to the screen-host tab, then select it.
+	ERR_FAIL_INDEX(p_index, editor_table.size());
+	buttons[p_index]->show();
+	if (screen_host_document) {
+		reveal(screen_host_document);
+	}
 	_select_index(p_index);
 }
 
@@ -564,6 +590,12 @@ void EditorMainScreen::add_main_plugin(EditorPlugin *p_editor) {
 	if (pname == "2D" || pname == "3D" || pname == "Script") {
 		tb->hide();
 		tb->set_meta("_g2_strip_retired", true); // marker so set_button_enabled keeps it hidden.
+	} else if (pname == "Game" || pname == "AssetLib") {
+		// G4: on-demand singleton screens — kept OFF the permanent strip. Game gets strip presence
+		// only while an embedded game is running (GameView drives it); AssetLib opens from
+		// Editor → Open Asset Library. reveal_main_plugin() is the only thing that shows them.
+		tb->hide();
+		tb->set_meta("_g2_on_demand", true);
 	}
 }
 

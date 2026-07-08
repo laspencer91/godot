@@ -426,11 +426,12 @@ void EditorNode::shortcut_input(const Ref<InputEvent> &p_event) {
 		} else if (ED_IS_SHORTCUT("editor/editor_script", p_event)) {
 			editor_main_screen->focus_editor(SNAME("Script"));
 		} else if (ED_IS_SHORTCUT("editor/editor_game", p_event)) {
-			editor_main_screen->select(EditorMainScreen::EDITOR_GAME);
+			// G4: Game/AssetLib are off the permanent strip — reveal summons them on demand.
+			editor_main_screen->reveal_main_plugin(EditorMainScreen::EDITOR_GAME);
 		} else if (ED_IS_SHORTCUT("editor/editor_help", p_event)) {
 			emit_signal(SNAME("request_help_search"), "");
 		} else if (ED_IS_SHORTCUT("editor/editor_assetlib", p_event) && AssetLibraryEditorPlugin::is_available()) {
-			editor_main_screen->select(EditorMainScreen::EDITOR_ASSETLIB);
+			editor_main_screen->reveal_main_plugin(EditorMainScreen::EDITOR_ASSETLIB);
 		} else if (ED_IS_SHORTCUT("editor/editor_next", p_event)) {
 			editor_main_screen->select_next();
 		} else if (ED_IS_SHORTCUT("editor/editor_prev", p_event)) {
@@ -3310,9 +3311,12 @@ void EditorNode::_edit_current(bool p_skip_foreign, bool p_skip_inspector_update
 					main_plugin->edit(current_script);
 				}
 			} else if (main_plugin != editor_plugin_screen) {
-				// Unedit previous plugin.
-				editor_plugin_screen->edit(nullptr);
-				active_plugins[editor_owner_id].erase(editor_plugin_screen);
+				// Unedit previous plugin. G4: the main-screen strip can now have nothing selected
+				// (empty backdrop when 2D/3D/Script are retired and no on-demand screen is up).
+				if (editor_plugin_screen) {
+					editor_plugin_screen->edit(nullptr);
+					active_plugins[editor_owner_id].erase(editor_plugin_screen);
+				}
 				// Update screen main_plugin.
 				editor_main_screen->select(plugin_index);
 				main_plugin->edit(current_obj);
@@ -3872,6 +3876,12 @@ void EditorNode::_menu_option_confirm(int p_option, bool p_confirmed) {
 		} break;
 		case EDITOR_OPEN_SETTINGS: {
 			editor_settings_dialog->popup_edit_settings();
+		} break;
+		case EDITOR_OPEN_ASSET_LIBRARY: {
+			// G4: AssetLib is an on-demand screen now — summon it from the Editor menu.
+			if (AssetLibraryEditorPlugin::is_available()) {
+				editor_main_screen->reveal_main_plugin(EditorMainScreen::EDITOR_ASSETLIB);
+			}
 		} break;
 		case EDITOR_OPEN_DATA_FOLDER: {
 			OS::get_singleton()->shell_show_in_file_manager(EditorPaths::get_singleton()->get_data_dir(), true);
@@ -8377,6 +8387,11 @@ void EditorNode::_build_settings_menu() {
 	settings_menu->add_shortcut(ED_GET_SHORTCUT("editor/editor_settings"), EDITOR_OPEN_SETTINGS);
 #endif
 	settings_menu->add_shortcut(ED_GET_SHORTCUT("editor/command_palette"), EDITOR_COMMAND_PALETTE);
+
+	// G4: AssetLib is off the permanent main-screen strip — it opens on demand from here.
+	if (AssetLibraryEditorPlugin::is_available()) {
+		settings_menu->add_shortcut(ED_GET_SHORTCUT("editor/editor_assetlib"), EDITOR_OPEN_ASSET_LIBRARY);
+	}
 	settings_menu->add_separator();
 
 	settings_menu->add_submenu_node_item(TTRC("Editor Docks"), editor_dock_manager->get_docks_menu());
@@ -9572,9 +9587,10 @@ EditorNode::EditorNode() {
 	log = memnew(EditorLog);
 	editor_dock_manager->add_dock(log);
 
-	// G4: unified bottom-bar toggle for the FileSystem drawer, beside the Output/Debugger/Audio
-	// dock toggles. The button drives the overlay; the drawer reports back so the two stay in sync.
-	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), ED_GET_SHORTCUT("editor/toggle_file_drawer"));
+	// G4: unified bottom-bar toggle for the FileSystem drawer. Seated at the far left of the bar
+	// (ahead of the Output/Debugger/Audio dock tabs) so it reads as its own leading entry. The button
+	// drives the overlay; the drawer reports back so the two stay in sync.
+	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), ED_GET_SHORTCUT("editor/toggle_file_drawer"), true);
 	filesystem_drawer_button->connect(SceneStringName(toggled), callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::set_open).bind(true));
 	workspace_file_drawer->connect("open_toggled", callable_mp(static_cast<BaseButton *>(filesystem_drawer_button), &BaseButton::set_pressed_no_signal));
 

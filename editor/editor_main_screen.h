@@ -119,6 +119,9 @@ public:
 	void select_prev();
 	void select_by_name(const String &p_name);
 	void select(int p_index);
+	// G4: summon an on-demand singleton screen (Game/AssetLib) that isn't kept on the permanent
+	// strip -- gives its button strip presence, homes to the screen-host tab, then selects it.
+	void reveal_main_plugin(int p_index);
 	// G2 S6a: p_grab_focus=false makes sure the document has a (hidden) tab + view without
 	// changing the current tab or pane focus — the background-open path.
 	void reveal(EditorDocument *p_document, DocumentViewKind p_kind = DocumentViewKind::DEFAULT, bool p_grab_focus = true);

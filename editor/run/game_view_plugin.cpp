@@ -565,7 +565,8 @@ void GameView::_play_pressed() {
 		EditorNode::get_singleton()->set_unfocused_low_processor_usage_mode_enabled(false);
 		_update_embed_window_size();
 		if (!window_wrapper->get_window_enabled()) {
-			EditorNode::get_singleton()->get_editor_main_screen()->select(EditorMainScreen::EDITOR_GAME);
+			// G4: the Game screen is off the permanent strip — reveal gives it strip presence for the run.
+			EditorNode::get_singleton()->get_editor_main_screen()->reveal_main_plugin(EditorMainScreen::EDITOR_GAME);
 			// Reset the normal size of the bottom panel when fully expanded.
 			EditorNode::get_singleton()->get_bottom_panel()->set_expanded(false);
 
@@ -600,6 +601,9 @@ void GameView::_stop_pressed() {
 	}
 
 	screen_index_before_start = -1;
+
+	// G4: the game has stopped — there's nothing to tab to, so pull the Game screen back off the strip.
+	EditorNode::get_singleton()->get_editor_main_screen()->set_button_enabled(EditorMainScreen::EDITOR_GAME, false);
 }
 
 void GameView::_embedding_completed() {
@@ -618,7 +622,8 @@ void GameView::_embedding_failed() {
 
 void GameView::_embedded_process_focused() {
 	if (embed_on_play && !window_wrapper->get_window_enabled()) {
-		EditorNode::get_singleton()->get_editor_main_screen()->select(EditorMainScreen::EDITOR_GAME);
+		// G4: reveal (not select) — the Game screen has no permanent strip button to select otherwise.
+		EditorNode::get_singleton()->get_editor_main_screen()->reveal_main_plugin(EditorMainScreen::EDITOR_GAME);
 	}
 }
 

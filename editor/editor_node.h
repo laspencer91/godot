@@ -189,6 +189,7 @@ public:
 		// Editor menu.
 		EDITOR_OPEN_SETTINGS,
 		EDITOR_COMMAND_PALETTE,
+		EDITOR_OPEN_ASSET_LIBRARY, // G4: AssetLib lives here now, not on the permanent main-screen strip.
 		EDITOR_TAKE_SCREENSHOT,
 		EDITOR_TOGGLE_FULLSCREEN,
 		EDITOR_OPEN_DATA_FOLDER,

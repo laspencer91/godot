@@ -238,7 +238,7 @@ EditorDock *EditorBottomPanel::_get_dock_from_control(Control *p_control) const 
 	return Object::cast_to<EditorDock>(p_control->get_parent());
 }
 
-Button *EditorBottomPanel::add_bottom_bar_toggle(const String &p_text, const Ref<Texture2D> &p_icon, const Ref<Shortcut> &p_shortcut) {
+Button *EditorBottomPanel::add_bottom_bar_toggle(const String &p_text, const Ref<Texture2D> &p_icon, const Ref<Shortcut> &p_shortcut, bool p_leading) {
 	Button *tb = memnew(Button);
 	tb->set_theme_type_variation("BottomPanelButton");
 	tb->set_toggle_mode(true);
@@ -248,6 +248,19 @@ Button *EditorBottomPanel::add_bottom_bar_toggle(const String &p_text, const Ref
 	}
 	if (p_shortcut.is_valid()) {
 		tb->set_shortcut(p_shortcut);
+	}
+	if (p_leading) {
+		// Far left of the row: internal_container holds [tab_bar][popup][bottom_hbox], so inserting
+		// at the front (with a divider) seats the toggle ahead of the dock tabs -- e.g. the FileSystem
+		// drawer button, which reads as its own leading entry rather than a trailing bar control.
+		tb->set_v_size_flags(SIZE_SHRINK_CENTER);
+		HBoxContainer *ic = get_internal_container();
+		VSeparator *sep = memnew(VSeparator);
+		ic->add_child(tb);
+		ic->add_child(sep);
+		ic->move_child(tb, 0);
+		ic->move_child(sep, 1);
+		return tb;
 	}
 	// Front of bottom_hbox = leftmost of the bar's non-tab controls, right after the dock tabs.
 	bottom_hbox->add_child(tb);
