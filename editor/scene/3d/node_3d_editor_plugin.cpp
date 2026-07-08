@@ -9935,6 +9935,11 @@ void Node3DEditor::_update_context_toolbar() {
 	}
 
 	context_toolbar_panel->set_visible(has_visible);
+	// G2: hide the tools/context divider too when nothing is selected, so no separator dangles at the
+	// end of the (now inline) tool row.
+	if (context_toolbar_divider) {
+		context_toolbar_divider->set_visible(has_visible);
+	}
 }
 
 void Node3DEditor::set_can_preview(Camera3D *p_preview) {
@@ -10965,12 +10970,19 @@ Node3DEditor::Node3DEditor() {
 	view_layout_menu->set_shortcut_context(this);
 	main_menu_hbox->add_child(view_layout_menu);
 
-	main_menu_hbox->add_child(memnew(VSeparator));
+	context_toolbar_divider = memnew(VSeparator);
+	main_menu_hbox->add_child(context_toolbar_divider);
 
 	context_toolbar_panel = memnew(PanelContainer);
 	context_toolbar_hbox = memnew(HBoxContainer);
 	context_toolbar_panel->add_child(context_toolbar_hbox);
-	main_flow->add_child(context_toolbar_panel);
+	// G2: the per-selection context toolbar (e.g. the MeshInstance3D "Mesh" menu) lives INSIDE the main
+	// tool row rather than as a sibling in the HFlowContainer. As a sibling it wrapped to a second row in
+	// the narrower workspace pane, and appearing/disappearing with the selection shifted the viewport.
+	// Inline in main_menu_hbox it stays on the tools row; SHRINK_CENTER keeps it from inflating the row
+	// height so no vertical shift occurs.
+	context_toolbar_panel->set_v_size_flags(SIZE_SHRINK_CENTER);
+	main_menu_hbox->add_child(context_toolbar_panel);
 
 	// Get the view menu popup and have it stay open when a checkable item is selected
 	p = view_layout_menu->get_popup();

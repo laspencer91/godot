@@ -831,6 +831,7 @@ private:
 	// (such as MeshInstance's "Mesh" menu).
 	PanelContainer *context_toolbar_panel = nullptr;
 	HBoxContainer *context_toolbar_hbox = nullptr;
+	VSeparator *context_toolbar_divider = nullptr; // G2: tools/context divider in the inline main tool row.
 	HashMap<Control *, VSeparator *> context_toolbar_separators;
 
 	void _update_context_toolbar();
