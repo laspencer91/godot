@@ -2471,6 +2471,400 @@ LightmapperRD::BakeError LightmapperRD::bake(BakeQuality p_quality, bool p_use_d
 	return BAKE_OK;
 }
 
+LightmapperRD::BakeError LightmapperRD::bake_ao(int p_ao_ray_count, float p_ao_max_distance, float p_bias, int p_max_texture_size, bool p_use_denoiser, float p_denoiser_strength, int p_denoiser_range, float p_supersampling_factor, BakeStepFunc p_step_function, void *p_bake_userdata) {
+	// AO-only bake: a trimmed composition of bake()'s early passes -- atlas-pack -> accel -> raster ->
+	// unocclude -> a dedicated MODE_AO short-ray pass -> JNLM denoise -> dilate -> R8 readback. No
+	// light/bounce/probe/SH passes, no material capture, no environment. The meshes must already be
+	// registered via add_mesh() with (dummy white) albedo/emission images. See LIGHTMAP-AO-PLAN.md.
+	ao_textures.clear();
+	const int grid_size = 128;
+
+	if (p_step_function) {
+		p_step_function(0.0, RTR("Begin AO Bake"), p_bake_userdata, true);
+	}
+
+	/* STEP 1: pack meshes into the atlas. albedo/emission come from the dummy images fed to add_mesh;
+	   the AO pass never samples them, but the atlas packer derives each mesh's rect from them. */
+	AABB bounds;
+	Size2i atlas_size;
+	int atlas_slices;
+	Vector<Ref<Image>> albedo_images;
+	Vector<Ref<Image>> emission_images;
+	BakeError bake_error = _blit_meshes_into_atlas(p_max_texture_size, p_denoiser_range, albedo_images, emission_images, bounds, atlas_size, atlas_slices, p_supersampling_factor, p_step_function, p_bake_userdata);
+	if (bake_error != BAKE_OK) {
+		return bake_error;
+	}
+
+	// Local rendering device (offline compute; mirrors bake()).
+	Error err;
+	RenderingContextDriver *rcd = nullptr;
+	RenderingDevice *rd = RenderingServer::get_singleton()->create_local_rendering_device();
+	if (rd == nullptr) {
+#if defined(RD_ENABLED)
+#if defined(METAL_ENABLED)
+		rcd = memnew(RenderingContextDriverMetal);
+		rd = memnew(RenderingDevice);
+#endif
+#if defined(VULKAN_ENABLED)
+		if (rcd == nullptr) {
+			rcd = memnew(RenderingContextDriverVulkan);
+			rd = memnew(RenderingDevice);
+		}
+#endif
+#endif
+		if (rcd != nullptr && rd != nullptr) {
+			err = rcd->initialize();
+			if (err == OK) {
+				err = rd->initialize(rcd);
+			}
+			if (err != OK) {
+				memdelete(rd);
+				memdelete(rcd);
+				rd = nullptr;
+				rcd = nullptr;
+			}
+		}
+	}
+	ERR_FAIL_NULL_V(rd, BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES);
+
+	// memdelete(rd) frees every RID it owns, so error paths just tear down the device.
+	auto cleanup_device = [&]() {
+		memdelete(rd);
+		if (rcd != nullptr) {
+			memdelete(rcd);
+		}
+	};
+
+	/* STEP 2: allocate textures. albedo/emission back the shared base uniform set; position/normal/
+	   unocclude are the raster G-buffer; ao_tex/ao_tex2 are the AO ping-pong (RGBA8 like shadowmask). */
+	RID albedo_array_tex;
+	RID emission_array_tex;
+	RID normal_tex;
+	RID position_tex;
+	RID unocclude_tex;
+	RID ao_tex;
+	RID ao_tex2;
+	{
+		Vector<Vector<uint8_t>> albedo_data;
+		Vector<Vector<uint8_t>> emission_data;
+		for (int i = 0; i < atlas_slices; i++) {
+			albedo_data.push_back(albedo_images[i]->get_data());
+			emission_data.push_back(emission_images[i]->get_data());
+		}
+
+		RD::TextureFormat tf;
+		tf.width = atlas_size.width;
+		tf.height = atlas_size.height;
+		tf.array_layers = atlas_slices;
+		tf.texture_type = RD::TEXTURE_TYPE_2D_ARRAY;
+		tf.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT;
+		tf.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
+		albedo_array_tex = rd->texture_create(tf, RD::TextureView(), albedo_data);
+
+		tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+		emission_array_tex = rd->texture_create(tf, RD::TextureView(), emission_data);
+
+		tf.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
+		normal_tex = rd->texture_create(tf, RD::TextureView());
+		tf.format = RD::DATA_FORMAT_R32G32B32A32_SFLOAT;
+		position_tex = rd->texture_create(tf, RD::TextureView());
+		unocclude_tex = rd->texture_create(tf, RD::TextureView());
+
+		tf.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT;
+		tf.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
+		ao_tex = rd->texture_create(tf, RD::TextureView());
+		rd->texture_clear(ao_tex, Color(0, 0, 0, 0), 0, 1, 0, atlas_slices);
+		ao_tex2 = rd->texture_create(tf, RD::TextureView());
+		rd->texture_clear(ao_tex2, Color(0, 0, 0, 0), 0, 1, 0, atlas_slices);
+	}
+
+	/* STEP 3: acceleration structures (no probes for AO). */
+	Vector<int> slice_triangle_count;
+	Vector<int> slice_seam_count;
+	Vector<Probe> ao_probe_positions; // local; AO never generates probes.
+	RID bake_parameters_buffer;
+	RID vertex_buffer;
+	RID triangle_buffer;
+	RID lights_buffer;
+	RID triangle_indices_buffer;
+	RID cluster_indices_buffer;
+	RID cluster_aabbs_buffer;
+	RID grid_texture;
+	RID seams_buffer;
+	RID probe_positions_buffer;
+
+	const uint32_t cluster_size = 16;
+	_create_acceleration_structures(rd, atlas_size, atlas_slices, bounds, grid_size, cluster_size, ao_probe_positions, GENERATE_PROBES_DISABLED, slice_triangle_count, slice_seam_count, vertex_buffer, triangle_buffer, lights_buffer, triangle_indices_buffer, cluster_indices_buffer, cluster_aabbs_buffer, probe_positions_buffer, grid_texture, seams_buffer, p_step_function, p_bake_userdata);
+
+	/* STEP 4: bake parameters UBO (AO-relevant subset + ao_max_distance). */
+	BakeParameters bake_parameters;
+	bake_parameters.world_size[0] = bounds.size.x;
+	bake_parameters.world_size[1] = bounds.size.y;
+	bake_parameters.world_size[2] = bounds.size.z;
+	bake_parameters.bias = p_bias;
+	bake_parameters.to_cell_offset[0] = bounds.position.x;
+	bake_parameters.to_cell_offset[1] = bounds.position.y;
+	bake_parameters.to_cell_offset[2] = bounds.position.z;
+	bake_parameters.grid_size = grid_size;
+	bake_parameters.to_cell_size[0] = (1.0 / bounds.size.x) * float(grid_size);
+	bake_parameters.to_cell_size[1] = (1.0 / bounds.size.y) * float(grid_size);
+	bake_parameters.to_cell_size[2] = (1.0 / bounds.size.z) * float(grid_size);
+	bake_parameters.light_count = lights.size();
+	bake_parameters.atlas_size[0] = atlas_size.width;
+	bake_parameters.atlas_size[1] = atlas_size.height;
+	bake_parameters.exposure_normalization = 1.0f;
+	bake_parameters.supersampling_factor = p_supersampling_factor;
+	bake_parameters.ao_max_distance = p_ao_max_distance;
+
+	bake_parameters_buffer = rd->uniform_buffer_create(sizeof(BakeParameters));
+	rd->buffer_update(bake_parameters_buffer, 0, sizeof(BakeParameters), &bake_parameters);
+
+	/* STEP 5: raster shader + base uniform set (mirrors bake()). */
+	Ref<RDShaderFile> raster_shader;
+	raster_shader.instantiate();
+	err = raster_shader->parse_versions_from_text(lm_raster_shader_glsl);
+	if (err != OK) {
+		raster_shader->print_errors("raster_shader");
+		cleanup_device();
+		ERR_FAIL_V(BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES);
+	}
+	RID rasterize_shader = rd->shader_create_from_spirv(raster_shader->get_spirv_stages());
+	if (rasterize_shader.is_null()) {
+		cleanup_device();
+		ERR_FAIL_V(BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES);
+	}
+
+	RID sampler;
+	{
+		RD::SamplerState s;
+		s.mag_filter = RD::SAMPLER_FILTER_LINEAR;
+		s.min_filter = RD::SAMPLER_FILTER_LINEAR;
+		s.max_lod = 0;
+		sampler = rd->sampler_create(s);
+	}
+	RID area_light_atlas_sampler;
+	{
+		RD::SamplerState s;
+		s.mag_filter = RD::SAMPLER_FILTER_LINEAR;
+		s.min_filter = RD::SAMPLER_FILTER_LINEAR;
+		s.repeat_u = RD::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE;
+		s.repeat_v = RD::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE;
+		area_light_atlas_sampler = rd->sampler_create(s);
+	}
+
+	Vector<RD::Uniform> base_uniforms;
+	{
+		auto push_buffer = [&](RD::UniformType p_type, int p_binding, RID p_id) {
+			RD::Uniform u;
+			u.uniform_type = p_type;
+			u.binding = p_binding;
+			u.append_id(p_id);
+			base_uniforms.push_back(u);
+		};
+		push_buffer(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, bake_parameters_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 1, vertex_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 2, triangle_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, triangle_indices_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, lights_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 5, seams_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 6, probe_positions_buffer);
+		push_buffer(RD::UNIFORM_TYPE_TEXTURE, 7, grid_texture);
+		push_buffer(RD::UNIFORM_TYPE_TEXTURE, 8, albedo_array_tex);
+		push_buffer(RD::UNIFORM_TYPE_TEXTURE, 9, emission_array_tex);
+		push_buffer(RD::UNIFORM_TYPE_SAMPLER, 10, sampler);
+		push_buffer(RD::UNIFORM_TYPE_SAMPLER, 11, area_light_atlas_sampler);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 12, cluster_indices_buffer);
+		push_buffer(RD::UNIFORM_TYPE_STORAGE_BUFFER, 13, cluster_aabbs_buffer);
+	}
+
+	RID raster_base_uniform = rd->uniform_set_create(base_uniforms, rasterize_shader, 0);
+	RID raster_depth_buffer;
+	{
+		RD::TextureFormat tf;
+		tf.width = atlas_size.width;
+		tf.height = atlas_size.height;
+		tf.depth = 1;
+		tf.texture_type = RD::TEXTURE_TYPE_2D;
+		tf.usage_bits = RD::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+		tf.format = RD::DATA_FORMAT_D32_SFLOAT;
+		tf.is_discardable = true;
+		raster_depth_buffer = rd->texture_create(tf, RD::TextureView());
+	}
+
+	rd->submit();
+	rd->sync();
+
+	_raster_geometry(rd, atlas_size, atlas_slices, grid_size, bounds, p_bias, slice_triangle_count, position_tex, unocclude_tex, normal_tex, raster_depth_buffer, rasterize_shader, raster_base_uniform);
+
+	/* STEP 6: compute shaders (unocclude + ao). */
+	Ref<RDShaderFile> compute_shader;
+	String defines = "\n#define CLUSTER_SIZE " + uitos(cluster_size) + "\n";
+	compute_shader.instantiate();
+	err = compute_shader->parse_versions_from_text(lm_compute_shader_glsl, defines);
+	if (err != OK) {
+		compute_shader->print_errors("compute_shader");
+		cleanup_device();
+		ERR_FAIL_V(BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES);
+	}
+
+	RID compute_shader_unocclude = rd->shader_create_from_spirv(compute_shader->get_spirv_stages("unocclude"));
+	RID compute_shader_ao = rd->shader_create_from_spirv(compute_shader->get_spirv_stages("ao"));
+	if (compute_shader_unocclude.is_null() || compute_shader_ao.is_null()) {
+		cleanup_device();
+		ERR_FAIL_V(BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES);
+	}
+	RID compute_shader_unocclude_pipeline = rd->compute_pipeline_create(compute_shader_unocclude);
+	RID compute_shader_ao_pipeline = rd->compute_pipeline_create(compute_shader_ao);
+	RID compute_base_uniform_set = rd->uniform_set_create(base_uniforms, compute_shader_unocclude, 0);
+
+	Vector3i group_size(Math::division_round_up(atlas_size.x, 8), Math::division_round_up(atlas_size.y, 8), 1);
+	rd->submit();
+	rd->sync();
+
+	PushConstant push_constant;
+	push_constant.denoiser_range = p_use_denoiser ? p_denoiser_range : 1;
+
+	/* UNOCCLUDE (pushes interior lumel origins out of geometry -> better AO in tight corners). */
+	{
+		Vector<RD::Uniform> uniforms;
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+			u.binding = 0;
+			u.append_id(position_tex);
+			uniforms.push_back(u);
+		}
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+			u.binding = 1;
+			u.append_id(unocclude_tex);
+			uniforms.push_back(u);
+		}
+		RID unocclude_uniform_set = rd->uniform_set_create(uniforms, compute_shader_unocclude, 1);
+		RD::ComputeListID compute_list = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(compute_list, compute_shader_unocclude_pipeline);
+		rd->compute_list_bind_uniform_set(compute_list, compute_base_uniform_set, 0);
+		rd->compute_list_bind_uniform_set(compute_list, unocclude_uniform_set, 1);
+		for (int i = 0; i < atlas_slices; i++) {
+			push_constant.atlas_slice = i;
+			rd->compute_list_set_push_constant(compute_list, &push_constant, sizeof(PushConstant));
+			rd->compute_list_dispatch(compute_list, group_size.x, group_size.y, group_size.z);
+		}
+		rd->compute_list_end();
+	}
+
+	/* AO PASS (region-chunked, mirrors the direct-light dispatch; submit/sync per region for
+	   GPU-timeout safety). Reads the position/normal G-buffer, writes openness to ao_tex. */
+	const int max_region_size = Math::nearest_power_of_2_templated(int(GLOBAL_GET("rendering/lightmapping/bake_performance/region_size")));
+	const int x_regions = Math::division_round_up(atlas_size.width, max_region_size);
+	const int y_regions = Math::division_round_up(atlas_size.height, max_region_size);
+	push_constant.ray_count = CLAMP((uint32_t)p_ao_ray_count, 16u, 8192u);
+	{
+		Vector<RD::Uniform> uniforms;
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+			u.binding = 0;
+			u.append_id(position_tex);
+			uniforms.push_back(u);
+		}
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+			u.binding = 1;
+			u.append_id(normal_tex);
+			uniforms.push_back(u);
+		}
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+			u.binding = 2;
+			u.append_id(ao_tex);
+			uniforms.push_back(u);
+		}
+		RID ao_uniform_set = rd->uniform_set_create(uniforms, compute_shader_ao, 1);
+
+		int count = 0;
+		for (int s = 0; s < atlas_slices; s++) {
+			push_constant.atlas_slice = s;
+			for (int i = 0; i < x_regions; i++) {
+				for (int j = 0; j < y_regions; j++) {
+					int x = i * max_region_size;
+					int y = j * max_region_size;
+					int w = MIN((i + 1) * max_region_size, atlas_size.width) - x;
+					int h = MIN((j + 1) * max_region_size, atlas_size.height) - y;
+
+					push_constant.region_ofs[0] = x;
+					push_constant.region_ofs[1] = y;
+
+					Vector3i gs = Vector3i(Math::division_round_up(w, 8), Math::division_round_up(h, 8), 1);
+					RD::ComputeListID compute_list = rd->compute_list_begin();
+					rd->compute_list_bind_compute_pipeline(compute_list, compute_shader_ao_pipeline);
+					rd->compute_list_bind_uniform_set(compute_list, compute_base_uniform_set, 0);
+					rd->compute_list_bind_uniform_set(compute_list, ao_uniform_set, 1);
+					rd->compute_list_set_push_constant(compute_list, &push_constant, sizeof(PushConstant));
+					rd->compute_list_dispatch(compute_list, gs.x, gs.y, gs.z);
+					rd->compute_list_end();
+
+					rd->submit();
+					rd->sync();
+
+					count++;
+					if (p_step_function) {
+						int total = atlas_slices * x_regions * y_regions;
+						if (p_step_function(0.5 + float(count) / total * 0.3, vformat(RTR("Baking AO %d%%"), count * 100 / total), p_bake_userdata, false)) {
+							cleanup_device();
+							return BAKE_ERROR_USER_ABORTED;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	/* DENOISE (JNLM) + DILATE, mirroring the shadowmask path (both operate on the RGBA8 AO texture). */
+	if (p_use_denoiser) {
+		SWAP(ao_tex, ao_tex2);
+		BakeError error = _denoise(rd, compute_shader, compute_base_uniform_set, push_constant, ao_tex2, normal_tex, ao_tex, unocclude_tex, p_denoiser_strength, p_denoiser_range, atlas_size, atlas_slices, false, p_step_function, p_bake_userdata);
+		if (error != BAKE_OK) {
+			cleanup_device();
+			return error;
+		}
+	}
+	{
+		SWAP(ao_tex, ao_tex2);
+		BakeError error = _dilate(rd, compute_shader, compute_base_uniform_set, push_constant, ao_tex2, ao_tex, atlas_size, atlas_slices);
+		if (error != BAKE_OK) {
+			cleanup_device();
+			return error;
+		}
+	}
+
+	/* READBACK -> one R8 image per atlas slice. */
+	if (p_step_function) {
+		p_step_function(0.9, RTR("Retrieving AO textures"), p_bake_userdata, true);
+	}
+	for (int i = 0; i < atlas_slices; i++) {
+		Vector<uint8_t> s = rd->texture_get_data(ao_tex, i);
+		Ref<Image> img = Image::create_from_data(atlas_size.width, atlas_size.height, false, Image::FORMAT_RGBA8, s);
+		img->convert(Image::FORMAT_R8);
+		ao_textures.push_back(img);
+	}
+
+	cleanup_device();
+	return BAKE_OK;
+}
+
+int LightmapperRD::get_bake_ao_texture_count() const {
+	return ao_textures.size();
+}
+
+Ref<Image> LightmapperRD::get_bake_ao_texture(int p_index) const {
+	ERR_FAIL_INDEX_V(p_index, ao_textures.size(), Ref<Image>());
+	return ao_textures[p_index];
+}
+
 int LightmapperRD::get_bake_texture_count() const {
 	return lightmap_textures.size();
 }

@@ -180,6 +180,13 @@ public:
 	virtual Ref<Image> get_bake_texture(int p_index) const = 0;
 	virtual int get_shadowmask_texture_count() const = 0;
 	virtual Ref<Image> get_shadowmask_texture(int p_index) const = 0;
+
+	// AO bake: contextual ambient-occlusion mask for weathering (see AOBaker3D). Non-pure so only the
+	// GPU backend (LightmapperRD) implements it; other backends inherit the not-supported default.
+	virtual BakeError bake_ao(int p_ao_ray_count, float p_ao_max_distance, float p_bias, int p_max_texture_size, bool p_use_denoiser, float p_denoiser_strength, int p_denoiser_range, float p_supersampling_factor, BakeStepFunc p_step_function = nullptr, void *p_step_userdata = nullptr) { return BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES; }
+	virtual int get_bake_ao_texture_count() const { return 0; }
+	virtual Ref<Image> get_bake_ao_texture(int p_index) const { return Ref<Image>(); }
+
 	virtual int get_bake_mesh_count() const = 0;
 	virtual Variant get_bake_mesh_userdata(int p_index) const = 0;
 	virtual Rect2 get_bake_mesh_uv_scale(int p_index) const = 0;

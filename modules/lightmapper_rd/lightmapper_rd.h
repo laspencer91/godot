@@ -281,6 +281,7 @@ class LightmapperRD : public Lightmapper {
 
 	Vector<Ref<Image>> lightmap_textures;
 	Vector<Ref<Image>> shadowmask_textures;
+	Vector<Ref<Image>> ao_textures; // AO bake output (one R8 slice per atlas layer).
 	Vector<Color> probe_values;
 
 	struct DilateParams {
@@ -326,6 +327,10 @@ public:
 	Ref<Image> get_bake_texture(int p_index) const override;
 	int get_shadowmask_texture_count() const override;
 	Ref<Image> get_shadowmask_texture(int p_index) const override;
+
+	virtual BakeError bake_ao(int p_ao_ray_count, float p_ao_max_distance, float p_bias, int p_max_texture_size, bool p_use_denoiser, float p_denoiser_strength, int p_denoiser_range, float p_supersampling_factor, BakeStepFunc p_step_function = nullptr, void *p_bake_userdata = nullptr) override;
+	int get_bake_ao_texture_count() const override;
+	Ref<Image> get_bake_ao_texture(int p_index) const override;
 	int get_bake_mesh_count() const override;
 	Variant get_bake_mesh_userdata(int p_index) const override;
 	Rect2 get_bake_mesh_uv_scale(int p_index) const override;
