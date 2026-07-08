@@ -263,6 +263,7 @@ void Box3DBody3D::_build_all_shapes() {
 						WARN_PRINT("Box3D: concave (trimesh) shapes are only supported on static/kinematic bodies.");
 						continue;
 					}
+					def.enableSensorEvents = false;
 					b3MeshData *mesh = s->mesh;
 					if (!slot.xform.is_equal_approx(Transform3D())) {
 						mesh = _clone_mesh_with_transform(s->mesh, slot.xform);
@@ -282,6 +283,7 @@ void Box3DBody3D::_build_all_shapes() {
 						WARN_PRINT("Box3D: heightmap shapes are only supported on static/kinematic bodies.");
 						continue;
 					}
+					def.enableSensorEvents = false;
 					b3MeshData *mesh = s->mesh;
 					if (!slot.xform.is_equal_approx(Transform3D())) {
 						mesh = _clone_mesh_with_transform(s->mesh, slot.xform);
