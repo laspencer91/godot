@@ -18,8 +18,10 @@ class Box3DShape3D;
 
 class Box3DSpace3D {
 	b3WorldId world = {};
+	b3Recording *recording = nullptr;
 	real_t last_step = 0.0;
 	bool stepping = false;
+	bool recording_active = false;
 
 	// Default-area parameters (World3D routes these through area_set_param on the space RID).
 	real_t default_gravity = 9.8;
@@ -53,6 +55,13 @@ public:
 
 	void step(real_t p_step);
 	void call_queries();
+
+	bool start_recording(int p_byte_capacity);
+	PackedByteArray stop_recording();
+	bool is_recording() const { return recording_active; }
+	PackedByteArray get_recording_data() const;
+	int get_recording_size() const;
+	bool save_recording(const String &p_path) const;
 
 	void kinematic_target_queued(Box3DBody3D *p_body) { pending_kinematic.insert(p_body); }
 	void body_added(Box3DBody3D *p_body) { bodies.insert(p_body); }

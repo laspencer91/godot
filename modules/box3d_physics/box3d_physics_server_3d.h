@@ -87,6 +87,11 @@ public:
 	virtual void space_set_active(RID p_space, bool p_active) override;
 	virtual bool space_is_active(RID p_space) const override;
 	virtual PhysicsDirectSpaceState3D *space_get_direct_state(RID p_space) override;
+	bool space_start_recording(RID p_space, int p_byte_capacity);
+	PackedByteArray space_stop_recording(RID p_space);
+	bool space_is_recording(RID p_space) const;
+	int space_get_recording_size(RID p_space) const;
+	bool space_save_recording(RID p_space, const String &p_path) const;
 
 	// Areas.
 	virtual RID area_create() override;

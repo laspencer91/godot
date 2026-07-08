@@ -119,6 +119,14 @@ public:
 	Quaternion joint_get_box3d_target_rotation(RID p_joint) const;
 	void joint_set_box3d_motor_velocity(RID p_joint, const Vector3 &p_velocity);
 	Vector3 joint_get_box3d_motor_velocity(RID p_joint) const;
+
+	bool recording_start(RID p_space, int p_byte_capacity = 0);
+	PackedByteArray recording_stop(RID p_space);
+	bool recording_is_active(RID p_space) const;
+	int recording_get_size(RID p_space) const;
+	bool recording_save(RID p_space, const String &p_path) const;
+	bool recording_validate(const PackedByteArray &p_data, int p_worker_count = 1) const;
+	bool recording_validate_file(const String &p_path, int p_worker_count = 1) const;
 };
 
 class Box3DSurfaceOverride3D : public Node {

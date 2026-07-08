@@ -138,6 +138,40 @@ PhysicsDirectSpaceState3D *Box3DPhysicsServer3D::space_get_direct_state(RID p_sp
 	return space->get_direct_state();
 }
 
+bool Box3DPhysicsServer3D::space_start_recording(RID p_space, int p_byte_capacity) {
+	Box3DSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, false);
+	ERR_FAIL_COND_V_MSG(!can_access_space(space), false, "Box3D: recording changes are inaccessible right now, wait for iteration or physics process notification.");
+	return space->start_recording(p_byte_capacity);
+}
+
+PackedByteArray Box3DPhysicsServer3D::space_stop_recording(RID p_space) {
+	Box3DSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, PackedByteArray());
+	ERR_FAIL_COND_V_MSG(!can_access_space(space), PackedByteArray(), "Box3D: recording changes are inaccessible right now, wait for iteration or physics process notification.");
+	return space->stop_recording();
+}
+
+bool Box3DPhysicsServer3D::space_is_recording(RID p_space) const {
+	Box3DSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, false);
+	return space->is_recording();
+}
+
+int Box3DPhysicsServer3D::space_get_recording_size(RID p_space) const {
+	Box3DSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, 0);
+	ERR_FAIL_COND_V_MSG(!can_access_space(space), 0, "Box3D: recording data is inaccessible right now, wait for iteration or physics process notification.");
+	return space->get_recording_size();
+}
+
+bool Box3DPhysicsServer3D::space_save_recording(RID p_space, const String &p_path) const {
+	Box3DSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, false);
+	ERR_FAIL_COND_V_MSG(!can_access_space(space), false, "Box3D: recording changes are inaccessible right now, wait for iteration or physics process notification.");
+	return space->save_recording(p_path);
+}
+
 // --- Areas ---
 
 RID Box3DPhysicsServer3D::area_create() {

@@ -10,6 +10,8 @@
 #include "box3d_conversions.h"
 #include "box3d_direct_space_state_3d.h"
 
+#include <string.h>
+
 // TODO(box3d): substep count + worker count become physics/box3d/* project settings.
 static const int BOX3D_SUBSTEPS = 4;
 
@@ -48,6 +50,12 @@ Box3DSpace3D::~Box3DSpace3D() {
 	// Bodies must already be detached (Godot frees bodies before their space).
 	if (direct_state) {
 		memdelete(direct_state);
+	}
+	if (recording_active) {
+		b3World_StopRecording(world);
+	}
+	if (recording != nullptr) {
+		b3DestroyRecording(recording);
 	}
 	b3DestroyWorld(world);
 }
@@ -130,6 +138,51 @@ void Box3DSpace3D::call_queries() {
 		area->call_queries();
 	}
 	dirty_areas.clear();
+}
+
+bool Box3DSpace3D::start_recording(int p_byte_capacity) {
+	ERR_FAIL_COND_V_MSG(recording_active, false, "Box3D: this space is already recording.");
+	if (recording != nullptr) {
+		b3DestroyRecording(recording);
+		recording = nullptr;
+	}
+	recording = b3CreateRecording(MAX(0, p_byte_capacity));
+	ERR_FAIL_NULL_V_MSG(recording, false, "Box3D: failed to create recording buffer.");
+	b3World_StartRecording(world, recording);
+	recording_active = true;
+	return true;
+}
+
+PackedByteArray Box3DSpace3D::stop_recording() {
+	ERR_FAIL_COND_V_MSG(!recording_active, PackedByteArray(), "Box3D: this space is not recording.");
+	b3World_StopRecording(world);
+	recording_active = false;
+	return get_recording_data();
+}
+
+PackedByteArray Box3DSpace3D::get_recording_data() const {
+	PackedByteArray bytes;
+	ERR_FAIL_NULL_V(recording, bytes);
+	const int size = b3Recording_GetSize(recording);
+	if (size <= 0) {
+		return bytes;
+	}
+	const uint8_t *data = b3Recording_GetData(recording);
+	ERR_FAIL_NULL_V(data, bytes);
+	bytes.resize(size);
+	memcpy(bytes.ptrw(), data, size);
+	return bytes;
+}
+
+int Box3DSpace3D::get_recording_size() const {
+	return recording != nullptr ? b3Recording_GetSize(recording) : 0;
+}
+
+bool Box3DSpace3D::save_recording(const String &p_path) const {
+	ERR_FAIL_NULL_V_MSG(recording, false, "Box3D: no recording is available to save.");
+	ERR_FAIL_COND_V_MSG(recording_active, false, "Box3D: stop recording before saving.");
+	const CharString path = p_path.utf8();
+	return b3SaveRecordingToFile(recording, path.get_data());
 }
 
 static int _box3d_shape_index(b3ShapeId p_shape_id) {

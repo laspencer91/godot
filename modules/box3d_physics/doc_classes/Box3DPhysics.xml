@@ -73,6 +73,59 @@
 				Reloads the library from [code]physics/box3d/surface_material_library[/code]. Existing shapes use updated values after reassignment or rebuild.
 			</description>
 		</method>
+		<method name="recording_get_size" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Returns the current native Box3D recording byte count for [param space], or [code]0[/code] when no recording buffer exists.
+			</description>
+		</method>
+		<method name="recording_is_active" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Returns whether [param space] is actively recording native Box3D operations.
+			</description>
+		</method>
+		<method name="recording_save" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="space" type="RID" />
+			<param index="1" name="path" type="String" />
+			<description>
+				Saves the last stopped native Box3D recording for [param space] to [param path]. Stop the recording before saving.
+			</description>
+		</method>
+		<method name="recording_start">
+			<return type="bool" />
+			<param index="0" name="space" type="RID" />
+			<param index="1" name="byte_capacity" type="int" default="0" />
+			<description>
+				Starts native Box3D recording for [param space]. [param byte_capacity] is an optional initial buffer size; [code]0[/code] uses Box3D's default.
+			</description>
+		</method>
+		<method name="recording_stop">
+			<return type="PackedByteArray" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Stops native Box3D recording for [param space] and returns the serialized bytes.
+			</description>
+		</method>
+		<method name="recording_validate" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="data" type="PackedByteArray" />
+			<param index="1" name="worker_count" type="int" default="1" />
+			<description>
+				Replays serialized native Box3D recording bytes and returns whether all embedded state hashes match. Pass [code]1[/code] to match the module's current serial stepping.
+			</description>
+		</method>
+		<method name="recording_validate_file" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="path" type="String" />
+			<param index="1" name="worker_count" type="int" default="1" />
+			<description>
+				Loads a native Box3D recording file and validates it with [method recording_validate].
+			</description>
+		</method>
 		<method name="shape_set_surface_map">
 			<return type="void" />
 			<param index="0" name="shape" type="RID" />

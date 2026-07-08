@@ -121,6 +121,13 @@ void Box3DPhysics::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("joint_get_box3d_target_rotation", "joint"), &Box3DPhysics::joint_get_box3d_target_rotation);
 	ClassDB::bind_method(D_METHOD("joint_set_box3d_motor_velocity", "joint", "velocity"), &Box3DPhysics::joint_set_box3d_motor_velocity);
 	ClassDB::bind_method(D_METHOD("joint_get_box3d_motor_velocity", "joint"), &Box3DPhysics::joint_get_box3d_motor_velocity);
+	ClassDB::bind_method(D_METHOD("recording_start", "space", "byte_capacity"), &Box3DPhysics::recording_start, DEFVAL(0));
+	ClassDB::bind_method(D_METHOD("recording_stop", "space"), &Box3DPhysics::recording_stop);
+	ClassDB::bind_method(D_METHOD("recording_is_active", "space"), &Box3DPhysics::recording_is_active);
+	ClassDB::bind_method(D_METHOD("recording_get_size", "space"), &Box3DPhysics::recording_get_size);
+	ClassDB::bind_method(D_METHOD("recording_save", "space", "path"), &Box3DPhysics::recording_save);
+	ClassDB::bind_method(D_METHOD("recording_validate", "data", "worker_count"), &Box3DPhysics::recording_validate, DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("recording_validate_file", "path", "worker_count"), &Box3DPhysics::recording_validate_file, DEFVAL(1));
 
 	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_HERTZ);
 	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_DAMPING_RATIO);
@@ -287,6 +294,60 @@ Vector3 Box3DPhysics::joint_get_box3d_motor_velocity(RID p_joint) const {
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL_V(server, Vector3());
 	return server->joint_get_box3d_motor_velocity(p_joint);
+}
+
+bool Box3DPhysics::recording_start(RID p_space, int p_byte_capacity) {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, false);
+	return server->space_start_recording(p_space, p_byte_capacity);
+}
+
+PackedByteArray Box3DPhysics::recording_stop(RID p_space) {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, PackedByteArray());
+	return server->space_stop_recording(p_space);
+}
+
+bool Box3DPhysics::recording_is_active(RID p_space) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, false);
+	return server->space_is_recording(p_space);
+}
+
+int Box3DPhysics::recording_get_size(RID p_space) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, 0);
+	return server->space_get_recording_size(p_space);
+}
+
+bool Box3DPhysics::recording_save(RID p_space, const String &p_path) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, false);
+	String path = p_path;
+	if (ProjectSettings::get_singleton() != nullptr) {
+		path = ProjectSettings::get_singleton()->globalize_path(path);
+	}
+	return server->space_save_recording(p_space, path);
+}
+
+bool Box3DPhysics::recording_validate(const PackedByteArray &p_data, int p_worker_count) const {
+	ERR_FAIL_COND_V_MSG(p_data.is_empty(), false, "Box3D: cannot validate an empty recording.");
+	return b3ValidateReplay(p_data.ptr(), p_data.size(), MAX(1, p_worker_count));
+}
+
+bool Box3DPhysics::recording_validate_file(const String &p_path, int p_worker_count) const {
+	String path = p_path;
+	if (ProjectSettings::get_singleton() != nullptr) {
+		path = ProjectSettings::get_singleton()->globalize_path(path);
+	}
+	const CharString utf8_path = path.utf8();
+	b3Recording *loaded = b3LoadRecordingFromFile(utf8_path.get_data());
+	ERR_FAIL_NULL_V_MSG(loaded, false, "Box3D: failed to load recording file.");
+	const uint8_t *data = b3Recording_GetData(loaded);
+	const int size = b3Recording_GetSize(loaded);
+	const bool valid = data != nullptr && size > 0 && b3ValidateReplay(data, size, MAX(1, p_worker_count));
+	b3DestroyRecording(loaded);
+	return valid;
 }
 
 String Box3DPhysics::get_material_name_hint() const {
