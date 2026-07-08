@@ -4753,6 +4753,19 @@ void EditorNode::set_edited_scene_root(Node *p_scene, bool p_auto_add) {
 	if (p_auto_add && p_scene) {
 		active_scene_root->add_child(p_scene, true);
 	}
+
+	// G2: force-build this scene's 3D gizmos once it is the edited scene. In the workspace/pane model a
+	// document's nodes enter their isolated world BEFORE the document becomes the edited scene, so the
+	// deferred _request_gizmo that fires on ENTER_WORLD is skipped (get_edited_scene() wasn't this scene
+	// yet). Node3D then latches gizmos_requested, so a later update_gizmos() never re-asks and the gizmo
+	// BVH stays empty — leaving viewport click-selection with nothing to hit. build_edited_scene_gizmos()
+	// re-drives _request_gizmo directly; defer it so the scene is fully in-tree/in-world by the time it
+	// runs (right after this returns). Non-Node3D scenes are skipped, so 2D/mixed docs are unaffected.
+	if (p_scene) {
+		if (Node3DEditor *spatial_editor = Node3DEditor::get_singleton()) {
+			callable_mp(spatial_editor, &Node3DEditor::build_edited_scene_gizmos).call_deferred();
+		}
+	}
 }
 
 String EditorNode::get_preview_locale() const {

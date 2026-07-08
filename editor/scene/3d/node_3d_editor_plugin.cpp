@@ -7497,6 +7497,34 @@ void Node3DEditor::update_all_gizmos(Node *p_node) {
 	_update_all_gizmos(p_node);
 }
 
+void Node3DEditor::build_edited_scene_gizmos() {
+	// Deferred entry point (see EditorNode::set_edited_scene_root): rebuild gizmos for whatever is the
+	// edited scene now that it is fully in the tree/world.
+	build_scene_gizmos(EditorNode::get_singleton()->get_edited_scene());
+}
+
+void Node3DEditor::build_scene_gizmos(Node *p_node) {
+	// Force gizmo creation across a subtree, bypassing Node3D::update_gizmos()'s gizmos_requested latch.
+	// In the workspace/pane model a document's nodes enter their isolated world BEFORE the document is
+	// the edited scene, so the ENTER_WORLD gizmo request runs _request_gizmo while the is-ancestor-of-
+	// edited-scene test still fails: no gizmo is built, yet gizmos_requested latches true. A later
+	// update_gizmos() then early-outs and never re-requests, so the gizmo BVH stays empty and viewport
+	// click-selection has nothing to hit. Driven from set_edited_scene_root (via build_edited_scene_gizmos)
+	// once the scene is the edited scene, this re-drives _request_gizmo directly for any node still
+	// missing gizmos.
+	if (!p_node) {
+		return;
+	}
+	if (Node3D *sp = Object::cast_to<Node3D>(p_node)) {
+		if (sp->get_gizmos().is_empty()) {
+			_request_gizmo(sp);
+		}
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		build_scene_gizmos(p_node->get_child(i));
+	}
+}
+
 Object *Node3DEditor::_get_editor_data(Object *p_what) {
 	Node3D *sp = Object::cast_to<Node3D>(p_what);
 	if (!sp) {

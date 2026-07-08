@@ -1025,6 +1025,8 @@ public:
 	void update_grid();
 	void update_transform_gizmo();
 	void update_all_gizmos(Node *p_node = nullptr);
+	void build_scene_gizmos(Node *p_node); // G2: force-build gizmos for a newly-active pane document (bypasses the gizmos_requested latch).
+	void build_edited_scene_gizmos(); // G2: deferred wrapper — build_scene_gizmos(get_edited_scene()); hooked from set_edited_scene_root.
 	void update_gizmo_opacity();
 	void snap_selected_nodes_to_floor();
 	void select_gizmo_highlight_axis(int p_axis);
