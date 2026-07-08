@@ -46,6 +46,8 @@
 #include "scene/main/scene_tree.h"
 #include "scene/property_utils.h"
 #include "scene/resources/packed_scene.h"
+#include "scene/resources/shader.h"
+#include "scene/resources/shader_include.h"
 
 void EditorSelectionHistory::cleanup_history() {
 	for (int i = 0; i < history.size(); i++) {
@@ -894,6 +896,27 @@ ScriptDocument *EditorData::get_or_create_script_document(const Ref<Resource> &p
 	return sd;
 }
 
+ShaderDocument *EditorData::get_or_create_shader_document(const Ref<Resource> &p_resource) {
+	// G-Shader: one ShaderDocument per shader resource — dedup by the same Ref (ResourceCache hands
+	// back the same instance) or, failing that, a non-empty stored path. Mirrors the script twin.
+	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
+	const String path = p_resource->get_path();
+	for (EditorDocument *doc : aux_documents) {
+		if (doc->get_type() != EditorDocument::TYPE_SHADER) {
+			continue;
+		}
+		ShaderDocument *sd = static_cast<ShaderDocument *>(doc);
+		if (sd->get_shader_resource() == p_resource || (!path.is_empty() && sd->get_path() == path)) {
+			return sd;
+		}
+	}
+	ShaderDocument *sd = memnew(ShaderDocument);
+	sd->set_shader_resource(p_resource);
+	sd->set_path(path);
+	aux_documents.push_back(sd);
+	return sd;
+}
+
 HelpDocument *EditorData::get_or_create_help_document(const String &p_class) {
 	// G2 S3: one HelpDocument per class; path == "help://<class>" is the dedup key.
 	const String path = "help://" + p_class;
@@ -942,7 +965,14 @@ EditorDocument *EditorData::get_or_create_document_for_path(const String &p_path
 		return nullptr;
 	}
 	Ref<Resource> res = ResourceLoader::load(p_path);
-	return res.is_valid() ? get_or_create_script_document(res) : nullptr;
+	if (res.is_null()) {
+		return nullptr;
+	}
+	// G-Shader: shaders open as their own tab kind; everything else text-like is a script document.
+	if (Object::cast_to<Shader>(res.ptr()) || Object::cast_to<ShaderInclude>(res.ptr())) {
+		return get_or_create_shader_document(res);
+	}
+	return get_or_create_script_document(res);
 }
 
 void EditorData::close_aux_document(EditorDocument *p_document) {

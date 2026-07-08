@@ -59,6 +59,7 @@ public:
 		TYPE_RESOURCE,
 		TYPE_HELP, // G2 S3: a class-reference (help) document. Append-only — do not reorder.
 		TYPE_SCREEN_HOST, // G2 S5.5: THE one screen-host document (seam #5). Append-only.
+		TYPE_SHADER, // G-Shader: a Shader / ShaderInclude / VisualShader document. Append-only.
 	};
 
 protected:
@@ -192,6 +193,23 @@ public:
 
 	ScriptDocument() { type = TYPE_SCRIPT; }
 	virtual ~ScriptDocument() {}
+};
+
+// G-Shader: a shader document opened as a workspace tab. Holds a Shader / ShaderInclude / VisualShader
+// resource (kept as Ref<Resource> so this header stays light — the ShaderEditorPlugin view factory
+// casts to the concrete type and its language plugins pick the widget: a code editor for text shaders,
+// a node-graph editor for visual shaders). No render world; `path` == the edited resource's path.
+class ShaderDocument : public EditorDocument {
+	Ref<Resource> shader;
+
+public:
+	Ref<Resource> get_shader_resource() const { return shader; }
+	void set_shader_resource(const Ref<Resource> &p_shader) { shader = p_shader; }
+
+	virtual bool opens_as_workspace_tab() const override { return true; }
+
+	ShaderDocument() { type = TYPE_SHADER; }
+	virtual ~ShaderDocument() {}
 };
 
 // G2 S3: a class-reference (help) document opened as a workspace tab. The view is an EditorHelp.
