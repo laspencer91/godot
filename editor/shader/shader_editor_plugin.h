@@ -35,6 +35,7 @@
 
 class CodeTextEditor;
 class Control;
+class DocumentView;
 class MenuButton;
 class ShaderCreateDialog;
 class ShaderEditor;
@@ -49,7 +50,9 @@ class ShaderEditorPlugin : public EditorPlugin {
 		Ref<ShaderInclude> shader_inc;
 		ShaderEditor *shader_editor = nullptr;
 		String path;
-		String name;
+
+		// The edited resource, whichever kind this entry holds.
+		Ref<Resource> resource() const { return shader.is_valid() ? Ref<Resource>(shader) : Ref<Resource>(shader_inc); }
 	};
 
 	LocalVector<EditedShader> edited_shaders;
@@ -89,7 +92,6 @@ class ShaderEditorPlugin : public EditorPlugin {
 	void _close_builtin_shaders_from_scene(const String &p_scene);
 	void _file_removed(const String &p_removed_file);
 	void _res_saved_callback(const Ref<Resource> &p_res);
-	void _set_file_specific_items_disabled(bool p_disabled);
 
 	void _shader_created(Ref<Shader> p_shader);
 	void _shader_include_created(Ref<ShaderInclude> p_shader_inc);
@@ -116,7 +118,7 @@ public:
 
 	// G-Shader: focus hook (driven by TabbedDocumentHost / EditorWorkspace, like ScriptEditor). When a
 	// shader tab becomes current its editor hosts the File menu; any other kind of tab parks it.
-	void set_current_surface(Control *p_surface);
+	void set_current_surface(DocumentView *p_view);
 
 	ShaderEditor *get_shader_editor(const Ref<Shader> &p_for_shader);
 

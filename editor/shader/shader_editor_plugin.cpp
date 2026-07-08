@@ -38,14 +38,12 @@
 #include "editor/editor_document.h"
 #include "editor/editor_main_screen.h"
 #include "editor/editor_node.h"
-#include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
-#include "editor/settings/editor_command_palette.h"
+#include "editor/gui/document_view.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/shader/shader_create_dialog.h"
 #include "editor/shader/text_shader_editor.h"
 #include "editor/shader/text_shader_language_plugin.h"
-#include "editor/themes/editor_scale.h"
 #include "scene/gui/menu_button.h"
 #include "servers/display/display_server.h"
 
@@ -73,13 +71,7 @@ int ShaderEditorPlugin::_current_edited_shader() const {
 
 Ref<Resource> ShaderEditorPlugin::_get_current_shader() {
 	int index = _current_edited_shader();
-	if (index < 0) {
-		return Ref<Resource>();
-	}
-	if (edited_shaders[index].shader.is_valid()) {
-		return edited_shaders[index].shader;
-	}
-	return edited_shaders[index].shader_inc;
+	return index < 0 ? Ref<Resource>() : edited_shaders[index].resource();
 }
 
 ShaderEditor *ShaderEditorPlugin::create_editor_view(const Ref<Resource> &p_resource) {
@@ -111,13 +103,9 @@ ShaderEditor *ShaderEditorPlugin::create_editor_view(const Ref<Resource> &p_reso
 
 	ERR_FAIL_NULL_V_MSG(es.shader_editor, nullptr, "ShaderEditorPlugin: Unable to edit shader because no suitable editor was found.");
 
-	// Cache the display name / path (used by _file_removed + get_unsaved_status now that the bottom
-	// list — which used to fill these — is gone).
+	// Cache the path (used by _file_removed to match a deleted file, and by get_unsaved_status for
+	// the display name, now that the bottom list — which used to fill these — is gone).
 	es.path = p_resource->get_path();
-	es.name = es.path.get_file();
-	if (es.name.is_empty()) {
-		es.name = TTR("[unsaved]");
-	}
 
 	// No bottom list to toggle in the workspace; the pane tab bar is the shader list.
 	es.shader_editor->set_toggle_list_control(nullptr);
@@ -167,14 +155,14 @@ void ShaderEditorPlugin::_park_file_menu() {
 	} else {
 		menu_home->add_child(file_menu);
 	}
-	_set_file_specific_items_disabled(true);
 }
 
-void ShaderEditorPlugin::set_current_surface(Control *p_surface) {
+void ShaderEditorPlugin::set_current_surface(DocumentView *p_view) {
 	// G-Shader (focus hook): a shader tab becoming current hosts the shared File menu in its own
 	// editor toolbar (ShaderEditor::use_menu_bar); any other kind of tab parks it. Driven by
-	// TabbedDocumentHost / EditorWorkspace, mirroring ScriptEditor::set_current_surface.
-	ShaderEditor *se = Object::cast_to<ShaderEditor>(p_surface);
+	// TabbedDocumentHost / EditorWorkspace, mirroring ScriptEditor::set_current_surface (which also
+	// takes the view and extracts the surface here).
+	ShaderEditor *se = p_view ? Object::cast_to<ShaderEditor>(p_view->get_editor_surface()) : nullptr;
 	const ObjectID new_id = se ? se->get_instance_id() : ObjectID();
 	if (new_id == current_shader_editor_id) {
 		return;
@@ -185,7 +173,6 @@ void ShaderEditorPlugin::set_current_surface(Control *p_surface) {
 			file_menu->get_parent()->remove_child(file_menu);
 		}
 		se->use_menu_bar(file_menu);
-		_set_file_specific_items_disabled(false);
 	} else {
 		_park_file_menu();
 	}
@@ -265,7 +252,8 @@ String ShaderEditorPlugin::get_unsaved_status(const String &p_for_scene) const {
 				if (unsaved_shaders.is_empty()) {
 					unsaved_shaders.append(TTR("Save changes to the following shaders(s) before quitting?"));
 				}
-				unsaved_shaders.append(edited_shaders[i].name.trim_suffix("(*)"));
+				String display = edited_shaders[i].path.get_file();
+				unsaved_shaders.append(display.is_empty() ? TTR("[unsaved]") : display);
 			}
 		}
 	}
@@ -313,7 +301,7 @@ void ShaderEditorPlugin::_close_current_shader() {
 	if (index < 0) {
 		return;
 	}
-	Ref<Resource> res = edited_shaders[index].shader.is_valid() ? Ref<Resource>(edited_shaders[index].shader) : Ref<Resource>(edited_shaders[index].shader_inc);
+	Ref<Resource> res = edited_shaders[index].resource();
 	if (res.is_null()) {
 		return;
 	}
@@ -482,7 +470,7 @@ void ShaderEditorPlugin::_update_shader_editor_zoom_factor(CodeTextEditor *p_sha
 void ShaderEditorPlugin::_file_removed(const String &p_removed_file) {
 	for (uint32_t i = 0; i < edited_shaders.size(); i++) {
 		if (edited_shaders[i].path == p_removed_file) {
-			Ref<Resource> res = edited_shaders[i].shader.is_valid() ? Ref<Resource>(edited_shaders[i].shader) : Ref<Resource>(edited_shaders[i].shader_inc);
+			Ref<Resource> res = edited_shaders[i].resource();
 			if (res.is_valid()) {
 				EditorNode::get_singleton()->get_editor_main_screen()->close_document(EditorNode::get_editor_data().get_or_create_shader_document(res));
 			}
@@ -498,10 +486,7 @@ void ShaderEditorPlugin::_res_saved_callback(const Ref<Resource> &p_res) {
 	const String &path = p_res->get_path();
 
 	for (EditedShader &edited : edited_shaders) {
-		Ref<Resource> shader_res = edited.shader;
-		if (shader_res.is_null()) {
-			shader_res = edited.shader_inc;
-		}
+		Ref<Resource> shader_res = edited.resource();
 		ERR_FAIL_COND(shader_res.is_null());
 
 		TextShaderEditor *text_shader_editor = Object::cast_to<TextShaderEditor>(edited.shader_editor);
@@ -513,17 +498,6 @@ void ShaderEditorPlugin::_res_saved_callback(const Ref<Resource> &p_res) {
 			text_shader_editor->tag_saved_version();
 		}
 	}
-}
-
-void ShaderEditorPlugin::_set_file_specific_items_disabled(bool p_disabled) {
-	PopupMenu *file_popup_menu = file_menu->get_popup();
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_SAVE), p_disabled);
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_SAVE_AS), p_disabled);
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_INSPECT), p_disabled);
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_INSPECT_NATIVE_SHADER_CODE), p_disabled);
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_CLOSE), p_disabled);
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_SHOW_IN_FILE_SYSTEM), p_disabled);
-	file_popup_menu->set_item_disabled(file_popup_menu->get_item_index(FILE_MENU_COPY_PATH), p_disabled);
 }
 
 void ShaderEditorPlugin::_setup_file_menu(PopupMenu *p_menu) {
@@ -580,7 +554,6 @@ ShaderEditorPlugin::ShaderEditorPlugin() {
 	file_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &ShaderEditorPlugin::_menu_item_pressed));
 	_setup_file_menu(file_menu->get_popup());
 	menu_home->add_child(file_menu);
-	_set_file_specific_items_disabled(true);
 
 	shader_create_dialog = memnew(ShaderCreateDialog);
 	shader_create_dialog->connect("shader_created", callable_mp(this, &ShaderEditorPlugin::_shader_created));

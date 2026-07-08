@@ -229,19 +229,16 @@ void TabbedDocumentHost::_activate_document(int p_idx) {
 void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 	// G2 S6a: the "current script" the ScriptEditor services act on (save, run, breakpoints)
 	// follows the workspace: a script tab becoming current makes its view the current one; any
-	// other kind of tab clears it (mirrors stock behavior when a help tab is current).
-	ScriptEditor *se = ScriptEditor::get_singleton();
-	if (!se) {
-		return;
-	}
+	// other kind of tab clears it (mirrors stock behavior when a help tab is current). The shader
+	// File menu (G-Shader) and the scene 2D/3D toolbar (M7.2a) follow the same tab the same way —
+	// each guarded independently so a missing subscriber can't starve the others.
 	DocumentView *view = (p_idx >= 0 && p_idx < views.size()) ? views[p_idx] : nullptr;
-	se->set_current_surface(view);
-	// G-Shader: the shader File menu follows the current tab the same way (mounts into a shader tab,
-	// parks otherwise).
-	if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
-		sep->set_current_surface(view ? view->get_editor_surface() : nullptr);
+	if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+		se->set_current_surface(view);
 	}
-	// G2 M7.2a: the shared 2D/3D toolbar follows the current tab into its scene pane's header.
+	if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
+		sep->set_current_surface(view);
+	}
 	if (EditorNode *en = EditorNode::get_singleton()) {
 		en->update_scene_pane_toolbar(view);
 	}

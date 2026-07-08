@@ -393,8 +393,7 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 		}
 		// G-Shader: the shader File menu likewise follows pane focus into the focused shader tab.
 		if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
-			DocumentView *view = host->get_current_view();
-			sep->set_current_surface(view ? view->get_editor_surface() : nullptr);
+			sep->set_current_surface(host->get_current_view());
 		}
 		// G2 M7.2a: the shared 2D/3D toolbar follows pane focus into the focused scene pane's header.
 		if (EditorNode *en = EditorNode::get_singleton()) {
