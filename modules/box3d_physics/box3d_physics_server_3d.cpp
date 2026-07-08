@@ -39,6 +39,26 @@ bool Box3DPhysicsServer3D::_can_mutate_shape_owners(const Box3DShape3D *p_shape)
 	return true;
 }
 
+bool Box3DPhysicsServer3D::_can_mutate_joint(const Box3DJoint3D *p_joint) const {
+	return _can_mutate_joint_bodies(p_joint->get_body_a(), p_joint->get_body_b());
+}
+
+bool Box3DPhysicsServer3D::_can_mutate_joint_bodies(const Box3DBody3D *p_body_a, const Box3DBody3D *p_body_b) const {
+	if (p_body_a != nullptr) {
+		Box3DSpace3D *space = p_body_a->get_space();
+		if (space != nullptr && !can_access_space(space)) {
+			return false;
+		}
+	}
+	if (p_body_b != nullptr) {
+		Box3DSpace3D *space = p_body_b->get_space();
+		if (space != nullptr && !can_access_space(space)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 RID Box3DPhysicsServer3D::custom_shape_create() {
 	ERR_FAIL_V_MSG(RID(), "Box3D: custom shapes are not supported.");
 }
@@ -663,6 +683,259 @@ bool Box3DPhysicsServer3D::body_test_motion(RID p_body, const MotionParameters &
 	return space->get_direct_state()->body_test_motion(*body, p_parameters, r_result);
 }
 
+// --- Joints ---
+
+RID Box3DPhysicsServer3D::joint_create() {
+	Box3DJoint3D *joint = memnew(Box3DJoint3D);
+	RID rid = joint_owner.make_rid(joint);
+	joint->set_rid(rid);
+	return rid;
+}
+
+void Box3DPhysicsServer3D::joint_clear(RID p_joint) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->clear();
+}
+
+PhysicsServer3D::JointType Box3DPhysicsServer3D::joint_get_type(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, JOINT_TYPE_PIN);
+	return joint->get_type();
+}
+
+void Box3DPhysicsServer3D::joint_set_solver_priority(RID p_joint, int p_priority) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	joint->set_solver_priority(p_priority);
+}
+
+int Box3DPhysicsServer3D::joint_get_solver_priority(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0);
+	return joint->get_solver_priority();
+}
+
+void Box3DPhysicsServer3D::joint_disable_collisions_between_bodies(RID p_joint, bool p_disable) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->set_collision_disabled(p_disable);
+}
+
+bool Box3DPhysicsServer3D::joint_is_disabled_collisions_between_bodies(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, false);
+	return joint->is_collision_disabled();
+}
+
+void Box3DPhysicsServer3D::joint_make_pin(RID p_joint, RID p_body_A, const Vector3 &p_local_A, RID p_body_B, const Vector3 &p_local_B) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	Box3DBody3D *body_a = body_owner.get_or_null(p_body_A);
+	Box3DBody3D *body_b = body_owner.get_or_null(p_body_B);
+	ERR_FAIL_NULL(body_a);
+	ERR_FAIL_NULL_MSG(body_b, "Box3D: world-body joints are not supported yet.");
+	ERR_FAIL_COND(body_a == body_b);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	ERR_FAIL_COND_MSG(!_can_mutate_joint_bodies(body_a, body_b), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->make_pin(body_a, body_b, p_local_A, p_local_B);
+}
+
+void Box3DPhysicsServer3D::pin_joint_set_param(RID p_joint, PinJointParam p_param, real_t p_value) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_PIN);
+	joint->pin_set_param(p_param, p_value);
+}
+
+real_t Box3DPhysicsServer3D::pin_joint_get_param(RID p_joint, PinJointParam p_param) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_PIN, 0.0);
+	return joint->pin_get_param(p_param);
+}
+
+void Box3DPhysicsServer3D::pin_joint_set_local_a(RID p_joint, const Vector3 &p_A) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_PIN);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->pin_set_local_a(p_A);
+}
+
+Vector3 Box3DPhysicsServer3D::pin_joint_get_local_a(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, Vector3());
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_PIN, Vector3());
+	return joint->pin_get_local_a();
+}
+
+void Box3DPhysicsServer3D::pin_joint_set_local_b(RID p_joint, const Vector3 &p_B) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_PIN);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->pin_set_local_b(p_B);
+}
+
+Vector3 Box3DPhysicsServer3D::pin_joint_get_local_b(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, Vector3());
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_PIN, Vector3());
+	return joint->pin_get_local_b();
+}
+
+void Box3DPhysicsServer3D::joint_make_hinge(RID p_joint, RID p_body_A, const Transform3D &p_hinge_A, RID p_body_B, const Transform3D &p_hinge_B) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	Box3DBody3D *body_a = body_owner.get_or_null(p_body_A);
+	Box3DBody3D *body_b = body_owner.get_or_null(p_body_B);
+	ERR_FAIL_NULL(body_a);
+	ERR_FAIL_NULL_MSG(body_b, "Box3D: world-body joints are not supported yet.");
+	ERR_FAIL_COND(body_a == body_b);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	ERR_FAIL_COND_MSG(!_can_mutate_joint_bodies(body_a, body_b), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->make_hinge(body_a, body_b, p_hinge_A, p_hinge_B);
+}
+
+void Box3DPhysicsServer3D::joint_make_hinge_simple(RID p_joint, RID p_body_A, const Vector3 &p_pivot_A, const Vector3 &p_axis_A, RID p_body_B, const Vector3 &p_pivot_B, const Vector3 &p_axis_B) {
+	WARN_PRINT_ONCE("Box3D: simple hinge axis conversion is not supported; using the full hinge API frame convention.");
+	Transform3D frame_a(Basis(), p_pivot_A);
+	Transform3D frame_b(Basis(), p_pivot_B);
+	joint_make_hinge(p_joint, p_body_A, frame_a, p_body_B, frame_b);
+}
+
+void Box3DPhysicsServer3D::hinge_joint_set_param(RID p_joint, HingeJointParam p_param, real_t p_value) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_HINGE);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->hinge_set_param(p_param, p_value);
+}
+
+real_t Box3DPhysicsServer3D::hinge_joint_get_param(RID p_joint, HingeJointParam p_param) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_HINGE, 0.0);
+	return joint->hinge_get_param(p_param);
+}
+
+void Box3DPhysicsServer3D::hinge_joint_set_flag(RID p_joint, HingeJointFlag p_flag, bool p_enabled) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_HINGE);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->hinge_set_flag(p_flag, p_enabled);
+}
+
+bool Box3DPhysicsServer3D::hinge_joint_get_flag(RID p_joint, HingeJointFlag p_flag) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, false);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_HINGE, false);
+	return joint->hinge_get_flag(p_flag);
+}
+
+void Box3DPhysicsServer3D::joint_make_slider(RID p_joint, RID p_body_A, const Transform3D &p_local_frame_A, RID p_body_B, const Transform3D &p_local_frame_B) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	Box3DBody3D *body_a = body_owner.get_or_null(p_body_A);
+	Box3DBody3D *body_b = body_owner.get_or_null(p_body_B);
+	ERR_FAIL_NULL(body_a);
+	ERR_FAIL_NULL_MSG(body_b, "Box3D: world-body joints are not supported yet.");
+	ERR_FAIL_COND(body_a == body_b);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	ERR_FAIL_COND_MSG(!_can_mutate_joint_bodies(body_a, body_b), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->make_slider(body_a, body_b, p_local_frame_A, p_local_frame_B);
+}
+
+void Box3DPhysicsServer3D::slider_joint_set_param(RID p_joint, SliderJointParam p_param, real_t p_value) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_SLIDER);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->slider_set_param(p_param, p_value);
+}
+
+real_t Box3DPhysicsServer3D::slider_joint_get_param(RID p_joint, SliderJointParam p_param) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_SLIDER, 0.0);
+	return joint->slider_get_param(p_param);
+}
+
+void Box3DPhysicsServer3D::joint_make_cone_twist(RID p_joint, RID p_body_A, const Transform3D &p_local_frame_A, RID p_body_B, const Transform3D &p_local_frame_B) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	Box3DBody3D *body_a = body_owner.get_or_null(p_body_A);
+	Box3DBody3D *body_b = body_owner.get_or_null(p_body_B);
+	ERR_FAIL_NULL(body_a);
+	ERR_FAIL_NULL_MSG(body_b, "Box3D: world-body joints are not supported yet.");
+	ERR_FAIL_COND(body_a == body_b);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	ERR_FAIL_COND_MSG(!_can_mutate_joint_bodies(body_a, body_b), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->make_cone_twist(body_a, body_b, p_local_frame_A, p_local_frame_B);
+}
+
+void Box3DPhysicsServer3D::cone_twist_joint_set_param(RID p_joint, ConeTwistJointParam p_param, real_t p_value) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_CONE_TWIST);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->cone_twist_set_param(p_param, p_value);
+}
+
+real_t Box3DPhysicsServer3D::cone_twist_joint_get_param(RID p_joint, ConeTwistJointParam p_param) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_CONE_TWIST, 0.0);
+	return joint->cone_twist_get_param(p_param);
+}
+
+void Box3DPhysicsServer3D::joint_make_generic_6dof(RID p_joint, RID p_body_A, const Transform3D &p_local_frame_A, RID p_body_B, const Transform3D &p_local_frame_B) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	Box3DBody3D *body_a = body_owner.get_or_null(p_body_A);
+	Box3DBody3D *body_b = body_owner.get_or_null(p_body_B);
+	ERR_FAIL_NULL(body_a);
+	ERR_FAIL_NULL_MSG(body_b, "Box3D: world-body joints are not supported yet.");
+	ERR_FAIL_COND(body_a == body_b);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	ERR_FAIL_COND_MSG(!_can_mutate_joint_bodies(body_a, body_b), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->make_generic_6dof(body_a, body_b, p_local_frame_A, p_local_frame_B);
+}
+
+void Box3DPhysicsServer3D::generic_6dof_joint_set_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param, real_t p_value) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_6DOF);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->generic_6dof_set_param(p_axis, p_param, p_value);
+}
+
+real_t Box3DPhysicsServer3D::generic_6dof_joint_get_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_6DOF, 0.0);
+	return joint->generic_6dof_get_param(p_axis, p_param);
+}
+
+void Box3DPhysicsServer3D::generic_6dof_joint_set_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag, bool p_enable) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_6DOF);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->generic_6dof_set_flag(p_axis, p_flag, p_enable);
+}
+
+bool Box3DPhysicsServer3D::generic_6dof_joint_get_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, false);
+	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_6DOF, false);
+	return joint->generic_6dof_get_flag(p_axis, p_flag);
+}
+
 // --- Lifecycle ---
 
 void Box3DPhysicsServer3D::free_rid(RID p_rid) {
@@ -679,10 +952,17 @@ void Box3DPhysicsServer3D::free_rid(RID p_rid) {
 		shape_owner.free(p_rid);
 		memdelete(shape);
 	} else if (Box3DBody3D *body = body_owner.get_or_null(p_rid)) {
+		while (!body->get_joints().is_empty()) {
+			Box3DJoint3D *joint = *body->get_joints().begin();
+			joint->clear();
+		}
 		body->clear_shapes();
 		body->set_space(nullptr);
 		body_owner.free(p_rid);
 		memdelete(body);
+	} else if (Box3DJoint3D *joint = joint_owner.get_or_null(p_rid)) {
+		joint_owner.free(p_rid);
+		memdelete(joint);
 	} else if (Box3DArea3D *area = area_owner.get_or_null(p_rid)) {
 		area_owner.free(p_rid);
 		memdelete(area);

@@ -18,6 +18,7 @@ class Box3DShape3D;
 class Box3DSpace3D;
 class Box3DDirectBodyState3D;
 class Box3DDirectSpaceState3D;
+class Box3DJoint3D;
 
 class Box3DBody3D : public Box3DCollisionObject3D {
 	friend class Box3DDirectBodyState3D;
@@ -59,6 +60,7 @@ private:
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
 	HashSet<RID> collision_exceptions;
+	HashSet<Box3DJoint3D *> joints;
 	bool continuous_cd = false;
 
 	Vector3 constant_force;
@@ -170,6 +172,9 @@ public:
 	bool has_collision_exception(RID p_body) const { return collision_exceptions.has(p_body); }
 	const HashSet<RID> &get_collision_exceptions() const { return collision_exceptions; }
 	void set_enable_continuous_collision_detection(bool p_enable);
+	void add_joint(Box3DJoint3D *p_joint) { joints.insert(p_joint); }
+	void remove_joint(Box3DJoint3D *p_joint) { joints.erase(p_joint); }
+	const HashSet<Box3DJoint3D *> &get_joints() const { return joints; }
 
 	void apply_central_impulse(const Vector3 &p_impulse);
 	void apply_impulse(const Vector3 &p_impulse, const Vector3 &p_position);

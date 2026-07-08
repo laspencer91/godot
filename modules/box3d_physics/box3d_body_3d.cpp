@@ -7,6 +7,7 @@
 #include "box3d_area_3d.h"
 #include "box3d_conversions.h"
 #include "box3d_direct_space_state_3d.h"
+#include "box3d_joint_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
 #include "box3d_surface_materials.h"
@@ -59,6 +60,9 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 
 	if (space) {
 		if (in_space()) {
+			for (Box3DJoint3D *joint : joints) {
+				joint->destroy_box3d_joint();
+			}
 			// Preserve dynamic state across space changes.
 			linear_velocity_cache = get_linear_velocity();
 			angular_velocity_cache = get_angular_velocity();
@@ -89,6 +93,9 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 		def.userData = this;
 		body_id = b3CreateBody(space->get_world(), &def);
 		_build_all_shapes();
+		for (Box3DJoint3D *joint : joints) {
+			joint->rebuild();
+		}
 	}
 }
 

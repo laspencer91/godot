@@ -16,6 +16,7 @@
 
 #include "box3d_area_3d.h"
 #include "box3d_body_3d.h"
+#include "box3d_joint_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
 
@@ -28,6 +29,7 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	mutable RID_PtrOwner<Box3DArea3D> area_owner;
 	mutable RID_PtrOwner<Box3DBody3D> body_owner;
 	mutable RID_PtrOwner<Box3DShape3D> shape_owner;
+	mutable RID_PtrOwner<Box3DJoint3D> joint_owner;
 
 	HashSet<Box3DSpace3D *> active_spaces;
 
@@ -39,6 +41,8 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	RID _create_shape(ShapeType p_type);
 	bool _can_mutate_body_shapes(const Box3DBody3D *p_body) const;
 	bool _can_mutate_shape_owners(const Box3DShape3D *p_shape) const;
+	bool _can_mutate_joint(const Box3DJoint3D *p_joint) const;
+	bool _can_mutate_joint_bodies(const Box3DBody3D *p_body_a, const Box3DBody3D *p_body_b) const;
 
 public:
 	explicit Box3DPhysicsServer3D(bool p_using_threads = false);
@@ -155,6 +159,39 @@ public:
 	virtual void body_set_force_integration_callback(RID p_body, const Callable &p_callable, const Variant &p_udata = Variant()) override;
 	virtual PhysicsDirectBodyState3D *body_get_direct_state(RID p_body) override;
 	virtual bool body_test_motion(RID p_body, const MotionParameters &p_parameters, MotionResult *r_result = nullptr) override;
+
+	// Joints.
+	virtual RID joint_create() override;
+	virtual void joint_clear(RID p_joint) override;
+	virtual JointType joint_get_type(RID p_joint) const override;
+	virtual void joint_set_solver_priority(RID p_joint, int p_priority) override;
+	virtual int joint_get_solver_priority(RID p_joint) const override;
+	virtual void joint_disable_collisions_between_bodies(RID p_joint, bool p_disable) override;
+	virtual bool joint_is_disabled_collisions_between_bodies(RID p_joint) const override;
+	virtual void joint_make_pin(RID p_joint, RID p_body_A, const Vector3 &p_local_A, RID p_body_B, const Vector3 &p_local_B) override;
+	virtual void pin_joint_set_param(RID p_joint, PinJointParam p_param, real_t p_value) override;
+	virtual real_t pin_joint_get_param(RID p_joint, PinJointParam p_param) const override;
+	virtual void pin_joint_set_local_a(RID p_joint, const Vector3 &p_A) override;
+	virtual Vector3 pin_joint_get_local_a(RID p_joint) const override;
+	virtual void pin_joint_set_local_b(RID p_joint, const Vector3 &p_B) override;
+	virtual Vector3 pin_joint_get_local_b(RID p_joint) const override;
+	virtual void joint_make_hinge(RID p_joint, RID p_body_A, const Transform3D &p_hinge_A, RID p_body_B, const Transform3D &p_hinge_B) override;
+	virtual void joint_make_hinge_simple(RID p_joint, RID p_body_A, const Vector3 &p_pivot_A, const Vector3 &p_axis_A, RID p_body_B, const Vector3 &p_pivot_B, const Vector3 &p_axis_B) override;
+	virtual void hinge_joint_set_param(RID p_joint, HingeJointParam p_param, real_t p_value) override;
+	virtual real_t hinge_joint_get_param(RID p_joint, HingeJointParam p_param) const override;
+	virtual void hinge_joint_set_flag(RID p_joint, HingeJointFlag p_flag, bool p_enabled) override;
+	virtual bool hinge_joint_get_flag(RID p_joint, HingeJointFlag p_flag) const override;
+	virtual void joint_make_slider(RID p_joint, RID p_body_A, const Transform3D &p_local_frame_A, RID p_body_B, const Transform3D &p_local_frame_B) override;
+	virtual void slider_joint_set_param(RID p_joint, SliderJointParam p_param, real_t p_value) override;
+	virtual real_t slider_joint_get_param(RID p_joint, SliderJointParam p_param) const override;
+	virtual void joint_make_cone_twist(RID p_joint, RID p_body_A, const Transform3D &p_local_frame_A, RID p_body_B, const Transform3D &p_local_frame_B) override;
+	virtual void cone_twist_joint_set_param(RID p_joint, ConeTwistJointParam p_param, real_t p_value) override;
+	virtual real_t cone_twist_joint_get_param(RID p_joint, ConeTwistJointParam p_param) const override;
+	virtual void joint_make_generic_6dof(RID p_joint, RID p_body_A, const Transform3D &p_local_frame_A, RID p_body_B, const Transform3D &p_local_frame_B) override;
+	virtual void generic_6dof_joint_set_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param, real_t p_value) override;
+	virtual real_t generic_6dof_joint_get_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param) const override;
+	virtual void generic_6dof_joint_set_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag, bool p_enable) override;
+	virtual bool generic_6dof_joint_get_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag) const override;
 
 	// Lifecycle.
 	virtual void free_rid(RID p_rid) override;

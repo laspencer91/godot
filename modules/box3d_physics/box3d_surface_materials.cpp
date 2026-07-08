@@ -129,6 +129,8 @@ Box3DPhysics::~Box3DPhysics() {
 
 void Box3DPhysics::register_project_settings() {
 	GLOBAL_DEF(PropertyInfo(Variant::STRING, "physics/box3d/surface_material_library", PROPERTY_HINT_FILE, "*.tres,*.res"), String());
+	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_hertz", PROPERTY_HINT_RANGE, U"0,240,0.1,or_greater,suffix:Hz"), 60.0f);
+	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_damping_ratio", PROPERTY_HINT_RANGE, U"0,10,0.01,or_greater"), 4.0f);
 }
 
 void Box3DPhysics::reload_surface_material_library() {
