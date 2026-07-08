@@ -112,6 +112,13 @@ public:
 	PackedByteArray get_shape_mesh_material_indices(RID p_shape) const;
 	Ref<Box3DSurfaceMaterial> get_face_material(RID p_shape, int p_face_index) const;
 	String get_material_name_hint() const;
+
+	void joint_set_box3d_param(RID p_joint, int p_param, real_t p_value);
+	real_t joint_get_box3d_param(RID p_joint, int p_param) const;
+	void joint_set_box3d_target_rotation(RID p_joint, const Quaternion &p_target_rotation);
+	Quaternion joint_get_box3d_target_rotation(RID p_joint) const;
+	void joint_set_box3d_motor_velocity(RID p_joint, const Vector3 &p_velocity);
+	Vector3 joint_get_box3d_motor_velocity(RID p_joint) const;
 };
 
 class Box3DSurfaceOverride3D : public Node {

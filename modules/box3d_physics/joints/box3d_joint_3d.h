@@ -26,6 +26,15 @@ class Box3DJoint3D {
 
 	bool collision_disabled = false;
 	int solver_priority = 1;
+	real_t constraint_hertz = -1.0;
+	real_t constraint_damping_ratio = -1.0;
+	real_t force_threshold = 0.0;
+	real_t torque_threshold = 0.0;
+	real_t spherical_spring_hertz = 0.0;
+	real_t spherical_spring_damping_ratio = 0.7;
+	Quaternion spherical_target_rotation;
+	Vector3 spherical_motor_velocity;
+	real_t spherical_max_motor_torque = 0.0;
 
 	static constexpr int PIN_JOINT_PARAM_COUNT = 3;
 	real_t pin_params[PIN_JOINT_PARAM_COUNT] = {};
@@ -40,9 +49,13 @@ class Box3DJoint3D {
 	bool _can_build() const;
 	Box3DSpace3D *_get_joint_space() const;
 	void _fill_base_def(b3JointDef &r_def);
+	void _fill_base_def(b3JointDef &r_def, const Transform3D &p_frame_a, const Transform3D &p_frame_b);
 	float _max_motor_torque_from_impulse(real_t p_impulse) const;
-	void _apply_collision_disabled();
-	void _remove_collision_disabled();
+	float _hinge_box3d_lower_limit() const;
+	float _hinge_box3d_upper_limit() const;
+	float _hinge_box3d_motor_speed() const;
+	Transform3D _remap_twist_x_to_z(const Transform3D &p_frame) const;
+	Transform3D _remap_linear_axis_to_x(const Transform3D &p_frame, int p_axis) const;
 
 	b3JointId _create_pin();
 	b3JointId _create_hinge();
@@ -69,6 +82,12 @@ public:
 
 	int get_solver_priority() const { return solver_priority; }
 	void set_solver_priority(int p_priority);
+	void set_box3d_param(int p_param, real_t p_value);
+	real_t get_box3d_param(int p_param) const;
+	void set_box3d_target_rotation(const Quaternion &p_target_rotation);
+	Quaternion get_box3d_target_rotation() const { return spherical_target_rotation; }
+	void set_box3d_motor_velocity(const Vector3 &p_velocity);
+	Vector3 get_box3d_motor_velocity() const { return spherical_motor_velocity; }
 
 	void destroy_box3d_joint();
 	void rebuild();

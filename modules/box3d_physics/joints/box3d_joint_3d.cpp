@@ -4,9 +4,10 @@
 
 #include "box3d_joint_3d.h"
 
-#include "box3d_body_3d.h"
-#include "box3d_conversions.h"
-#include "box3d_space_3d.h"
+#include "../box3d_body_3d.h"
+#include "../box3d_conversions.h"
+#include "../box3d_physics_server_3d.h"
+#include "../box3d_space_3d.h"
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
@@ -109,7 +110,6 @@ Box3DJoint3D::~Box3DJoint3D() {
 }
 
 void Box3DJoint3D::_set_bodies(Box3DBody3D *p_body_a, Box3DBody3D *p_body_b) {
-	_remove_collision_disabled();
 	destroy_box3d_joint();
 	if (body_a != nullptr) {
 		body_a->remove_joint(this);
@@ -127,7 +127,6 @@ void Box3DJoint3D::_set_bodies(Box3DBody3D *p_body_a, Box3DBody3D *p_body_b) {
 	if (body_b != nullptr) {
 		body_b->add_joint(this);
 	}
-	_apply_collision_disabled();
 }
 
 bool Box3DJoint3D::_can_build() const {
@@ -145,13 +144,19 @@ Box3DSpace3D *Box3DJoint3D::_get_joint_space() const {
 }
 
 void Box3DJoint3D::_fill_base_def(b3JointDef &r_def) {
+	_fill_base_def(r_def, local_frame_a, local_frame_b);
+}
+
+void Box3DJoint3D::_fill_base_def(b3JointDef &r_def, const Transform3D &p_frame_a, const Transform3D &p_frame_b) {
 	r_def.bodyIdA = body_a->get_body_id();
 	r_def.bodyIdB = body_b->get_body_id();
-	r_def.localFrameA = to_box3d(local_frame_a);
-	r_def.localFrameB = to_box3d(local_frame_b);
+	r_def.localFrameA = to_box3d(p_frame_a);
+	r_def.localFrameB = to_box3d(p_frame_b);
 	r_def.collideConnected = !collision_disabled;
-	r_def.constraintHertz = (float)GLOBAL_GET("physics/box3d/joints/constraint_hertz");
-	r_def.constraintDampingRatio = (float)GLOBAL_GET("physics/box3d/joints/constraint_damping_ratio");
+	r_def.constraintHertz = (float)(constraint_hertz >= 0.0 ? constraint_hertz : (real_t)GLOBAL_GET("physics/box3d/joints/constraint_hertz"));
+	r_def.constraintDampingRatio = (float)(constraint_damping_ratio >= 0.0 ? constraint_damping_ratio : (real_t)GLOBAL_GET("physics/box3d/joints/constraint_damping_ratio"));
+	r_def.forceThreshold = (float)force_threshold;
+	r_def.torqueThreshold = (float)torque_threshold;
 	r_def.userData = this;
 }
 
@@ -169,20 +174,42 @@ float Box3DJoint3D::_max_motor_torque_from_impulse(real_t p_impulse) const {
 	return (float)(p_impulse / MAX(step, CMP_EPSILON));
 }
 
-void Box3DJoint3D::_apply_collision_disabled() {
-	if (!collision_disabled || body_a == nullptr || body_b == nullptr) {
-		return;
-	}
-	body_a->add_collision_exception(body_b_rid);
-	body_b->add_collision_exception(body_a_rid);
+float Box3DJoint3D::_hinge_box3d_lower_limit() const {
+	return (float)-hinge_params[PhysicsServer3D::HINGE_JOINT_LIMIT_UPPER];
 }
 
-void Box3DJoint3D::_remove_collision_disabled() {
-	if (!collision_disabled || body_a == nullptr || body_b == nullptr) {
-		return;
+float Box3DJoint3D::_hinge_box3d_upper_limit() const {
+	return (float)-hinge_params[PhysicsServer3D::HINGE_JOINT_LIMIT_LOWER];
+}
+
+float Box3DJoint3D::_hinge_box3d_motor_speed() const {
+	return (float)-hinge_params[PhysicsServer3D::HINGE_JOINT_MOTOR_TARGET_VELOCITY];
+}
+
+Transform3D Box3DJoint3D::_remap_twist_x_to_z(const Transform3D &p_frame) const {
+	Basis x_to_z;
+	x_to_z.set_column(0, Vector3(0, 1, 0));
+	x_to_z.set_column(1, Vector3(0, 0, 1));
+	x_to_z.set_column(2, Vector3(1, 0, 0));
+	return Transform3D(p_frame.basis * x_to_z, p_frame.origin);
+}
+
+Transform3D Box3DJoint3D::_remap_linear_axis_to_x(const Transform3D &p_frame, int p_axis) const {
+	if (p_axis == Vector3::AXIS_X) {
+		return p_frame;
 	}
-	body_a->remove_collision_exception(body_b_rid);
-	body_b->remove_collision_exception(body_a_rid);
+
+	Basis remap;
+	if (p_axis == Vector3::AXIS_Y) {
+		remap.set_column(0, Vector3(0, 1, 0));
+		remap.set_column(1, Vector3(0, 0, 1));
+		remap.set_column(2, Vector3(1, 0, 0));
+	} else {
+		remap.set_column(0, Vector3(0, 0, 1));
+		remap.set_column(1, Vector3(1, 0, 0));
+		remap.set_column(2, Vector3(0, 1, 0));
+	}
+	return Transform3D(p_frame.basis * remap, p_frame.origin);
 }
 
 b3JointId Box3DJoint3D::_create_pin() {
@@ -199,10 +226,10 @@ b3JointId Box3DJoint3D::_create_hinge() {
 	b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
 	_fill_base_def(def.base);
 	def.enableLimit = hinge_flags[PhysicsServer3D::HINGE_JOINT_FLAG_USE_LIMIT];
-	def.lowerAngle = (float)hinge_params[PhysicsServer3D::HINGE_JOINT_LIMIT_LOWER];
-	def.upperAngle = (float)hinge_params[PhysicsServer3D::HINGE_JOINT_LIMIT_UPPER];
+	def.lowerAngle = _hinge_box3d_lower_limit();
+	def.upperAngle = _hinge_box3d_upper_limit();
 	def.enableMotor = hinge_flags[PhysicsServer3D::HINGE_JOINT_FLAG_ENABLE_MOTOR];
-	def.motorSpeed = (float)hinge_params[PhysicsServer3D::HINGE_JOINT_MOTOR_TARGET_VELOCITY];
+	def.motorSpeed = _hinge_box3d_motor_speed();
 	def.maxMotorTorque = _max_motor_torque_from_impulse(hinge_params[PhysicsServer3D::HINGE_JOINT_MOTOR_MAX_IMPULSE]);
 	return b3CreateRevoluteJoint(space->get_world(), &def);
 }
@@ -222,7 +249,7 @@ b3JointId Box3DJoint3D::_create_cone_twist() {
 	Box3DSpace3D *space = _get_joint_space();
 	ERR_FAIL_NULL_V(space, b3_nullJointId);
 	b3SphericalJointDef def = b3DefaultSphericalJointDef();
-	_fill_base_def(def.base);
+	_fill_base_def(def.base, _remap_twist_x_to_z(local_frame_a), _remap_twist_x_to_z(local_frame_b));
 	const float swing = CLAMP((float)cone_params[PhysicsServer3D::CONE_TWIST_JOINT_SWING_SPAN], 0.0f, (float)Math::PI);
 	const float twist = CLAMP((float)cone_params[PhysicsServer3D::CONE_TWIST_JOINT_TWIST_SPAN], 0.0f, (float)Math::PI * 0.99f);
 	def.enableConeLimit = true;
@@ -268,25 +295,25 @@ b3JointId Box3DJoint3D::_create_generic_6dof() {
 		return b3CreateWeldJoint(space->get_world(), &def);
 	}
 
-	if (all_angular_locked && free_linear_count == 1 && free_linear_axis == Vector3::AXIS_X) {
+	if (all_angular_locked && free_linear_count == 1) {
 		b3PrismaticJointDef def = b3DefaultPrismaticJointDef();
-		_fill_base_def(def.base);
-		const bool limited = g6dof_flags[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_LIMIT];
+		_fill_base_def(def.base, _remap_linear_axis_to_x(local_frame_a, free_linear_axis), _remap_linear_axis_to_x(local_frame_b, free_linear_axis));
+		const bool limited = g6dof_flags[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_LIMIT];
 		def.enableLimit = limited;
-		def.lowerTranslation = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_LINEAR_LOWER_LIMIT];
-		def.upperTranslation = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_LINEAR_UPPER_LIMIT];
-		def.enableSpring = g6dof_flags[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_SPRING];
-		def.hertz = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_STIFFNESS];
-		def.dampingRatio = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_DAMPING];
-		def.enableMotor = g6dof_flags[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR];
-		def.motorSpeed = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_TARGET_VELOCITY];
-		def.maxMotorForce = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_FORCE_LIMIT];
+		def.lowerTranslation = (float)g6dof_params[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_LINEAR_LOWER_LIMIT];
+		def.upperTranslation = (float)g6dof_params[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_LINEAR_UPPER_LIMIT];
+		def.enableSpring = g6dof_flags[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_SPRING];
+		def.hertz = (float)g6dof_params[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_STIFFNESS];
+		def.dampingRatio = (float)g6dof_params[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_DAMPING];
+		def.enableMotor = g6dof_flags[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR];
+		def.motorSpeed = (float)g6dof_params[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_TARGET_VELOCITY];
+		def.maxMotorForce = (float)g6dof_params[free_linear_axis][PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_FORCE_LIMIT];
 		return b3CreatePrismaticJoint(space->get_world(), &def);
 	}
 
 	if (all_linear_locked) {
 		b3SphericalJointDef def = b3DefaultSphericalJointDef();
-		_fill_base_def(def.base);
+		_fill_base_def(def.base, _remap_twist_x_to_z(local_frame_a), _remap_twist_x_to_z(local_frame_b));
 		const bool has_cone_limits = g6dof_flags[Vector3::AXIS_Y][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT] ||
 				g6dof_flags[Vector3::AXIS_Z][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT];
 		if (has_cone_limits) {
@@ -297,8 +324,8 @@ b3JointId Box3DJoint3D::_create_generic_6dof() {
 		}
 		if (g6dof_flags[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT]) {
 			def.enableTwistLimit = true;
-			def.lowerTwistAngle = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_ANGULAR_LOWER_LIMIT];
-			def.upperTwistAngle = (float)g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_ANGULAR_UPPER_LIMIT];
+			def.lowerTwistAngle = (float)-g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_ANGULAR_UPPER_LIMIT];
+			def.upperTwistAngle = (float)-g6dof_params[Vector3::AXIS_X][PhysicsServer3D::G6DOF_JOINT_ANGULAR_LOWER_LIMIT];
 		}
 		return b3CreateSphericalJoint(space->get_world(), &def);
 	}
@@ -312,6 +339,20 @@ b3JointId Box3DJoint3D::_create_generic_6dof() {
 void Box3DJoint3D::_apply_runtime_settings() {
 	if (B3_IS_NON_NULL(joint_id)) {
 		b3Joint_SetCollideConnected(joint_id, !collision_disabled);
+		b3Joint_SetConstraintTuning(joint_id, (float)(constraint_hertz >= 0.0 ? constraint_hertz : (real_t)GLOBAL_GET("physics/box3d/joints/constraint_hertz")),
+				(float)(constraint_damping_ratio >= 0.0 ? constraint_damping_ratio : (real_t)GLOBAL_GET("physics/box3d/joints/constraint_damping_ratio")));
+		b3Joint_SetForceThreshold(joint_id, (float)force_threshold);
+		b3Joint_SetTorqueThreshold(joint_id, (float)torque_threshold);
+		if (b3Joint_GetType(joint_id) == b3_sphericalJoint) {
+			b3SphericalJoint_EnableSpring(joint_id, spherical_spring_hertz > 0.0);
+			b3SphericalJoint_SetSpringHertz(joint_id, (float)spherical_spring_hertz);
+			b3SphericalJoint_SetSpringDampingRatio(joint_id, (float)spherical_spring_damping_ratio);
+			b3SphericalJoint_SetTargetRotation(joint_id, to_box3d(spherical_target_rotation));
+			const bool motor_enabled = spherical_max_motor_torque > 0.0;
+			b3SphericalJoint_EnableMotor(joint_id, motor_enabled);
+			b3SphericalJoint_SetMotorVelocity(joint_id, to_box3d(spherical_motor_velocity));
+			b3SphericalJoint_SetMaxMotorTorque(joint_id, (float)spherical_max_motor_torque);
+		}
 	}
 }
 
@@ -319,9 +360,7 @@ void Box3DJoint3D::set_collision_disabled(bool p_disabled) {
 	if (collision_disabled == p_disabled) {
 		return;
 	}
-	_remove_collision_disabled();
 	collision_disabled = p_disabled;
-	_apply_collision_disabled();
 	if (B3_IS_NON_NULL(joint_id)) {
 		b3Joint_SetCollideConnected(joint_id, !collision_disabled);
 	}
@@ -332,6 +371,66 @@ void Box3DJoint3D::set_solver_priority(int p_priority) {
 	if (p_priority != 1) {
 		WARN_PRINT_ONCE("Box3D: joint solver priority is not supported and will be ignored.");
 	}
+}
+
+void Box3DJoint3D::set_box3d_param(int p_param, real_t p_value) {
+	switch (p_param) {
+		case Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_HERTZ:
+			constraint_hertz = p_value;
+			break;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_DAMPING_RATIO:
+			constraint_damping_ratio = p_value;
+			break;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_FORCE_THRESHOLD:
+			force_threshold = p_value;
+			break;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_TORQUE_THRESHOLD:
+			torque_threshold = p_value;
+			break;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_SPRING_HERTZ:
+			spherical_spring_hertz = p_value;
+			break;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_SPRING_DAMPING_RATIO:
+			spherical_spring_damping_ratio = p_value;
+			break;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_MAX_MOTOR_TORQUE:
+			spherical_max_motor_torque = p_value;
+			break;
+		default:
+			ERR_FAIL_MSG("Box3D: unknown Box3D joint parameter.");
+	}
+	_apply_runtime_settings();
+}
+
+real_t Box3DJoint3D::get_box3d_param(int p_param) const {
+	switch (p_param) {
+		case Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_HERTZ:
+			return constraint_hertz;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_DAMPING_RATIO:
+			return constraint_damping_ratio;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_FORCE_THRESHOLD:
+			return force_threshold;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_TORQUE_THRESHOLD:
+			return torque_threshold;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_SPRING_HERTZ:
+			return spherical_spring_hertz;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_SPRING_DAMPING_RATIO:
+			return spherical_spring_damping_ratio;
+		case Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_MAX_MOTOR_TORQUE:
+			return spherical_max_motor_torque;
+		default:
+			ERR_FAIL_V_MSG(0.0, "Box3D: unknown Box3D joint parameter.");
+	}
+}
+
+void Box3DJoint3D::set_box3d_target_rotation(const Quaternion &p_target_rotation) {
+	spherical_target_rotation = p_target_rotation;
+	_apply_runtime_settings();
+}
+
+void Box3DJoint3D::set_box3d_motor_velocity(const Vector3 &p_velocity) {
+	spherical_motor_velocity = p_velocity;
+	_apply_runtime_settings();
 }
 
 void Box3DJoint3D::destroy_box3d_joint() {
@@ -369,7 +468,6 @@ void Box3DJoint3D::rebuild() {
 }
 
 void Box3DJoint3D::clear() {
-	_remove_collision_disabled();
 	destroy_box3d_joint();
 	if (body_a != nullptr) {
 		body_a->remove_joint(this);
@@ -462,13 +560,13 @@ void Box3DJoint3D::hinge_set_param(PhysicsServer3D::HingeJointParam p_param, rea
 	switch (p_param) {
 		case PhysicsServer3D::HINGE_JOINT_LIMIT_UPPER:
 		case PhysicsServer3D::HINGE_JOINT_LIMIT_LOWER:
-			if (type == PhysicsServer3D::JOINT_TYPE_HINGE) {
-				rebuild();
+			if (B3_IS_NON_NULL(joint_id)) {
+				b3RevoluteJoint_SetLimits(joint_id, _hinge_box3d_lower_limit(), _hinge_box3d_upper_limit());
 			}
 			break;
 		case PhysicsServer3D::HINGE_JOINT_MOTOR_TARGET_VELOCITY:
 			if (B3_IS_NON_NULL(joint_id)) {
-				b3RevoluteJoint_SetMotorSpeed(joint_id, (float)p_value);
+				b3RevoluteJoint_SetMotorSpeed(joint_id, _hinge_box3d_motor_speed());
 			}
 			break;
 		case PhysicsServer3D::HINGE_JOINT_MOTOR_MAX_IMPULSE:

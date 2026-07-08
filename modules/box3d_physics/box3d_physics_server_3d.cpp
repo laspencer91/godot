@@ -801,10 +801,7 @@ void Box3DPhysicsServer3D::joint_make_hinge(RID p_joint, RID p_body_A, const Tra
 }
 
 void Box3DPhysicsServer3D::joint_make_hinge_simple(RID p_joint, RID p_body_A, const Vector3 &p_pivot_A, const Vector3 &p_axis_A, RID p_body_B, const Vector3 &p_pivot_B, const Vector3 &p_axis_B) {
-	WARN_PRINT_ONCE("Box3D: simple hinge axis conversion is not supported; using the full hinge API frame convention.");
-	Transform3D frame_a(Basis(), p_pivot_A);
-	Transform3D frame_b(Basis(), p_pivot_B);
-	joint_make_hinge(p_joint, p_body_A, frame_a, p_body_B, frame_b);
+	ERR_FAIL_MSG("Box3D: simple hinge joints are not supported; use joint_make_hinge with explicit local frames.");
 }
 
 void Box3DPhysicsServer3D::hinge_joint_set_param(RID p_joint, HingeJointParam p_param, real_t p_value) {
@@ -934,6 +931,45 @@ bool Box3DPhysicsServer3D::generic_6dof_joint_get_flag(RID p_joint, Vector3::Axi
 	ERR_FAIL_NULL_V(joint, false);
 	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_6DOF, false);
 	return joint->generic_6dof_get_flag(p_axis, p_flag);
+}
+
+void Box3DPhysicsServer3D::joint_set_box3d_param(RID p_joint, Box3DJointParam p_param, real_t p_value) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->set_box3d_param(p_param, p_value);
+}
+
+real_t Box3DPhysicsServer3D::joint_get_box3d_param(RID p_joint, Box3DJointParam p_param) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, 0.0);
+	return joint->get_box3d_param(p_param);
+}
+
+void Box3DPhysicsServer3D::joint_set_box3d_target_rotation(RID p_joint, const Quaternion &p_target_rotation) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->set_box3d_target_rotation(p_target_rotation);
+}
+
+Quaternion Box3DPhysicsServer3D::joint_get_box3d_target_rotation(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, Quaternion());
+	return joint->get_box3d_target_rotation();
+}
+
+void Box3DPhysicsServer3D::joint_set_box3d_motor_velocity(RID p_joint, const Vector3 &p_velocity) {
+	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL(joint);
+	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
+	joint->set_box3d_motor_velocity(p_velocity);
+}
+
+Vector3 Box3DPhysicsServer3D::joint_get_box3d_motor_velocity(RID p_joint) const {
+	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
+	ERR_FAIL_NULL_V(joint, Vector3());
+	return joint->get_box3d_motor_velocity();
 }
 
 // --- Lifecycle ---

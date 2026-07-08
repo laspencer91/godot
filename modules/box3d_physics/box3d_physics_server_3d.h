@@ -16,9 +16,9 @@
 
 #include "box3d_area_3d.h"
 #include "box3d_body_3d.h"
-#include "box3d_joint_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
+#include "joints/box3d_joint_3d.h"
 
 class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	GDCLASS(Box3DPhysicsServer3D, PhysicsServer3DDummy);
@@ -45,6 +45,16 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	bool _can_mutate_joint_bodies(const Box3DBody3D *p_body_a, const Box3DBody3D *p_body_b) const;
 
 public:
+	enum Box3DJointParam {
+		BOX3D_JOINT_CONSTRAINT_HERTZ = 100,
+		BOX3D_JOINT_CONSTRAINT_DAMPING_RATIO,
+		BOX3D_JOINT_FORCE_THRESHOLD,
+		BOX3D_JOINT_TORQUE_THRESHOLD,
+		BOX3D_JOINT_SPHERICAL_SPRING_HERTZ,
+		BOX3D_JOINT_SPHERICAL_SPRING_DAMPING_RATIO,
+		BOX3D_JOINT_SPHERICAL_MAX_MOTOR_TORQUE,
+	};
+
 	explicit Box3DPhysicsServer3D(bool p_using_threads = false);
 	~Box3DPhysicsServer3D();
 
@@ -192,6 +202,12 @@ public:
 	virtual real_t generic_6dof_joint_get_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param) const override;
 	virtual void generic_6dof_joint_set_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag, bool p_enable) override;
 	virtual bool generic_6dof_joint_get_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag) const override;
+	void joint_set_box3d_param(RID p_joint, Box3DJointParam p_param, real_t p_value);
+	real_t joint_get_box3d_param(RID p_joint, Box3DJointParam p_param) const;
+	void joint_set_box3d_target_rotation(RID p_joint, const Quaternion &p_target_rotation);
+	Quaternion joint_get_box3d_target_rotation(RID p_joint) const;
+	void joint_set_box3d_motor_velocity(RID p_joint, const Vector3 &p_velocity);
+	Vector3 joint_get_box3d_motor_velocity(RID p_joint) const;
 
 	// Lifecycle.
 	virtual void free_rid(RID p_rid) override;
@@ -202,3 +218,5 @@ public:
 	virtual void end_sync() override { doing_sync = false; }
 	virtual bool is_flushing_queries() const override { return flushing_queries; }
 };
+
+VARIANT_ENUM_CAST(Box3DPhysicsServer3D::Box3DJointParam);

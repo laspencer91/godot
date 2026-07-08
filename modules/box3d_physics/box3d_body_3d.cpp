@@ -7,7 +7,7 @@
 #include "box3d_area_3d.h"
 #include "box3d_conversions.h"
 #include "box3d_direct_space_state_3d.h"
-#include "box3d_joint_3d.h"
+#include "joints/box3d_joint_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
 #include "box3d_surface_materials.h"

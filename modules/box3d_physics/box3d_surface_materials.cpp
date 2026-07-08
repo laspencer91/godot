@@ -115,6 +115,20 @@ void Box3DPhysics::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("body_set_surface_material", "body", "shape_idx", "material_id"), &Box3DPhysics::body_set_surface_material);
 	ClassDB::bind_method(D_METHOD("get_shape_mesh_material_indices", "shape"), &Box3DPhysics::get_shape_mesh_material_indices);
 	ClassDB::bind_method(D_METHOD("get_face_material", "shape", "face_index"), &Box3DPhysics::get_face_material);
+	ClassDB::bind_method(D_METHOD("joint_set_box3d_param", "joint", "param", "value"), &Box3DPhysics::joint_set_box3d_param);
+	ClassDB::bind_method(D_METHOD("joint_get_box3d_param", "joint", "param"), &Box3DPhysics::joint_get_box3d_param);
+	ClassDB::bind_method(D_METHOD("joint_set_box3d_target_rotation", "joint", "target_rotation"), &Box3DPhysics::joint_set_box3d_target_rotation);
+	ClassDB::bind_method(D_METHOD("joint_get_box3d_target_rotation", "joint"), &Box3DPhysics::joint_get_box3d_target_rotation);
+	ClassDB::bind_method(D_METHOD("joint_set_box3d_motor_velocity", "joint", "velocity"), &Box3DPhysics::joint_set_box3d_motor_velocity);
+	ClassDB::bind_method(D_METHOD("joint_get_box3d_motor_velocity", "joint"), &Box3DPhysics::joint_get_box3d_motor_velocity);
+
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_HERTZ);
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_DAMPING_RATIO);
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_FORCE_THRESHOLD);
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_TORQUE_THRESHOLD);
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_SPRING_HERTZ);
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_SPRING_DAMPING_RATIO);
+	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_SPHERICAL_MAX_MOTOR_TORQUE);
 }
 
 Box3DPhysics::Box3DPhysics() {
@@ -130,7 +144,7 @@ Box3DPhysics::~Box3DPhysics() {
 void Box3DPhysics::register_project_settings() {
 	GLOBAL_DEF(PropertyInfo(Variant::STRING, "physics/box3d/surface_material_library", PROPERTY_HINT_FILE, "*.tres,*.res"), String());
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_hertz", PROPERTY_HINT_RANGE, U"0,240,0.1,or_greater,suffix:Hz"), 60.0f);
-	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_damping_ratio", PROPERTY_HINT_RANGE, U"0,10,0.01,or_greater"), 4.0f);
+	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_damping_ratio", PROPERTY_HINT_RANGE, U"0,10,0.01,or_greater"), 2.0f);
 }
 
 void Box3DPhysics::reload_surface_material_library() {
@@ -237,6 +251,42 @@ Ref<Box3DSurfaceMaterial> Box3DPhysics::get_face_material(RID p_shape, int p_fac
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL_V(server, Ref<Box3DSurfaceMaterial>());
 	return get_material(server->shape_get_face_material_id(p_shape, p_face_index));
+}
+
+void Box3DPhysics::joint_set_box3d_param(RID p_joint, int p_param, real_t p_value) {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL(server);
+	server->joint_set_box3d_param(p_joint, (Box3DPhysicsServer3D::Box3DJointParam)p_param, p_value);
+}
+
+real_t Box3DPhysics::joint_get_box3d_param(RID p_joint, int p_param) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, 0.0);
+	return server->joint_get_box3d_param(p_joint, (Box3DPhysicsServer3D::Box3DJointParam)p_param);
+}
+
+void Box3DPhysics::joint_set_box3d_target_rotation(RID p_joint, const Quaternion &p_target_rotation) {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL(server);
+	server->joint_set_box3d_target_rotation(p_joint, p_target_rotation);
+}
+
+Quaternion Box3DPhysics::joint_get_box3d_target_rotation(RID p_joint) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, Quaternion());
+	return server->joint_get_box3d_target_rotation(p_joint);
+}
+
+void Box3DPhysics::joint_set_box3d_motor_velocity(RID p_joint, const Vector3 &p_velocity) {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL(server);
+	server->joint_set_box3d_motor_velocity(p_joint, p_velocity);
+}
+
+Vector3 Box3DPhysics::joint_get_box3d_motor_velocity(RID p_joint) const {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, Vector3());
+	return server->joint_get_box3d_motor_velocity(p_joint);
 }
 
 String Box3DPhysics::get_material_name_hint() const {
