@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DRagdoll" inherits="SkeletonModifier3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Box3D-backed ragdoll runtime modifier.
+	</brief_description>
+	<description>
+		[Box3DRagdoll] builds Box3D server body RIDs for profile bones and connects them with module-internal native Box3D joints. While inactive it follows the parent [Skeleton3D] and caches two physics poses. Calling [method die] seeds each body with finite-difference linear and angular velocity from those cached poses, optionally applies a hit impulse, and switches to physics write-back. Calling [method revive] returns to kinematic-follow.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="are_bodies_sleeping" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns whether all generated Box3D bodies are sleeping.
+			</description>
+		</method>
+		<method name="build">
+			<return type="bool" />
+			<description>
+				Builds server body RIDs and native Box3D joints from [member profile].
+			</description>
+		</method>
+		<method name="die">
+			<return type="void" />
+			<param index="0" name="impulse" type="Vector3" default="Vector3(0, 0, 0)" />
+			<param index="1" name="hit_bone" type="StringName" default="&quot;&quot;" />
+			<param index="2" name="ramp_time" type="float" default="0.0" />
+			<description>
+				Switches to ragdoll mode. The current implementation seeds body velocities from the cached animation pose history and applies [param impulse] to [param hit_bone] when provided. Driven ramping is reserved for a later milestone.
+			</description>
+		</method>
+		<method name="get_bone_body" qualifiers="const">
+			<return type="RID" />
+			<param index="0" name="bone" type="StringName" />
+			<description>
+				Returns the PhysicsServer3D body RID for [param bone], or an invalid RID.
+			</description>
+		</method>
+		<method name="get_bone_global_transform" qualifiers="const">
+			<return type="Transform3D" />
+			<param index="0" name="bone" type="StringName" />
+			<description>
+				Returns the current global transform of [param bone]'s generated body.
+			</description>
+		</method>
+		<method name="get_bone_linear_velocity" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="bone" type="StringName" />
+			<description>
+				Returns the current linear velocity of [param bone]'s generated body.
+			</description>
+		</method>
+		<method name="get_center_of_mass_velocity" qualifiers="const">
+			<return type="Vector3" />
+			<description>
+				Returns the mass-weighted average linear velocity of generated bodies.
+			</description>
+		</method>
+		<method name="is_built" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns whether the runtime bodies and joints are built.
+			</description>
+		</method>
+		<method name="is_ragdoll_active" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns whether physics write-back is active.
+			</description>
+		</method>
+		<method name="revive">
+			<return type="void" />
+			<description>
+				Returns to kinematic-follow mode.
+			</description>
+		</method>
+		<method name="teardown">
+			<return type="void" />
+			<description>
+				Destroys native joints and generated server RIDs.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="profile" type="Box3DRagdollProfile" setter="set_profile" getter="get_profile">
+			Profile used to build the ragdoll.
+		</member>
+	</members>
+	<signals>
+		<signal name="ragdoll_asleep">
+			<description>
+				Emitted once after all generated bodies sleep while ragdoll mode is active.
+			</description>
+		</signal>
+	</signals>
+</class>

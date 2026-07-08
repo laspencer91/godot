@@ -195,6 +195,7 @@ void Box3DBody3D::_build_all_shapes() {
 		def.baseMaterial.restitution = (float)bounce;
 		def.filter.categoryBits = (uint64_t)collision_layer;
 		def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
+		def.filter.groupIndex = collision_group_index;
 		def.enableCustomFiltering = !collision_exceptions.is_empty();
 		def.enableSensorEvents = true;
 		def.enableContactEvents = reports_contacts();
@@ -689,6 +690,11 @@ void Box3DBody3D::set_collision_layer(uint32_t p_layer) {
 
 void Box3DBody3D::set_collision_mask(uint32_t p_mask) {
 	collision_mask = p_mask;
+	shapes_changed();
+}
+
+void Box3DBody3D::set_collision_group_index(int p_group_index) {
+	collision_group_index = p_group_index;
 	shapes_changed();
 }
 

@@ -7,6 +7,7 @@
 #include "box3d_character_mover.h"
 #include "box3d_direct_space_state_3d.h"
 #include "box3d_physics_server_3d.h"
+#include "box3d_ragdoll.h"
 #include "box3d_surface_materials.h"
 
 #include "core/config/engine.h"
@@ -29,6 +30,8 @@ static PhysicsServer3D *create_box3d_physics_server() {
 
 void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		GDREGISTER_CLASS(Box3DRagdollProfile);
+		GDREGISTER_CLASS(Box3DRagdoll);
 		GDREGISTER_CLASS(Box3DSurfaceOverride3D);
 		return;
 	}

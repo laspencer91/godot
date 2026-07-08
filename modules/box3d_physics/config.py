@@ -11,6 +11,8 @@ def get_doc_classes():
         "Box3DCharacterMover",
         "Box3DDirectSpaceState3D",
         "Box3DPhysics",
+        "Box3DRagdoll",
+        "Box3DRagdollProfile",
         "Box3DSurfaceMap",
         "Box3DSurfaceMaterial",
         "Box3DSurfaceMaterialLibrary",

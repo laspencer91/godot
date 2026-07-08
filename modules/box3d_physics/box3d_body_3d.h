@@ -59,6 +59,7 @@ private:
 	real_t gravity_scale = 1.0;
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
+	int collision_group_index = 0;
 	HashSet<RID> collision_exceptions;
 	HashSet<Box3DJoint3D *> joints;
 	bool continuous_cd = false;
@@ -167,6 +168,8 @@ public:
 	uint32_t get_collision_layer() const { return collision_layer; }
 	void set_collision_mask(uint32_t p_mask);
 	uint32_t get_collision_mask() const { return collision_mask; }
+	void set_collision_group_index(int p_group_index);
+	int get_collision_group_index() const { return collision_group_index; }
 	void add_collision_exception(RID p_body);
 	void remove_collision_exception(RID p_body);
 	bool has_collision_exception(RID p_body) const { return collision_exceptions.has(p_body); }

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DRagdollProfile" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Profile resource for [Box3DRagdoll].
+	</brief_description>
+	<description>
+		[Box3DRagdollProfile] stores per-bone capsule and joint settings for [Box3DRagdoll]. R1 uses dictionary entries in [member bones]; the profile generator and editor tooling are planned for a later milestone.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="bones" type="Array" setter="set_bones" getter="get_bones" default="[]">
+			Array of dictionaries. Each entry uses [code]bone[/code] ([StringName]), [code]enabled[/code], [code]offset[/code] ([Transform3D]), [code]radius[/code], [code]height[/code], [code]density_scale[/code], [code]joint_type[/code], [code]swing_limit[/code], [code]twist_lower[/code], [code]twist_upper[/code], [code]joint_friction_scale[/code], and [code]blend[/code].
+		</member>
+		<member name="collision_layer" type="int" setter="set_collision_layer" getter="get_collision_layer" default="1">
+			Collision layer assigned to generated ragdoll bodies.
+		</member>
+		<member name="collision_mask" type="int" setter="set_collision_mask" getter="get_collision_mask" default="1">
+			Collision mask assigned to generated ragdoll bodies.
+		</member>
+		<member name="filter_pairs" type="Array" setter="set_filter_pairs" getter="get_filter_pairs" default="[]">
+			Array of two-name arrays. Each pair creates a native Box3D filter joint that disables collision between those two bone bodies.
+		</member>
+		<member name="friction_torque" type="float" setter="set_friction_torque" getter="get_friction_torque" default="8.0">
+			Max zero-velocity motor torque used as joint friction.
+		</member>
+		<member name="spring_damping_ratio" type="float" setter="set_spring_damping_ratio" getter="get_spring_damping_ratio" default="0.7">
+			Spherical joint spring damping ratio.
+		</member>
+		<member name="spring_hertz" type="float" setter="set_spring_hertz" getter="get_spring_hertz" default="1.0">
+			Spherical joint spring frequency in hertz.
+		</member>
+	</members>
+	<constants>
+		<constant name="JOINT_TYPE_NONE" value="0" />
+		<constant name="JOINT_TYPE_SPHERICAL" value="1" />
+		<constant name="JOINT_TYPE_REVOLUTE" value="2" />
+	</constants>
+</class>
