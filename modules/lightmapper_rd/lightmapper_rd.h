@@ -59,6 +59,12 @@ class LightmapperRD : public Lightmapper {
 		uint32_t shadowmask_light_idx = 0;
 		uint32_t transparency_rays = 0;
 		float supersampling_factor = 0.0f;
+
+		// AO pass (MODE_AO): appended trailing row, mirrors lm_common_inc.glsl. 0 for light bakes.
+		float ao_max_distance = 0.0f;
+		float ao_pad0 = 0.0f;
+		float ao_pad1 = 0.0f;
+		float ao_pad2 = 0.0f;
 	};
 
 	struct MeshInstance {

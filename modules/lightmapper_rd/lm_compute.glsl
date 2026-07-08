@@ -4,6 +4,7 @@ primary = "#define MODE_DIRECT_LIGHT";
 secondary = "#define MODE_BOUNCE_LIGHT";
 dilate = "#define MODE_DILATE";
 unocclude = "#define MODE_UNOCCLUDE";
+ao = "#define MODE_AO";
 light_probes = "#define MODE_LIGHT_PROBES";
 denoise = "#define MODE_DENOISE";
 pack_coeffs = "#define MODE_PACK_L1_COEFFS";
@@ -50,6 +51,16 @@ layout(set = 1, binding = 2) uniform texture2D environment;
 
 layout(rgba32f, set = 1, binding = 0) uniform restrict image2DArray position;
 layout(rgba32f, set = 1, binding = 1) uniform restrict image2DArray unocclude;
+
+#endif
+
+#ifdef MODE_AO
+
+// Contextual ambient-occlusion pass: reads the raster/unocclude G-buffer (position + normal) and
+// writes an openness mask (1 = open, 0 = fully occluded) sampled on UV2 by weathering shaders.
+layout(set = 1, binding = 0) uniform texture2DArray source_position;
+layout(set = 1, binding = 1) uniform texture2DArray source_normal;
+layout(rgba8, set = 1, binding = 2) uniform restrict writeonly image2DArray dest_ao;
 
 #endif
 
@@ -1086,6 +1097,37 @@ void main() {
 
 	imageStore(position, ivec3(atlas_pos, params.atlas_slice), position_alpha);
 	imageStore(unocclude, ivec3(atlas_pos, params.atlas_slice), vec4(unocclude_mask, 0, 0, 0));
+
+#endif
+
+#ifdef MODE_AO
+
+	vec3 normal = texelFetch(sampler2DArray(source_normal, linear_sampler), ivec3(atlas_pos, params.atlas_slice), 0).xyz;
+	if (length(normal) < 0.5) {
+		return; // Empty texel, nothing to occlude.
+	}
+	vec3 position = texelFetch(sampler2DArray(source_position, linear_sampler), ivec3(atlas_pos, params.atlas_slice), 0).xyz;
+
+	// Raise the ray origin off the surface along the normal to avoid self-intersection. The unocclude
+	// pass has already nudged interior lumels out of geometry, so this only needs the standard bias.
+	vec3 base_pos = position + normal * bake_params.bias;
+
+	uint noise = random_seed(ivec3(atlas_pos, 43573547));
+	uint hits = 0;
+	// Cosine-weighted hemisphere directions => the plain hit-count average IS the cosine-weighted AO
+	// estimator (importance sampling), so no per-ray weighting is needed. Short any-hit rays: a hit
+	// anywhere within ao_max_distance counts as occluded (grime is a local contact effect).
+	for (uint i = 0u; i < params.ray_count; i++) {
+		vec3 ray_dir = generate_ray_dir_from_normal(normal, noise);
+		vec3 ray_to = base_pos + ray_dir * bake_params.ao_max_distance;
+		if (trace_ray_any_hit(base_pos, ray_to) != RAY_MISS) {
+			hits++;
+		}
+	}
+
+	// Store openness (1 = fully open). Weathering shaders invert it (grime density = 1 - openness).
+	float openness = 1.0 - float(hits) / float(params.ray_count);
+	imageStore(dest_ao, ivec3(atlas_pos, params.atlas_slice), vec4(openness, openness, openness, 1.0));
 
 #endif
 

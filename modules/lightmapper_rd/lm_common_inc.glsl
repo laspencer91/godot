@@ -19,6 +19,12 @@ layout(set = 0, binding = 0) uniform BakeParameters {
 	int shadowmask_light_idx;
 	uint transparency_rays;
 	float supersampling_factor;
+
+	// AO pass (MODE_AO): appended trailing row, std140-safe. Unused (0) by the light passes.
+	float ao_max_distance;
+	float ao_pad0;
+	float ao_pad1;
+	float ao_pad2;
 }
 bake_params;
 
