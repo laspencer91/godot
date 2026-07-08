@@ -1550,6 +1550,21 @@ void RendererSceneCull::instance_geometry_set_lightmap(RID p_instance, RID p_lig
 	}
 }
 
+void RendererSceneCull::instance_geometry_set_ao_map(RID p_instance, RID p_ao_atlas, const Rect2 &p_ao_uv_scale, int p_ao_slice) {
+	Instance *instance = instance_owner.get_or_null(p_instance);
+	ERR_FAIL_NULL(instance);
+
+	instance->ao_atlas = p_ao_atlas;
+	instance->ao_uv_scale = p_ao_uv_scale;
+	instance->ao_slice_index = p_ao_slice;
+
+	if ((1 << instance->base_type) & RSE::INSTANCE_GEOMETRY_MASK && instance->base_data) {
+		InstanceGeometryData *geom = static_cast<InstanceGeometryData *>(instance->base_data);
+		ERR_FAIL_NULL(geom->geometry_instance);
+		geom->geometry_instance->set_use_ao_map(p_ao_atlas, p_ao_uv_scale, p_ao_slice);
+	}
+}
+
 void RendererSceneCull::instance_geometry_set_lod_bias(RID p_instance, float p_lod_bias) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);

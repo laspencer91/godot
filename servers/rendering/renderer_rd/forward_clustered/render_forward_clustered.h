@@ -271,6 +271,7 @@ private:
 
 	// When changing any of these enums, remember to change the corresponding enums in the shader files as well.
 	enum {
+		INSTANCE_DATA_FLAG_USE_AO_MAP = 1 << 1,
 		INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT = 1 << 2,
 		INSTANCE_DATA_FLAGS_DYNAMIC = 1 << 3,
 		INSTANCE_DATA_FLAGS_NON_UNIFORM_SCALE = 1 << 4,
@@ -342,6 +343,11 @@ private:
 			uint32_t layer_mask;
 			float prev_transform[12];
 			float lightmap_uv_scale[4];
+			float ao_uv_scale[4];
+			uint32_t ao_slice;
+			uint32_t ao_pad0;
+			uint32_t ao_pad1;
+			uint32_t ao_pad2;
 #ifdef REAL_T_IS_DOUBLE
 			float model_precision[4];
 			float prev_model_precision[4];
@@ -358,6 +364,13 @@ private:
 				Rect2 *rect = reinterpret_cast<Rect2 *>(lightmap_uv_scale);
 				*rect = p_rect;
 #endif
+			}
+
+			inline void set_ao_uv_scale(const Rect2 &p_rect) {
+				ao_uv_scale[0] = p_rect.position.x;
+				ao_uv_scale[1] = p_rect.position.y;
+				ao_uv_scale[2] = p_rect.size.x;
+				ao_uv_scale[3] = p_rect.size.y;
 			}
 
 			inline void set_compressed_aabb(const AABB &p_aabb) {
@@ -405,6 +418,10 @@ private:
 		uint32_t lightmaps_used = 0;
 		uint32_t max_lightmaps;
 		RID lightmap_buffer;
+
+		// Single active AO-map atlas for the frame (Texture2DArray). Gathered in _fill_render_list,
+		// bound in _setup_render_pass_uniform_set. One AOBaker3D per scene -> one atlas; last wins.
+		RID ao_atlas;
 
 		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY") };
 		InstanceData *curr_gpu_ptr[RENDER_LIST_MAX] = {};
@@ -562,9 +579,15 @@ private:
 		uint32_t lightmap_slice_index;
 		GeometryInstanceLightmapSH *lightmap_sh = nullptr;
 
+		// AO map (per-instance baked ambient occlusion, independent of the lightmap)
+		RID ao_atlas;
+		Rect2 ao_uv_scale;
+		uint32_t ao_slice_index = 0;
+
 		//used during rendering
 
 		uint32_t gi_offset_cache = 0;
+		uint32_t ao_slice_cache = 0;
 		bool store_transform_cache = true;
 		RID transforms_uniform_set;
 		uint32_t instance_count = 0;
@@ -594,6 +617,7 @@ private:
 		virtual void reset_motion_vectors() override;
 		virtual void set_use_lightmap(RID p_lightmap_instance, const Rect2 &p_lightmap_uv_scale, int p_lightmap_slice_index) override;
 		virtual void set_lightmap_capture(const Color *p_sh9) override;
+		virtual void set_use_ao_map(RID p_ao_atlas, const Rect2 &p_ao_uv_scale, int p_ao_slice) override;
 
 		virtual void clear_light_instances() override {}
 		virtual void pair_light_instance(const RID p_light_instance, RSE::LightType light_type, uint32_t placement_idx) override {}

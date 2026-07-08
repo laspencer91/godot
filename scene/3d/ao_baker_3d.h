@@ -118,14 +118,10 @@ public:
 	void set_ao_transforms(const Dictionary &p_transforms);
 	Dictionary get_ao_transforms() const;
 
-	// Shader-parameter names a weathering shader reads (see apply_to_meshes()).
-	static const char *INSTANCE_PARAM_ATLAS; // sampler2DArray material uniform: the shared AO atlas.
-	static const char *INSTANCE_PARAM_UV_RECT; // vec4 instance uniform: xy = UV2 offset, zw = UV2 scale.
-	static const char *INSTANCE_PARAM_SLICE; // float instance uniform: atlas array layer.
-
-	// Push each baked mesh's atlas transform onto its MeshInstance3D as instance shader parameters,
-	// so a single shared weathering material can sample the right slice/rect per instance. Returns
-	// the number of meshes wired. Called automatically at the end of bake().
+	// Deliver the bake to every baked mesh through the engine's per-instance AO-map channel
+	// (RenderingServer::instance_geometry_set_ao_map): shared atlas + per-mesh UV rect + slice. A
+	// shader reads the value via the AO_MAP built-in. Returns the number of meshes wired. Called at
+	// the end of bake() and re-applied on scene load (the RS binding is not serialized).
 	int apply_to_meshes();
 
 	// Whole-level AO bake (synchronous). Gathers static meshes under this node's parent, bakes the AO

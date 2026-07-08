@@ -855,6 +855,8 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 		instance_data.layer_mask = inst->layer_mask;
 		instance_data.instance_uniforms_ofs = uint32_t(inst->shader_uniforms_offset);
 		instance_data.set_lightmap_uv_scale(inst->lightmap_uv_scale);
+		instance_data.set_ao_uv_scale(inst->ao_uv_scale);
+		instance_data.ao_slice = inst->ao_slice_cache;
 
 		AABB surface_aabb = AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 1.0, 1.0));
 		uint64_t format = RendererRD::MeshStorage::get_singleton()->mesh_surface_get_format(surface->surface);
@@ -988,6 +990,12 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 		flags = (flags & ~INSTANCE_DATA_FLAGS_FADE_MASK) | (uint32_t(fade_alpha * 255.0) << INSTANCE_DATA_FLAGS_FADE_SHIFT);
 
 		if (p_render_list == RENDER_LIST_OPAQUE) {
+			// Setup per-instance AO map (independent of GI; last valid atlas wins for the frame).
+			if (inst->ao_atlas.is_valid()) {
+				flags |= INSTANCE_DATA_FLAG_USE_AO_MAP;
+				inst->ao_slice_cache = inst->ao_slice_index;
+				scene_state.ao_atlas = inst->ao_atlas;
+			}
 			// Setup GI
 			if (inst->lightmap_instance.is_valid()) {
 				// find index of the lightmap_instance of the instance being rendered
@@ -1208,6 +1216,9 @@ void RenderForwardClustered::_setup_voxelgis(const PagedArray<RID> &p_voxelgis) 
 
 void RenderForwardClustered::_setup_lightmaps(const RenderDataRD *p_render_data, const PagedArray<RID> &p_lightmaps, const Transform3D &p_cam_transform) {
 	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
+
+	// Cleared once per frame; _fill_render_list re-gathers the active AO atlas from visible instances.
+	scene_state.ao_atlas = RID();
 
 	scene_state.lightmaps_used = 0;
 	for (int i = 0; i < (int)p_lightmaps.size(); i++) {
@@ -3500,6 +3511,21 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		uniforms.push_back(u);
 	}
 	{
+		// AO map atlas (single Texture2DArray; white default = openness 1.0 = no AO).
+		RD::Uniform u;
+		u.binding = 37;
+		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+		RID ao_tex;
+		if (scene_state.ao_atlas.is_valid()) {
+			ao_tex = texture_storage->texture_get_rd_texture(scene_state.ao_atlas);
+		}
+		if (ao_tex.is_null()) {
+			ao_tex = texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_WHITE);
+		}
+		u.append_id(ao_tex);
+		uniforms.push_back(u);
+	}
+	{
 		RD::Uniform u;
 		u.binding = 8;
 		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
@@ -4927,6 +4953,14 @@ void RenderForwardClustered::GeometryInstanceForwardClustered::set_use_lightmap(
 	lightmap_instance = p_lightmap_instance;
 	lightmap_uv_scale = p_lightmap_uv_scale;
 	lightmap_slice_index = p_lightmap_slice_index;
+
+	_mark_dirty();
+}
+
+void RenderForwardClustered::GeometryInstanceForwardClustered::set_use_ao_map(RID p_ao_atlas, const Rect2 &p_ao_uv_scale, int p_ao_slice) {
+	ao_atlas = p_ao_atlas;
+	ao_uv_scale = p_ao_uv_scale;
+	ao_slice_index = p_ao_slice;
 
 	_mark_dirty();
 }

@@ -40,7 +40,7 @@ layout(location = 3) in vec4 color_attrib;
 layout(location = 4) in vec2 uv_attrib;
 #endif
 
-#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(MODE_RENDER_MATERIAL)
+#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(AO_MAP_USED) || defined(MODE_RENDER_MATERIAL)
 layout(location = 5) in vec2 uv2_attrib;
 #endif
 
@@ -103,7 +103,7 @@ layout(location = 2) out vec4 color_interp;
 layout(location = 3) out vec2 uv_interp;
 #endif
 
-#if defined(UV2_USED) || defined(USE_LIGHTMAP)
+#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(AO_MAP_USED)
 layout(location = 4) out vec2 uv2_interp;
 #endif
 
@@ -360,7 +360,7 @@ void vertex_shader(vec3 vertex_input,
 	uv_interp = uv_attrib;
 #endif
 
-#if defined(UV2_USED) || defined(USE_LIGHTMAP)
+#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(AO_MAP_USED)
 	uv2_interp = uv2_attrib;
 #endif
 
@@ -370,7 +370,7 @@ void vertex_shader(vec3 vertex_input,
 #ifdef UV_USED
 		uv_interp = (uv_interp - 0.5) * uv_scale.xy;
 #endif
-#if defined(UV2_USED) || defined(USE_LIGHTMAP)
+#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(AO_MAP_USED)
 		uv2_interp = (uv2_interp - 0.5) * uv_scale.zw;
 #endif
 	}
@@ -896,7 +896,7 @@ layout(location = 2) in vec4 color_interp;
 layout(location = 3) in vec2 uv_interp;
 #endif
 
-#if defined(UV2_USED) || defined(USE_LIGHTMAP)
+#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(AO_MAP_USED)
 layout(location = 4) in vec2 uv2_interp;
 #endif
 
@@ -1271,8 +1271,18 @@ void fragment_shader(in SceneData scene_data) {
 	vec2 uv = uv_interp;
 #endif
 
-#if defined(UV2_USED) || defined(USE_LIGHTMAP)
+#if defined(UV2_USED) || defined(USE_LIGHTMAP) || defined(AO_MAP_USED)
 	vec2 uv2 = uv2_interp;
+#endif
+
+#ifdef AO_MAP_USED
+	// Per-instance baked AO map (openness: 1.0 = fully open, 0.0 = fully occluded). Sampled here so
+	// the user fragment code can read the AO_MAP built-in; default 1.0 when the instance has no atlas.
+	float ao_map = 1.0;
+	if (bool(instances.data[instance_index].flags & INSTANCE_FLAGS_USE_AO_MAP)) {
+		vec2 ao_map_uv = uv2 * instances.data[instance_index].ao_uv_scale.zw + instances.data[instance_index].ao_uv_scale.xy;
+		ao_map = textureLod(sampler2DArray(ao_map_atlas, SAMPLER_LINEAR_CLAMP), vec3(ao_map_uv, float(instances.data[instance_index].ao_slice)), 0.0).r;
+	}
 #endif
 
 #if defined(COLOR_USED)

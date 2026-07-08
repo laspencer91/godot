@@ -30,19 +30,17 @@
 
 #include "ao_baker_3d.h"
 
-#include "core/config/engine.h"
 #include "core/io/dir_access.h"
 #include "core/io/image.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "scene/3d/lightmapper.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/resources/image_texture.h"
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
-
-const char *AOBaker3D::INSTANCE_PARAM_ATLAS = "ao_atlas";
-const char *AOBaker3D::INSTANCE_PARAM_UV_RECT = "ao_uv_rect";
-const char *AOBaker3D::INSTANCE_PARAM_SLICE = "ao_slice";
+#include "scene/resources/texture.h"
+#include "servers/rendering/rendering_server.h"
 
 // Whether every triangle surface of p_mesh carries both UV2 and normals (and there is at least one
 // triangle surface). This is exactly the condition a mesh must meet to be baked. A mesh that has
@@ -287,23 +285,12 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 	return BAKE_ERROR_OK;
 }
 
-// Set the shared atlas onto every ShaderMaterial in a material's next_pass chain (harmless on
-// materials that don't declare the uniform -- the value is just ignored). r_any tracks whether at
-// least one ShaderMaterial was reached, so we can report meshes that won't show grime.
-static void _set_atlas_on_material_chain(Ref<Material> p_mat, const Ref<Texture2DArray> &p_atlas, bool &r_any) {
-	int guard = 0; // Bound the walk in case a next_pass chain is malformed.
-	while (p_mat.is_valid() && guard++ < 16) {
-		Ref<ShaderMaterial> sm = p_mat;
-		if (sm.is_valid()) {
-			sm->set_shader_parameter(AOBaker3D::INSTANCE_PARAM_ATLAS, p_atlas);
-			r_any = true;
-		}
-		p_mat = p_mat->get_next_pass();
-	}
-}
-
 int AOBaker3D::apply_to_meshes() {
-	int textured = 0;
+	// Deliver the bake through the engine's per-instance AO-map channel (mirrors the lightmap): the
+	// shared atlas + this mesh's UV rect + slice are set on the RenderingServer instance, so any
+	// shader that reads the AO_MAP built-in gets it -- no material mutation, no global, no uniforms.
+	const RID atlas_rid = ao_atlas.is_valid() ? ao_atlas->get_rid() : RID();
+	int wired = 0;
 	Array keys = ao_transforms.keys();
 	for (int i = 0; i < keys.size(); i++) {
 		const NodePath np = keys[i];
@@ -315,25 +302,12 @@ int AOBaker3D::apply_to_meshes() {
 		if (entry.size() < 2) {
 			continue;
 		}
-
-		// Per-instance transform (always applied -- floats are legal instance uniforms).
-		mi->set_instance_shader_parameter(INSTANCE_PARAM_UV_RECT, entry[0]);
-		mi->set_instance_shader_parameter(INSTANCE_PARAM_SLICE, (float)(int)entry[1]);
-
-		// Shared atlas -> the mesh's weathering ShaderMaterial(s), if any (material_override, surface
-		// materials, and their next_pass chains). Never replaces a material; only fills the uniform.
-		bool wired = false;
-		_set_atlas_on_material_chain(mi->get_material_override(), ao_atlas, wired);
-		Ref<Mesh> mesh = mi->get_mesh();
-		const int surf_count = mesh.is_valid() ? mesh->get_surface_count() : 0;
-		for (int s = 0; s < surf_count; s++) {
-			_set_atlas_on_material_chain(mi->get_active_material(s), ao_atlas, wired);
-		}
-		if (wired) {
-			textured++;
-		}
+		const Vector4 rect = entry[0];
+		const int slice = entry[1];
+		RenderingServer::get_singleton()->instance_geometry_set_ao_map(mi->get_instance(), atlas_rid, Rect2(rect.x, rect.y, rect.z, rect.w), slice);
+		wired++;
 	}
-	return textured;
+	return wired;
 }
 
 void AOBaker3D::set_ao_ray_count(int p_ao_ray_count) { ao_ray_count = CLAMP(p_ao_ray_count, 16, 8192); }
@@ -410,12 +384,11 @@ void AOBaker3D::_bind_methods() {
 void AOBaker3D::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_READY: {
-			// At game runtime, re-push this scene's atlas into its meshes' materials. Per-instance
-			// transforms are serialized and restored automatically, but the ao_atlas texture uniform
-			// on a material SHARED across scenes would otherwise hold whichever scene baked last --
-			// re-applying on load makes the currently-loaded scene win. No-op in the editor.
-			if (!Engine::get_singleton()->is_editor_hint() && ao_atlas.is_valid()) {
-				apply_to_meshes();
+			// The RenderingServer per-instance AO-map binding is runtime state (not serialized), so
+			// re-push it whenever this scene enters the tree -- in the editor and at game runtime.
+			// Deferred so sibling MeshInstance3Ds have created their RS instances first.
+			if (ao_atlas.is_valid()) {
+				callable_mp(this, &AOBaker3D::apply_to_meshes).call_deferred();
 			}
 		} break;
 	}

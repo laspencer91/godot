@@ -167,6 +167,7 @@ layout(constant_id = 2) const bool sc_emulate_point_size = false;
 
 layout(set = 0, binding = 2) uniform sampler shadow_sampler;
 
+#define INSTANCE_FLAGS_USE_AO_MAP (1 << 1)
 #define INSTANCE_FLAGS_DYNAMIC (1 << 3)
 #define INSTANCE_FLAGS_NON_UNIFORM_SCALE (1 << 4)
 #define INSTANCE_FLAGS_USE_GI_BUFFERS (1 << 5)
@@ -352,6 +353,11 @@ struct InstanceData {
 	uint layer_mask;
 	mat3x4 prev_transform;
 	vec4 lightmap_uv_scale;
+	vec4 ao_uv_scale;
+	uint ao_slice;
+	uint ao_pad0;
+	uint ao_pad1;
+	uint ao_pad2;
 #ifdef USE_DOUBLE_PRECISION
 	vec4 model_precision;
 	vec4 prev_model_precision;
@@ -380,6 +386,8 @@ layout(set = 1, binding = 5) uniform texture2D shadow_atlas;
 layout(set = 1, binding = 6) uniform texture2D directional_shadow_atlas;
 
 layout(set = 1, binding = 7) uniform texture2DArray lightmap_textures[MAX_LIGHTMAP_TEXTURES * 2];
+
+layout(set = 1, binding = 37) uniform texture2DArray ao_map_atlas;
 
 layout(set = 1, binding = 8) uniform texture3D voxel_gi_textures[MAX_VOXEL_GI_INSTANCES];
 

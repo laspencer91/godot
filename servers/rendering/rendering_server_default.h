@@ -967,6 +967,7 @@ public:
 
 	FUNC6(instance_geometry_set_visibility_range, RID, float, float, float, float, RSE::VisibilityRangeFadeMode)
 	FUNC4(instance_geometry_set_lightmap, RID, RID, const Rect2 &, int)
+	FUNC4(instance_geometry_set_ao_map, RID, RID, const Rect2 &, int)
 	FUNC2(instance_geometry_set_lod_bias, RID, float)
 	FUNC2(instance_geometry_set_transparency, RID, float)
 	FUNC3(instance_geometry_set_shader_parameter, RID, const StringName &, const Variant &)

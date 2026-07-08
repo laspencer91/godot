@@ -436,6 +436,11 @@ public:
 		uint32_t lightmap_cull_index;
 		Vector<Color> lightmap_sh; //spherical harmonic
 
+		// Per-instance baked AO map (independent of the lightmap: separate atlas + UV rect + slice).
+		RID ao_atlas;
+		Rect2 ao_uv_scale;
+		int ao_slice_index = 0;
+
 		AABB aabb;
 		AABB transformed_aabb;
 		AABB prev_transformed_aabb;
@@ -574,6 +579,7 @@ public:
 			lightmap_slice_index = 0;
 			lightmap = nullptr;
 			lightmap_cull_index = 0;
+			ao_slice_index = 0;
 			lod_bias = 1.0;
 			ignore_occlusion_culling = false;
 			ignore_all_culling = false;
@@ -1063,6 +1069,7 @@ public:
 	virtual void instance_geometry_set_visibility_range(RID p_instance, float p_min, float p_max, float p_min_margin, float p_max_margin, RSE::VisibilityRangeFadeMode p_fade_mode);
 
 	virtual void instance_geometry_set_lightmap(RID p_instance, RID p_lightmap, const Rect2 &p_lightmap_uv_scale, int p_slice_index);
+	virtual void instance_geometry_set_ao_map(RID p_instance, RID p_ao_atlas, const Rect2 &p_ao_uv_scale, int p_ao_slice);
 	virtual void instance_geometry_set_lod_bias(RID p_instance, float p_lod_bias);
 
 	virtual void instance_geometry_set_shader_parameter(RID p_instance, const StringName &p_parameter, const Variant &p_value);
