@@ -80,6 +80,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 		Transform3D previous_pose;
 		Transform3D current_pose;
 		bool has_pose_history = false;
+		uint32_t pose_capture_count = 0;
 	};
 
 	LocalVector<BoneRuntime> bones;
@@ -105,6 +106,8 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	void _create_joint_for_bone(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone);
 	void _create_filter_joints(Box3DPhysicsServer3D *p_server);
 	void _seed_body_velocity(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone, real_t p_delta);
+	real_t _bone_mass(const BoneRuntime &p_bone) const;
+	bool _has_velocity_history() const;
 	void _sync_skeleton_from_bodies(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton);
 	bool _all_bodies_sleeping(Box3DPhysicsServer3D *p_server) const;
 	Transform3D _remap_twist_x_to_z(const Transform3D &p_frame) const;

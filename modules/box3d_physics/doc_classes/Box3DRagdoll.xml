@@ -4,7 +4,7 @@
 		Box3D-backed ragdoll runtime modifier.
 	</brief_description>
 	<description>
-		[Box3DRagdoll] builds Box3D server body RIDs for profile bones and connects them with module-internal native Box3D joints. While inactive it follows the parent [Skeleton3D] and caches two physics poses. Calling [method die] seeds each body with finite-difference linear and angular velocity from those cached poses, optionally applies a hit impulse, and switches to physics write-back. Calling [method revive] returns to kinematic-follow.
+		[Box3DRagdoll] builds Box3D server body RIDs for profile bones and connects them with module-internal native Box3D joints. While inactive the generated bodies use kinematic-follow mode and cache physics poses from the parent [Skeleton3D]. Call [method build] when the character spawns so at least two physics poses are available before death. Calling [method die] seeds each body with finite-difference linear and angular velocity from those cached poses, optionally applies a hit impulse, and switches to physics write-back. Calling [method revive] returns to kinematic-follow.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -18,7 +18,7 @@
 		<method name="build">
 			<return type="bool" />
 			<description>
-				Builds server body RIDs and native Box3D joints from [member profile].
+				Builds server body RIDs and native Box3D joints from [member profile]. Call this while the character is alive, preferably at spawn, so [method die] can inherit animation momentum from cached physics poses.
 			</description>
 		</method>
 		<method name="die">
@@ -27,7 +27,7 @@
 			<param index="1" name="hit_bone" type="StringName" default="&quot;&quot;" />
 			<param index="2" name="ramp_time" type="float" default="0.0" />
 			<description>
-				Switches to ragdoll mode. The current implementation seeds body velocities from the cached animation pose history and applies [param impulse] to [param hit_bone] when provided. Driven ramping is reserved for a later milestone.
+				Switches to ragdoll mode. The current implementation seeds body velocities from the cached animation pose history and applies [param impulse] to [param hit_bone] when provided. If fewer than two cached physics poses are available, the method warns and inherited momentum may be zero. Driven ramping is reserved for a later milestone.
 			</description>
 		</method>
 		<method name="get_bone_body" qualifiers="const">

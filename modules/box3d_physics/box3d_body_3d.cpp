@@ -104,6 +104,9 @@ void Box3DBody3D::set_mode(PhysicsServer3D::BodyMode p_mode) {
 		return;
 	}
 	mode = p_mode;
+	if (mode != PhysicsServer3D::BODY_MODE_KINEMATIC) {
+		has_kinematic_target = false;
+	}
 	if (in_space()) {
 		b3Body_SetType(body_id, _box3d_type());
 		b3Body_SetMotionLocks(body_id, _motion_locks());

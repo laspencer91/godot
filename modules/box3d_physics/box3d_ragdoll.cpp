@@ -51,6 +51,14 @@ static Vector3 _angular_velocity_between(const Basis &p_from, const Basis &p_to,
 	return axis * (angle / p_delta);
 }
 
+real_t Box3DRagdoll::_bone_mass(const BoneRuntime &p_bone) const {
+	const real_t radius = MAX((real_t)0.01, p_bone.radius);
+	const real_t height = MAX((real_t)0.02, p_bone.height);
+	const real_t cylinder_height = MAX((real_t)0.0, height - (real_t)2.0 * radius);
+	const real_t volume = Math::PI * radius * radius * cylinder_height + ((real_t)4.0 / (real_t)3.0) * Math::PI * radius * radius * radius;
+	return MAX((real_t)0.05, volume * (real_t)1000.0 * MAX((real_t)0.0, p_bone.density_scale));
+}
+
 void Box3DRagdollProfile::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bones", "bones"), &Box3DRagdollProfile::set_bones);
 	ClassDB::bind_method(D_METHOD("get_bones"), &Box3DRagdollProfile::get_bones);
@@ -151,10 +159,10 @@ bool Box3DRagdoll::_create_body_for_bone(Box3DPhysicsServer3D *p_server, Skeleto
 	p_server->shape_set_data(r_bone.shape, capsule);
 
 	r_bone.body = p_server->body_create();
-	p_server->body_set_mode(r_bone.body, PhysicsServer3D::BODY_MODE_RIGID);
+	p_server->body_set_mode(r_bone.body, PhysicsServer3D::BODY_MODE_KINEMATIC);
 	p_server->body_set_collision_layer(r_bone.body, profile->get_collision_layer());
 	p_server->body_set_collision_mask(r_bone.body, profile->get_collision_mask());
-	p_server->body_set_param(r_bone.body, PhysicsServer3D::BODY_PARAM_MASS, MAX((real_t)0.05, r_bone.density_scale * r_bone.radius * r_bone.radius * r_bone.height * (real_t)100.0));
+	p_server->body_set_param(r_bone.body, PhysicsServer3D::BODY_PARAM_MASS, _bone_mass(r_bone));
 	p_server->body_add_shape(r_bone.body, r_bone.shape, Transform3D(), false);
 	p_server->body_set_state_sync_callback(r_bone.body, callable_mp(this, &Box3DRagdoll::_body_state_changed));
 	Box3DBody3D *body = p_server->get_body(r_bone.body);
@@ -319,6 +327,18 @@ bool Box3DRagdoll::build() {
 		ERR_FAIL_COND_V(!_create_body_for_bone(server, skeleton, bones[i]), false);
 	}
 	for (uint32_t i = 0; i < bones.size(); i++) {
+		if (bones[i].parent_runtime < 0) {
+			continue;
+		}
+		const real_t child_mass = _bone_mass(bones[i]);
+		const real_t parent_mass = _bone_mass(bones[bones[i].parent_runtime]);
+		const real_t min_mass = MIN(child_mass, parent_mass);
+		const real_t max_mass = MAX(child_mass, parent_mass);
+		if (min_mass > 0.0 && max_mass / min_mass > 10.0) {
+			WARN_PRINT(vformat("Box3D: ragdoll adjacent bone mass ratio exceeds 10:1 between '%s' and '%s' (%.2f kg vs %.2f kg).", String(bones[bones[i].parent_runtime].name), String(bones[i].name), parent_mass, child_mass));
+		}
+	}
+	for (uint32_t i = 0; i < bones.size(); i++) {
 		_create_joint_for_bone(server, bones[i]);
 	}
 	_create_filter_joints(server);
@@ -391,6 +411,7 @@ void Box3DRagdoll::_capture_animation_pose(real_t p_delta) {
 			bone.previous_pose = bone.current_pose;
 			bone.current_pose = pose;
 		}
+		bone.pose_capture_count++;
 		if (built && !ragdoll_active) {
 			Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 			if (server != nullptr) {
@@ -411,6 +432,18 @@ void Box3DRagdoll::_seed_body_velocity(Box3DPhysicsServer3D *p_server, BoneRunti
 	p_server->body_set_state(r_bone.body, PhysicsServer3D::BODY_STATE_SLEEPING, false);
 }
 
+bool Box3DRagdoll::_has_velocity_history() const {
+	if (bones.is_empty()) {
+		return false;
+	}
+	for (uint32_t i = 0; i < bones.size(); i++) {
+		if (bones[i].pose_capture_count < 2) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void Box3DRagdoll::die(const Vector3 &p_impulse, const StringName &p_hit_bone, real_t p_ramp_time) {
 	if (!built && !build()) {
 		return;
@@ -418,9 +451,13 @@ void Box3DRagdoll::die(const Vector3 &p_impulse, const StringName &p_hit_bone, r
 	if (p_ramp_time > 0.0) {
 		WARN_PRINT_ONCE("Box3D: Box3DRagdoll die() ramp_time is reserved for the driven-ragdoll milestone and is ignored in R1.");
 	}
+	if (!_has_velocity_history()) {
+		WARN_PRINT("Box3D: Box3DRagdoll die() has fewer than two cached physics poses; build() should be called at spawn so death momentum can be inherited.");
+	}
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL(server);
 	for (uint32_t i = 0; i < bones.size(); i++) {
+		server->body_set_mode(bones[i].body, PhysicsServer3D::BODY_MODE_RIGID);
 		_set_body_transform(server, bones[i], bones[i].current_pose);
 		_seed_body_velocity(server, bones[i], last_capture_delta);
 	}
@@ -430,6 +467,8 @@ void Box3DRagdoll::die(const Vector3 &p_impulse, const StringName &p_hit_bone, r
 			const int *found = bone_lookup.getptr(p_hit_bone);
 			if (found != nullptr) {
 				hit_idx = *found;
+			} else {
+				WARN_PRINT(vformat("Box3D: Box3DRagdoll die() hit_bone '%s' was not found; applying impulse to the root body.", String(p_hit_bone)));
 			}
 		}
 		server->body_apply_impulse(bones[hit_idx].body, p_impulse, Vector3());
@@ -439,6 +478,14 @@ void Box3DRagdoll::die(const Vector3 &p_impulse, const StringName &p_hit_bone, r
 }
 
 void Box3DRagdoll::revive() {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	if (server != nullptr) {
+		for (uint32_t i = 0; i < bones.size(); i++) {
+			server->body_set_mode(bones[i].body, PhysicsServer3D::BODY_MODE_KINEMATIC);
+			server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, Vector3());
+			server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, Vector3());
+		}
+	}
 	ragdoll_active = false;
 	asleep_emitted = false;
 	_capture_animation_pose(last_capture_delta);
