@@ -5,7 +5,7 @@
 	</brief_description>
 	<description>
 		[Box3DRagdoll] builds Box3D server body RIDs for profile bones and connects them with module-internal native Box3D joints. While inactive the generated bodies use kinematic-follow mode and cache physics poses from the parent [Skeleton3D]. Call [method build] when the character spawns so at least two physics poses are available before death. Calling [method die] seeds each body with finite-difference linear and angular velocity from those cached poses, optionally applies a hit impulse, and switches to physics write-back. Calling [method revive] returns to kinematic-follow.
-		Typical setup is: generate a [Box3DRagdollProfile] with [Box3DRagdollProfileGenerator], inspect/edit the generated capsules and limits, assign it to [member profile], call [method build] at spawn, then call [method die] on character death.
+		Typical setup is: generate a [Box3DRagdollProfile] with [Box3DRagdollProfileGenerator], inspect the color-coded capsule and joint-limit gizmos, edit the chain-grouped capsule and limit values, use [member simulate_in_editor] to preview the result in an isolated physics space, assign the profile to the runtime character, call [method build] at spawn, then call [method die] on character death.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -76,6 +76,12 @@
 				Returns to kinematic-follow mode.
 			</description>
 		</method>
+		<method name="reset_simulation">
+			<return type="void" />
+			<description>
+				Stops an editor-only private-space preview and restores the skeleton pose captured when simulation began. This method has no effect outside the editor.
+			</description>
+		</method>
 		<method name="teardown">
 			<return type="void" />
 			<description>
@@ -86,6 +92,9 @@
 	<members>
 		<member name="profile" type="Box3DRagdollProfile" setter="set_profile" getter="get_profile">
 			Profile used to build the ragdoll.
+		</member>
+		<member name="simulate_in_editor" type="bool" setter="set_simulate_in_editor" getter="is_simulating_in_editor" default="false">
+			When enabled in the editor, snapshots the current skeleton pose and previews the ragdoll in a private Box3D space with a temporary ground plane. The property is editor-only and is not saved. Disable it or call [method reset_simulation] to restore the snapshot.
 		</member>
 	</members>
 	<signals>

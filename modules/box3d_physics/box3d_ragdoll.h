@@ -4,12 +4,12 @@
 
 #pragma once
 
+#include "box3d/box3d.h"
+
+#include "core/io/resource.h"
 #include "core/templates/hash_map.h"
 #include "core/templates/local_vector.h"
-#include "core/io/resource.h"
 #include "scene/3d/skeleton_modifier_3d.h"
-
-#include "box3d/box3d.h"
 
 class Box3DBody3D;
 class Box3DPhysicsServer3D;
@@ -40,21 +40,45 @@ public:
 		JOINT_TYPE_REVOLUTE,
 	};
 
-	void set_bones(const TypedArray<Dictionary> &p_bones) { bones = p_bones; }
+	void set_bones(const TypedArray<Dictionary> &p_bones) {
+		bones = p_bones;
+		emit_changed();
+	}
 	TypedArray<Dictionary> get_bones() const { return bones; }
-	void set_filter_pairs(const Array &p_pairs) { filter_pairs = p_pairs; }
+	void set_filter_pairs(const Array &p_pairs) {
+		filter_pairs = p_pairs;
+		emit_changed();
+	}
 	Array get_filter_pairs() const { return filter_pairs; }
-	void set_bone_chains(const Dictionary &p_chains) { bone_chains = p_chains; }
+	void set_bone_chains(const Dictionary &p_chains) {
+		bone_chains = p_chains;
+		emit_changed();
+	}
 	Dictionary get_bone_chains() const { return bone_chains; }
-	void set_collision_layer(uint32_t p_layer) { collision_layer = p_layer; }
+	void set_collision_layer(uint32_t p_layer) {
+		collision_layer = p_layer;
+		emit_changed();
+	}
 	uint32_t get_collision_layer() const { return collision_layer; }
-	void set_collision_mask(uint32_t p_mask) { collision_mask = p_mask; }
+	void set_collision_mask(uint32_t p_mask) {
+		collision_mask = p_mask;
+		emit_changed();
+	}
 	uint32_t get_collision_mask() const { return collision_mask; }
-	void set_friction_torque(real_t p_torque) { friction_torque = MAX((real_t)0.0, p_torque); }
+	void set_friction_torque(real_t p_torque) {
+		friction_torque = MAX((real_t)0.0, p_torque);
+		emit_changed();
+	}
 	real_t get_friction_torque() const { return friction_torque; }
-	void set_spring_hertz(real_t p_hertz) { spring_hertz = MAX((real_t)0.0, p_hertz); }
+	void set_spring_hertz(real_t p_hertz) {
+		spring_hertz = MAX((real_t)0.0, p_hertz);
+		emit_changed();
+	}
 	real_t get_spring_hertz() const { return spring_hertz; }
-	void set_spring_damping_ratio(real_t p_ratio) { spring_damping_ratio = MAX((real_t)0.0, p_ratio); }
+	void set_spring_damping_ratio(real_t p_ratio) {
+		spring_damping_ratio = MAX((real_t)0.0, p_ratio);
+		emit_changed();
+	}
 	real_t get_spring_damping_ratio() const { return spring_damping_ratio; }
 
 	real_t estimate_bone_mass(const Dictionary &p_bone) const;
@@ -104,6 +128,16 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	bool asleep_emitted = false;
 	real_t last_capture_delta = 1.0 / 60.0;
 
+#ifdef TOOLS_ENABLED
+	RID editor_space_rid;
+	RID editor_ground_body;
+	RID editor_ground_shape;
+	LocalVector<Transform3D> editor_pose_snapshot;
+	bool simulate_in_editor = false;
+	bool editor_teardown_active = false;
+	real_t editor_step_accumulator = 0.0;
+#endif
+
 	static int next_group_index;
 
 	void _clear_native_joints();
@@ -123,6 +157,15 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	bool _all_bodies_sleeping(Box3DPhysicsServer3D *p_server) const;
 	Transform3D _remap_twist_x_to_z(const Transform3D &p_frame) const;
 	void _body_state_changed(PhysicsDirectBodyState3D *p_state);
+	bool _build_in_space(RID p_space);
+
+#ifdef TOOLS_ENABLED
+	void _profile_changed();
+	bool _start_editor_simulation();
+	void _stop_editor_simulation(bool p_restore_pose);
+	bool _create_editor_ground(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton);
+	void _step_editor_simulation(real_t p_delta);
+#endif
 
 protected:
 	static void _bind_methods();
@@ -144,6 +187,12 @@ public:
 	Vector3 get_bone_linear_velocity(const StringName &p_bone) const;
 	Vector3 get_center_of_mass_velocity() const;
 	bool are_bodies_sleeping() const;
+
+#ifdef TOOLS_ENABLED
+	void set_simulate_in_editor(bool p_enabled);
+	bool is_simulating_in_editor() const { return simulate_in_editor; }
+	void reset_simulation();
+#endif
 
 	virtual bool has_process() const override { return true; }
 	~Box3DRagdoll();
@@ -188,5 +237,8 @@ public:
 	void clear_warnings() { warnings.clear(); }
 	Ref<Box3DRagdollProfile> generate_profile(Skeleton3D *p_skeleton, MeshInstance3D *p_mesh_instance = nullptr, const Ref<AnimationLibrary> &p_animation_library = Ref<AnimationLibrary>());
 	Dictionary analyze_profile(const Ref<Box3DRagdollProfile> &p_profile) const;
+#ifdef TOOLS_ENABLED
+	Dictionary get_gizmo_line_groups(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const;
+#endif
 	PackedVector3Array get_gizmo_lines(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const;
 };

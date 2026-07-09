@@ -34,7 +34,15 @@
 			<param index="0" name="profile" type="Box3DRagdollProfile" />
 			<param index="1" name="skeleton" type="Skeleton3D" />
 			<description>
-				Returns capsule axis line segments in world space for editor gizmo drawing.
+				Returns all capsule wireframe, swing-cone, and twist-arc segments in world space. Each pair of points is one line segment. Use [method get_gizmo_line_groups] when chain colors are required.
+			</description>
+		</method>
+		<method name="get_gizmo_line_groups" qualifiers="const">
+			<return type="Dictionary" />
+			<param index="0" name="profile" type="Box3DRagdollProfile" />
+			<param index="1" name="skeleton" type="Skeleton3D" />
+			<description>
+				Returns the same editor gizmo segments as [method get_gizmo_lines], grouped by the chain names in [member Box3DRagdollProfile.bone_chains]. Values are [PackedVector3Array] instances in world space.
 			</description>
 		</method>
 		<method name="get_warnings" qualifiers="const">

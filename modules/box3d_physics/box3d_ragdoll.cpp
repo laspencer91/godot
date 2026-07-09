@@ -15,10 +15,10 @@
 #include "core/object/class_db.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/resources/3d/skin.h"
+#include "scene/resources/3d/world_3d.h"
 #include "scene/resources/animation.h"
 #include "scene/resources/animation_library.h"
 #include "scene/resources/mesh.h"
-#include "scene/resources/3d/world_3d.h"
 
 int Box3DRagdoll::next_group_index = -1;
 
@@ -139,14 +139,14 @@ void Box3DRagdollProfile::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("estimate_bone_mass", "bone"), &Box3DRagdollProfile::estimate_bone_mass);
 	ClassDB::bind_method(D_METHOD("estimate_total_mass"), &Box3DRagdollProfile::estimate_total_mass);
 
-	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "bones"), "set_bones", "get_bones");
-	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "filter_pairs"), "set_filter_pairs", "get_filter_pairs");
-	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "bone_chains"), "set_bone_chains", "get_bone_chains");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_layer", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_layer", "get_collision_layer");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "friction_torque", PROPERTY_HINT_RANGE, "0,100,0.1,or_greater,suffix:N*m"), "set_friction_torque", "get_friction_torque");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "spring_hertz", PROPERTY_HINT_RANGE, "0,30,0.1,or_greater,suffix:Hz"), "set_spring_hertz", "get_spring_hertz");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "spring_damping_ratio", PROPERTY_HINT_RANGE, "0,10,0.01,or_greater"), "set_spring_damping_ratio", "get_spring_damping_ratio");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_layer", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_layer", "get_collision_layer");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
+	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "bone_chains"), "set_bone_chains", "get_bone_chains");
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "filter_pairs"), "set_filter_pairs", "get_filter_pairs");
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "bones"), "set_bones", "get_bones");
 
 	BIND_ENUM_CONSTANT(JOINT_TYPE_NONE);
 	BIND_ENUM_CONSTANT(JOINT_TYPE_SPHERICAL);
@@ -183,7 +183,16 @@ void Box3DRagdoll::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_center_of_mass_velocity"), &Box3DRagdoll::get_center_of_mass_velocity);
 	ClassDB::bind_method(D_METHOD("are_bodies_sleeping"), &Box3DRagdoll::are_bodies_sleeping);
 
+#ifdef TOOLS_ENABLED
+	ClassDB::bind_method(D_METHOD("set_simulate_in_editor", "enabled"), &Box3DRagdoll::set_simulate_in_editor);
+	ClassDB::bind_method(D_METHOD("is_simulating_in_editor"), &Box3DRagdoll::is_simulating_in_editor);
+	ClassDB::bind_method(D_METHOD("reset_simulation"), &Box3DRagdoll::reset_simulation);
+#endif
+
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "profile", PROPERTY_HINT_RESOURCE_TYPE, "Box3DRagdollProfile"), "set_profile", "get_profile");
+#ifdef TOOLS_ENABLED
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "simulate_in_editor", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR), "set_simulate_in_editor", "is_simulating_in_editor");
+#endif
 	ADD_SIGNAL(MethodInfo("ragdoll_asleep"));
 }
 
@@ -191,8 +200,27 @@ void Box3DRagdoll::set_profile(const Ref<Box3DRagdollProfile> &p_profile) {
 	if (profile == p_profile) {
 		return;
 	}
+#ifdef TOOLS_ENABLED
+	const bool restart_editor_simulation = simulate_in_editor;
+	if (restart_editor_simulation) {
+		_stop_editor_simulation(true);
+	}
+	if (profile.is_valid()) {
+		profile->disconnect_changed(callable_mp(this, &Box3DRagdoll::_profile_changed));
+	}
+#endif
 	teardown();
 	profile = p_profile;
+#ifdef TOOLS_ENABLED
+	if (profile.is_valid()) {
+		profile->connect_changed(callable_mp(this, &Box3DRagdoll::_profile_changed));
+	}
+	update_gizmos();
+	if (restart_editor_simulation) {
+		simulate_in_editor = true;
+		_start_editor_simulation();
+	}
+#endif
 }
 
 Dictionary Box3DRagdoll::_profile_entry_for_bone(const StringName &p_name) const {
@@ -359,12 +387,23 @@ bool Box3DRagdoll::build() {
 	if (built) {
 		return true;
 	}
+	Ref<World3D> world = get_world_3d();
+	ERR_FAIL_COND_V(world.is_null(), false);
+	const bool result = _build_in_space(world->get_space());
+	if (!result) {
+		teardown();
+	}
+	return result;
+}
+
+bool Box3DRagdoll::_build_in_space(RID p_space) {
+	if (built) {
+		return true;
+	}
 	ERR_FAIL_COND_V_MSG(profile.is_null(), false, "Box3D: Box3DRagdoll needs a profile.");
 	Skeleton3D *skeleton = get_skeleton();
 	ERR_FAIL_NULL_V(skeleton, false);
-	Ref<World3D> world = get_world_3d();
-	ERR_FAIL_COND_V(world.is_null(), false);
-	space_rid = world->get_space();
+	space_rid = p_space;
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL_V(server, false);
 	ERR_FAIL_NULL_V(server->get_space(space_rid), false);
@@ -466,6 +505,13 @@ void Box3DRagdoll::_clear_bodies() {
 }
 
 void Box3DRagdoll::teardown() {
+#ifdef TOOLS_ENABLED
+	if (editor_space_rid.is_valid() && !editor_teardown_active) {
+		simulate_in_editor = false;
+		_stop_editor_simulation(true);
+		return;
+	}
+#endif
 	_clear_native_joints();
 	_clear_bodies();
 	bones.clear();
@@ -476,6 +522,166 @@ void Box3DRagdoll::teardown() {
 	asleep_emitted = false;
 	space_rid = RID();
 }
+
+#ifdef TOOLS_ENABLED
+void Box3DRagdoll::_profile_changed() {
+	update_gizmos();
+	if (!simulate_in_editor) {
+		return;
+	}
+	_stop_editor_simulation(true);
+	if (!_start_editor_simulation()) {
+		simulate_in_editor = false;
+	}
+}
+
+bool Box3DRagdoll::_create_editor_ground(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton) {
+	ERR_FAIL_NULL_V(p_server, false);
+	ERR_FAIL_NULL_V(p_skeleton, false);
+	bool found_foot = false;
+	real_t foot_y = 0.0;
+	for (uint32_t i = 0; i < bones.size(); i++) {
+		Box3DBody3D *body = p_server->get_body(bones[i].body);
+		if (body == nullptr) {
+			continue;
+		}
+		const Transform3D body_transform = body->get_transform();
+		const real_t radius = MAX((real_t)0.01, bones[i].radius);
+		const real_t half_axis = MAX((real_t)0.0, bones[i].height * (real_t)0.5 - radius);
+		const Vector3 endpoint_offset = body_transform.basis.get_column(1).normalized() * half_axis;
+		const real_t bone_foot = MIN(body_transform.origin.y - endpoint_offset.y, body_transform.origin.y + endpoint_offset.y) - radius;
+		if (!found_foot || bone_foot < foot_y) {
+			foot_y = bone_foot;
+			found_foot = true;
+		}
+	}
+	ERR_FAIL_COND_V(!found_foot, false);
+
+	editor_ground_shape = p_server->box_shape_create();
+	p_server->shape_set_data(editor_ground_shape, Vector3(10.0, 0.1, 10.0));
+	editor_ground_body = p_server->body_create();
+	p_server->body_set_mode(editor_ground_body, PhysicsServer3D::BODY_MODE_STATIC);
+	p_server->body_set_collision_layer(editor_ground_body, profile->get_collision_mask());
+	p_server->body_set_collision_mask(editor_ground_body, profile->get_collision_layer());
+	p_server->body_add_shape(editor_ground_body, editor_ground_shape);
+	const Vector3 skeleton_origin = p_skeleton->get_global_transform().origin;
+	p_server->body_set_state(editor_ground_body, PhysicsServer3D::BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(skeleton_origin.x, foot_y - 0.1, skeleton_origin.z)));
+	p_server->body_set_space(editor_ground_body, editor_space_rid);
+	return true;
+}
+
+bool Box3DRagdoll::_start_editor_simulation() {
+	ERR_FAIL_COND_V(!Engine::get_singleton()->is_editor_hint(), false);
+	ERR_FAIL_COND_V(!is_inside_tree(), false);
+	ERR_FAIL_COND_V_MSG(profile.is_null(), false, "Box3D: assign a ragdoll profile before enabling editor simulation.");
+	Skeleton3D *skeleton = get_skeleton();
+	ERR_FAIL_NULL_V(skeleton, false);
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	ERR_FAIL_NULL_V(server, false);
+
+	editor_pose_snapshot.clear();
+	editor_pose_snapshot.resize(skeleton->get_bone_count());
+	for (int i = 0; i < skeleton->get_bone_count(); i++) {
+		editor_pose_snapshot[i] = skeleton->get_bone_pose(i);
+	}
+
+	editor_space_rid = server->space_create();
+	if (!_build_in_space(editor_space_rid) || !_create_editor_ground(server, skeleton)) {
+		_stop_editor_simulation(true);
+		return false;
+	}
+	for (uint32_t i = 0; i < bones.size(); i++) {
+		server->body_set_mode(bones[i].body, PhysicsServer3D::BODY_MODE_RIGID);
+		server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, Vector3());
+		server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, Vector3());
+		server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_SLEEPING, false);
+	}
+	ragdoll_active = true;
+	asleep_emitted = false;
+	editor_step_accumulator = 0.0;
+	set_process_internal(true);
+	return true;
+}
+
+void Box3DRagdoll::_stop_editor_simulation(bool p_restore_pose) {
+	set_process_internal(false);
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	editor_teardown_active = true;
+	teardown();
+	editor_teardown_active = false;
+	if (server != nullptr) {
+		if (editor_ground_body.is_valid()) {
+			server->free_rid(editor_ground_body);
+		}
+		if (editor_ground_shape.is_valid()) {
+			server->free_rid(editor_ground_shape);
+		}
+		if (editor_space_rid.is_valid()) {
+			server->free_rid(editor_space_rid);
+		}
+	}
+	editor_ground_body = RID();
+	editor_ground_shape = RID();
+	editor_space_rid = RID();
+	editor_step_accumulator = 0.0;
+
+	Skeleton3D *skeleton = get_skeleton();
+	if (p_restore_pose && skeleton != nullptr && editor_pose_snapshot.size() == (uint32_t)skeleton->get_bone_count()) {
+		for (int i = 0; i < skeleton->get_bone_count(); i++) {
+			skeleton->set_bone_pose(i, editor_pose_snapshot[i]);
+		}
+	}
+	editor_pose_snapshot.clear();
+	update_gizmos();
+}
+
+void Box3DRagdoll::_step_editor_simulation(real_t p_delta) {
+	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
+	Box3DSpace3D *space = server != nullptr ? server->get_space(editor_space_rid) : nullptr;
+	Skeleton3D *skeleton = get_skeleton();
+	if (space == nullptr || skeleton == nullptr) {
+		set_simulate_in_editor(false);
+		return;
+	}
+
+	static constexpr real_t fixed_step = (real_t)1.0 / (real_t)60.0;
+	editor_step_accumulator = MIN(editor_step_accumulator + MIN(p_delta, (real_t)0.25), fixed_step * (real_t)8.0);
+	while (editor_step_accumulator >= fixed_step) {
+		space->step(fixed_step);
+		space->call_queries();
+		editor_step_accumulator -= fixed_step;
+	}
+	_sync_skeleton_from_bodies(server, skeleton);
+	update_gizmos();
+}
+
+void Box3DRagdoll::set_simulate_in_editor(bool p_enabled) {
+	if (!Engine::get_singleton()->is_editor_hint()) {
+		return;
+	}
+	if (simulate_in_editor == p_enabled && (!p_enabled || editor_space_rid.is_valid())) {
+		return;
+	}
+	simulate_in_editor = p_enabled;
+	if (simulate_in_editor) {
+		if (!_start_editor_simulation()) {
+			simulate_in_editor = false;
+		}
+	} else if (editor_space_rid.is_valid()) {
+		_stop_editor_simulation(true);
+	}
+}
+
+void Box3DRagdoll::reset_simulation() {
+	if (!Engine::get_singleton()->is_editor_hint()) {
+		return;
+	}
+	simulate_in_editor = false;
+	if (editor_space_rid.is_valid()) {
+		_stop_editor_simulation(true);
+	}
+}
+#endif
 
 void Box3DRagdoll::_capture_animation_pose(real_t p_delta) {
 	Skeleton3D *skeleton = get_skeleton();
@@ -603,6 +809,11 @@ bool Box3DRagdoll::_all_bodies_sleeping(Box3DPhysicsServer3D *p_server) const {
 }
 
 void Box3DRagdoll::_process_modification(double p_delta) {
+#ifdef TOOLS_ENABLED
+	if (simulate_in_editor) {
+		return;
+	}
+#endif
 	if (!built) {
 		_capture_animation_pose(p_delta);
 		return;
@@ -635,8 +846,25 @@ void Box3DRagdoll::_body_state_changed(PhysicsDirectBodyState3D *p_state) {
 }
 
 void Box3DRagdoll::_notification(int p_what) {
-	if (p_what == NOTIFICATION_EXIT_TREE) {
-		teardown();
+	switch (p_what) {
+#ifdef TOOLS_ENABLED
+		case NOTIFICATION_INTERNAL_PROCESS: {
+			if (simulate_in_editor && Engine::get_singleton()->is_editor_hint()) {
+				_step_editor_simulation(get_process_delta_time());
+			}
+		} break;
+#endif
+		case NOTIFICATION_EXIT_TREE: {
+#ifdef TOOLS_ENABLED
+			if (editor_space_rid.is_valid()) {
+				simulate_in_editor = false;
+				_stop_editor_simulation(true);
+			} else
+#endif
+			{
+				teardown();
+			}
+		} break;
 	}
 }
 
@@ -746,6 +974,9 @@ void Box3DRagdollProfileGenerator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear_warnings"), &Box3DRagdollProfileGenerator::clear_warnings);
 	ClassDB::bind_method(D_METHOD("generate_profile", "skeleton", "mesh_instance", "animation_library"), &Box3DRagdollProfileGenerator::generate_profile, DEFVAL(Variant()), DEFVAL(Variant()));
 	ClassDB::bind_method(D_METHOD("analyze_profile", "profile"), &Box3DRagdollProfileGenerator::analyze_profile);
+#ifdef TOOLS_ENABLED
+	ClassDB::bind_method(D_METHOD("get_gizmo_line_groups", "profile", "skeleton"), &Box3DRagdollProfileGenerator::get_gizmo_line_groups);
+#endif
 	ClassDB::bind_method(D_METHOD("get_gizmo_lines", "profile", "skeleton"), &Box3DRagdollProfileGenerator::get_gizmo_lines);
 
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "vertex_weight_threshold", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_vertex_weight_threshold", "get_vertex_weight_threshold");
@@ -1020,9 +1251,7 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		} else if (lower.contains("leg") || lower.contains("knee") || lower.contains("shin") || lower.contains("forearm") || lower.contains("elbow")) {
 			joint_type = Box3DRagdollProfile::JOINT_TYPE_REVOLUTE;
 		}
-		const Basis joint_basis = joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ?
-				_basis_from_z_axis_with_x(_project_perpendicular(reference_basis.get_column(0), axis_dir), axis_dir) :
-				_basis_from_x_axis(axis, reference_basis);
+		const Basis joint_basis = joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? _basis_from_z_axis_with_x(_project_perpendicular(reference_basis.get_column(0), axis_dir), axis_dir) : _basis_from_x_axis(axis, reference_basis);
 		const Transform3D joint_world(joint_basis, center);
 		const Transform3D joint_frame = capsule_world.affine_inverse() * joint_world;
 
@@ -1094,14 +1323,145 @@ Dictionary Box3DRagdollProfileGenerator::analyze_profile(const Ref<Box3DRagdollP
 	return result;
 }
 
+#ifdef TOOLS_ENABLED
+static void _append_gizmo_segment(PackedVector3Array &r_lines, const Transform3D &p_transform, const Vector3 &p_from, const Vector3 &p_to) {
+	r_lines.append(p_transform.xform(p_from));
+	r_lines.append(p_transform.xform(p_to));
+}
+
+static void _append_gizmo_circle_y(PackedVector3Array &r_lines, const Transform3D &p_transform, real_t p_y, real_t p_radius) {
+	static constexpr int segments = 20;
+	for (int i = 0; i < segments; i++) {
+		const real_t a = Math::TAU * (real_t)i / (real_t)segments;
+		const real_t b = Math::TAU * (real_t)(i + 1) / (real_t)segments;
+		_append_gizmo_segment(r_lines, p_transform, Vector3(Math::cos(a) * p_radius, p_y, Math::sin(a) * p_radius), Vector3(Math::cos(b) * p_radius, p_y, Math::sin(b) * p_radius));
+	}
+}
+
+static void _append_capsule_gizmo(PackedVector3Array &r_lines, const Transform3D &p_transform, real_t p_radius, real_t p_height) {
+	const real_t radius = MAX((real_t)0.01, p_radius);
+	const real_t half_axis = MAX((real_t)0.0, p_height * (real_t)0.5 - radius);
+	_append_gizmo_circle_y(r_lines, p_transform, half_axis, radius);
+	_append_gizmo_circle_y(r_lines, p_transform, -half_axis, radius);
+	for (int i = 0; i < 4; i++) {
+		const real_t angle = Math::TAU * (real_t)i / (real_t)4.0;
+		const Vector3 radial(Math::cos(angle) * radius, 0, Math::sin(angle) * radius);
+		_append_gizmo_segment(r_lines, p_transform, radial + Vector3(0, -half_axis, 0), radial + Vector3(0, half_axis, 0));
+	}
+	static constexpr int cap_segments = 12;
+	for (int plane = 0; plane < 2; plane++) {
+		for (int i = 0; i < cap_segments; i++) {
+			const real_t a = Math::PI * (real_t)i / (real_t)cap_segments;
+			const real_t b = Math::PI * (real_t)(i + 1) / (real_t)cap_segments;
+			const Vector3 top_a = plane == 0 ? Vector3(Math::cos(a) * radius, half_axis + Math::sin(a) * radius, 0) : Vector3(0, half_axis + Math::sin(a) * radius, Math::cos(a) * radius);
+			const Vector3 top_b = plane == 0 ? Vector3(Math::cos(b) * radius, half_axis + Math::sin(b) * radius, 0) : Vector3(0, half_axis + Math::sin(b) * radius, Math::cos(b) * radius);
+			const Vector3 bottom_a = plane == 0 ? Vector3(Math::cos(a) * radius, -half_axis - Math::sin(a) * radius, 0) : Vector3(0, -half_axis - Math::sin(a) * radius, Math::cos(a) * radius);
+			const Vector3 bottom_b = plane == 0 ? Vector3(Math::cos(b) * radius, -half_axis - Math::sin(b) * radius, 0) : Vector3(0, -half_axis - Math::sin(b) * radius, Math::cos(b) * radius);
+			_append_gizmo_segment(r_lines, p_transform, top_a, top_b);
+			_append_gizmo_segment(r_lines, p_transform, bottom_a, bottom_b);
+		}
+	}
+}
+
+static void _append_joint_limit_gizmo(PackedVector3Array &r_lines, const Transform3D &p_transform, Box3DRagdollProfile::JointType p_joint_type, real_t p_radius, real_t p_swing, real_t p_twist_lower, real_t p_twist_upper) {
+	const real_t scale = MAX((real_t)0.15, p_radius * (real_t)2.5);
+	if (p_joint_type == Box3DRagdollProfile::JOINT_TYPE_SPHERICAL) {
+		const real_t swing = CLAMP(p_swing, (real_t)0.0, (real_t)Math::PI * (real_t)0.99);
+		const real_t depth = scale * Math::cos(swing);
+		const real_t width = scale * Math::sin(swing);
+		static constexpr int cone_segments = 24;
+		for (int i = 0; i < cone_segments; i++) {
+			const real_t a = Math::TAU * (real_t)i / (real_t)cone_segments;
+			const real_t b = Math::TAU * (real_t)(i + 1) / (real_t)cone_segments;
+			const Vector3 from(depth, Math::cos(a) * width, Math::sin(a) * width);
+			const Vector3 to(depth, Math::cos(b) * width, Math::sin(b) * width);
+			_append_gizmo_segment(r_lines, p_transform, from, to);
+			if (i % 6 == 0) {
+				_append_gizmo_segment(r_lines, p_transform, Vector3(), from);
+			}
+		}
+	}
+
+	const real_t lower = CLAMP(p_twist_lower, (real_t)-Math::PI, (real_t)Math::PI);
+	const real_t upper = CLAMP(p_twist_upper, lower, (real_t)Math::PI);
+	const real_t arc_radius = scale * (real_t)0.65;
+	static constexpr int arc_segments = 24;
+	for (int i = 0; i < arc_segments; i++) {
+		const real_t a = Math::lerp(lower, upper, (real_t)i / (real_t)arc_segments);
+		const real_t b = Math::lerp(lower, upper, (real_t)(i + 1) / (real_t)arc_segments);
+		const Vector3 from = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(a) * arc_radius, Math::sin(a) * arc_radius, 0) : Vector3(0, Math::cos(a) * arc_radius, Math::sin(a) * arc_radius);
+		const Vector3 to = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(b) * arc_radius, Math::sin(b) * arc_radius, 0) : Vector3(0, Math::cos(b) * arc_radius, Math::sin(b) * arc_radius);
+		_append_gizmo_segment(r_lines, p_transform, from, to);
+	}
+	const Vector3 lower_endpoint = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(lower) * arc_radius, Math::sin(lower) * arc_radius, 0) : Vector3(0, Math::cos(lower) * arc_radius, Math::sin(lower) * arc_radius);
+	const Vector3 upper_endpoint = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(upper) * arc_radius, Math::sin(upper) * arc_radius, 0) : Vector3(0, Math::cos(upper) * arc_radius, Math::sin(upper) * arc_radius);
+	_append_gizmo_segment(r_lines, p_transform, Vector3(), lower_endpoint);
+	_append_gizmo_segment(r_lines, p_transform, Vector3(), upper_endpoint);
+}
+
+Dictionary Box3DRagdollProfileGenerator::get_gizmo_line_groups(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const {
+	Dictionary groups;
+	ERR_FAIL_COND_V(p_profile.is_null(), groups);
+	ERR_FAIL_NULL_V(p_skeleton, groups);
+
+	HashMap<StringName, StringName> bone_to_chain;
+	const Dictionary chains = p_profile->get_bone_chains();
+	const Array chain_names = chains.keys();
+	for (int i = 0; i < chain_names.size(); i++) {
+		const StringName chain_name = chain_names[i];
+		const PackedStringArray chain_bones = chains[chain_name];
+		for (int j = 0; j < chain_bones.size(); j++) {
+			bone_to_chain[StringName(chain_bones[j])] = chain_name;
+		}
+	}
+
+	const Transform3D skeleton_global = p_skeleton->get_global_transform();
+	const TypedArray<Dictionary> profile_bones = p_profile->get_bones();
+	for (int i = 0; i < profile_bones.size(); i++) {
+		const Dictionary entry = profile_bones[i];
+		if (!_dict_bool(entry, SNAME("enabled"), true)) {
+			continue;
+		}
+		const StringName bone_name = entry.get(SNAME("bone"), StringName());
+		const int bone_idx = p_skeleton->find_bone(String(bone_name));
+		if (bone_idx < 0) {
+			continue;
+		}
+		const StringName *found_chain = bone_to_chain.getptr(bone_name);
+		const StringName chain_name = found_chain != nullptr ? *found_chain : SNAME("ungrouped");
+		PackedVector3Array lines = groups.has(chain_name) ? (PackedVector3Array)groups[chain_name] : PackedVector3Array();
+		const real_t radius = _dict_real(entry, SNAME("radius"), 0.12);
+		const real_t height = _dict_real(entry, SNAME("height"), 0.5);
+		const Transform3D offset = _dict_transform(entry, SNAME("offset"), Transform3D());
+		const Transform3D body_pose = skeleton_global * p_skeleton->get_bone_global_pose(bone_idx) * offset;
+		_append_capsule_gizmo(lines, body_pose, radius, height);
+
+		const Box3DRagdollProfile::JointType joint_type = (Box3DRagdollProfile::JointType)_dict_int(entry, SNAME("joint_type"), Box3DRagdollProfile::JOINT_TYPE_SPHERICAL);
+		if (joint_type != Box3DRagdollProfile::JOINT_TYPE_NONE) {
+			const Transform3D joint_frame = _dict_transform(entry, SNAME("joint_frame"), Transform3D());
+			_append_joint_limit_gizmo(lines, body_pose * joint_frame, joint_type, radius, _dict_real(entry, SNAME("swing_limit"), Math::deg_to_rad((real_t)25.0)), _dict_real(entry, SNAME("twist_lower"), Math::deg_to_rad((real_t)-15.0)), _dict_real(entry, SNAME("twist_upper"), Math::deg_to_rad((real_t)15.0)));
+		}
+		groups[chain_name] = lines;
+	}
+	return groups;
+}
+#endif
+
 PackedVector3Array Box3DRagdollProfileGenerator::get_gizmo_lines(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const {
 	PackedVector3Array lines;
+#ifdef TOOLS_ENABLED
+	const Dictionary groups = get_gizmo_line_groups(p_profile, p_skeleton);
+	const Array group_names = groups.keys();
+	for (int i = 0; i < group_names.size(); i++) {
+		lines.append_array((PackedVector3Array)groups[group_names[i]]);
+	}
+#else
 	ERR_FAIL_COND_V(p_profile.is_null(), lines);
 	ERR_FAIL_NULL_V(p_skeleton, lines);
 	const Transform3D skeleton_global = p_skeleton->get_global_transform();
-	const TypedArray<Dictionary> bones = p_profile->get_bones();
-	for (int i = 0; i < bones.size(); i++) {
-		Dictionary entry = bones[i];
+	const TypedArray<Dictionary> profile_bones = p_profile->get_bones();
+	for (int i = 0; i < profile_bones.size(); i++) {
+		const Dictionary entry = profile_bones[i];
 		const int bone_idx = p_skeleton->find_bone(String((StringName)entry.get(SNAME("bone"), StringName())));
 		if (bone_idx < 0) {
 			continue;
@@ -1112,9 +1472,19 @@ PackedVector3Array Box3DRagdollProfileGenerator::get_gizmo_lines(const Ref<Box3D
 		lines.append(pose.xform(Vector3(0, -height * 0.5, 0)));
 		lines.append(pose.xform(Vector3(0, height * 0.5, 0)));
 	}
+#endif
 	return lines;
 }
 
 Box3DRagdoll::~Box3DRagdoll() {
+#ifdef TOOLS_ENABLED
+	if (profile.is_valid()) {
+		profile->disconnect_changed(callable_mp(this, &Box3DRagdoll::_profile_changed));
+	}
+	if (editor_space_rid.is_valid()) {
+		simulate_in_editor = false;
+		_stop_editor_simulation(false);
+	}
+#endif
 	teardown();
 }

@@ -16,6 +16,10 @@
 #include "core/object/class_db.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
+#ifdef TOOLS_ENABLED
+#include "editor/box3d_ragdoll_editor_plugin.h"
+#endif
+
 static Box3DPhysics *box3d_physics_singleton = nullptr;
 
 static PhysicsServer3D *create_box3d_physics_server() {
@@ -29,6 +33,12 @@ static PhysicsServer3D *create_box3d_physics_server() {
 }
 
 void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
+#ifdef TOOLS_ENABLED
+	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
+		EditorPlugins::add_by_type<Box3DRagdollEditorPlugin>();
+		return;
+	}
+#endif
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		GDREGISTER_CLASS(Box3DRagdollProfile);
 		GDREGISTER_CLASS(Box3DRagdollProfileGenerator);

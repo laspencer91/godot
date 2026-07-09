@@ -26,6 +26,8 @@ env.modules_sources += thirdparty_obj
 module_obj = []
 env_box3d.add_source_files(module_obj, "*.cpp")
 env_box3d.add_source_files(module_obj, "joints/*.cpp")
+if env.editor_build:
+    env_box3d.add_source_files(module_obj, "editor/*.cpp")
 env.modules_sources += module_obj
 
 env.Depends(module_obj, thirdparty_obj)

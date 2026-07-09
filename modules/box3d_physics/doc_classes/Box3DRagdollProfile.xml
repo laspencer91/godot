@@ -4,7 +4,7 @@
 		Profile resource for [Box3DRagdoll].
 	</brief_description>
 	<description>
-		[Box3DRagdollProfile] stores per-bone capsule and joint settings for [Box3DRagdoll]. Profiles can be authored directly with dictionary entries in [member bones] or generated with [Box3DRagdollProfileGenerator].
+		[Box3DRagdollProfile] stores per-bone capsule and joint settings for [Box3DRagdoll]. Profiles can be authored directly with dictionary entries in [member bones] or generated with [Box3DRagdollProfileGenerator]. In the editor, the master friction and spring values appear before an editable chain-grouped bone table.
 	</description>
 	<tutorials>
 	</tutorials>
