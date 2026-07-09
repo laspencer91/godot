@@ -4702,6 +4702,12 @@ void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 	}
 }
 
+void EditorNode::drop_workspace_tabs_for_document(EditorDocument *p_document) {
+	if (p_document && editor_main_screen) {
+		editor_main_screen->drop_document_tabs(p_document);
+	}
+}
+
 void EditorNode::_activate_scene_views() {
 	// Acting as the (proto) workspace: bind both the 2D and 3D editors to the active document's
 	// isolated world. The world is passed explicitly (the editor no longer reaches into the global

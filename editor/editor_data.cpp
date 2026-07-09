@@ -657,6 +657,13 @@ void EditorData::move_edited_scene_index(int p_idx, int p_to_idx) {
 
 void EditorData::remove_scene(int p_idx) {
 	ERR_FAIL_INDEX(p_idx, edited_scene.size());
+
+	// G2: drop any workspace tab/view showing this document FIRST — DocumentViews hold raw
+	// pointers to the document and its scene root, so they must die while both are alive.
+	if (edited_scene[p_idx].document && EditorNode::get_singleton()) {
+		EditorNode::get_singleton()->drop_workspace_tabs_for_document(edited_scene[p_idx].document);
+	}
+
 	if (edited_scene[p_idx].root) {
 		for (int i = 0; i < editor_plugins.size(); i++) {
 			editor_plugins[i]->notify_scene_closed(edited_scene[p_idx].root->get_scene_file_path());

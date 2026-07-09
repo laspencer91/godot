@@ -923,6 +923,16 @@ public:
 	// bar uses). Lets a workspace pane's tab selection drive which document the editor edits.
 	void set_edited_scene_index(int p_idx) { _set_current_scene(p_idx); }
 
+	// G2: close the open scene at p_idx through the stock tab-close flow (unsaved-changes
+	// prompt included). Used by workspace scene-tab closes; the workspace tab itself is
+	// dropped from EditorData::remove_scene once the close actually happens.
+	void request_close_scene_tab(int p_idx) { _scene_tab_closed(p_idx); }
+
+	// G2: remove any workspace tab/view showing p_document. Called while the document and
+	// its scene root are still alive (from EditorData::remove_scene) — views hold raw
+	// pointers to both.
+	void drop_workspace_tabs_for_document(EditorDocument *p_document);
+
 	void set_edited_scene(Node *p_scene);
 	void set_edited_scene_root(Node *p_scene, bool p_auto_add);
 	Node *get_edited_scene() { return editor_data.get_edited_scene_root(); }

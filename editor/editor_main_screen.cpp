@@ -481,6 +481,18 @@ bool EditorMainScreen::close_document(EditorDocument *p_document) {
 	return host && host->close_document(p_document);
 }
 
+void EditorMainScreen::drop_document_tabs(EditorDocument *p_document) {
+	if (!workspace || !p_document) {
+		return;
+	}
+	for (WorkspacePane *pane : workspace->get_tabbed_leaves()) {
+		TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(pane->get_content());
+		if (host && host->drop_document_tab(p_document)) {
+			return; // A document lives in at most one pane.
+		}
+	}
+}
+
 int EditorMainScreen::get_selected_index() const {
 	for (int i = 0; i < editor_table.size(); i++) {
 		if (selected_plugin == editor_table[i]) {

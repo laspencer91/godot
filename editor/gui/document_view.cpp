@@ -331,6 +331,22 @@ void DocumentView::_notification(int p_what) {
 	if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 		se->park_chrome_if_hosted_by(this);
 	}
+	// G2 M7.2a: same for the shared 2D/3D toolbar — it travels into the focused scene pane's
+	// toolbar_host, and dying with this view would leave the editors' toolbar pointers dangling.
+	if (toolbar_host) {
+		if (Node3DEditor *sp = Node3DEditor::get_singleton()) {
+			Control *tb = sp->get_shared_toolbar();
+			if (tb && tb->get_parent() == toolbar_host) {
+				sp->park_shared_toolbar();
+			}
+		}
+		if (CanvasItemEditor *ci = CanvasItemEditor::get_singleton()) {
+			Control *tb = ci->get_shared_toolbar();
+			if (tb && tb->get_parent() == toolbar_host) {
+				ci->park_shared_toolbar();
+			}
+		}
+	}
 	if (!editor_surface) {
 		return;
 	}

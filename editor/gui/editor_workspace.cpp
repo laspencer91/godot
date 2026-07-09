@@ -524,7 +524,10 @@ void EditorWorkspace::close_pane(WorkspacePane *p_pane) {
 	if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content())) {
 		const ObjectID pane_id = p_pane->get_instance_id();
 		while (host->get_document_count() > 0) {
-			host->close_tab(0);
+			// drop_tab, not close_tab: a scene tab's close_tab routes through the async
+			// unsaved-changes prompt and leaves the tab in place — the drain would spin.
+			// Pane close keeps its "views go away, scenes stay open" semantics.
+			host->drop_tab(0);
 			if (!ObjectDB::get_instance(pane_id)) {
 				return; // Something already tore the pane down mid-drain.
 			}

@@ -81,6 +81,8 @@ class TabbedDocumentHost : public VBoxContainer {
 	void _activate_document(int p_idx); // Make tab p_idx's document the editor's active edited scene.
 	void _sync_current_script_view(int p_idx); // G2 S6a: tell ScriptEditor which script view (if any) is current.
 	void _remove_tab_entry(int p_idx); // Drop the tab row, keeping the current selection when it survives.
+	void _drop_tab_at(int p_idx); // Mechanical tab removal + close side effects (no scene-close routing).
+	bool suppress_activation = false; // Guards the reselect inside _drop_tab_at from re-entering the global scene switch.
 	void _on_tab_selected(int p_idx);
 	void _on_tab_close(int p_idx);
 	void _on_tab_rmb(int p_idx); // G2 S8
@@ -127,9 +129,16 @@ public:
 	// False if the document has no tab here.
 	bool close_document(EditorDocument *p_document);
 
-	// G2 S8: close tab p_idx (same pipeline as the tab X). Public so pane close can
-	// drain remaining tabs through the side-effect choke point.
+	// G2 S8: close tab p_idx (same pipeline as the tab X — a scene tab routes through
+	// EditorNode's close-scene flow, prompt included).
 	void close_tab(int p_idx) { _on_tab_close(p_idx); }
+
+	// Mechanical removal, NO scene-close routing: the tab/view go away, side effects
+	// (script state cache, chrome parking) still run. Used by the pane-close drain (a
+	// scene tab must not pop an async prompt mid-drain; its scene stays open) and by
+	// drop_document_tab when a scene document is being destroyed.
+	void drop_tab(int p_idx) { _drop_tab_at(p_idx); }
+	bool drop_document_tab(EditorDocument *p_document);
 
 	EditorDocument *get_document(int p_idx) const; // G2 S8 (null on bad index).
 

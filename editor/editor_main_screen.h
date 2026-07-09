@@ -127,6 +127,10 @@ public:
 	// G2 S7: close p_document's workspace tab wherever it lives (side effects included via the
 	// host's close pipeline). False if no pane shows it.
 	bool close_document(EditorDocument *p_document);
+
+	// Mechanical tab removal (no close routing/prompt) — used while p_document is being
+	// destroyed (EditorData::remove_scene), so views never outlive the document they bind.
+	void drop_document_tabs(EditorDocument *p_document);
 	void focus_editor(const StringName &p_name);
 	int get_selected_index() const;
 	int get_plugin_index(EditorPlugin *p_editor) const;

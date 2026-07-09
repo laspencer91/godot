@@ -247,8 +247,9 @@ void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	_show(p_idx);
 	// Only a genuine, in-tree selection drives the global active scene -- not the programmatic
-	// set_current() done while the host is being built and placed into a pane.
-	if (is_inside_tree()) {
+	// set_current() done while the host is being built and placed into a pane, and not the
+	// reselect that follows dropping a tab mid scene-close (suppress_activation).
+	if (is_inside_tree() && !suppress_activation) {
 		_activate_document(p_idx);
 		_sync_current_script_view(p_idx); // G2 S6a
 	}
@@ -285,6 +286,41 @@ void TabbedDocumentHost::_on_tab_close(int p_idx) {
 	if (p_idx < 0 || p_idx >= documents.size()) {
 		return;
 	}
+	// A scene tab close must close the SCENE (unsaved prompt, EditorData removal) — not just
+	// drop the view, which would leave the scene resident and invisible. The tab itself is
+	// removed by drop_document_tab() when the scene actually closes (EditorData::remove_scene);
+	// a cancelled prompt leaves it untouched.
+	EditorDocument *doc = documents[p_idx];
+	if (doc) {
+		switch (doc->get_type()) {
+			case EditorDocument::TYPE_SCENE_2D:
+			case EditorDocument::TYPE_SCENE_3D:
+			case EditorDocument::TYPE_SCENE_MIXED: {
+				EditorNode *en = EditorNode::get_singleton();
+				const int scene_idx = en ? en->get_editor_data().find_document_index(doc) : -1;
+				if (scene_idx >= 0) {
+					en->request_close_scene_tab(scene_idx);
+					return;
+				}
+			} break;
+			default:
+				break;
+		}
+	}
+	_drop_tab_at(p_idx);
+}
+
+bool TabbedDocumentHost::drop_document_tab(EditorDocument *p_document) {
+	// Mechanical removal (no close routing) — used when the document is being destroyed.
+	const int idx = documents.find(p_document);
+	if (idx < 0) {
+		return false;
+	}
+	_drop_tab_at(idx);
+	return true;
+}
+
+void TabbedDocumentHost::_drop_tab_at(int p_idx) {
 	// G2 S7: single choke point for script/help close side effects (state cache,
 	// previous-scripts, notify_script_close) — must run while the surface is still alive.
 	if (views[p_idx]) {
@@ -297,7 +333,12 @@ void TabbedDocumentHost::_on_tab_close(int p_idx) {
 		// its Node3DEditorView, whose gizmo layer is returned to its world's freelist).
 		memdelete(views[p_idx]);
 	}
+	// The reselect inside _remove_tab_entry must not re-enter the global scene switch —
+	// we may be deep inside EditorData::remove_scene (drop_document_tab) with the scene
+	// list mid-mutation. The deferred _ensure_active_scene_tab reveal self-corrects focus.
+	suppress_activation = true;
 	_remove_tab_entry(p_idx);
+	suppress_activation = false;
 
 	// G2 S8: the last tab closing in a non-root pane closes the pane. Deferred — we may
 	// be deep inside this host's own signal emission, and the close frees this host.
