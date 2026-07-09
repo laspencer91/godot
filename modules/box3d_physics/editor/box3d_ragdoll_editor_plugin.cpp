@@ -29,9 +29,12 @@ Box3DRagdollGizmoPlugin::Box3DRagdollGizmoPlugin() {
 		Color(0.34, 0.82, 0.73),
 		Color(0.92, 0.47, 0.84),
 	};
+	chain_material_names.resize(RAGDOLL_CHAIN_COLOR_COUNT);
 	for (int i = 0; i < RAGDOLL_CHAIN_COLOR_COUNT; i++) {
-		create_material(vformat("chain_%d", i), colors[i]);
+		chain_material_names[i] = vformat("chain_%d", i);
+		create_material(chain_material_names[i], colors[i]);
 	}
+	line_generator.instantiate();
 }
 
 bool Box3DRagdollGizmoPlugin::has_gizmo(Node3D *p_spatial) {
@@ -57,22 +60,20 @@ void Box3DRagdollGizmoPlugin::redraw(EditorNode3DGizmo *p_gizmo) {
 		return;
 	}
 
-	Ref<Box3DRagdollProfileGenerator> generator;
-	generator.instantiate();
-	const Dictionary groups = generator->get_gizmo_line_groups(ragdoll->get_profile(), skeleton);
+	const Dictionary groups = line_generator->get_gizmo_line_groups(ragdoll->get_profile(), skeleton);
 	const Array group_names = groups.keys();
 	const Transform3D node_inverse = ragdoll->get_global_transform().affine_inverse();
 	for (int group_idx = 0; group_idx < group_names.size(); group_idx++) {
 		const PackedVector3Array world_lines = groups[group_names[group_idx]];
+		if (world_lines.is_empty()) {
+			continue;
+		}
 		Vector<Vector3> local_lines;
 		local_lines.resize(world_lines.size());
 		for (int i = 0; i < world_lines.size(); i++) {
 			local_lines.write[i] = node_inverse.xform(world_lines[i]);
 		}
-		if (local_lines.is_empty()) {
-			continue;
-		}
-		const String material_name = vformat("chain_%d", group_idx % RAGDOLL_CHAIN_COLOR_COUNT);
+		const String &material_name = chain_material_names[group_idx % RAGDOLL_CHAIN_COLOR_COUNT];
 		p_gizmo->add_lines(local_lines, get_material(material_name, p_gizmo));
 		p_gizmo->add_collision_segments(local_lines);
 	}
@@ -167,7 +168,7 @@ class Box3DRagdollProfileBonesEditor : public VBoxContainer {
 			return;
 		}
 		const int entry_index = item->get_metadata(0);
-		TypedArray<Dictionary> old_bones = profile->get_bones().duplicate(true);
+		TypedArray<Dictionary> old_bones = profile->get_bones();
 		TypedArray<Dictionary> new_bones = old_bones.duplicate(true);
 		if (entry_index < 0 || entry_index >= new_bones.size()) {
 			return;
@@ -205,16 +206,7 @@ class Box3DRagdollProfileBonesEditor : public VBoxContainer {
 	void _build_tree() {
 		tree->clear();
 		TreeItem *root = tree->create_item();
-		HashMap<StringName, StringName> bone_to_chain;
-		const Dictionary chains = profile->get_bone_chains();
-		const Array chain_names = chains.keys();
-		for (int i = 0; i < chain_names.size(); i++) {
-			const StringName chain_name = chain_names[i];
-			const PackedStringArray chain_bones = chains[chain_name];
-			for (int j = 0; j < chain_bones.size(); j++) {
-				bone_to_chain[StringName(chain_bones[j])] = chain_name;
-			}
-		}
+		const HashMap<StringName, StringName> bone_to_chain = profile->build_bone_to_chain_map();
 
 		HashMap<StringName, TreeItem *> chain_items;
 		const TypedArray<Dictionary> bones = profile->get_bones();
@@ -222,7 +214,7 @@ class Box3DRagdollProfileBonesEditor : public VBoxContainer {
 			const Dictionary entry = bones[i];
 			const StringName bone_name = entry.get(SNAME("bone"), StringName());
 			const StringName *found_chain = bone_to_chain.getptr(bone_name);
-			const StringName chain_name = found_chain != nullptr ? *found_chain : SNAME("ungrouped");
+			const StringName chain_name = found_chain != nullptr ? *found_chain : Box3DRagdollProfile::ungrouped_chain_name();
 			TreeItem **chain_item_ptr = chain_items.getptr(chain_name);
 			TreeItem *chain_item = chain_item_ptr != nullptr ? *chain_item_ptr : nullptr;
 			if (chain_item == nullptr) {
@@ -238,15 +230,16 @@ class Box3DRagdollProfileBonesEditor : public VBoxContainer {
 			row->set_cell_mode(1, TreeItem::CELL_MODE_RANGE);
 			row->set_range_config(1, 0, 2, 1);
 			row->set_text(1, TTR("None") + "," + TTR("Spherical") + "," + TTR("Revolute"));
-			row->set_range(1, (int)entry.get(SNAME("joint_type"), Box3DRagdollProfile::JOINT_TYPE_SPHERICAL));
+			const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(entry);
+			row->set_range(1, (int)params.joint_type);
 			row->set_editable(1, true);
 
 			const real_t values[5] = {
-				(real_t)entry.get(SNAME("radius"), 0.12),
-				(real_t)entry.get(SNAME("height"), 0.5),
-				Math::rad_to_deg((real_t)entry.get(SNAME("swing_limit"), Math::deg_to_rad((real_t)25.0))),
-				Math::rad_to_deg((real_t)entry.get(SNAME("twist_lower"), Math::deg_to_rad((real_t)-15.0))),
-				Math::rad_to_deg((real_t)entry.get(SNAME("twist_upper"), Math::deg_to_rad((real_t)15.0))),
+				params.radius,
+				params.height,
+				Math::rad_to_deg(params.swing_limit),
+				Math::rad_to_deg(params.twist_lower),
+				Math::rad_to_deg(params.twist_upper),
 			};
 			for (int column = 2; column <= 6; column++) {
 				row->set_cell_mode(column, TreeItem::CELL_MODE_RANGE);

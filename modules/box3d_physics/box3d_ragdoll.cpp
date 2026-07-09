@@ -38,8 +38,16 @@ static Transform3D _dict_transform(const Dictionary &p_dict, const StringName &p
 	return p_dict.has(p_key) ? (Transform3D)p_dict[p_key] : p_default;
 }
 
+static real_t _capsule_clamped_radius(real_t p_radius) {
+	return MAX((real_t)0.01, p_radius);
+}
+
+static real_t _capsule_half_axis(real_t p_radius, real_t p_height) {
+	return MAX((real_t)0.0, p_height * (real_t)0.5 - _capsule_clamped_radius(p_radius));
+}
+
 static real_t _capsule_mass(real_t p_radius, real_t p_height, real_t p_density_scale) {
-	const real_t radius = MAX((real_t)0.01, p_radius);
+	const real_t radius = _capsule_clamped_radius(p_radius);
 	const real_t height = MAX((real_t)0.02, p_height);
 	const real_t cylinder_height = MAX((real_t)0.0, height - (real_t)2.0 * radius);
 	const real_t volume = Math::PI * radius * radius * cylinder_height + ((real_t)4.0 / (real_t)3.0) * Math::PI * radius * radius * radius;
@@ -153,8 +161,44 @@ void Box3DRagdollProfile::_bind_methods() {
 	BIND_ENUM_CONSTANT(JOINT_TYPE_REVOLUTE);
 }
 
+Box3DRagdollProfile::BoneParams Box3DRagdollProfile::parse_bone_entry(const Dictionary &p_entry) {
+	BoneParams params;
+	params.offset = _dict_transform(p_entry, SNAME("offset"), params.offset);
+	params.has_joint_frame = p_entry.has(SNAME("joint_frame"));
+	params.joint_frame = _dict_transform(p_entry, SNAME("joint_frame"), params.joint_frame);
+	params.enabled = _dict_bool(p_entry, SNAME("enabled"), params.enabled);
+	params.joint_type = (JointType)_dict_int(p_entry, SNAME("joint_type"), params.joint_type);
+	params.radius = _dict_real(p_entry, SNAME("radius"), params.radius);
+	params.height = _dict_real(p_entry, SNAME("height"), params.height);
+	params.density_scale = _dict_real(p_entry, SNAME("density_scale"), params.density_scale);
+	params.swing_limit = _dict_real(p_entry, SNAME("swing_limit"), params.swing_limit);
+	params.twist_lower = _dict_real(p_entry, SNAME("twist_lower"), params.twist_lower);
+	params.twist_upper = _dict_real(p_entry, SNAME("twist_upper"), params.twist_upper);
+	params.joint_friction_scale = _dict_real(p_entry, SNAME("joint_friction_scale"), params.joint_friction_scale);
+	params.blend = CLAMP(_dict_real(p_entry, SNAME("blend"), params.blend), (real_t)0.0, (real_t)1.0);
+	return params;
+}
+
+HashMap<StringName, StringName> Box3DRagdollProfile::build_bone_to_chain_map() const {
+	HashMap<StringName, StringName> map;
+	const Array chain_names = bone_chains.keys();
+	for (int i = 0; i < chain_names.size(); i++) {
+		const StringName chain_name = chain_names[i];
+		const PackedStringArray chain_bones = bone_chains[chain_name];
+		for (int j = 0; j < chain_bones.size(); j++) {
+			map[StringName(chain_bones[j])] = chain_name;
+		}
+	}
+	return map;
+}
+
+StringName Box3DRagdollProfile::ungrouped_chain_name() {
+	return SNAME("ungrouped");
+}
+
 real_t Box3DRagdollProfile::estimate_bone_mass(const Dictionary &p_bone) const {
-	return _capsule_mass(_dict_real(p_bone, SNAME("radius"), 0.12), _dict_real(p_bone, SNAME("height"), 0.5), _dict_real(p_bone, SNAME("density_scale"), 1.0));
+	const BoneParams params = parse_bone_entry(p_bone);
+	return _capsule_mass(params.radius, params.height, params.density_scale);
 }
 
 real_t Box3DRagdollProfile::estimate_total_mass() const {
@@ -202,9 +246,7 @@ void Box3DRagdoll::set_profile(const Ref<Box3DRagdollProfile> &p_profile) {
 	}
 #ifdef TOOLS_ENABLED
 	const bool restart_editor_simulation = simulate_in_editor;
-	if (restart_editor_simulation) {
-		_stop_editor_simulation(true);
-	}
+	set_simulate_in_editor(false);
 	if (profile.is_valid()) {
 		profile->disconnect_changed(callable_mp(this, &Box3DRagdoll::_profile_changed));
 	}
@@ -217,8 +259,7 @@ void Box3DRagdoll::set_profile(const Ref<Box3DRagdollProfile> &p_profile) {
 	}
 	update_gizmos();
 	if (restart_editor_simulation) {
-		simulate_in_editor = true;
-		_start_editor_simulation();
+		set_simulate_in_editor(true);
 	}
 #endif
 }
@@ -238,18 +279,19 @@ Dictionary Box3DRagdoll::_profile_entry_for_bone(const StringName &p_name) const
 }
 
 void Box3DRagdoll::_load_runtime_from_profile(BoneRuntime &r_bone, const Dictionary &p_entry) const {
-	r_bone.offset = _dict_transform(p_entry, SNAME("offset"), Transform3D());
-	r_bone.has_joint_frame = p_entry.has(SNAME("joint_frame"));
-	r_bone.joint_frame = _dict_transform(p_entry, SNAME("joint_frame"), Transform3D());
-	r_bone.radius = _dict_real(p_entry, SNAME("radius"), r_bone.radius);
-	r_bone.height = _dict_real(p_entry, SNAME("height"), r_bone.height);
-	r_bone.density_scale = _dict_real(p_entry, SNAME("density_scale"), r_bone.density_scale);
-	r_bone.joint_type = (Box3DRagdollProfile::JointType)_dict_int(p_entry, SNAME("joint_type"), r_bone.joint_type);
-	r_bone.swing_limit = _dict_real(p_entry, SNAME("swing_limit"), r_bone.swing_limit);
-	r_bone.twist_lower = _dict_real(p_entry, SNAME("twist_lower"), r_bone.twist_lower);
-	r_bone.twist_upper = _dict_real(p_entry, SNAME("twist_upper"), r_bone.twist_upper);
-	r_bone.joint_friction_scale = _dict_real(p_entry, SNAME("joint_friction_scale"), r_bone.joint_friction_scale);
-	r_bone.blend = CLAMP(_dict_real(p_entry, SNAME("blend"), r_bone.blend), (real_t)0.0, (real_t)1.0);
+	const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(p_entry);
+	r_bone.offset = params.offset;
+	r_bone.has_joint_frame = params.has_joint_frame;
+	r_bone.joint_frame = params.joint_frame;
+	r_bone.radius = params.radius;
+	r_bone.height = params.height;
+	r_bone.density_scale = params.density_scale;
+	r_bone.joint_type = params.joint_type;
+	r_bone.swing_limit = params.swing_limit;
+	r_bone.twist_lower = params.twist_lower;
+	r_bone.twist_upper = params.twist_upper;
+	r_bone.joint_friction_scale = params.joint_friction_scale;
+	r_bone.blend = params.blend;
 }
 
 Transform3D Box3DRagdoll::_bone_world_pose(Skeleton3D *p_skeleton, const BoneRuntime &p_bone) const {
@@ -262,7 +304,7 @@ void Box3DRagdoll::_set_body_transform(Box3DPhysicsServer3D *p_server, BoneRunti
 
 bool Box3DRagdoll::_create_body_for_bone(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton, BoneRuntime &r_bone) {
 	Dictionary capsule;
-	capsule[SNAME("radius")] = MAX((real_t)0.01, r_bone.radius);
+	capsule[SNAME("radius")] = _capsule_clamped_radius(r_bone.radius);
 	capsule[SNAME("height")] = MAX((real_t)0.02, r_bone.height);
 
 	r_bone.shape = p_server->capsule_shape_create();
@@ -506,12 +548,16 @@ void Box3DRagdoll::_clear_bodies() {
 
 void Box3DRagdoll::teardown() {
 #ifdef TOOLS_ENABLED
-	if (editor_space_rid.is_valid() && !editor_teardown_active) {
+	if (editor_space_rid.is_valid()) {
 		simulate_in_editor = false;
 		_stop_editor_simulation(true);
 		return;
 	}
 #endif
+	_teardown_impl();
+}
+
+void Box3DRagdoll::_teardown_impl() {
 	_clear_native_joints();
 	_clear_bodies();
 	bones.clear();
@@ -526,6 +572,16 @@ void Box3DRagdoll::teardown() {
 #ifdef TOOLS_ENABLED
 void Box3DRagdoll::_profile_changed() {
 	update_gizmos();
+	if (!simulate_in_editor || editor_rebuild_queued) {
+		return;
+	}
+	// Inspector drags emit `changed` continuously; coalesce to one rebuild per frame.
+	editor_rebuild_queued = true;
+	callable_mp(this, &Box3DRagdoll::_rebuild_editor_simulation).call_deferred();
+}
+
+void Box3DRagdoll::_rebuild_editor_simulation() {
+	editor_rebuild_queued = false;
 	if (!simulate_in_editor) {
 		return;
 	}
@@ -546,8 +602,8 @@ bool Box3DRagdoll::_create_editor_ground(Box3DPhysicsServer3D *p_server, Skeleto
 			continue;
 		}
 		const Transform3D body_transform = body->get_transform();
-		const real_t radius = MAX((real_t)0.01, bones[i].radius);
-		const real_t half_axis = MAX((real_t)0.0, bones[i].height * (real_t)0.5 - radius);
+		const real_t radius = _capsule_clamped_radius(bones[i].radius);
+		const real_t half_axis = _capsule_half_axis(bones[i].radius, bones[i].height);
 		const Vector3 endpoint_offset = body_transform.basis.get_column(1).normalized() * half_axis;
 		const real_t bone_foot = MIN(body_transform.origin.y - endpoint_offset.y, body_transform.origin.y + endpoint_offset.y) - radius;
 		if (!found_foot || bone_foot < foot_y) {
@@ -606,9 +662,7 @@ bool Box3DRagdoll::_start_editor_simulation() {
 void Box3DRagdoll::_stop_editor_simulation(bool p_restore_pose) {
 	set_process_internal(false);
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
-	editor_teardown_active = true;
-	teardown();
-	editor_teardown_active = false;
+	_teardown_impl();
 	if (server != nullptr) {
 		if (editor_ground_body.is_valid()) {
 			server->free_rid(editor_ground_body);
@@ -646,10 +700,15 @@ void Box3DRagdoll::_step_editor_simulation(real_t p_delta) {
 
 	static constexpr real_t fixed_step = (real_t)1.0 / (real_t)60.0;
 	editor_step_accumulator = MIN(editor_step_accumulator + MIN(p_delta, (real_t)0.25), fixed_step * (real_t)8.0);
+	bool stepped = false;
 	while (editor_step_accumulator >= fixed_step) {
 		space->step(fixed_step);
 		space->call_queries();
 		editor_step_accumulator -= fixed_step;
+		stepped = true;
+	}
+	if (!stepped) {
+		return;
 	}
 	_sync_skeleton_from_bodies(server, skeleton);
 	update_gizmos();
@@ -673,13 +732,7 @@ void Box3DRagdoll::set_simulate_in_editor(bool p_enabled) {
 }
 
 void Box3DRagdoll::reset_simulation() {
-	if (!Engine::get_singleton()->is_editor_hint()) {
-		return;
-	}
-	simulate_in_editor = false;
-	if (editor_space_rid.is_valid()) {
-		_stop_editor_simulation(true);
-	}
+	set_simulate_in_editor(false);
 }
 #endif
 
@@ -855,15 +908,7 @@ void Box3DRagdoll::_notification(int p_what) {
 		} break;
 #endif
 		case NOTIFICATION_EXIT_TREE: {
-#ifdef TOOLS_ENABLED
-			if (editor_space_rid.is_valid()) {
-				simulate_in_editor = false;
-				_stop_editor_simulation(true);
-			} else
-#endif
-			{
-				teardown();
-			}
+			teardown();
 		} break;
 	}
 }
@@ -974,9 +1019,7 @@ void Box3DRagdollProfileGenerator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear_warnings"), &Box3DRagdollProfileGenerator::clear_warnings);
 	ClassDB::bind_method(D_METHOD("generate_profile", "skeleton", "mesh_instance", "animation_library"), &Box3DRagdollProfileGenerator::generate_profile, DEFVAL(Variant()), DEFVAL(Variant()));
 	ClassDB::bind_method(D_METHOD("analyze_profile", "profile"), &Box3DRagdollProfileGenerator::analyze_profile);
-#ifdef TOOLS_ENABLED
 	ClassDB::bind_method(D_METHOD("get_gizmo_line_groups", "profile", "skeleton"), &Box3DRagdollProfileGenerator::get_gizmo_line_groups);
-#endif
 	ClassDB::bind_method(D_METHOD("get_gizmo_lines", "profile", "skeleton"), &Box3DRagdollProfileGenerator::get_gizmo_lines);
 
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "vertex_weight_threshold", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_vertex_weight_threshold", "get_vertex_weight_threshold");
@@ -1164,8 +1207,10 @@ void Box3DRagdollProfileGenerator::_clamp_adjacent_mass_ratios(Skeleton3D *p_ske
 		if (child_entry == nullptr || parent_entry == nullptr) {
 			continue;
 		}
-		const real_t child_mass = _capsule_mass(_dict_real(*child_entry, SNAME("radius"), 0.12), _dict_real(*child_entry, SNAME("height"), 0.5), _dict_real(*child_entry, SNAME("density_scale"), 1.0));
-		const real_t parent_mass = _capsule_mass(_dict_real(*parent_entry, SNAME("radius"), 0.12), _dict_real(*parent_entry, SNAME("height"), 0.5), _dict_real(*parent_entry, SNAME("density_scale"), 1.0));
+		const Box3DRagdollProfile::BoneParams child_params = Box3DRagdollProfile::parse_bone_entry(*child_entry);
+		const Box3DRagdollProfile::BoneParams parent_params = Box3DRagdollProfile::parse_bone_entry(*parent_entry);
+		const real_t child_mass = _capsule_mass(child_params.radius, child_params.height, child_params.density_scale);
+		const real_t parent_mass = _capsule_mass(parent_params.radius, parent_params.height, parent_params.density_scale);
 		const real_t min_mass = MIN(child_mass, parent_mass);
 		const real_t max_mass = MAX(child_mass, parent_mass);
 		if (min_mass <= 0.0 || max_mass / min_mass <= maximum_adjacent_mass_ratio) {
@@ -1323,7 +1368,6 @@ Dictionary Box3DRagdollProfileGenerator::analyze_profile(const Ref<Box3DRagdollP
 	return result;
 }
 
-#ifdef TOOLS_ENABLED
 static void _append_gizmo_segment(PackedVector3Array &r_lines, const Transform3D &p_transform, const Vector3 &p_from, const Vector3 &p_to) {
 	r_lines.append(p_transform.xform(p_from));
 	r_lines.append(p_transform.xform(p_to));
@@ -1339,8 +1383,8 @@ static void _append_gizmo_circle_y(PackedVector3Array &r_lines, const Transform3
 }
 
 static void _append_capsule_gizmo(PackedVector3Array &r_lines, const Transform3D &p_transform, real_t p_radius, real_t p_height) {
-	const real_t radius = MAX((real_t)0.01, p_radius);
-	const real_t half_axis = MAX((real_t)0.0, p_height * (real_t)0.5 - radius);
+	const real_t radius = _capsule_clamped_radius(p_radius);
+	const real_t half_axis = _capsule_half_axis(p_radius, p_height);
 	_append_gizmo_circle_y(r_lines, p_transform, half_axis, radius);
 	_append_gizmo_circle_y(r_lines, p_transform, -half_axis, radius);
 	for (int i = 0; i < 4; i++) {
@@ -1350,13 +1394,14 @@ static void _append_capsule_gizmo(PackedVector3Array &r_lines, const Transform3D
 	}
 	static constexpr int cap_segments = 12;
 	for (int plane = 0; plane < 2; plane++) {
+		const Vector3 lateral = plane == 0 ? Vector3(1, 0, 0) : Vector3(0, 0, 1);
 		for (int i = 0; i < cap_segments; i++) {
 			const real_t a = Math::PI * (real_t)i / (real_t)cap_segments;
 			const real_t b = Math::PI * (real_t)(i + 1) / (real_t)cap_segments;
-			const Vector3 top_a = plane == 0 ? Vector3(Math::cos(a) * radius, half_axis + Math::sin(a) * radius, 0) : Vector3(0, half_axis + Math::sin(a) * radius, Math::cos(a) * radius);
-			const Vector3 top_b = plane == 0 ? Vector3(Math::cos(b) * radius, half_axis + Math::sin(b) * radius, 0) : Vector3(0, half_axis + Math::sin(b) * radius, Math::cos(b) * radius);
-			const Vector3 bottom_a = plane == 0 ? Vector3(Math::cos(a) * radius, -half_axis - Math::sin(a) * radius, 0) : Vector3(0, -half_axis - Math::sin(a) * radius, Math::cos(a) * radius);
-			const Vector3 bottom_b = plane == 0 ? Vector3(Math::cos(b) * radius, -half_axis - Math::sin(b) * radius, 0) : Vector3(0, -half_axis - Math::sin(b) * radius, Math::cos(b) * radius);
+			const Vector3 top_a = lateral * (Math::cos(a) * radius) + Vector3(0, half_axis + Math::sin(a) * radius, 0);
+			const Vector3 top_b = lateral * (Math::cos(b) * radius) + Vector3(0, half_axis + Math::sin(b) * radius, 0);
+			const Vector3 bottom_a = lateral * (Math::cos(a) * radius) + Vector3(0, -half_axis - Math::sin(a) * radius, 0);
+			const Vector3 bottom_b = lateral * (Math::cos(b) * radius) + Vector3(0, -half_axis - Math::sin(b) * radius, 0);
 			_append_gizmo_segment(r_lines, p_transform, top_a, top_b);
 			_append_gizmo_segment(r_lines, p_transform, bottom_a, bottom_b);
 		}
@@ -1385,18 +1430,18 @@ static void _append_joint_limit_gizmo(PackedVector3Array &r_lines, const Transfo
 	const real_t lower = CLAMP(p_twist_lower, (real_t)-Math::PI, (real_t)Math::PI);
 	const real_t upper = CLAMP(p_twist_upper, lower, (real_t)Math::PI);
 	const real_t arc_radius = scale * (real_t)0.65;
+	// Revolute hinges twist about local z, spherical joints about local x.
+	auto arc_point = [&](real_t p_angle) {
+		return p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(p_angle) * arc_radius, Math::sin(p_angle) * arc_radius, 0) : Vector3(0, Math::cos(p_angle) * arc_radius, Math::sin(p_angle) * arc_radius);
+	};
 	static constexpr int arc_segments = 24;
 	for (int i = 0; i < arc_segments; i++) {
 		const real_t a = Math::lerp(lower, upper, (real_t)i / (real_t)arc_segments);
 		const real_t b = Math::lerp(lower, upper, (real_t)(i + 1) / (real_t)arc_segments);
-		const Vector3 from = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(a) * arc_radius, Math::sin(a) * arc_radius, 0) : Vector3(0, Math::cos(a) * arc_radius, Math::sin(a) * arc_radius);
-		const Vector3 to = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(b) * arc_radius, Math::sin(b) * arc_radius, 0) : Vector3(0, Math::cos(b) * arc_radius, Math::sin(b) * arc_radius);
-		_append_gizmo_segment(r_lines, p_transform, from, to);
+		_append_gizmo_segment(r_lines, p_transform, arc_point(a), arc_point(b));
 	}
-	const Vector3 lower_endpoint = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(lower) * arc_radius, Math::sin(lower) * arc_radius, 0) : Vector3(0, Math::cos(lower) * arc_radius, Math::sin(lower) * arc_radius);
-	const Vector3 upper_endpoint = p_joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? Vector3(Math::cos(upper) * arc_radius, Math::sin(upper) * arc_radius, 0) : Vector3(0, Math::cos(upper) * arc_radius, Math::sin(upper) * arc_radius);
-	_append_gizmo_segment(r_lines, p_transform, Vector3(), lower_endpoint);
-	_append_gizmo_segment(r_lines, p_transform, Vector3(), upper_endpoint);
+	_append_gizmo_segment(r_lines, p_transform, Vector3(), arc_point(lower));
+	_append_gizmo_segment(r_lines, p_transform, Vector3(), arc_point(upper));
 }
 
 Dictionary Box3DRagdollProfileGenerator::get_gizmo_line_groups(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const {
@@ -1404,22 +1449,19 @@ Dictionary Box3DRagdollProfileGenerator::get_gizmo_line_groups(const Ref<Box3DRa
 	ERR_FAIL_COND_V(p_profile.is_null(), groups);
 	ERR_FAIL_NULL_V(p_skeleton, groups);
 
-	HashMap<StringName, StringName> bone_to_chain;
-	const Dictionary chains = p_profile->get_bone_chains();
-	const Array chain_names = chains.keys();
-	for (int i = 0; i < chain_names.size(); i++) {
-		const StringName chain_name = chain_names[i];
-		const PackedStringArray chain_bones = chains[chain_name];
-		for (int j = 0; j < chain_bones.size(); j++) {
-			bone_to_chain[StringName(chain_bones[j])] = chain_name;
-		}
-	}
+	const HashMap<StringName, StringName> bone_to_chain = p_profile->build_bone_to_chain_map();
+	// Accumulate in a HashMap so per-bone appends never copy-on-write against
+	// the Variant still held by the Dictionary; chain_order keeps the returned
+	// Dictionary in first-seen bone order.
+	HashMap<StringName, PackedVector3Array> chain_lines;
+	LocalVector<StringName> chain_order;
 
 	const Transform3D skeleton_global = p_skeleton->get_global_transform();
 	const TypedArray<Dictionary> profile_bones = p_profile->get_bones();
 	for (int i = 0; i < profile_bones.size(); i++) {
 		const Dictionary entry = profile_bones[i];
-		if (!_dict_bool(entry, SNAME("enabled"), true)) {
+		const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(entry);
+		if (!params.enabled) {
 			continue;
 		}
 		const StringName bone_name = entry.get(SNAME("bone"), StringName());
@@ -1428,51 +1470,32 @@ Dictionary Box3DRagdollProfileGenerator::get_gizmo_line_groups(const Ref<Box3DRa
 			continue;
 		}
 		const StringName *found_chain = bone_to_chain.getptr(bone_name);
-		const StringName chain_name = found_chain != nullptr ? *found_chain : SNAME("ungrouped");
-		PackedVector3Array lines = groups.has(chain_name) ? (PackedVector3Array)groups[chain_name] : PackedVector3Array();
-		const real_t radius = _dict_real(entry, SNAME("radius"), 0.12);
-		const real_t height = _dict_real(entry, SNAME("height"), 0.5);
-		const Transform3D offset = _dict_transform(entry, SNAME("offset"), Transform3D());
-		const Transform3D body_pose = skeleton_global * p_skeleton->get_bone_global_pose(bone_idx) * offset;
-		_append_capsule_gizmo(lines, body_pose, radius, height);
-
-		const Box3DRagdollProfile::JointType joint_type = (Box3DRagdollProfile::JointType)_dict_int(entry, SNAME("joint_type"), Box3DRagdollProfile::JOINT_TYPE_SPHERICAL);
-		if (joint_type != Box3DRagdollProfile::JOINT_TYPE_NONE) {
-			const Transform3D joint_frame = _dict_transform(entry, SNAME("joint_frame"), Transform3D());
-			_append_joint_limit_gizmo(lines, body_pose * joint_frame, joint_type, radius, _dict_real(entry, SNAME("swing_limit"), Math::deg_to_rad((real_t)25.0)), _dict_real(entry, SNAME("twist_lower"), Math::deg_to_rad((real_t)-15.0)), _dict_real(entry, SNAME("twist_upper"), Math::deg_to_rad((real_t)15.0)));
+		const StringName chain_name = found_chain != nullptr ? *found_chain : Box3DRagdollProfile::ungrouped_chain_name();
+		PackedVector3Array *lines = chain_lines.getptr(chain_name);
+		if (lines == nullptr) {
+			chain_order.push_back(chain_name);
+			lines = &chain_lines.insert(chain_name, PackedVector3Array())->value;
 		}
-		groups[chain_name] = lines;
+		const Transform3D body_pose = skeleton_global * p_skeleton->get_bone_global_pose(bone_idx) * params.offset;
+		_append_capsule_gizmo(*lines, body_pose, params.radius, params.height);
+
+		if (params.joint_type != Box3DRagdollProfile::JOINT_TYPE_NONE) {
+			_append_joint_limit_gizmo(*lines, body_pose * params.joint_frame, params.joint_type, params.radius, params.swing_limit, params.twist_lower, params.twist_upper);
+		}
+	}
+	for (const StringName &chain_name : chain_order) {
+		groups[chain_name] = chain_lines[chain_name];
 	}
 	return groups;
 }
-#endif
 
 PackedVector3Array Box3DRagdollProfileGenerator::get_gizmo_lines(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const {
 	PackedVector3Array lines;
-#ifdef TOOLS_ENABLED
 	const Dictionary groups = get_gizmo_line_groups(p_profile, p_skeleton);
 	const Array group_names = groups.keys();
 	for (int i = 0; i < group_names.size(); i++) {
 		lines.append_array((PackedVector3Array)groups[group_names[i]]);
 	}
-#else
-	ERR_FAIL_COND_V(p_profile.is_null(), lines);
-	ERR_FAIL_NULL_V(p_skeleton, lines);
-	const Transform3D skeleton_global = p_skeleton->get_global_transform();
-	const TypedArray<Dictionary> profile_bones = p_profile->get_bones();
-	for (int i = 0; i < profile_bones.size(); i++) {
-		const Dictionary entry = profile_bones[i];
-		const int bone_idx = p_skeleton->find_bone(String((StringName)entry.get(SNAME("bone"), StringName())));
-		if (bone_idx < 0) {
-			continue;
-		}
-		const real_t height = _dict_real(entry, SNAME("height"), 0.5);
-		const Transform3D offset = _dict_transform(entry, SNAME("offset"), Transform3D());
-		const Transform3D pose = skeleton_global * p_skeleton->get_bone_global_rest(bone_idx) * offset;
-		lines.append(pose.xform(Vector3(0, -height * 0.5, 0)));
-		lines.append(pose.xform(Vector3(0, height * 0.5, 0)));
-	}
-#endif
 	return lines;
 }
 

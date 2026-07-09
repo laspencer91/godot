@@ -40,6 +40,29 @@ public:
 		JOINT_TYPE_REVOLUTE,
 	};
 
+	// Canonical bone-entry schema: every consumer of a profile bone Dictionary
+	// (runtime build, gizmo drawing, inspector, mass estimation) must parse it
+	// through parse_bone_entry() so keys and defaults stay in one place.
+	struct BoneParams {
+		Transform3D offset;
+		Transform3D joint_frame;
+		bool has_joint_frame = false;
+		bool enabled = true;
+		JointType joint_type = JOINT_TYPE_SPHERICAL;
+		real_t radius = 0.12;
+		real_t height = 0.5;
+		real_t density_scale = 1.0;
+		real_t swing_limit = Math::deg_to_rad((real_t)25.0);
+		real_t twist_lower = Math::deg_to_rad((real_t)-15.0);
+		real_t twist_upper = Math::deg_to_rad((real_t)15.0);
+		real_t joint_friction_scale = 1.0;
+		real_t blend = 1.0;
+	};
+	static BoneParams parse_bone_entry(const Dictionary &p_entry);
+
+	HashMap<StringName, StringName> build_bone_to_chain_map() const;
+	static StringName ungrouped_chain_name();
+
 	void set_bones(const TypedArray<Dictionary> &p_bones) {
 		bones = p_bones;
 		emit_changed();
@@ -134,7 +157,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	RID editor_ground_shape;
 	LocalVector<Transform3D> editor_pose_snapshot;
 	bool simulate_in_editor = false;
-	bool editor_teardown_active = false;
+	bool editor_rebuild_queued = false;
 	real_t editor_step_accumulator = 0.0;
 #endif
 
@@ -158,9 +181,11 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	Transform3D _remap_twist_x_to_z(const Transform3D &p_frame) const;
 	void _body_state_changed(PhysicsDirectBodyState3D *p_state);
 	bool _build_in_space(RID p_space);
+	void _teardown_impl();
 
 #ifdef TOOLS_ENABLED
 	void _profile_changed();
+	void _rebuild_editor_simulation();
 	bool _start_editor_simulation();
 	void _stop_editor_simulation(bool p_restore_pose);
 	bool _create_editor_ground(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton);
@@ -237,8 +262,6 @@ public:
 	void clear_warnings() { warnings.clear(); }
 	Ref<Box3DRagdollProfile> generate_profile(Skeleton3D *p_skeleton, MeshInstance3D *p_mesh_instance = nullptr, const Ref<AnimationLibrary> &p_animation_library = Ref<AnimationLibrary>());
 	Dictionary analyze_profile(const Ref<Box3DRagdollProfile> &p_profile) const;
-#ifdef TOOLS_ENABLED
 	Dictionary get_gizmo_line_groups(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const;
-#endif
 	PackedVector3Array get_gizmo_lines(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const;
 };

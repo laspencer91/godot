@@ -4,11 +4,16 @@
 
 #pragma once
 
+#include "../box3d_ragdoll.h"
+
 #include "editor/plugins/editor_plugin.h"
 #include "editor/scene/3d/node_3d_editor_gizmos.h"
 
 class Box3DRagdollGizmoPlugin : public EditorNode3DGizmoPlugin {
 	GDCLASS(Box3DRagdollGizmoPlugin, EditorNode3DGizmoPlugin);
+
+	Ref<Box3DRagdollProfileGenerator> line_generator;
+	LocalVector<String> chain_material_names;
 
 public:
 	bool has_gizmo(Node3D *p_spatial) override;
