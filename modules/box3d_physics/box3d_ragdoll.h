@@ -75,6 +75,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 		int parent_runtime = -1;
 		Box3DRagdollProfile::JointType joint_type = Box3DRagdollProfile::JOINT_TYPE_SPHERICAL;
 		Transform3D offset;
+		Transform3D joint_frame;
 		real_t radius = 0.12;
 		real_t height = 0.5;
 		real_t density_scale = 1.0;
@@ -89,6 +90,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 		Transform3D previous_pose;
 		Transform3D current_pose;
 		bool has_pose_history = false;
+		bool has_joint_frame = false;
 		uint32_t pose_capture_count = 0;
 	};
 

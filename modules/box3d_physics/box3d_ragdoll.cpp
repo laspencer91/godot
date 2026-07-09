@@ -68,6 +68,57 @@ real_t Box3DRagdoll::_bone_mass(const BoneRuntime &p_bone) const {
 	return _capsule_mass(p_bone.radius, p_bone.height, p_bone.density_scale);
 }
 
+static Vector3 _project_perpendicular(const Vector3 &p_reference, const Vector3 &p_axis) {
+	Vector3 projected = p_reference - p_axis * p_reference.dot(p_axis);
+	if (projected.length_squared() > CMP_EPSILON) {
+		return projected.normalized();
+	}
+	const Vector3 fallbacks[] = { Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1) };
+	for (const Vector3 &fallback : fallbacks) {
+		projected = fallback - p_axis * fallback.dot(p_axis);
+		if (projected.length_squared() > CMP_EPSILON) {
+			return projected.normalized();
+		}
+	}
+	return Vector3(1, 0, 0);
+}
+
+static Basis _basis_from_y_axis(const Vector3 &p_axis, const Basis &p_reference) {
+	const Vector3 y = p_axis.length_squared() > CMP_EPSILON ? p_axis.normalized() : Vector3(0, 1, 0);
+	Vector3 x = _project_perpendicular(p_reference.get_column(0), y);
+	Vector3 z = x.cross(y).normalized();
+	x = y.cross(z).normalized();
+	Basis basis;
+	basis.set_column(0, x);
+	basis.set_column(1, y);
+	basis.set_column(2, z);
+	return basis;
+}
+
+static Basis _basis_from_x_axis(const Vector3 &p_axis, const Basis &p_reference) {
+	const Vector3 x = p_axis.length_squared() > CMP_EPSILON ? p_axis.normalized() : Vector3(1, 0, 0);
+	Vector3 y = _project_perpendicular(p_reference.get_column(1), x);
+	Vector3 z = x.cross(y).normalized();
+	y = z.cross(x).normalized();
+	Basis basis;
+	basis.set_column(0, x);
+	basis.set_column(1, y);
+	basis.set_column(2, z);
+	return basis;
+}
+
+static Basis _basis_from_z_axis_with_x(const Vector3 &p_z_axis, const Vector3 &p_x_reference) {
+	const Vector3 z = p_z_axis.length_squared() > CMP_EPSILON ? p_z_axis.normalized() : Vector3(0, 0, 1);
+	Vector3 x = _project_perpendicular(p_x_reference, z);
+	Vector3 y = z.cross(x).normalized();
+	x = y.cross(z).normalized();
+	Basis basis;
+	basis.set_column(0, x);
+	basis.set_column(1, y);
+	basis.set_column(2, z);
+	return basis;
+}
+
 void Box3DRagdollProfile::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bones", "bones"), &Box3DRagdollProfile::set_bones);
 	ClassDB::bind_method(D_METHOD("get_bones"), &Box3DRagdollProfile::get_bones);
@@ -160,6 +211,8 @@ Dictionary Box3DRagdoll::_profile_entry_for_bone(const StringName &p_name) const
 
 void Box3DRagdoll::_load_runtime_from_profile(BoneRuntime &r_bone, const Dictionary &p_entry) const {
 	r_bone.offset = _dict_transform(p_entry, SNAME("offset"), Transform3D());
+	r_bone.has_joint_frame = p_entry.has(SNAME("joint_frame"));
+	r_bone.joint_frame = _dict_transform(p_entry, SNAME("joint_frame"), Transform3D());
 	r_bone.radius = _dict_real(p_entry, SNAME("radius"), r_bone.radius);
 	r_bone.height = _dict_real(p_entry, SNAME("height"), r_bone.height);
 	r_bone.density_scale = _dict_real(p_entry, SNAME("density_scale"), r_bone.density_scale);
@@ -224,8 +277,9 @@ void Box3DRagdoll::_create_joint_for_bone(Box3DPhysicsServer3D *p_server, BoneRu
 
 	const Transform3D parent_world = parent_body->get_transform();
 	const Transform3D child_world = body->get_transform();
-	Transform3D parent_frame = parent_world.affine_inverse() * child_world;
-	Transform3D child_frame;
+	const Transform3D joint_world = r_bone.has_joint_frame ? child_world * r_bone.joint_frame : child_world;
+	Transform3D parent_frame = parent_world.affine_inverse() * joint_world;
+	Transform3D child_frame = r_bone.has_joint_frame ? r_bone.joint_frame : Transform3D();
 
 	if (r_bone.joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE) {
 		b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
@@ -632,18 +686,14 @@ bool Box3DRagdoll::are_bodies_sleeping() const {
 	return _all_bodies_sleeping(server);
 }
 
-static Basis _basis_y_to_axis(const Vector3 &p_axis) {
-	const Vector3 axis = p_axis.normalized();
-	if (!axis.is_normalized()) {
-		return Basis();
-	}
-	return Basis(Quaternion(Vector3(0, 1, 0), axis));
-}
-
-static real_t _signed_twist_angle_x(const Quaternion &p_rotation) {
+static real_t _signed_twist_angle(const Quaternion &p_rotation, int p_axis) {
 	Quaternion q = p_rotation;
 	q.normalize();
-	Quaternion twist(q.x, 0.0, 0.0, q.w);
+	Quaternion twist(
+			p_axis == 0 ? q.x : 0.0,
+			p_axis == 1 ? q.y : 0.0,
+			p_axis == 2 ? q.z : 0.0,
+			q.w);
 	if (twist.length_squared() <= CMP_EPSILON) {
 		return 0.0;
 	}
@@ -654,13 +704,18 @@ static real_t _signed_twist_angle_x(const Quaternion &p_rotation) {
 	if (angle > Math::PI) {
 		angle -= Math::TAU;
 	}
-	return axis.x < 0.0 ? -angle : angle;
+	const real_t sign = p_axis == 0 ? axis.x : (p_axis == 1 ? axis.y : axis.z);
+	return sign < 0.0 ? -angle : angle;
 }
 
-static real_t _swing_angle_without_x_twist(const Quaternion &p_rotation) {
+static real_t _swing_angle_without_twist(const Quaternion &p_rotation, int p_axis) {
 	Quaternion q = p_rotation;
 	q.normalize();
-	Quaternion twist(q.x, 0.0, 0.0, q.w);
+	Quaternion twist(
+			p_axis == 0 ? q.x : 0.0,
+			p_axis == 1 ? q.y : 0.0,
+			p_axis == 2 ? q.z : 0.0,
+			q.w);
 	if (twist.length_squared() <= CMP_EPSILON) {
 		return 0.0;
 	}
@@ -823,6 +878,11 @@ void Box3DRagdollProfileGenerator::_apply_animation_limits(Skeleton3D *p_skeleto
 			if (entry == nullptr) {
 				continue;
 			}
+			const Transform3D offset = _dict_transform(*entry, SNAME("offset"), Transform3D());
+			const Transform3D joint_frame = _dict_transform(*entry, SNAME("joint_frame"), Transform3D());
+			const Quaternion rest_rotation = p_skeleton->get_bone_rest(bone_idx).basis.get_rotation_quaternion();
+			const Quaternion joint_basis_in_bone = (offset.basis * joint_frame.basis).get_rotation_quaternion();
+			const int twist_axis = _dict_int(*entry, SNAME("joint_type"), Box3DRagdollProfile::JOINT_TYPE_SPHERICAL) == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? 2 : 0;
 			found_rotation_track = true;
 			real_t swing = 0.0;
 			real_t twist_lower = 0.0;
@@ -834,8 +894,12 @@ void Box3DRagdollProfileGenerator::_apply_animation_limits(Skeleton3D *p_skeleto
 				if (animation->try_rotation_track_interpolate(track, time, &q) != OK) {
 					continue;
 				}
-				const real_t sample_twist = _signed_twist_angle_x(q);
-				const real_t sample_swing = _swing_angle_without_x_twist(q);
+				Quaternion delta = rest_rotation.inverse() * q;
+				delta.normalize();
+				Quaternion joint_delta = joint_basis_in_bone.inverse() * delta * joint_basis_in_bone;
+				joint_delta.normalize();
+				const real_t sample_twist = _signed_twist_angle(joint_delta, twist_axis);
+				const real_t sample_swing = _swing_angle_without_twist(joint_delta, twist_axis);
 				if (!has_sample) {
 					twist_lower = sample_twist;
 					twist_upper = sample_twist;
@@ -894,12 +958,19 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 
 	HashMap<int, LocalVector<Vector3>> weighted_vertices;
 	_collect_weighted_vertices(p_skeleton, p_mesh_instance, weighted_vertices);
+	const bool select_by_weights = p_mesh_instance != nullptr && !weighted_vertices.is_empty();
 
 	HashMap<StringName, Dictionary> entries;
 	Dictionary chains;
 	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
+		const LocalVector<Vector3> *vertices = weighted_vertices.getptr(bone);
+		if (select_by_weights && (vertices == nullptr || vertices->size() == 0)) {
+			continue;
+		}
 		const StringName bone_name = StringName(p_skeleton->get_bone_name(bone));
 		const Transform3D bone_rest = p_skeleton->get_bone_global_rest(bone);
+		const int parent = p_skeleton->get_bone_parent(bone);
+		const Basis reference_basis = parent >= 0 ? p_skeleton->get_bone_global_rest(parent).basis : bone_rest.basis;
 		Vector3 axis;
 		Vector<int> children = p_skeleton->get_bone_children(bone);
 		if (!children.is_empty()) {
@@ -926,7 +997,6 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		const real_t length = MAX(axis.length(), minimum_bone_length);
 		const Vector3 axis_dir = axis.normalized();
 		real_t radius = MAX(minimum_radius, length * fallback_radius_ratio);
-		const LocalVector<Vector3> *vertices = weighted_vertices.getptr(bone);
 		if (vertices != nullptr && vertices->size() > 0) {
 			Vector<real_t> distances;
 			for (uint32_t i = 0; i < vertices->size(); i++) {
@@ -940,7 +1010,7 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		}
 		const real_t height = MAX(length + radius * (real_t)2.0, radius * (real_t)2.1);
 		const Vector3 center = bone_rest.origin + axis_dir * (length * (real_t)0.5);
-		const Transform3D capsule_world(_basis_y_to_axis(axis), center);
+		const Transform3D capsule_world(_basis_from_y_axis(axis, reference_basis), center);
 		const Transform3D offset = bone_rest.affine_inverse() * capsule_world;
 
 		const String lower = String(bone_name).to_lower();
@@ -950,6 +1020,11 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		} else if (lower.contains("leg") || lower.contains("knee") || lower.contains("shin") || lower.contains("forearm") || lower.contains("elbow")) {
 			joint_type = Box3DRagdollProfile::JOINT_TYPE_REVOLUTE;
 		}
+		const Basis joint_basis = joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ?
+				_basis_from_z_axis_with_x(_project_perpendicular(reference_basis.get_column(0), axis_dir), axis_dir) :
+				_basis_from_x_axis(axis, reference_basis);
+		const Transform3D joint_world(joint_basis, center);
+		const Transform3D joint_frame = capsule_world.affine_inverse() * joint_world;
 
 		Dictionary entry;
 		entry[SNAME("enabled")] = true;
@@ -958,6 +1033,7 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		entry[SNAME("radius")] = radius;
 		entry[SNAME("height")] = height;
 		entry[SNAME("offset")] = offset;
+		entry[SNAME("joint_frame")] = joint_frame;
 		entry[SNAME("density_scale")] = 1.0;
 		entry[SNAME("swing_limit")] = Math::deg_to_rad((real_t)(joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? 0.0 : 35.0));
 		entry[SNAME("twist_lower")] = Math::deg_to_rad((real_t)(joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? -5.0 : -15.0));
@@ -969,6 +1045,9 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		PackedStringArray chain_bones = chains.has(chain) ? (PackedStringArray)chains[chain] : PackedStringArray();
 		chain_bones.append(String(bone_name));
 		chains[chain] = chain_bones;
+	}
+	if (entries.size() > 30) {
+		_warn(vformat("Box3D: ragdoll generator enabled %d bones; production ragdolls usually need fewer than 30.", entries.size()));
 	}
 
 	_apply_animation_limits(p_skeleton, p_animation_library, entries);
@@ -983,10 +1062,6 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 			continue;
 		}
 		bones_array.push_back(*entry);
-		const int parent = p_skeleton->get_bone_parent(bone);
-		if (parent >= 0 && entries.has(StringName(p_skeleton->get_bone_name(parent)))) {
-			filter_pairs.append(PackedStringArray({ p_skeleton->get_bone_name(parent), p_skeleton->get_bone_name(bone) }));
-		}
 	}
 	profile->set_bones(bones_array);
 	profile->set_filter_pairs(filter_pairs);

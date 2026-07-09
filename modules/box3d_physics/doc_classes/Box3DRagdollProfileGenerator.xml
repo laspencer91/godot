@@ -4,7 +4,7 @@
 		Generates [Box3DRagdollProfile] resources from a [Skeleton3D].
 	</brief_description>
 	<description>
-		Builds the authoring profile used by [Box3DRagdoll]. The generator fits one capsule per generated bone, uses vertices weighted to the bone when a skinned [MeshInstance3D] is supplied, derives capsule mass from the runtime profile's density-based mass model, and can sample an [AnimationLibrary] to derive editable swing/twist limits. Rotation tracks are interpreted in the same joint frame used by [Box3DRagdoll]: twist is the Godot-authored local X axis, remapped internally to Box3D's local Z twist axis at joint creation.
+		Builds the authoring profile used by [Box3DRagdoll]. The generator fits one capsule per generated bone, uses vertices weighted to the bone when a skinned [MeshInstance3D] is supplied, derives capsule mass from the runtime profile's density-based mass model, and can sample an [AnimationLibrary] to derive editable swing/twist limits. Generated profiles store a per-bone [code]joint_frame[/code] whose local X axis follows the anatomical bone axis; rotation tracks are converted to deltas from the rest pose and decomposed in that same frame before the runtime remaps spherical twist to Box3D's local Z axis.
 	</description>
 	<methods>
 		<method name="analyze_profile" qualifiers="const">
@@ -26,7 +26,7 @@
 			<param index="1" name="mesh_instance" type="MeshInstance3D" default="null" />
 			<param index="2" name="animation_library" type="AnimationLibrary" default="null" />
 			<description>
-				Generates a profile from [param skeleton]. When [param mesh_instance] has skin weights, vertices with weight at or above [member vertex_weight_threshold] drive capsule radius; otherwise bone length heuristics are used. When [param animation_library] is supplied, matching rotation tracks are sampled at 30 Hz and padded by [member animation_padding] to derive limits.
+				Generates a profile from [param skeleton]. When [param mesh_instance] has skin weights, bones with no weighted vertices are skipped and vertices with weight at or above [member vertex_weight_threshold] drive capsule radius; otherwise bone length heuristics are used. When [param animation_library] is supplied, matching rotation tracks are sampled at 30 Hz and padded by [member animation_padding] to derive limits.
 			</description>
 		</method>
 		<method name="get_gizmo_lines" qualifiers="const">
