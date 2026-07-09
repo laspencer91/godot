@@ -954,6 +954,12 @@ private:
 
 	void _load_default_preview_settings();
 	void _update_preview_environment();
+	// Recompute directional_light_count / world_env_count from the currently edited scene.
+	// The running counters maintained by _node_added/_node_removed assume a single resident
+	// scene (stock Godot); with the workspace model every document keeps its own SubViewport
+	// resident, so switching tabs never fires the node_removed that would decrement a prior
+	// scene's light. Recounting on scene switch re-establishes truth for the active document.
+	void _recount_scene_lights_and_environments();
 
 	void _preview_settings_changed();
 	void _sun_environ_settings_pressed();
@@ -979,6 +985,11 @@ public:
 	// origin into and picks against. v1 returns the root-window world (unchanged);
 	// the G1 flip makes these return the active document's world/scenario/space so
 	// each live scene is isolated. All hardcoded root-window sites route through here.
+
+	// Re-sync the preview sun/environment toggles with the now-active document's scene.
+	// Called on scene switch (see Node3DEditorPlugin::edited_scene_changed).
+	void update_preview_for_edited_scene() { _recount_scene_lights_and_environments(); }
+
 	Ref<World3D> get_editor_world_3d() const;
 	RID get_editor_scenario() const;
 	PhysicsDirectSpaceState3D *get_editor_space_state() const;

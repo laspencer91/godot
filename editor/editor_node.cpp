@@ -4641,6 +4641,12 @@ void EditorNode::_ensure_active_scene_tab() {
 			boot_scene_focus_pending = false;
 			grab_focus = true;
 		}
+		// An explicit scene open (FileSystem dock double-click, Open Scene dialog, etc.) should
+		// switch to the newly opened scene's pane rather than open it in the background.
+		if (open_scene_focus_pending) {
+			open_scene_focus_pending = false;
+			grab_focus = true;
+		}
 		main_screen->reveal(active_doc, DocumentViewKind::DEFAULT, grab_focus);
 	}
 }
@@ -4997,10 +5003,20 @@ Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, b
 	String lpath = ProjectSettings::get_singleton()->localize_path(ResourceUID::ensure_path(p_scene));
 	_update_prev_closed_scenes(lpath, false);
 
+	// An explicit open should reveal the scene's pane (see _ensure_active_scene_tab). Suppressed for a
+	// silent tab change (background restore/session load), which keeps the current pane focused.
+	if (!p_silent_change_tab) {
+		open_scene_focus_pending = true;
+	}
+
 	if (!p_set_inherited) {
 		for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
 			if (editor_data.get_scene_path(i) == lpath) {
 				_set_current_scene(i);
+				// _set_current_scene no-ops when i is already the edited scene, so it may not queue the
+				// pane reveal. Queue it directly so re-opening the active scene still focuses its pane
+				// (and open_scene_focus_pending is always consumed rather than leaking to a later switch).
+				callable_mp(this, &EditorNode::_ensure_active_scene_tab).call_deferred();
 				return OK;
 			}
 		}
@@ -5035,6 +5051,10 @@ Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, b
 
 		Dictionary state = editor_data.restore_edited_scene_state(editor_selection, &editor_history);
 		callable_mp(this, &EditorNode::_set_main_scene_state).call_deferred(state, get_edited_scene()); // Do after everything else is done setting up.
+
+		// Loading into the reused empty current slot doesn't switch tabs, so _set_current_scene never
+		// runs. Queue the pane reveal directly to honor (and consume) open_scene_focus_pending.
+		callable_mp(this, &EditorNode::_ensure_active_scene_tab).call_deferred();
 	}
 
 	dependency_errors.clear();

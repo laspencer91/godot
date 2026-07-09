@@ -3073,6 +3073,11 @@ void Node3DEditorViewport::set_message(const String &p_message, float p_time) {
 }
 
 void Node3DEditorPlugin::edited_scene_changed() {
+	// Reconcile the preview sun/environment state with the newly active document. The running
+	// light/env counters don't survive tab switches under the workspace model (each document
+	// keeps its own resident SubViewport, so no node_removed fires for the scene we left).
+	Node3DEditor::get_singleton()->update_preview_for_edited_scene();
+
 	for (uint32_t i = 0; i < Node3DEditor::VIEWPORTS_COUNT; i++) {
 		Node3DEditorViewport *viewport = Node3DEditor::get_singleton()->get_editor_viewport(i);
 		if (viewport->is_visible()) {
@@ -10312,6 +10317,36 @@ void Node3DEditor::_node_removed(Node *p_node) {
 		selected = nullptr;
 		update_transform_gizmo();
 	}
+}
+
+void Node3DEditor::_recount_scene_lights_and_environments() {
+	// Walk the currently edited scene and rebuild the light/environment tallies from scratch.
+	// The incremental _node_added/_node_removed counters drift under the workspace model:
+	// every document keeps its own resident SubViewport, so switching tabs never fires the
+	// node_removed that would decrement a background scene's DirectionalLight3D/WorldEnvironment.
+	// Recounting against the active document's root is the authoritative reconciliation.
+	world_env_count = 0;
+	directional_light_count = 0;
+
+	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
+	if (edited_scene) {
+		LocalVector<Node *> stack;
+		stack.push_back(edited_scene);
+		while (!stack.is_empty()) {
+			Node *n = stack[stack.size() - 1];
+			stack.remove_at(stack.size() - 1);
+			if (Object::cast_to<WorldEnvironment>(n)) {
+				world_env_count++;
+			} else if (Object::cast_to<DirectionalLight3D>(n)) {
+				directional_light_count++;
+			}
+			for (int i = 0; i < n->get_child_count(); i++) {
+				stack.push_back(n->get_child(i));
+			}
+		}
+	}
+
+	_update_preview_environment();
 }
 
 void Node3DEditor::_register_all_gizmos() {

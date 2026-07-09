@@ -622,6 +622,11 @@ private:
 	void _ensure_active_scene_tab();
 	// G2 M7.2b: one-shot — the first _ensure_active_scene_tab focuses the scene's pane (boot-to-scene).
 	bool boot_scene_focus_pending = true;
+	// One-shot — an explicit scene open (FileSystem dock double-click, Open Scene dialog, recent scenes,
+	// all funnel through load_scene) focuses the scene's pane instead of opening it in the background.
+	// Cleared when consumed by _ensure_active_scene_tab. Legacy tab-strip switches bypass load_scene and
+	// keep the background-open behavior.
+	bool open_scene_focus_pending = false;
 	void _nav_to_selected_scene();
 	bool _validate_scene_recursive(const String &p_filename, Node *p_node);
 	void _save_scene(String p_file, int idx = -1);
