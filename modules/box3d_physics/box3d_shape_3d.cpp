@@ -86,23 +86,45 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 		case PhysicsServer3D::SHAPE_CONCAVE_POLYGON: {
 			Dictionary d = p_data;
 			PackedVector3Array faces = d["faces"];
+			const bool backface_collision = d.get("backface_collision", false);
 			int vertex_count = faces.size();
 			ERR_FAIL_COND_MSG(vertex_count == 0 || vertex_count % 3 != 0, "Box3D: concave shape needs a triangle soup (3 vertices per face).");
+			const int source_triangle_count = vertex_count / 3;
+			const int output_triangle_count = backface_collision ? source_triangle_count * 2 : source_triangle_count;
 			LocalVector<b3Vec3> vertices;
 			LocalVector<int32_t> indices;
 			LocalVector<uint8_t> material_indices;
 			vertices.resize(vertex_count);
-			indices.resize(vertex_count);
+			indices.resize(output_triangle_count * 3);
 			for (int i = 0; i < vertex_count; i++) {
 				vertices[i] = to_box3d(faces[i]);
-				indices[i] = i;
+			}
+			int index = 0;
+			for (int i = 0; i < vertex_count; i += 3) {
+				// Godot-authored faces are clockwise-front; Box3D meshes use the opposite winding.
+				indices[index++] = i;
+				indices[index++] = i + 2;
+				indices[index++] = i + 1;
+				if (backface_collision) {
+					indices[index++] = i;
+					indices[index++] = i + 1;
+					indices[index++] = i + 2;
+				}
 			}
 			b3MeshDef mesh_def = {}; // Geometry defs are plain zero-init structs (no b3Default* factory).
 			mesh_def.vertices = vertices.ptr();
 			mesh_def.indices = indices.ptr();
 			mesh_def.vertexCount = vertex_count;
-			mesh_def.triangleCount = vertex_count / 3;
-			_copy_material_indices(mesh_triangle_material_indices, material_indices, mesh_def.triangleCount);
+			mesh_def.triangleCount = output_triangle_count;
+			if (mesh_triangle_material_indices.size() == source_triangle_count) {
+				material_indices.resize(output_triangle_count);
+				for (int i = 0; i < source_triangle_count; i++) {
+					material_indices[backface_collision ? i * 2 : i] = mesh_triangle_material_indices[i];
+					if (backface_collision) {
+						material_indices[i * 2 + 1] = mesh_triangle_material_indices[i];
+					}
+				}
+			}
 			mesh_def.materialIndices = material_indices.size() == mesh_def.triangleCount ? material_indices.ptr() : nullptr;
 			mesh_def.weldVertices = true;
 			mesh_def.weldTolerance = 0.0001f;
@@ -166,6 +188,7 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 					const int i01 = (z + 1) * width + x;
 					const int i11 = (z + 1) * width + x + 1;
 
+					// Heightmaps are module-authored; this winding gives flat grids +Y collision normals in Box3D.
 					indices[index++] = i00;
 					indices[index++] = i01;
 					indices[index++] = i10;
