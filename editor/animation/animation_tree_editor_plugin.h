@@ -37,6 +37,7 @@
 
 class Button;
 class EditorFileDialog;
+class Label;
 class PanelContainer;
 class ScrollContainer;
 class RichTextLabel;
@@ -64,6 +65,7 @@ class AnimationTreeEditor : public EditorDock {
 
 	ScrollContainer *path_edit = nullptr;
 	HBoxContainer *path_hb = nullptr;
+	Label *bound_scene_label = nullptr;
 
 	AnimationTree *tree = nullptr;
 	MarginContainer *editor_base = nullptr;
@@ -73,7 +75,9 @@ class AnimationTreeEditor : public EditorDock {
 	Vector<AnimationTreeNodeEditorPlugin *> editors;
 
 	void _update_path();
+	void _update_bound_scene_label();
 	void _clear_editors();
+	void _unbind_tree();
 	ObjectID current_root;
 
 	void _path_button_pressed(int p_path);
@@ -101,6 +105,9 @@ public:
 
 	void enter_editor(const String &p_path = "");
 	static AnimationTreeEditor *get_singleton() { return singleton; }
+	Dictionary get_state() const;
+	void set_state(const Dictionary &p_state);
+	void edited_scene_changed();
 	void edit(AnimationTree *p_tree);
 	AnimationTreeEditor();
 };
@@ -111,6 +118,11 @@ class AnimationTreeEditorPlugin : public EditorPlugin {
 	AnimationTreeEditor *anim_tree_editor = nullptr;
 
 public:
+	virtual Dictionary get_state() const override { return anim_tree_editor->get_state(); }
+	virtual void set_state(const Dictionary &p_state) override { anim_tree_editor->set_state(p_state); }
+	virtual void clear() override { anim_tree_editor->edit(nullptr); }
+	virtual void edited_scene_changed() override { anim_tree_editor->edited_scene_changed(); }
+
 	virtual String get_plugin_name() const override { return "AnimationTree"; }
 	virtual void edit(Object *p_object) override;
 	virtual bool handles(Object *p_object) const override;

@@ -1182,8 +1182,10 @@ void AnimationPlayerEditor::_set_controls_disabled(bool p_disabled) {
 	play_from->set_disabled(p_disabled);
 	animation->set_disabled(p_disabled);
 	autoplay->set_disabled(p_disabled);
-	onion_toggle->set_disabled(p_disabled);
-	onion_skinning->set_disabled(p_disabled);
+	// Pane-hosted scenes render through document-bound viewports, while onion
+	// skinning still captures and overlays the legacy singleton editor views.
+	onion_toggle->set_disabled(true);
+	onion_skinning->set_disabled(true);
 }
 
 void AnimationPlayerEditor::_update_animation_list_icons() {
@@ -2226,7 +2228,9 @@ AnimationPlayerEditor::AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plug
 	onion_toggle = memnew(Button);
 	onion_toggle->set_theme_type_variation(SceneStringName(FlatButton));
 	onion_toggle->set_toggle_mode(true);
-	onion_toggle->set_tooltip_text(TTRC("Enable Onion Skinning"));
+	const String onion_unavailable_tooltip = TTRC("Onion skinning is unavailable for pane-hosted scenes because it relies on the legacy 2D and 3D editor viewports.");
+	onion_toggle->set_tooltip_text(onion_unavailable_tooltip);
+	onion_toggle->set_disabled(true);
 	onion_toggle->connect(SceneStringName(pressed), callable_mp(this, &AnimationPlayerEditor::_onion_skinning_menu).bind(ONION_SKINNING_ENABLE));
 	hb->add_child(onion_toggle);
 
@@ -2234,7 +2238,8 @@ AnimationPlayerEditor::AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plug
 	onion_skinning->set_accessibility_name(TTRC("Onion Skinning Options"));
 	onion_skinning->set_flat(false);
 	onion_skinning->set_theme_type_variation("FlatMenuButton");
-	onion_skinning->set_tooltip_text(TTRC("Onion Skinning Options"));
+	onion_skinning->set_tooltip_text(onion_unavailable_tooltip);
+	onion_skinning->set_disabled(true);
 	onion_skinning->get_popup()->add_separator(TTRC("Directions"));
 	// TRANSLATORS: Opposite of "Future", refers to a direction in animation onion skinning.
 	onion_skinning->get_popup()->add_check_item(TTRC("Past"), ONION_SKINNING_PAST);

@@ -1,7 +1,7 @@
 # G7 — Contextual bottom docks in the workspace model
 
-**Status:** Animation dock migrated (first proving case). AnimationTree / TileMap / Theme /
-SpriteFrames / Polygon2D / ResourcePreloader / MeshLibrary still follow stock behavior.
+**Status:** Animation and AnimationTree docks migrated. TileMap / Theme / SpriteFrames /
+Polygon2D / ResourcePreloader / MeshLibrary still follow stock behavior.
 
 ## Decision (owner, 2026-07-09)
 
@@ -21,6 +21,7 @@ A selection-driven bottom dock is correct under the workspace model when it sati
    unbind explicitly. Trigger: the `EditorNode::scene_changed` signal (fires at the end of
    every document switch) and/or `NOTIFICATION_VISIBILITY_CHANGED`.
    *Animation:* `AnimationPlayerEditor::_find_player()` → `_unbind_player()`.
+   *AnimationTree:* `AnimationTreeEditorPlugin::edited_scene_changed()` → `_unbind_tree()`.
 
 2. **Per-scene state round-trip via plugin `get_state()`/`set_state()`.** The machinery
    already runs on every switch (`EditorNode::_set_current_scene_nocheck` →
@@ -28,6 +29,7 @@ A selection-driven bottom dock is correct under the workspace model when it sati
    each scene remembers whether the dock was open (apply it *before* any visibility
    early-out so a scene that left it closed also closes it).
    *Animation:* `AnimationPlayerEditor::get_state()/set_state()`; `EditorDock::is_dock_open()`.
+   *AnimationTree:* `AnimationTreeEditor::get_state()/set_state()`.
 
 3. **Boot restore gets a switch tail.** During session restore every `_set_current_scene`
    skips `_set_main_scene_state` (gated on `restoring_scenes`), so `scene_changed` /
@@ -41,7 +43,7 @@ A selection-driven bottom dock is correct under the workspace model when it sati
    show the owning scene's short name in the dock's toolbar. Derive it from the bound
    node's owning edited scene (scan `EditorData` edited scenes for the ancestor root),
    NOT from `get_edited_scene()` — a pinned binding may belong to a non-active scene.
-   *Animation:* `_update_bound_scene_label()`.
+   *Animation / AnimationTree:* `_update_bound_scene_label()`.
 
 5. **Pin-style overrides survive switches deliberately.** If the dock supports pinning a
    binding, the stale-binding unbind (contract #1) must skip pinned bindings; the indicator
@@ -51,5 +53,7 @@ A selection-driven bottom dock is correct under the workspace model when it sati
 
 Onion skinning captures viewport state through the `Node3DEditor`/`CanvasItemEditor`
 singleton main views, which are **unbound** for pane-hosted scenes — expected broken under
-the workspace model. If confirmed in interactive testing, disable the toggle with an
-explanatory tooltip rather than shipping a half-working capture.
+the workspace model. Confirmed from the implemented routing: pane views render through their own
+document-bound `SubViewport`s, pane 2D views do not forward the force-overlay, and
+`EditorPlugin::update_overlays()` refreshes only the singleton main views. Both onion controls
+are disabled with an explanatory tooltip until capture is made document-view-aware.

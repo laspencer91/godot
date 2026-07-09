@@ -43,6 +43,7 @@
 #include "editor/themes/editor_scale.h"
 #include "scene/animation/animation_blend_tree.h"
 #include "scene/gui/button.h"
+#include "scene/gui/label.h"
 #include "scene/gui/margin_container.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/rich_text_label.h"
@@ -196,30 +197,70 @@ void AnimationTreeNodeEditorPlugin::update_error_message(const AnimationTree *p_
 }
 
 void AnimationTreeEditor::edit(AnimationTree *p_tree) {
-	if (p_tree && !p_tree->is_connected("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed))) {
-		p_tree->connect("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed), CONNECT_DEFERRED);
-	}
-
 	if (tree == p_tree) {
+		_update_bound_scene_label();
 		return;
 	}
 
-	if (tree && tree->is_connected("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed))) {
-		tree->disconnect("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed));
-	}
+	_unbind_tree();
 
 	tree = p_tree;
+	if (tree && !tree->is_connected("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed))) {
+		tree->connect("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed), CONNECT_DEFERRED);
+	}
 
 	Vector<String> path;
 	if (tree) {
 		edit_path(path);
 	}
+	_update_bound_scene_label();
 }
 
 void AnimationTreeEditor::_node_removed(Node *p_node) {
 	if (p_node == tree) {
-		tree = nullptr;
-		_clear_editors();
+		_unbind_tree();
+	}
+}
+
+void AnimationTreeEditor::_unbind_tree() {
+	if (tree && tree->is_connected("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed))) {
+		tree->disconnect("animation_list_changed", callable_mp(this, &AnimationTreeEditor::_animation_list_changed));
+	}
+
+	tree = nullptr;
+	_clear_editors();
+	_update_bound_scene_label();
+}
+
+void AnimationTreeEditor::edited_scene_changed() {
+	EditorData &editor_data = EditorNode::get_singleton()->get_editor_data();
+	const int edited_scene_index = editor_data.get_edited_scene();
+	Node *edited_scene = edited_scene_index >= 0 && edited_scene_index < editor_data.get_edited_scene_count() ? editor_data.get_edited_scene_root(edited_scene_index) : nullptr;
+	// Workspace documents stay resident, so switching scenes does not emit the
+	// node_removed signal that stock AnimationTree binding relied on.
+	if (tree && (!edited_scene || (tree != edited_scene && !edited_scene->is_ancestor_of(tree)))) {
+		_unbind_tree();
+		return;
+	}
+
+	_update_bound_scene_label();
+}
+
+Dictionary AnimationTreeEditor::get_state() const {
+	Dictionary state;
+	state["dock_open"] = is_dock_open();
+	return state;
+}
+
+void AnimationTreeEditor::set_state(const Dictionary &p_state) {
+	if (!p_state.has("dock_open")) {
+		return;
+	}
+
+	if (bool(p_state["dock_open"])) {
+		open();
+	} else {
+		close();
 	}
 }
 
@@ -272,6 +313,27 @@ void AnimationTreeEditor::_update_path() {
 		b->set_focus_mode(FOCUS_ACCESSIBILITY);
 		b->connect(SceneStringName(pressed), callable_mp(this, &AnimationTreeEditor::_path_button_pressed).bind(i));
 	}
+}
+
+void AnimationTreeEditor::_update_bound_scene_label() {
+	String scene_name;
+	if (tree) {
+		EditorData &editor_data = EditorNode::get_singleton()->get_editor_data();
+		for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
+			Node *root = editor_data.get_edited_scene_root(i);
+			if (root && (root == tree || root->is_ancestor_of(tree))) {
+				scene_name = editor_data.get_scene_path(i).get_file();
+				if (scene_name.is_empty()) {
+					scene_name = root->get_name();
+				}
+				break;
+			}
+		}
+	}
+
+	bound_scene_label->set_text(scene_name);
+	bound_scene_label->set_tooltip_text(scene_name.is_empty() ? String() : vformat(TTR("Editing AnimationTree in scene \"%s\"."), scene_name));
+	bound_scene_label->set_visible(!scene_name.is_empty());
 }
 
 void AnimationTreeEditor::edit_path(const Vector<String> &p_path) {
@@ -357,6 +419,10 @@ void AnimationTreeEditor::_notification(int p_what) {
 		case NOTIFICATION_EXIT_TREE: {
 			get_tree()->disconnect("node_removed", callable_mp(this, &AnimationTreeEditor::_node_removed));
 		} break;
+
+		case NOTIFICATION_VISIBILITY_CHANGED: {
+			edited_scene_changed();
+		} break;
 	}
 }
 
@@ -424,13 +490,24 @@ AnimationTreeEditor::AnimationTreeEditor() {
 	VBoxContainer *main_vbox_container = memnew(VBoxContainer);
 	add_child(main_vbox_container);
 
+	HBoxContainer *toolbar_hb = memnew(HBoxContainer);
+	main_vbox_container->add_child(toolbar_hb);
+
 	path_edit = memnew(ScrollContainer);
 	path_edit->set_vertical_scroll_mode(ScrollContainer::SCROLL_MODE_DISABLED);
-	main_vbox_container->add_child(path_edit);
+	path_edit->set_h_size_flags(SIZE_EXPAND_FILL);
+	toolbar_hb->add_child(path_edit);
 
 	path_hb = memnew(HBoxContainer);
 	path_hb->add_child(memnew(Label(TTR("Path:"))));
 	path_edit->add_child(path_hb);
+
+	bound_scene_label = memnew(Label);
+	bound_scene_label->set_focus_mode(FOCUS_NONE);
+	bound_scene_label->set_modulate(Color(1, 1, 1, 0.55));
+	bound_scene_label->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+	bound_scene_label->hide();
+	toolbar_hb->add_child(bound_scene_label);
 
 	main_vbox_container->add_child(memnew(HSeparator));
 
