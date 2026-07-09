@@ -14,12 +14,16 @@
 class Box3DBody3D;
 class Box3DPhysicsServer3D;
 class PhysicsDirectBodyState3D;
+class AnimationLibrary;
+class MeshInstance3D;
+class Skeleton3D;
 
 class Box3DRagdollProfile : public Resource {
 	GDCLASS(Box3DRagdollProfile, Resource);
 
 	TypedArray<Dictionary> bones;
 	Array filter_pairs;
+	Dictionary bone_chains;
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
 	real_t friction_torque = 8.0;
@@ -40,6 +44,8 @@ public:
 	TypedArray<Dictionary> get_bones() const { return bones; }
 	void set_filter_pairs(const Array &p_pairs) { filter_pairs = p_pairs; }
 	Array get_filter_pairs() const { return filter_pairs; }
+	void set_bone_chains(const Dictionary &p_chains) { bone_chains = p_chains; }
+	Dictionary get_bone_chains() const { return bone_chains; }
 	void set_collision_layer(uint32_t p_layer) { collision_layer = p_layer; }
 	uint32_t get_collision_layer() const { return collision_layer; }
 	void set_collision_mask(uint32_t p_mask) { collision_mask = p_mask; }
@@ -50,6 +56,9 @@ public:
 	real_t get_spring_hertz() const { return spring_hertz; }
 	void set_spring_damping_ratio(real_t p_ratio) { spring_damping_ratio = MAX((real_t)0.0, p_ratio); }
 	real_t get_spring_damping_ratio() const { return spring_damping_ratio; }
+
+	real_t estimate_bone_mass(const Dictionary &p_bone) const;
+	real_t estimate_total_mass() const;
 };
 
 VARIANT_ENUM_CAST(Box3DRagdollProfile::JointType);
@@ -136,4 +145,46 @@ public:
 
 	virtual bool has_process() const override { return true; }
 	~Box3DRagdoll();
+};
+
+class Box3DRagdollProfileGenerator : public RefCounted {
+	GDCLASS(Box3DRagdollProfileGenerator, RefCounted);
+
+	PackedStringArray warnings;
+	real_t vertex_weight_threshold = 0.5;
+	real_t animation_padding = Math::deg_to_rad((real_t)10.0);
+	real_t minimum_bone_length = 0.08;
+	real_t minimum_radius = 0.04;
+	real_t fallback_radius_ratio = 0.2;
+	real_t maximum_adjacent_mass_ratio = 10.0;
+
+	void _warn(const String &p_warning);
+	StringName _chain_for_bone(const String &p_bone) const;
+	int _track_bone_index(Skeleton3D *p_skeleton, const NodePath &p_path) const;
+	void _collect_weighted_vertices(Skeleton3D *p_skeleton, MeshInstance3D *p_mesh_instance, HashMap<int, LocalVector<Vector3>> &r_vertices);
+	void _apply_animation_limits(Skeleton3D *p_skeleton, const Ref<AnimationLibrary> &p_animation_library, HashMap<StringName, Dictionary> &r_entries);
+	void _clamp_adjacent_mass_ratios(Skeleton3D *p_skeleton, HashMap<StringName, Dictionary> &r_entries);
+
+protected:
+	static void _bind_methods();
+
+public:
+	void set_vertex_weight_threshold(real_t p_threshold) { vertex_weight_threshold = CLAMP(p_threshold, (real_t)0.0, (real_t)1.0); }
+	real_t get_vertex_weight_threshold() const { return vertex_weight_threshold; }
+	void set_animation_padding(real_t p_padding) { animation_padding = MAX((real_t)0.0, p_padding); }
+	real_t get_animation_padding() const { return animation_padding; }
+	void set_minimum_bone_length(real_t p_length) { minimum_bone_length = MAX((real_t)0.001, p_length); }
+	real_t get_minimum_bone_length() const { return minimum_bone_length; }
+	void set_minimum_radius(real_t p_radius) { minimum_radius = MAX((real_t)0.001, p_radius); }
+	real_t get_minimum_radius() const { return minimum_radius; }
+	void set_fallback_radius_ratio(real_t p_ratio) { fallback_radius_ratio = MAX((real_t)0.01, p_ratio); }
+	real_t get_fallback_radius_ratio() const { return fallback_radius_ratio; }
+	void set_maximum_adjacent_mass_ratio(real_t p_ratio) { maximum_adjacent_mass_ratio = MAX((real_t)1.0, p_ratio); }
+	real_t get_maximum_adjacent_mass_ratio() const { return maximum_adjacent_mass_ratio; }
+
+	PackedStringArray get_warnings() const { return warnings; }
+	void clear_warnings() { warnings.clear(); }
+	Ref<Box3DRagdollProfile> generate_profile(Skeleton3D *p_skeleton, MeshInstance3D *p_mesh_instance = nullptr, const Ref<AnimationLibrary> &p_animation_library = Ref<AnimationLibrary>());
+	Dictionary analyze_profile(const Ref<Box3DRagdollProfile> &p_profile) const;
+	PackedVector3Array get_gizmo_lines(const Ref<Box3DRagdollProfile> &p_profile, Skeleton3D *p_skeleton) const;
 };

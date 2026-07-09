@@ -31,6 +31,7 @@ static PhysicsServer3D *create_box3d_physics_server() {
 void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		GDREGISTER_CLASS(Box3DRagdollProfile);
+		GDREGISTER_CLASS(Box3DRagdollProfileGenerator);
 		GDREGISTER_CLASS(Box3DRagdoll);
 		GDREGISTER_CLASS(Box3DSurfaceOverride3D);
 		return;
