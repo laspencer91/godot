@@ -13,6 +13,7 @@
 #include "core/config/project_settings.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/templates/hash_set.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/resources/3d/skin.h"
 #include "scene/resources/3d/world_3d.h"
@@ -222,6 +223,7 @@ void Box3DRagdoll::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_built"), &Box3DRagdoll::is_built);
 	ClassDB::bind_method(D_METHOD("is_ragdoll_active"), &Box3DRagdoll::is_ragdoll_active);
 	ClassDB::bind_method(D_METHOD("get_bone_body", "bone"), &Box3DRagdoll::get_bone_body);
+	ClassDB::bind_method(D_METHOD("get_bone_joint_parent", "bone"), &Box3DRagdoll::get_bone_joint_parent);
 	ClassDB::bind_method(D_METHOD("get_bone_global_transform", "bone"), &Box3DRagdoll::get_bone_global_transform);
 	ClassDB::bind_method(D_METHOD("get_bone_linear_velocity", "bone"), &Box3DRagdoll::get_bone_linear_velocity);
 	ClassDB::bind_method(D_METHOD("get_center_of_mass_velocity"), &Box3DRagdoll::get_center_of_mass_velocity);
@@ -481,13 +483,26 @@ bool Box3DRagdoll::_build_in_space(RID p_space) {
 
 	ERR_FAIL_COND_V_MSG(bones.is_empty(), false, "Box3D: ragdoll profile has no valid enabled bones.");
 
+	HashMap<int, int> bone_to_runtime;
 	for (uint32_t i = 0; i < bones.size(); i++) {
-		for (uint32_t j = 0; j < bones.size(); j++) {
-			if (bones[j].bone == bones[i].parent) {
-				bones[i].parent_runtime = j;
+		bone_to_runtime[bones[i].bone] = i;
+	}
+	for (uint32_t i = 0; i < bones.size(); i++) {
+		// Joint to the nearest simulated ancestor, not just the direct parent:
+		// real profiles skip unweighted rig bones (Rigify ORG-/helper bones), and
+		// requiring the direct parent would split those into disconnected roots.
+		int ancestor = bones[i].parent;
+		while (ancestor >= 0) {
+			const int *runtime_idx = bone_to_runtime.getptr(ancestor);
+			if (runtime_idx != nullptr) {
+				bones[i].parent_runtime = *runtime_idx;
 				break;
 			}
+			ancestor = skeleton->get_bone_parent(ancestor);
 		}
+	}
+	_attach_disconnected_components(skeleton);
+	for (uint32_t i = 0; i < bones.size(); i++) {
 		ERR_FAIL_COND_V(!_create_body_for_bone(server, skeleton, bones[i]), false);
 	}
 	for (uint32_t i = 0; i < bones.size(); i++) {
@@ -512,6 +527,71 @@ bool Box3DRagdoll::_build_in_space(RID p_space) {
 	built = true;
 	asleep_emitted = false;
 	return true;
+}
+
+void Box3DRagdoll::_attach_disconnected_components(Skeleton3D *p_skeleton) {
+	// Selected bones on real rigs may share no ancestry at all (Rigify limb
+	// DEF chains parent through ORG bones into sibling branches); attach each
+	// secondary component's root to the nearest simulated capsule in the
+	// heaviest component so the ragdoll builds as one connected assembly.
+	LocalVector<int> component;
+	component.resize(bones.size());
+	for (uint32_t i = 0; i < bones.size(); i++) {
+		uint32_t c = i;
+		while (bones[c].parent_runtime >= 0) {
+			c = bones[c].parent_runtime;
+		}
+		component[i] = c;
+	}
+	LocalVector<int> roots;
+	for (uint32_t i = 0; i < bones.size(); i++) {
+		if (bones[i].parent_runtime < 0) {
+			roots.push_back(i);
+		}
+	}
+	if (roots.size() <= 1) {
+		return;
+	}
+	int primary = roots[0];
+	real_t primary_mass = 0.0;
+	for (const int root : roots) {
+		real_t mass = 0.0;
+		for (uint32_t i = 0; i < bones.size(); i++) {
+			if (component[i] == root) {
+				mass += _bone_mass(bones[i]);
+			}
+		}
+		if (mass > primary_mass) {
+			primary_mass = mass;
+			primary = root;
+		}
+	}
+	for (const int root : roots) {
+		if (root == primary) {
+			continue;
+		}
+		const Vector3 anchor = _bone_world_pose(p_skeleton, bones[root]).origin;
+		int best = -1;
+		real_t best_distance = 0.0;
+		for (uint32_t j = 0; j < bones.size(); j++) {
+			if (component[j] != primary) {
+				continue;
+			}
+			const Transform3D candidate = _bone_world_pose(p_skeleton, bones[j]);
+			const Vector3 axis = candidate.basis.get_column(1);
+			const real_t half_axis = _capsule_half_axis(bones[j].radius, bones[j].height);
+			const real_t along = CLAMP((anchor - candidate.origin).dot(axis), -half_axis, half_axis);
+			const real_t distance = anchor.distance_to(candidate.origin + axis * along);
+			if (best < 0 || distance < best_distance) {
+				best_distance = distance;
+				best = j;
+			}
+		}
+		if (best >= 0) {
+			bones[root].parent_runtime = best;
+			print_verbose(vformat("Box3D: ragdoll attached disconnected bone '%s' to nearest simulated bone '%s' (%.2f m).", String(bones[root].name), String(bones[best].name), best_distance));
+		}
+	}
 }
 
 void Box3DRagdoll::_clear_native_joints() {
@@ -918,6 +998,14 @@ RID Box3DRagdoll::get_bone_body(const StringName &p_bone) const {
 	return idx != nullptr ? bones[*idx].body : RID();
 }
 
+StringName Box3DRagdoll::get_bone_joint_parent(const StringName &p_bone) const {
+	const int *idx = bone_lookup.getptr(p_bone);
+	if (idx == nullptr || bones[*idx].parent_runtime < 0) {
+		return StringName();
+	}
+	return bones[bones[*idx].parent_runtime].name;
+}
+
 Transform3D Box3DRagdoll::get_bone_global_transform(const StringName &p_bone) const {
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL_V(server, Transform3D());
@@ -1009,6 +1097,10 @@ void Box3DRagdollProfileGenerator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_animation_padding"), &Box3DRagdollProfileGenerator::get_animation_padding);
 	ClassDB::bind_method(D_METHOD("set_minimum_bone_length", "length"), &Box3DRagdollProfileGenerator::set_minimum_bone_length);
 	ClassDB::bind_method(D_METHOD("get_minimum_bone_length"), &Box3DRagdollProfileGenerator::get_minimum_bone_length);
+	ClassDB::bind_method(D_METHOD("set_prune_bone_length", "length"), &Box3DRagdollProfileGenerator::set_prune_bone_length);
+	ClassDB::bind_method(D_METHOD("get_prune_bone_length"), &Box3DRagdollProfileGenerator::get_prune_bone_length);
+	ClassDB::bind_method(D_METHOD("set_target_total_mass", "mass"), &Box3DRagdollProfileGenerator::set_target_total_mass);
+	ClassDB::bind_method(D_METHOD("get_target_total_mass"), &Box3DRagdollProfileGenerator::get_target_total_mass);
 	ClassDB::bind_method(D_METHOD("set_minimum_radius", "radius"), &Box3DRagdollProfileGenerator::set_minimum_radius);
 	ClassDB::bind_method(D_METHOD("get_minimum_radius"), &Box3DRagdollProfileGenerator::get_minimum_radius);
 	ClassDB::bind_method(D_METHOD("set_fallback_radius_ratio", "ratio"), &Box3DRagdollProfileGenerator::set_fallback_radius_ratio);
@@ -1025,6 +1117,8 @@ void Box3DRagdollProfileGenerator::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "vertex_weight_threshold", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_vertex_weight_threshold", "get_vertex_weight_threshold");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "animation_padding", PROPERTY_HINT_RANGE, "0,3.14159,0.001,radians"), "set_animation_padding", "get_animation_padding");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "minimum_bone_length", PROPERTY_HINT_RANGE, "0.001,10,0.001,or_greater,suffix:m"), "set_minimum_bone_length", "get_minimum_bone_length");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "prune_bone_length", PROPERTY_HINT_RANGE, "0,1,0.005,or_greater,suffix:m"), "set_prune_bone_length", "get_prune_bone_length");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "target_total_mass", PROPERTY_HINT_RANGE, "0,500,0.5,or_greater,suffix:kg"), "set_target_total_mass", "get_target_total_mass");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "minimum_radius", PROPERTY_HINT_RANGE, "0.001,2,0.001,or_greater,suffix:m"), "set_minimum_radius", "get_minimum_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "fallback_radius_ratio", PROPERTY_HINT_RANGE, "0.01,1,0.01"), "set_fallback_radius_ratio", "get_fallback_radius_ratio");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "maximum_adjacent_mass_ratio", PROPERTY_HINT_RANGE, "1,100,0.1"), "set_maximum_adjacent_mass_ratio", "get_maximum_adjacent_mass_ratio");
@@ -1047,6 +1141,55 @@ StringName Box3DRagdollProfileGenerator::_chain_for_bone(const String &p_bone) c
 		return SNAME("head");
 	}
 	return SNAME("spine");
+}
+
+Vector3 Box3DRagdollProfileGenerator::_bone_axis(Skeleton3D *p_skeleton, int p_bone) const {
+	const Transform3D bone_rest = p_skeleton->get_bone_global_rest(p_bone);
+	Vector3 axis;
+	Vector<int> children = p_skeleton->get_bone_children(p_bone);
+	if (!children.is_empty()) {
+		real_t best_score = -Math::INF;
+		for (int child : children) {
+			const Vector3 candidate = p_skeleton->get_bone_global_rest(child).origin - bone_rest.origin;
+			const real_t candidate_length = candidate.length();
+			const real_t score = (candidate_length > CMP_EPSILON ? candidate.y / candidate_length : (real_t)0.0) * (real_t)10.0 + candidate_length;
+			if (score > best_score) {
+				best_score = score;
+				axis = candidate;
+			}
+		}
+	} else {
+		const int parent = p_skeleton->get_bone_parent(p_bone);
+		if (parent >= 0) {
+			axis = bone_rest.origin - p_skeleton->get_bone_global_rest(parent).origin;
+		}
+	}
+	return axis;
+}
+
+void Box3DRagdollProfileGenerator::_fit_bone_capsule(Skeleton3D *p_skeleton, int p_bone, const LocalVector<Vector3> *p_vertices, Vector3 &r_axis, real_t &r_length, real_t &r_radius) const {
+	Vector3 axis = _bone_axis(p_skeleton, p_bone);
+	if (axis.length() < minimum_bone_length) {
+		axis = Vector3(0, minimum_bone_length, 0);
+	}
+	const real_t length = MAX(axis.length(), minimum_bone_length);
+	const Vector3 axis_dir = axis.normalized();
+	real_t radius = MAX(minimum_radius, length * fallback_radius_ratio);
+	if (p_vertices != nullptr && p_vertices->size() > 0) {
+		const Transform3D bone_rest = p_skeleton->get_bone_global_rest(p_bone);
+		Vector<real_t> distances;
+		for (uint32_t i = 0; i < p_vertices->size(); i++) {
+			const Vector3 rel = (*p_vertices)[i] - bone_rest.origin;
+			const real_t projection = CLAMP(rel.dot(axis_dir), (real_t)0.0, length);
+			const Vector3 closest = bone_rest.origin + axis_dir * projection;
+			distances.append(((*p_vertices)[i] - closest).length());
+		}
+		distances.sort();
+		radius = CLAMP(distances[distances.size() / 2], minimum_radius, length * (real_t)0.45);
+	}
+	r_axis = axis;
+	r_length = length;
+	r_radius = radius;
 }
 
 int Box3DRagdollProfileGenerator::_track_bone_index(Skeleton3D *p_skeleton, const NodePath &p_path) const {
@@ -1197,14 +1340,25 @@ void Box3DRagdollProfileGenerator::_apply_animation_limits(Skeleton3D *p_skeleto
 }
 
 void Box3DRagdollProfileGenerator::_clamp_adjacent_mass_ratios(Skeleton3D *p_skeleton, HashMap<StringName, Dictionary> &r_entries) {
+	// Pair each entry with its nearest selected ancestor — the same rule the
+	// runtime uses when jointing — so the clamp covers the joints actually built.
 	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
-		const int parent = p_skeleton->get_bone_parent(bone);
-		if (parent < 0) {
+		Dictionary *child_entry = r_entries.getptr(StringName(p_skeleton->get_bone_name(bone)));
+		if (child_entry == nullptr) {
 			continue;
 		}
-		Dictionary *child_entry = r_entries.getptr(StringName(p_skeleton->get_bone_name(bone)));
-		Dictionary *parent_entry = r_entries.getptr(StringName(p_skeleton->get_bone_name(parent)));
-		if (child_entry == nullptr || parent_entry == nullptr) {
+		Dictionary *parent_entry = nullptr;
+		int ancestor = p_skeleton->get_bone_parent(bone);
+		StringName ancestor_name;
+		while (ancestor >= 0) {
+			ancestor_name = StringName(p_skeleton->get_bone_name(ancestor));
+			parent_entry = r_entries.getptr(ancestor_name);
+			if (parent_entry != nullptr) {
+				break;
+			}
+			ancestor = p_skeleton->get_bone_parent(ancestor);
+		}
+		if (parent_entry == nullptr) {
 			continue;
 		}
 		const Box3DRagdollProfile::BoneParams child_params = Box3DRagdollProfile::parse_bone_entry(*child_entry);
@@ -1219,7 +1373,42 @@ void Box3DRagdollProfileGenerator::_clamp_adjacent_mass_ratios(Skeleton3D *p_ske
 		Dictionary *lighter = child_mass < parent_mass ? child_entry : parent_entry;
 		const real_t density_scale = _dict_real(*lighter, SNAME("density_scale"), 1.0);
 		(*lighter)[SNAME("density_scale")] = density_scale * (max_mass / min_mass) / maximum_adjacent_mass_ratio;
-		_warn(vformat("Box3D: ragdoll generator raised density_scale on '%s' to keep adjacent mass ratio within %.1f:1.", child_mass < parent_mass ? p_skeleton->get_bone_name(bone) : p_skeleton->get_bone_name(parent), maximum_adjacent_mass_ratio));
+		_warn(vformat("Box3D: ragdoll generator raised density_scale on '%s' to keep adjacent mass ratio within %.1f:1.", child_mass < parent_mass ? p_skeleton->get_bone_name(bone) : String(ancestor_name), maximum_adjacent_mass_ratio));
+	}
+
+	// Entries with no selected ancestor get proximity-attached to the main
+	// assembly at build time; clamp them against the heaviest entry so that
+	// joint is stable too.
+	real_t heaviest = 0.0;
+	for (const KeyValue<StringName, Dictionary> &kv : r_entries) {
+		const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(kv.value);
+		heaviest = MAX(heaviest, _capsule_mass(params.radius, params.height, params.density_scale));
+	}
+	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
+		const StringName bone_name = StringName(p_skeleton->get_bone_name(bone));
+		Dictionary *entry = r_entries.getptr(bone_name);
+		if (entry == nullptr) {
+			continue;
+		}
+		bool has_selected_ancestor = false;
+		int ancestor = p_skeleton->get_bone_parent(bone);
+		while (ancestor >= 0) {
+			if (r_entries.getptr(StringName(p_skeleton->get_bone_name(ancestor))) != nullptr) {
+				has_selected_ancestor = true;
+				break;
+			}
+			ancestor = p_skeleton->get_bone_parent(ancestor);
+		}
+		if (has_selected_ancestor) {
+			continue;
+		}
+		const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(*entry);
+		const real_t mass = _capsule_mass(params.radius, params.height, params.density_scale);
+		if (mass <= 0.0 || heaviest / mass <= maximum_adjacent_mass_ratio) {
+			continue;
+		}
+		(*entry)[SNAME("density_scale")] = params.density_scale * (heaviest / mass) / maximum_adjacent_mass_ratio;
+		_warn(vformat("Box3D: ragdoll generator raised density_scale on '%s' to keep adjacent mass ratio within %.1f:1.", bone_name, maximum_adjacent_mass_ratio));
 	}
 }
 
@@ -1236,54 +1425,193 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 	_collect_weighted_vertices(p_skeleton, p_mesh_instance, weighted_vertices);
 	const bool select_by_weights = p_mesh_instance != nullptr && !weighted_vertices.is_empty();
 
-	HashMap<StringName, Dictionary> entries;
-	Dictionary chains;
+	LocalVector<int> selected_bones;
+	HashSet<int> selected_set;
 	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
 		const LocalVector<Vector3> *vertices = weighted_vertices.getptr(bone);
 		if (select_by_weights && (vertices == nullptr || vertices->size() == 0)) {
 			continue;
 		}
+		selected_bones.push_back(bone);
+		selected_set.insert(bone);
+	}
+
+	// Prune short selected bones (fingers, toes, tiny helpers): their skin
+	// vertices are reassigned to the nearest kept selected ancestor so the
+	// surviving capsule still covers the pruned geometry and mass stays honest.
+	HashSet<int> pruned;
+	if (select_by_weights && prune_bone_length > (real_t)0.0) {
+		for (const int bone : selected_bones) {
+			if (p_skeleton->get_bone_parent(bone) >= 0 && _bone_axis(p_skeleton, bone).length() < prune_bone_length) {
+				pruned.insert(bone);
+			}
+		}
+		// A pruned bone needs a kept selected ancestor to merge into; keep any
+		// that have none, repeating until stable since keeping one bone can
+		// provide the ancestor another pruned bone was missing.
+		bool changed = true;
+		while (changed) {
+			changed = false;
+			for (const int bone : selected_bones) {
+				if (!pruned.has(bone)) {
+					continue;
+				}
+				int ancestor = p_skeleton->get_bone_parent(bone);
+				bool has_target = false;
+				while (ancestor >= 0) {
+					if (selected_set.has(ancestor) && !pruned.has(ancestor)) {
+						has_target = true;
+						break;
+					}
+					ancestor = p_skeleton->get_bone_parent(ancestor);
+				}
+				if (!has_target) {
+					pruned.erase(bone);
+					changed = true;
+				}
+			}
+		}
+		PackedStringArray pruned_names;
+		for (const int bone : selected_bones) {
+			if (!pruned.has(bone)) {
+				continue;
+			}
+			int ancestor = p_skeleton->get_bone_parent(bone);
+			while (!selected_set.has(ancestor) || pruned.has(ancestor)) {
+				ancestor = p_skeleton->get_bone_parent(ancestor);
+			}
+			const LocalVector<Vector3> *source = weighted_vertices.getptr(bone);
+			LocalVector<Vector3> *target = weighted_vertices.getptr(ancestor);
+			for (uint32_t vertex = 0; vertex < source->size(); vertex++) {
+				target->push_back((*source)[vertex]);
+			}
+			pruned_names.append(p_skeleton->get_bone_name(bone));
+		}
+		if (!pruned_names.is_empty()) {
+			String shown = String(", ").join(pruned_names.slice(0, 8));
+			if (pruned_names.size() > 8) {
+				shown += vformat(", +%d more", pruned_names.size() - 8);
+			}
+			_warn(vformat("Box3D: ragdoll generator merged %d bones shorter than %.2f m into kept ancestors (%s); set prune_bone_length to 0 to disable.", pruned_names.size(), prune_bone_length, shown));
+		}
+	}
+
+	if (select_by_weights) {
+		// Selected bones with no selected ancestor get proximity-attached to the
+		// main assembly at build time. When such a bone's fitted capsule center
+		// sits inside another kept bone's capsule (Rigify shoulder/breast/pelvis
+		// sockets, importer neutral bones), a body of its own destabilizes the
+		// assembly; merge it into the containing capsule instead — the reference
+		// humanoid attaches limbs directly to the torso.
+		LocalVector<int> kept_bones;
+		HashSet<int> kept_set;
+		for (const int bone : selected_bones) {
+			if (!pruned.has(bone)) {
+				kept_bones.push_back(bone);
+				kept_set.insert(bone);
+			}
+		}
+		// Map every kept bone to its topmost kept ancestor (its component root).
+		HashMap<int, int> component_root;
+		for (const int bone : kept_bones) {
+			int root = bone;
+			int ancestor = p_skeleton->get_bone_parent(bone);
+			while (ancestor >= 0) {
+				if (kept_set.has(ancestor)) {
+					root = ancestor;
+				}
+				ancestor = p_skeleton->get_bone_parent(ancestor);
+			}
+			component_root[bone] = root;
+		}
+		// Preliminary capsule fits, for containment tests and component masses.
+		HashMap<int, Vector3> fit_origin;
+		HashMap<int, Vector3> fit_axis;
+		HashMap<int, real_t> fit_radius;
+		HashMap<int, real_t> component_mass;
+		for (const int bone : kept_bones) {
+			Vector3 axis;
+			real_t length = 0.0;
+			real_t radius = 0.0;
+			_fit_bone_capsule(p_skeleton, bone, weighted_vertices.getptr(bone), axis, length, radius);
+			fit_origin.insert(bone, p_skeleton->get_bone_global_rest(bone).origin);
+			fit_axis.insert(bone, axis.normalized() * length);
+			fit_radius.insert(bone, radius);
+			component_mass[component_root[bone]] += _capsule_mass(radius, MAX(length + radius * (real_t)2.0, radius * (real_t)2.1), 1.0);
+		}
+		// The heaviest component anchors the assembly; its root is exempt.
+		int primary_root = -1;
+		real_t primary_mass = 0.0;
+		for (const int bone : kept_bones) {
+			if (component_root[bone] == bone && component_mass[bone] > primary_mass) {
+				primary_mass = component_mass[bone];
+				primary_root = bone;
+			}
+		}
+		PackedStringArray socket_names;
+		for (const int bone : kept_bones) {
+			if (component_root[bone] != bone || bone == primary_root) {
+				continue;
+			}
+			const Vector3 center = fit_origin[bone] + fit_axis[bone] * (real_t)0.5;
+			int container = -1;
+			real_t container_distance = 0.0;
+			for (const int other : kept_bones) {
+				if (component_root[other] == bone) {
+					continue;
+				}
+				const Vector3 other_origin = fit_origin[other];
+				const Vector3 other_axis = fit_axis[other];
+				const real_t axis_length = other_axis.length();
+				Vector3 closest = other_origin;
+				if (axis_length > (real_t)CMP_EPSILON) {
+					const Vector3 dir = other_axis / axis_length;
+					closest = other_origin + dir * CLAMP((center - other_origin).dot(dir), (real_t)0.0, axis_length);
+				}
+				const real_t distance = center.distance_to(closest);
+				if (distance < fit_radius[other] && (container < 0 || distance < container_distance)) {
+					container = other;
+					container_distance = distance;
+				}
+			}
+			if (container < 0) {
+				continue;
+			}
+			pruned.insert(bone);
+			const LocalVector<Vector3> *source = weighted_vertices.getptr(bone);
+			LocalVector<Vector3> *target = weighted_vertices.getptr(container);
+			if (source != nullptr && target != nullptr) {
+				for (uint32_t vertex = 0; vertex < source->size(); vertex++) {
+					target->push_back((*source)[vertex]);
+				}
+			}
+			socket_names.append(p_skeleton->get_bone_name(bone));
+		}
+		if (!socket_names.is_empty()) {
+			String shown = String(", ").join(socket_names.slice(0, 8));
+			if (socket_names.size() > 8) {
+				shown += vformat(", +%d more", socket_names.size() - 8);
+			}
+			_warn(vformat("Box3D: ragdoll generator merged %d socket bones embedded in larger capsules (%s); limbs attach to the containing body instead.", socket_names.size(), shown));
+		}
+	}
+
+	HashMap<StringName, Dictionary> entries;
+	Dictionary chains;
+	for (const int bone : selected_bones) {
+		if (pruned.has(bone)) {
+			continue;
+		}
+		const LocalVector<Vector3> *vertices = weighted_vertices.getptr(bone);
 		const StringName bone_name = StringName(p_skeleton->get_bone_name(bone));
 		const Transform3D bone_rest = p_skeleton->get_bone_global_rest(bone);
 		const int parent = p_skeleton->get_bone_parent(bone);
 		const Basis reference_basis = parent >= 0 ? p_skeleton->get_bone_global_rest(parent).basis : bone_rest.basis;
 		Vector3 axis;
-		Vector<int> children = p_skeleton->get_bone_children(bone);
-		if (!children.is_empty()) {
-			real_t best_score = -Math::INF;
-			for (int child : children) {
-				const Vector3 candidate = p_skeleton->get_bone_global_rest(child).origin - bone_rest.origin;
-				const real_t candidate_length = candidate.length();
-				const real_t score = (candidate_length > CMP_EPSILON ? candidate.y / candidate_length : (real_t)0.0) * (real_t)10.0 + candidate_length;
-				if (score > best_score) {
-					best_score = score;
-					axis = candidate;
-				}
-			}
-		} else {
-			const int parent = p_skeleton->get_bone_parent(bone);
-			if (parent >= 0) {
-				axis = bone_rest.origin - p_skeleton->get_bone_global_rest(parent).origin;
-			}
-		}
-		if (axis.length() < minimum_bone_length) {
-			axis = Vector3(0, minimum_bone_length, 0);
-		}
-
-		const real_t length = MAX(axis.length(), minimum_bone_length);
+		real_t length = 0.0;
+		real_t radius = 0.0;
+		_fit_bone_capsule(p_skeleton, bone, vertices, axis, length, radius);
 		const Vector3 axis_dir = axis.normalized();
-		real_t radius = MAX(minimum_radius, length * fallback_radius_ratio);
-		if (vertices != nullptr && vertices->size() > 0) {
-			Vector<real_t> distances;
-			for (uint32_t i = 0; i < vertices->size(); i++) {
-				const Vector3 rel = (*vertices)[i] - bone_rest.origin;
-				const real_t projection = CLAMP(rel.dot(axis_dir), (real_t)0.0, length);
-				const Vector3 closest = bone_rest.origin + axis_dir * projection;
-				distances.append(((*vertices)[i] - closest).length());
-			}
-			distances.sort();
-			radius = CLAMP(distances[distances.size() / 2], minimum_radius, length * (real_t)0.45);
-		}
 		const real_t height = MAX(length + radius * (real_t)2.0, radius * (real_t)2.1);
 		const Vector3 center = bone_rest.origin + axis_dir * (length * (real_t)0.5);
 		const Transform3D capsule_world(_basis_from_y_axis(axis, reference_basis), center);
@@ -1327,6 +1655,21 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 	_apply_animation_limits(p_skeleton, p_animation_library, entries);
 	_clamp_adjacent_mass_ratios(p_skeleton, entries);
 
+	if (target_total_mass > (real_t)0.0) {
+		real_t natural_mass = 0.0;
+		for (const KeyValue<StringName, Dictionary> &kv : entries) {
+			const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(kv.value);
+			natural_mass += _capsule_mass(params.radius, params.height, params.density_scale);
+		}
+		if (natural_mass > (real_t)0.0) {
+			// Uniform density scaling preserves the clamped mass ratios.
+			const real_t mass_scale = target_total_mass / natural_mass;
+			for (KeyValue<StringName, Dictionary> &kv : entries) {
+				kv.value[SNAME("density_scale")] = _dict_real(kv.value, SNAME("density_scale"), 1.0) * mass_scale;
+			}
+		}
+	}
+
 	TypedArray<Dictionary> bones_array;
 	Array filter_pairs;
 	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
@@ -1340,6 +1683,11 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 	profile->set_bones(bones_array);
 	profile->set_filter_pairs(filter_pairs);
 	profile->set_bone_chains(chains);
+
+	const real_t total_mass = profile->estimate_total_mass();
+	if (total_mass < (real_t)10.0 || total_mass > (real_t)500.0) {
+		_warn(vformat("Box3D: ragdoll generator total mass %.1f kg is outside the plausible character band (10-500 kg); check the rig's import scale.", total_mass));
+	}
 	return profile;
 }
 

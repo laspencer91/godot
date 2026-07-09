@@ -181,6 +181,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	Transform3D _remap_twist_x_to_z(const Transform3D &p_frame) const;
 	void _body_state_changed(PhysicsDirectBodyState3D *p_state);
 	bool _build_in_space(RID p_space);
+	void _attach_disconnected_components(Skeleton3D *p_skeleton);
 	void _teardown_impl();
 
 #ifdef TOOLS_ENABLED
@@ -208,6 +209,7 @@ public:
 	bool is_built() const { return built; }
 	bool is_ragdoll_active() const { return ragdoll_active; }
 	RID get_bone_body(const StringName &p_bone) const;
+	StringName get_bone_joint_parent(const StringName &p_bone) const;
 	Transform3D get_bone_global_transform(const StringName &p_bone) const;
 	Vector3 get_bone_linear_velocity(const StringName &p_bone) const;
 	Vector3 get_center_of_mass_velocity() const;
@@ -230,6 +232,8 @@ class Box3DRagdollProfileGenerator : public RefCounted {
 	real_t vertex_weight_threshold = 0.5;
 	real_t animation_padding = Math::deg_to_rad((real_t)10.0);
 	real_t minimum_bone_length = 0.08;
+	real_t prune_bone_length = 0.06;
+	real_t target_total_mass = 0.0;
 	real_t minimum_radius = 0.04;
 	real_t fallback_radius_ratio = 0.2;
 	real_t maximum_adjacent_mass_ratio = 10.0;
@@ -237,6 +241,8 @@ class Box3DRagdollProfileGenerator : public RefCounted {
 	void _warn(const String &p_warning);
 	StringName _chain_for_bone(const String &p_bone) const;
 	int _track_bone_index(Skeleton3D *p_skeleton, const NodePath &p_path) const;
+	Vector3 _bone_axis(Skeleton3D *p_skeleton, int p_bone) const;
+	void _fit_bone_capsule(Skeleton3D *p_skeleton, int p_bone, const LocalVector<Vector3> *p_vertices, Vector3 &r_axis, real_t &r_length, real_t &r_radius) const;
 	void _collect_weighted_vertices(Skeleton3D *p_skeleton, MeshInstance3D *p_mesh_instance, HashMap<int, LocalVector<Vector3>> &r_vertices);
 	void _apply_animation_limits(Skeleton3D *p_skeleton, const Ref<AnimationLibrary> &p_animation_library, HashMap<StringName, Dictionary> &r_entries);
 	void _clamp_adjacent_mass_ratios(Skeleton3D *p_skeleton, HashMap<StringName, Dictionary> &r_entries);
@@ -251,6 +257,10 @@ public:
 	real_t get_animation_padding() const { return animation_padding; }
 	void set_minimum_bone_length(real_t p_length) { minimum_bone_length = MAX((real_t)0.001, p_length); }
 	real_t get_minimum_bone_length() const { return minimum_bone_length; }
+	void set_prune_bone_length(real_t p_length) { prune_bone_length = MAX((real_t)0.0, p_length); }
+	real_t get_prune_bone_length() const { return prune_bone_length; }
+	void set_target_total_mass(real_t p_mass) { target_total_mass = MAX((real_t)0.0, p_mass); }
+	real_t get_target_total_mass() const { return target_total_mass; }
 	void set_minimum_radius(real_t p_radius) { minimum_radius = MAX((real_t)0.001, p_radius); }
 	real_t get_minimum_radius() const { return minimum_radius; }
 	void set_fallback_radius_ratio(real_t p_ratio) { fallback_radius_ratio = MAX((real_t)0.01, p_ratio); }

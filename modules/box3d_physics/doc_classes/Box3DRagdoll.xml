@@ -45,6 +45,13 @@
 				Returns the current global transform of [param bone]'s generated body.
 			</description>
 		</method>
+		<method name="get_bone_joint_parent" qualifiers="const">
+			<return type="StringName" />
+			<param index="0" name="bone" type="StringName" />
+			<description>
+				Returns the name of the bone [param bone]'s joint connects to after [method build], or an empty name for roots. Bodies are jointed to the nearest ancestor bone that is simulated in the profile, so bones skipped by the profile (helpers, unweighted rig bones) do not split the ragdoll.
+			</description>
+		</method>
 		<method name="get_bone_linear_velocity" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="bone" type="StringName" />

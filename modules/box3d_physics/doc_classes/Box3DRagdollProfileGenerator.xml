@@ -68,6 +68,12 @@
 		<member name="minimum_radius" type="float" setter="set_minimum_radius" getter="get_minimum_radius" default="0.04">
 			Minimum generated capsule radius.
 		</member>
+		<member name="prune_bone_length" type="float" setter="set_prune_bone_length" getter="get_prune_bone_length" default="0.06">
+			Weighted bones whose rest-pose axis is shorter than this are not given bodies; their skin vertices are merged into the nearest kept ancestor's capsule fit instead. This collapses finger, toe, and helper chains into the hand/foot capsules. Set to [code]0.0[/code] to disable pruning. Only applies when generating from a skinned mesh.
+		</member>
+		<member name="target_total_mass" type="float" setter="set_target_total_mass" getter="get_target_total_mass" default="0.0">
+			When greater than zero, uniformly scales every generated bone's [code]density_scale[/code] so the profile's total mass equals this value. Mass ratios between bones are preserved. Set to [code]0.0[/code] to keep the mass derived from capsule volume.
+		</member>
 		<member name="vertex_weight_threshold" type="float" setter="set_vertex_weight_threshold" getter="get_vertex_weight_threshold" default="0.5">
 			Minimum skin weight for a mesh vertex to affect a bone's capsule fit.
 		</member>
