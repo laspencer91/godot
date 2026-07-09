@@ -6781,6 +6781,20 @@ void EditorNode::_load_open_scenes_from_config(Ref<ConfigFile> p_layout) {
 	save_editor_layout_delayed();
 
 	restoring_scenes = false;
+
+	// Deferred so it runs after the workspace phase-2 restore has filled the panes.
+	callable_mp(this, &EditorNode::_notify_restored_scene_current).call_deferred();
+}
+
+void EditorNode::_notify_restored_scene_current() {
+	// Only the notification tail of _set_main_scene_state — its auto-switch-screens
+	// block would re-select a legacy main screen, which the retired strip must not do,
+	// and its dock-scroll state was never captured during restore anyway.
+	changing_scene = false;
+	EditorDebuggerNode::get_singleton()->update_live_edit_root();
+	ScriptEditor::get_singleton()->set_scene_root_script(editor_data.get_scene_root_script(editor_data.get_edited_scene()));
+	editor_data.notify_edited_scene_changed();
+	emit_signal(SNAME("scene_changed"));
 }
 
 bool EditorNode::has_scenes_in_session() {

@@ -100,6 +100,7 @@ class AnimationPlayerEditor : public EditorDock {
 	Button *onion_toggle = nullptr;
 	MenuButton *onion_skinning = nullptr;
 	Button *pin = nullptr;
+	Label *bound_scene_label = nullptr;
 	SpinBox *frame = nullptr;
 	LineEdit *scale = nullptr;
 	LineEdit *name = nullptr;
@@ -208,6 +209,7 @@ class AnimationPlayerEditor : public EditorDock {
 	void _current_animation_changed(const StringName &p_name);
 	void _update_animation();
 	void _update_player();
+	void _update_bound_scene_label();
 	void _set_controls_disabled(bool p_disabled);
 	void _update_animation_list_icons();
 	void _update_name_dialog_library_dropdown();
@@ -250,6 +252,9 @@ protected:
 	void _notification(int p_what);
 	void _node_removed(Node *p_node);
 	void _find_player();
+	// Shared unbind: node removal, and cross-document stale bindings on scene switch
+	// (resident documents never fire node_removed for a tab change).
+	void _unbind_player();
 	static void _bind_methods();
 
 public:

@@ -113,6 +113,7 @@ public:
 	void make_visible();
 	void make_floating();
 	void close();
+	bool is_dock_open() const { return is_open; }
 
 	void set_title(const String &p_title);
 	String get_title() const { return title; }

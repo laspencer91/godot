@@ -695,6 +695,11 @@ private:
 
 	Dictionary _get_main_scene_state();
 	void _set_main_scene_state(Dictionary p_state, Node *p_for_scene);
+	// End-of-switch tail for the scene left current after session restore. Every
+	// _set_current_scene during restore skips _set_main_scene_state (gated on
+	// restoring_scenes), so without this the boot scene never emits scene_changed /
+	// notify_edited_scene_changed and changing_scene stays stuck true.
+	void _notify_restored_scene_current();
 
 	void _save_editor_layout();
 	void _load_editor_layout();

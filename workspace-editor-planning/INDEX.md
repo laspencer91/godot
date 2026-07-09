@@ -15,6 +15,8 @@ This package reconciles the per-goal plans into one buildable sequence. Each goa
 | **G3** | Per-pane contextual docks (scene-tree + inspector, resource-as-inspector-tab, script methods) | L→XL | [G3-contextual-docks.md](./G3-contextual-docks.md) |
 | **G4** | Bottom drawer slideout for file exploration with drag-drop into panes | M | [G4-bottom-drawer.md](./G4-bottom-drawer.md) |
 | **G5** | Faster scene/resource open and editor startup (investigation + optimization) | M–L | [G5-faster-load.md](./G5-faster-load.md) |
+| **G6** | Drag-a-tab-to-split compass overlay (landed) | M | [G6-drag-to-split.md](./G6-drag-to-split.md) |
+| **G7** | Contextual bottom docks: focus-bound binding contract (Animation first) | M | [G7-contextual-bottom-docks.md](./G7-contextual-bottom-docks.md) |
 
 ## Cross-cutting references
 

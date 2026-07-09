@@ -51,6 +51,7 @@
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
 #include "scene/animation/animation_tree.h"
+#include "scene/gui/label.h"
 #include "scene/gui/separator.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
@@ -62,11 +63,23 @@
 ///////////////////////////////////
 
 void AnimationPlayerEditor::_find_player() {
-	if (!is_visible() || player) {
+	if (!is_visible()) {
 		return;
 	}
 
 	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
+
+	// Workspace model: documents stay resident, so switching tabs never fires the
+	// node_removed that used to unbind the previous scene's player when that scene
+	// left the tree. Drop a binding that points outside the now-active scene, unless
+	// deliberately pinned (a pinned player survives tab switches).
+	if (player && !is_pinned() && (!edited_scene || (player != edited_scene && !edited_scene->is_ancestor_of(player)))) {
+		_unbind_player();
+	}
+
+	if (player) {
+		return;
+	}
 
 	if (!edited_scene) {
 		return;
@@ -83,23 +96,27 @@ void AnimationPlayerEditor::_find_player() {
 
 void AnimationPlayerEditor::_node_removed(Node *p_node) {
 	if (player && original_node == p_node) {
-		if (is_dummy) {
-			plugin->_clear_dummy_player();
-		}
-
-		player = nullptr;
-
-		set_process(false);
-
-		track_editor->set_animation(Ref<Animation>(), true);
-		track_editor->set_root(nullptr);
-		track_editor->show_select_node_warning(true);
-		_update_player();
-
-		_ensure_dummy_player();
-
-		pin->set_pressed(false);
+		_unbind_player();
 	}
+}
+
+void AnimationPlayerEditor::_unbind_player() {
+	if (is_dummy) {
+		plugin->_clear_dummy_player();
+	}
+
+	player = nullptr;
+
+	set_process(false);
+
+	track_editor->set_animation(Ref<Animation>(), true);
+	track_editor->set_root(nullptr);
+	track_editor->show_select_node_warning(true);
+	_update_player();
+
+	_ensure_dummy_player();
+
+	pin->set_pressed(false);
 }
 
 void AnimationPlayerEditor::_notification(int p_what) {
@@ -903,6 +920,8 @@ void AnimationPlayerEditor::ensure_visibility() {
 Dictionary AnimationPlayerEditor::get_state() const {
 	Dictionary d;
 
+	d["dock_open"] = is_dock_open();
+
 	if (!is_dummy) {
 		d["visible"] = is_visible_in_tree();
 		if (EditorNode::get_singleton()->get_edited_scene() && is_visible_in_tree() && player) {
@@ -916,6 +935,16 @@ Dictionary AnimationPlayerEditor::get_state() const {
 }
 
 void AnimationPlayerEditor::set_state(const Dictionary &p_state) {
+	// Workspace model: the dock's open/closed state follows each scene. Applied before
+	// the visibility early-out so a scene that left the dock closed also closes it.
+	if (p_state.has("dock_open")) {
+		if (bool(p_state["dock_open"])) {
+			open();
+		} else {
+			close();
+		}
+	}
+
 	if (!p_state.has("visible") || !p_state["visible"]) {
 		return;
 	}
@@ -1022,6 +1051,27 @@ void AnimationPlayerEditor::_update_animation() {
 	updating = false;
 }
 
+void AnimationPlayerEditor::_update_bound_scene_label() {
+	String scene_name;
+	if (player) {
+		EditorData &ed = EditorNode::get_singleton()->get_editor_data();
+		for (int i = 0; i < ed.get_edited_scene_count(); i++) {
+			Node *root = ed.get_edited_scene_root(i);
+			if (root && (root == player || root->is_ancestor_of(player))) {
+				scene_name = ed.get_scene_path(i).get_file();
+				if (scene_name.is_empty()) {
+					scene_name = root->get_name();
+				}
+				break;
+			}
+		}
+	}
+
+	bound_scene_label->set_text(scene_name);
+	bound_scene_label->set_tooltip_text(scene_name.is_empty() ? String() : vformat(TTR("Editing animation in scene \"%s\"."), scene_name));
+	bound_scene_label->set_visible(!scene_name.is_empty());
+}
+
 void AnimationPlayerEditor::_update_player() {
 	updating = true;
 
@@ -1030,6 +1080,7 @@ void AnimationPlayerEditor::_update_player() {
 	tool_anim->set_disabled(player == nullptr);
 	pin->set_disabled(player == nullptr);
 	_set_controls_disabled(player == nullptr);
+	_update_bound_scene_label();
 
 	if (!player) {
 		AnimationPlayerEditor::get_singleton()->get_track_editor()->update_keying();
@@ -2203,6 +2254,15 @@ AnimationPlayerEditor::AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plug
 	hb->add_child(onion_skinning);
 
 	hb->add_child(memnew(VSeparator));
+
+	// Which scene the timeline is bound to — a global bottom panel over multiple
+	// workspace panes is otherwise ambiguous.
+	bound_scene_label = memnew(Label);
+	bound_scene_label->set_focus_mode(FOCUS_NONE);
+	bound_scene_label->set_modulate(Color(1, 1, 1, 0.55));
+	bound_scene_label->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+	bound_scene_label->hide();
+	hb->add_child(bound_scene_label);
 
 	pin = memnew(Button);
 	pin->set_theme_type_variation(SceneStringName(FlatButton));
