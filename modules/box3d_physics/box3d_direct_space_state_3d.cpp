@@ -962,9 +962,11 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 	real_t safe_fraction = 1.0;
 	real_t unsafe_fraction = 1.0;
 	bool hit = false;
+	bool has_zero_radius_cast_shape = false;
 
 	if (!p_parameters.motion.is_zero_approx()) {
 		const b3Vec3 translation = to_box3d(p_parameters.motion);
+		const Vector3 motion_direction = p_parameters.motion.normalized();
 		for (uint32_t i = 0; i < p_body.slots.size(); i++) {
 			const Box3DBody3D::ShapeSlot &slot = p_body.slots[i];
 			if (slot.disabled || slot.shape == nullptr) {
@@ -976,6 +978,11 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 
 			QueryShape query_shape;
 			if (!_build_query_shape(slot.rid, transform * slot.xform, query_shape)) {
+				continue;
+			}
+
+			if (query_shape.proxy.radius <= 0.0f) {
+				has_zero_radius_cast_shape = true;
 				continue;
 			}
 
@@ -1009,6 +1016,40 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 				}
 				hit = true;
 				unsafe_fraction = MIN(unsafe_fraction, (real_t)cast.fraction);
+			}
+		}
+
+		if (has_zero_radius_cast_shape) {
+			auto has_blocking_contact = [&](real_t p_fraction) {
+				Transform3D cast_transform = transform;
+				cast_transform.origin += p_parameters.motion * p_fraction;
+
+				LocalVector<Box3DQueryContact> contacts;
+				collect_contacts(cast_transform, margin, contacts);
+				for (const Box3DQueryContact &contact : contacts) {
+					if (motion_direction.dot(contact.normal) < -CMP_EPSILON && contact.separation <= 0.0) {
+						return true;
+					}
+				}
+				return false;
+			};
+
+			if (has_blocking_contact(0.0)) {
+				hit = true;
+				unsafe_fraction = 0.0;
+			} else if (unsafe_fraction > CMP_EPSILON && has_blocking_contact(unsafe_fraction)) {
+				hit = true;
+				real_t low = 0.0;
+				real_t high = unsafe_fraction;
+				for (int i = 0; i < 12; i++) {
+					const real_t mid = (low + high) * (real_t)0.5;
+					if (has_blocking_contact(mid)) {
+						high = mid;
+					} else {
+						low = mid;
+					}
+				}
+				unsafe_fraction = MIN(unsafe_fraction, high);
 			}
 		}
 
