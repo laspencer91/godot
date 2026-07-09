@@ -3138,13 +3138,13 @@ void Node3DEditorViewport::_project_settings_changed() {
 	viewport->set_anisotropic_filtering_level(anisotropic_filtering_level);
 }
 
-static void override_label_colors(Control *p_control) {
+static void override_label_colors(Control *p_control, Control *p_theme_source) {
 	p_control->begin_bulk_theme_override();
-	p_control->add_theme_color_override(SceneStringName(font_color), p_control->get_theme_color(SNAME("font_dark_background_color"), EditorStringName(Editor)));
-	p_control->add_theme_color_override("font_hover_color", p_control->get_theme_color(SNAME("font_dark_background_hover_color"), EditorStringName(Editor)));
-	p_control->add_theme_color_override("font_focus_color", p_control->get_theme_color(SNAME("font_dark_background_focus_color"), EditorStringName(Editor)));
-	p_control->add_theme_color_override("font_pressed_color", p_control->get_theme_color(SNAME("font_dark_background_pressed_color"), EditorStringName(Editor)));
-	p_control->add_theme_color_override("font_hover_pressed_color", p_control->get_theme_color(SNAME("font_dark_background_hover_pressed_color"), EditorStringName(Editor)));
+	p_control->add_theme_color_override(SceneStringName(font_color), p_theme_source->get_theme_color(SNAME("font_dark_background_color"), EditorStringName(Editor)));
+	p_control->add_theme_color_override("font_hover_color", p_theme_source->get_theme_color(SNAME("font_dark_background_hover_color"), EditorStringName(Editor)));
+	p_control->add_theme_color_override("font_focus_color", p_theme_source->get_theme_color(SNAME("font_dark_background_focus_color"), EditorStringName(Editor)));
+	p_control->add_theme_color_override("font_pressed_color", p_theme_source->get_theme_color(SNAME("font_dark_background_pressed_color"), EditorStringName(Editor)));
+	p_control->add_theme_color_override("font_hover_pressed_color", p_theme_source->get_theme_color(SNAME("font_dark_background_hover_pressed_color"), EditorStringName(Editor)));
 	p_control->end_bulk_theme_override();
 }
 
@@ -3864,31 +3864,34 @@ void Node3DEditorViewport::_notification(int p_what) {
 
 			const Ref<StyleBox> &information_3d_stylebox = gui_base->get_theme_stylebox(SNAME("Information3dViewport"), EditorStringName(EditorStyles));
 
+			// Pane viewports are minted before they enter the editor's themed tree. Always
+			// resolve editor-only theme items from gui_base so an early theme notification
+			// cannot cache fallback values (notably black overlay text) as explicit overrides.
 			override_button_stylebox(view_display_menu, information_3d_stylebox);
-			override_label_colors(view_display_menu);
+			override_label_colors(view_display_menu, gui_base);
 			override_button_stylebox(translation_preview_button, information_3d_stylebox);
-			override_label_colors(translation_preview_button);
+			override_label_colors(translation_preview_button, gui_base);
 			override_button_stylebox(follow_mode, information_3d_stylebox);
-			override_label_colors(follow_mode);
+			override_label_colors(follow_mode, gui_base);
 			override_button_stylebox(preview_camera, information_3d_stylebox);
-			override_label_colors(preview_camera);
+			override_label_colors(preview_camera, gui_base);
 
-			frame_time_gradient->set_color(0, get_theme_color(SNAME("success_color_dark_background"), EditorStringName(Editor)));
-			frame_time_gradient->set_color(1, get_theme_color(SNAME("warning_color_dark_background"), EditorStringName(Editor)));
-			frame_time_gradient->set_color(2, get_theme_color(SNAME("error_color_dark_background"), EditorStringName(Editor)));
+			frame_time_gradient->set_color(0, gui_base->get_theme_color(SNAME("success_color_dark_background"), EditorStringName(Editor)));
+			frame_time_gradient->set_color(1, gui_base->get_theme_color(SNAME("warning_color_dark_background"), EditorStringName(Editor)));
+			frame_time_gradient->set_color(2, gui_base->get_theme_color(SNAME("error_color_dark_background"), EditorStringName(Editor)));
 
 			override_button_stylebox(pilot_camera, information_3d_stylebox);
-			override_label_colors(pilot_camera);
+			override_label_colors(pilot_camera, gui_base);
 
 			info_panel->add_theme_style_override(SceneStringName(panel), information_3d_stylebox);
-			override_label_colors(info_label);
+			override_label_colors(info_label, gui_base);
 			tooltip_panel->add_theme_style_override(CoreStringName(normal), information_3d_stylebox);
 
 			frame_time_panel->add_theme_style_override(SceneStringName(panel), information_3d_stylebox);
 			// Set a minimum width to prevent the width from changing all the time
 			// when numbers vary rapidly. This minimum width is set based on a
 			// GPU time of 999.99 ms in the current editor language.
-			const float min_width = get_theme_font(SNAME("main"), EditorStringName(EditorFonts))->get_string_size(vformat(TTR("GPU Time: %s ms"), 999.99)).x;
+			const float min_width = gui_base->get_theme_font(SNAME("main"), EditorStringName(EditorFonts))->get_string_size(vformat(TTR("GPU Time: %s ms"), 999.99)).x;
 			frame_time_panel->set_custom_minimum_size(Size2(min_width, 0) * EDSCALE);
 			frame_time_vbox->add_theme_constant_override("separation", Math::round(-1 * EDSCALE));
 
@@ -3899,22 +3902,22 @@ void Node3DEditorViewport::_notification(int p_what) {
 			ruler_label->add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0));
 			ruler_label->add_theme_constant_override("outline_size", 4 * EDSCALE);
 			ruler_label->add_theme_font_size_override(SceneStringName(font_size), 15 * EDSCALE);
-			ruler_label->add_theme_font_override(SceneStringName(font), get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
+			ruler_label->add_theme_font_override(SceneStringName(font), gui_base->get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
 
 			ruler_label_x->add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0));
 			ruler_label_x->add_theme_constant_override("outline_size", 4 * EDSCALE);
 			ruler_label_x->add_theme_font_size_override(SceneStringName(font_size), 15 * EDSCALE);
-			ruler_label_x->add_theme_font_override(SceneStringName(font), get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
+			ruler_label_x->add_theme_font_override(SceneStringName(font), gui_base->get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
 
 			ruler_label_y->add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0));
 			ruler_label_y->add_theme_constant_override("outline_size", 4 * EDSCALE);
 			ruler_label_y->add_theme_font_size_override(SceneStringName(font_size), 15 * EDSCALE);
-			ruler_label_y->add_theme_font_override(SceneStringName(font), get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
+			ruler_label_y->add_theme_font_override(SceneStringName(font), gui_base->get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
 
 			ruler_label_z->add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0));
 			ruler_label_z->add_theme_constant_override("outline_size", 4 * EDSCALE);
 			ruler_label_z->add_theme_font_size_override(SceneStringName(font_size), 15 * EDSCALE);
-			ruler_label_z->add_theme_font_override(SceneStringName(font), get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
+			ruler_label_z->add_theme_font_override(SceneStringName(font), gui_base->get_theme_font(SNAME("bold"), EditorStringName(EditorFonts)));
 		} break;
 
 		case NOTIFICATION_DRAG_END: {
