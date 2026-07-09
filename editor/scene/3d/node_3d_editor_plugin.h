@@ -933,6 +933,9 @@ private:
 	Ref<Environment> environment;
 	Ref<CameraAttributesPractical> camera_attributes;
 	Ref<ProceduralSkyMaterial> sky_material;
+	// Document world currently carrying the preview environment; also keeps that world
+	// alive across a document close until the next rebind clears it.
+	Ref<World3D> preview_env_bound_world;
 
 	bool sun_environ_updating = false;
 
@@ -960,6 +963,11 @@ private:
 	// resident, so switching tabs never fires the node_removed that would decrement a prior
 	// scene's light. Recounting on scene switch re-establishes truth for the active document.
 	void _recount_scene_lights_and_environments();
+	// The preview sun/environment nodes are parented to this singleton, which lives in the
+	// root-window world — a world no document viewport renders. Retarget their render state
+	// onto the active document's World3D (sun: instance_set_scenario, like the per-view
+	// grid/origin decorations; environment: applied directly on the World3D).
+	void _bind_preview_nodes_to_active_world();
 
 	void _preview_settings_changed();
 	void _sun_environ_settings_pressed();

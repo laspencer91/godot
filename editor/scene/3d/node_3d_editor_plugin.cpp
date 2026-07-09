@@ -10570,6 +10570,47 @@ void Node3DEditor::_update_preview_environment() {
 			preview_env_dangling = false;
 		}
 	}
+
+	_bind_preview_nodes_to_active_world();
+}
+
+void Node3DEditor::_bind_preview_nodes_to_active_world() {
+	Ref<World3D> target_world;
+	if (EditorNode::get_singleton()) {
+		EditorDocument *doc = EditorNode::get_singleton()->get_editor_data().get_active_document();
+		if (doc) {
+			target_world = doc->get_world_3d();
+		}
+	}
+
+	// The sun stays parented here (transform/param sync needs the tree); only its render
+	// instance is re-scenario'd. Re-applied on every update because add_child re-registers
+	// the instance into this node's own (root-window) scenario on ENTER_WORLD.
+	if (preview_sun->get_parent() && preview_sun->get_instance().is_valid()) {
+		RS::get_singleton()->instance_set_scenario(preview_sun->get_instance(), target_world.is_valid() ? target_world->get_scenario() : RID());
+	}
+
+	const bool env_active = preview_environment->get_parent() != nullptr;
+
+	if (preview_env_bound_world.is_valid() && (!env_active || preview_env_bound_world != target_world)) {
+		// Only clear what is still ours — a WorldEnvironment added to the scene may have
+		// already applied its own environment to this world in the same update.
+		if (preview_env_bound_world->get_environment() == environment) {
+			preview_env_bound_world->set_environment(Ref<Environment>());
+		}
+		if (camera_attributes.is_valid() && preview_env_bound_world->get_camera_attributes() == camera_attributes) {
+			preview_env_bound_world->set_camera_attributes(Ref<CameraAttributes>());
+		}
+		preview_env_bound_world = Ref<World3D>();
+	}
+
+	if (env_active && target_world.is_valid()) {
+		target_world->set_environment(environment);
+		if (camera_attributes.is_valid()) {
+			target_world->set_camera_attributes(camera_attributes);
+		}
+		preview_env_bound_world = target_world;
+	}
 }
 
 void Node3DEditor::_sun_direction_input(const Ref<InputEvent> &p_event) {
