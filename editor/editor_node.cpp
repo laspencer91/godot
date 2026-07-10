@@ -4810,7 +4810,9 @@ void EditorNode::set_edited_scene_root(Node *p_scene, bool p_auto_add) {
 		get_tree()->set_edited_scene_root(p_scene);
 	}
 
-	if (p_auto_add && p_scene) {
+	if (p_auto_add && p_scene && !p_scene->get_parent()) {
+		// EditorData::set_scene_root (called above through set_edited_scene_root) already
+		// parents the root under the document's viewport; only attach if it hasn't.
 		active_scene_root->add_child(p_scene, true);
 	}
 
@@ -4934,7 +4936,7 @@ void EditorNode::_set_current_scene(int p_idx) {
 void EditorNode::_set_current_scene_nocheck(int p_idx, bool p_ignore_state) {
 	// Save the folding in case the scene gets reloaded.
 	const String scene_path = editor_data.get_scene_path(p_idx);
-	if (scene_path.is_empty() && editor_data.get_edited_scene_root(p_idx)) {
+	if (!scene_path.is_empty() && editor_data.get_edited_scene_root(p_idx)) {
 		editor_folding.save_scene_folding(editor_data.get_edited_scene_root(p_idx), editor_data.get_scene_path(p_idx));
 	}
 
@@ -8517,7 +8519,7 @@ void EditorNode::_build_settings_menu(bool p_dark_mode) {
 
 	// G4: AssetLib is off the permanent main-screen strip — it opens on demand from here.
 	if (AssetLibraryEditorPlugin::is_available()) {
-		settings_menu->add_shortcut(ED_GET_SHORTCUT("editor/editor_assetlib"), EDITOR_OPEN_ASSET_LIBRARY);
+		settings_menu->add_shortcut(ED_GET_SHORTCUT("editor/editor_asset_store"), EDITOR_OPEN_ASSET_LIBRARY);
 	}
 	settings_menu->add_separator();
 

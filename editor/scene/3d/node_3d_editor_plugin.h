@@ -36,6 +36,7 @@
 #include "editor/scene/3d/node_3d_editor_gizmos.h"
 #include "scene/debugger/view_3d_controller.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/margin_container.h"
 #include "scene/gui/popup.h"
 
 class AcceptDialog;

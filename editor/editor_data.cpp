@@ -44,6 +44,7 @@
 #include "editor/inspector/multi_node_edit.h"
 #include "editor/plugins/editor_plugin.h"
 #include "scene/main/scene_tree.h"
+#include "scene/main/viewport.h"
 #include "scene/property_utils.h"
 #include "scene/resources/packed_scene.h"
 #include "scene/resources/shader.h"
@@ -731,12 +732,25 @@ void EditorData::set_scene_root(int p_idx, Node *p_root) {
 	ERR_FAIL_INDEX(p_idx, edited_scene.size());
 	EditedScene &scene_info = edited_scene.write[p_idx];
 
+	Node *old_root = scene_info.root;
 	scene_info.root = p_root;
 	// Mirror the root onto the document and classify it, so a DocumentView can route to the
 	// right per-pane editor surface (2D vs 3D).
 	if (EditorDocument *doc = scene_info.document) {
 		doc->set_root(p_root);
 		doc->set_type(EditorDocument::classify_scene_type(p_root));
+		// G1: a document owns its scene root for the document's lifetime — parent it into
+		// the document's isolated SubViewport as soon as it is assigned. Upstream instead
+		// attaches on tab switch under the shared scene_root, which the workspace model
+		// removed; without this, a loaded scene never enters the tree.
+		if (SubViewport *doc_viewport = doc->get_scene_root()) {
+			if (old_root && old_root != p_root && old_root->get_parent() == doc_viewport) {
+				doc_viewport->remove_child(old_root);
+			}
+			if (p_root && !p_root->get_parent()) {
+				doc_viewport->add_child(p_root, true);
+			}
+		}
 	}
 	if (p_root) {
 		if (p_root->is_instance()) {
