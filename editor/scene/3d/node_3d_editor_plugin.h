@@ -582,8 +582,10 @@ public:
 	DynamicBVH::ID insert_gizmo_bvh_node(Node3D *p_node, const AABB &p_aabb);
 	void update_gizmo_bvh_node(DynamicBVH::ID p_id, const AABB &p_aabb);
 	void remove_gizmo_bvh_node(DynamicBVH::ID p_id);
-	Vector<Node3D *> gizmo_bvh_ray_query(const Vector3 &p_ray_start, const Vector3 &p_ray_end);
-	Vector<Node3D *> gizmo_bvh_frustum_query(const Vector<Plane> &p_frustum);
+	// The gizmo BVH is shared by every open document; queries take the caller's World3D and
+	// only return nodes living in it, so consumers never see other documents' nodes.
+	Vector<Node3D *> gizmo_bvh_ray_query(const Vector3 &p_ray_start, const Vector3 &p_ray_end, const Ref<World3D> &p_world);
+	Vector<Node3D *> gizmo_bvh_frustum_query(const Vector<Plane> &p_frustum, const Ref<World3D> &p_world);
 
 	void edit(Node3D *p_spatial);
 	void clear();

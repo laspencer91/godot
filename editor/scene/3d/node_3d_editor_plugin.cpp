@@ -4415,30 +4415,38 @@ void Node3DEditor::remove_gizmo_bvh_node(DynamicBVH::ID p_id) {
 	gizmo_bvh.remove(p_id);
 }
 
-Vector<Node3D *> Node3DEditor::gizmo_bvh_ray_query(const Vector3 &p_ray_start, const Vector3 &p_ray_end) {
+Vector<Node3D *> Node3DEditor::gizmo_bvh_ray_query(const Vector3 &p_ray_start, const Vector3 &p_ray_end, const Ref<World3D> &p_world) {
 	struct Result {
 		Vector<Node3D *> nodes;
+		const Ref<World3D> &world;
 		bool operator()(void *p_data) {
-			nodes.append((Node3D *)p_data);
+			Node3D *node = (Node3D *)p_data;
+			if (node->is_inside_world() && node->get_world_3d() == world) {
+				nodes.append(node);
+			}
 			return false;
 		}
-	} result;
+	} result{ {}, p_world };
 
 	gizmo_bvh.ray_query(p_ray_start, p_ray_end, result);
 
 	return result.nodes;
 }
 
-Vector<Node3D *> Node3DEditor::gizmo_bvh_frustum_query(const Vector<Plane> &p_frustum) {
+Vector<Node3D *> Node3DEditor::gizmo_bvh_frustum_query(const Vector<Plane> &p_frustum, const Ref<World3D> &p_world) {
 	Vector<Vector3> points = Geometry3D::compute_convex_mesh_points(&p_frustum[0], p_frustum.size());
 
 	struct Result {
 		Vector<Node3D *> nodes;
+		const Ref<World3D> &world;
 		bool operator()(void *p_data) {
-			nodes.append((Node3D *)p_data);
+			Node3D *node = (Node3D *)p_data;
+			if (node->is_inside_world() && node->get_world_3d() == world) {
+				nodes.append(node);
+			}
 			return false;
 		}
-	} result;
+	} result{ {}, p_world };
 
 	gizmo_bvh.convex_query(p_frustum.ptr(), p_frustum.size(), points.ptr(), points.size(), result);
 

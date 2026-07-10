@@ -683,11 +683,13 @@ void Node3DEditorViewport::_select_clicked(bool p_allow_locked) {
 		return;
 	}
 
-	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
-
-	if (!edited_scene || (node != edited_scene && !edited_scene->is_ancestor_of(node))) {
+	// `clicked` may be stale (captured before a document/scene switch); a true result also
+	// guarantees `edited_scene` is non-null for the walks below.
+	if (!_is_node_in_edited_scene(selected)) {
 		return;
 	}
+
+	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
 
 	// Prevent selection of nodes not owned by the edited scene.
 	while (node && node != edited_scene->get_parent()) {
@@ -741,10 +743,6 @@ ObjectID Node3DEditorViewport::_select_ray(const Point2 &p_pos) const {
 	Vector3 ray = get_ray(p_pos);
 	Vector3 pos = get_ray_pos(p_pos);
 	Vector2 shrinked_pos = p_pos;
-	Node *edited_scene = get_tree()->get_edited_scene_root();
-	if (!edited_scene) {
-		return ObjectID();
-	}
 
 	if (viewport->get_debug_draw() == Viewport::DEBUG_DRAW_SDFGI_PROBES) {
 		RS::get_singleton()->sdfgi_set_debug_probe_select(pos, ray);
@@ -752,11 +750,12 @@ ObjectID Node3DEditorViewport::_select_ray(const Point2 &p_pos) const {
 
 	HashSet<Ref<EditorNode3DGizmo>> found_gizmos;
 
+	Node *edited_scene = get_tree()->get_edited_scene_root();
 	ObjectID closest;
 	Node *item = nullptr;
 	float closest_dist = 1e20;
 
-	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(pos, pos + ray * camera->get_far());
+	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(pos, pos + ray * camera->get_far(), viewport->find_world_3d());
 
 	for (Node3D *spat : nodes_with_gizmos) {
 		if (!_is_node_in_edited_scene(spat) || _is_node_locked(spat)) {
@@ -956,7 +955,7 @@ bool Node3DEditorViewport::_find_closest_vertex_in_scene(const Point2 &p_screen_
 
 	Point2 min_pos(p_screen_pos.x - p_threshold, p_screen_pos.y - p_threshold);
 	Point2 max_pos(p_screen_pos.x + p_threshold, p_screen_pos.y + p_threshold);
-	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_frustum_query(_build_screen_frustum(min_pos, max_pos));
+	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_frustum_query(_build_screen_frustum(min_pos, max_pos), viewport->find_world_3d());
 
 	bool use_collision = Node3DEditor::get_singleton()->is_vertex_snap_use_collision();
 
@@ -1048,7 +1047,7 @@ void Node3DEditorViewport::_vertex_snap_cancel() {
 bool Node3DEditorViewport::_is_vertex_occluded(const Vector3 &p_world_pos, const Vector2 &p_screen_pos) const {
 	Vector3 ray_pos = get_ray_pos(p_screen_pos);
 	float vertex_dist = ray_pos.distance_to(p_world_pos);
-	Vector<Node3D *> hits = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(ray_pos, ray_pos + get_ray(p_screen_pos) * camera->get_far());
+	Vector<Node3D *> hits = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(ray_pos, ray_pos + get_ray(p_screen_pos) * camera->get_far(), viewport->find_world_3d());
 	for (Node3D *spat : hits) {
 		if (!_is_node_in_edited_scene(spat)) {
 			continue;
@@ -1129,7 +1128,7 @@ void Node3DEditorViewport::_find_items_at_pos(const Point2 &p_pos, Vector<_RayRe
 	Vector3 ray = get_ray(p_pos);
 	Vector3 pos = get_ray_pos(p_pos);
 
-	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(pos, pos + ray * camera->get_far());
+	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(pos, pos + ray * camera->get_far(), viewport->find_world_3d());
 
 	HashSet<Node3D *> found_nodes;
 
@@ -1303,7 +1302,7 @@ void Node3DEditorViewport::_select_region() {
 		_clear_selected();
 	}
 
-	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_frustum_query(frustum);
+	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_frustum_query(frustum, viewport->find_world_3d());
 	HashSet<Node3D *> found_nodes;
 	Vector<Node *> selected;
 
@@ -1324,9 +1323,10 @@ void Node3DEditorViewport::_select_region() {
 
 		Node *node = Object::cast_to<Node>(sp);
 
-		// Selection requires that the node is the edited scene or its descendant, and has an owner.
+		// Selection requires an owner (being the edited scene or its descendant is
+		// already guaranteed by the filter above).
 		if (node != edited_scene) {
-			if (!node->get_owner() || !edited_scene->is_ancestor_of(node)) {
+			if (!node->get_owner()) {
 				continue;
 			}
 			node = edited_scene->get_deepest_editable_node(node);
@@ -1917,17 +1917,11 @@ bool Node3DEditorViewport::_is_node_locked(const Node *p_node) const {
 }
 
 bool Node3DEditorViewport::_is_node_in_edited_scene(const Node3D *p_node) const {
-	if (!p_node || !p_node->is_inside_world()) {
+	// World scoping is done by the gizmo BVH query wrappers; this applies the active-scene
+	// rule, including to stale `clicked` nodes, which reach selection without a BVH query.
+	if (!p_node) {
 		return false;
 	}
-
-	// The gizmo BVH is shared by every open document. Keep this viewport's queries inside its
-	// bound document world before applying the active-scene ownership rules.
-	Ref<World3D> view_world = viewport->find_world_3d();
-	if (view_world.is_null() || p_node->get_world_3d() != view_world) {
-		return false;
-	}
-
 	Node *edited_scene = get_tree()->get_edited_scene_root();
 	if (!edited_scene) {
 		return false;
@@ -4897,6 +4891,8 @@ void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
 	// world is a no-op (no churn). The camera cull mask is rewritten to see the new layer; the
 	// gizmo instances' layer masks are updated below alongside their scenario migration.
 	if (p_world != gizmo_layer_world) {
+		// A click captured against the previous document can no longer resolve meaningfully.
+		clicked = ObjectID();
 		if (gizmo_layer_world.is_valid()) {
 			spatial_editor->free_gizmo_layer(gizmo_layer_world, gizmo_layer);
 		}
