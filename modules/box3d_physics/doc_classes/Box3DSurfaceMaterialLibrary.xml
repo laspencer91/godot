@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DSurfaceMaterialLibrary" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Project-wide Box3D surface material library.
+	</brief_description>
+	<description>
+		[Box3DSurfaceMaterialLibrary] is loaded from the [code]physics/box3d/surface_material_library[/code] project setting and indexed by [Box3DPhysics].
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="materials" type="Array[Box3DSurfaceMaterial]" setter="set_materials" getter="get_materials">
+			Registered surface material resources.
+		</member>
+	</members>
+</class>

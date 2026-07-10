@@ -1,0 +1,33 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+Import("env")
+Import("env_modules")
+
+env_box3d = env_modules.Clone()
+
+thirdparty_dir = "#thirdparty/box3d/"
+env_box3d.Prepend(CPPPATH=[thirdparty_dir + "include"])
+
+# Thirdparty Box3D library (C17).
+env_thirdparty = env_box3d.Clone()
+env_thirdparty.disable_warnings()
+env_thirdparty.Prepend(CPPPATH=[thirdparty_dir + "src"])
+if env.msvc:
+    env_thirdparty.Append(CFLAGS=["/std:c17"])
+else:
+    env_thirdparty.Append(CFLAGS=["-std=c17"])
+
+thirdparty_obj = []
+env_thirdparty.add_source_files(thirdparty_obj, thirdparty_dir + "src/*.c")
+env.modules_sources += thirdparty_obj
+
+# Module sources.
+module_obj = []
+env_box3d.add_source_files(module_obj, "*.cpp")
+env_box3d.add_source_files(module_obj, "joints/*.cpp")
+if env.editor_build:
+    env_box3d.add_source_files(module_obj, "editor/*.cpp")
+env.modules_sources += module_obj
+
+env.Depends(module_obj, thirdparty_obj)

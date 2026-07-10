@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DPhysics" inherits="Object" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Box3D physics singleton.
+	</brief_description>
+	<description>
+		[Box3DPhysics] exposes Box3D-specific helpers, including the surface material registry and assignment/query methods. It is available as the [code]Box3DPhysics[/code] engine singleton.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="body_set_surface_material">
+			<return type="void" />
+			<param index="0" name="body" type="RID" />
+			<param index="1" name="shape_idx" type="int" />
+			<param index="2" name="material_id" type="int" />
+			<description>
+				Assigns a named surface material id to one body shape, or all shapes when [param shape_idx] is [code]-1[/code]. Passing [code]0[/code] clears the body-level override.
+			</description>
+		</method>
+		<method name="get_face_material" qualifiers="const">
+			<return type="Box3DSurfaceMaterial" />
+			<param index="0" name="shape" type="RID" />
+			<param index="1" name="face_index" type="int" />
+			<description>
+				Returns the baked surface material for [param face_index] on a shared mesh shape, or [code]null[/code] if none is assigned.
+			</description>
+		</method>
+		<method name="get_material" qualifiers="const">
+			<return type="Box3DSurfaceMaterial" />
+			<param index="0" name="id_or_name" type="Variant" />
+			<description>
+				Returns the material resource registered by integer id or [StringName], or [code]null[/code].
+			</description>
+		</method>
+		<method name="get_material_id" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Returns the registered id for [param name], or [code]0[/code].
+			</description>
+		</method>
+		<method name="get_material_name" qualifiers="const">
+			<return type="StringName" />
+			<param index="0" name="id" type="int" />
+			<description>
+				Returns the registered name for [param id], or an empty [StringName].
+			</description>
+		</method>
+		<method name="get_shape_mesh_material_indices" qualifiers="const">
+			<return type="PackedByteArray" />
+			<param index="0" name="shape" type="RID" />
+			<description>
+				Returns the material-index array baked into a mesh shape.
+			</description>
+		</method>
+		<method name="get_surface_material_library" qualifiers="const">
+			<return type="Box3DSurfaceMaterialLibrary" />
+			<description>
+				Returns the loaded project surface material library.
+			</description>
+		</method>
+		<method name="match_texture" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="texture_name" type="String" />
+			<description>
+				Returns the first registered material id whose texture pattern matches [param texture_name], or [code]0[/code].
+			</description>
+		</method>
+		<method name="reload_surface_material_library">
+			<return type="void" />
+			<description>
+				Reloads the library from [code]physics/box3d/surface_material_library[/code]. Existing shapes use updated values after reassignment or rebuild.
+			</description>
+		</method>
+		<method name="recording_get_size" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Returns the current native Box3D recording byte count for [param space], or [code]0[/code] when no recording buffer exists.
+			</description>
+		</method>
+		<method name="recording_is_active" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Returns whether [param space] is actively recording native Box3D operations.
+			</description>
+		</method>
+		<method name="recording_save" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="space" type="RID" />
+			<param index="1" name="path" type="String" />
+			<description>
+				Saves the last stopped native Box3D recording for [param space] to [param path]. Stop the recording before saving.
+			</description>
+		</method>
+		<method name="recording_start">
+			<return type="bool" />
+			<param index="0" name="space" type="RID" />
+			<param index="1" name="byte_capacity" type="int" default="0" />
+			<description>
+				Starts native Box3D recording for [param space]. [param byte_capacity] is an optional initial buffer size; [code]0[/code] uses Box3D's default.
+			</description>
+		</method>
+		<method name="recording_stop">
+			<return type="PackedByteArray" />
+			<param index="0" name="space" type="RID" />
+			<description>
+				Stops native Box3D recording for [param space] and returns the serialized bytes.
+			</description>
+		</method>
+		<method name="recording_validate" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="data" type="PackedByteArray" />
+			<param index="1" name="worker_count" type="int" default="1" />
+			<description>
+				Replays serialized native Box3D recording bytes and returns whether all embedded state hashes match. Pass [code]1[/code] to match the module's current serial stepping.
+			</description>
+		</method>
+		<method name="recording_validate_file" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="path" type="String" />
+			<param index="1" name="worker_count" type="int" default="1" />
+			<description>
+				Loads a native Box3D recording file and validates it with [method recording_validate].
+			</description>
+		</method>
+		<method name="shape_set_surface_map">
+			<return type="void" />
+			<param index="0" name="shape" type="RID" />
+			<param index="1" name="material_ids" type="PackedInt64Array" />
+			<param index="2" name="triangle_indices" type="PackedByteArray" />
+			<description>
+				Assigns a per-triangle material map to a shared mesh shape. [param triangle_indices] indexes [param material_ids].
+			</description>
+		</method>
+		<method name="shape_set_surface_material">
+			<return type="void" />
+			<param index="0" name="shape" type="RID" />
+			<param index="1" name="material_id" type="int" />
+			<description>
+				Assigns a base material id to a shared shape. Passing [code]0[/code] clears the shared-shape override.
+			</description>
+		</method>
+	</methods>
+</class>
