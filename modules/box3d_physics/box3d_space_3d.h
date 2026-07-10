@@ -69,6 +69,6 @@ public:
 	void area_added(Box3DArea3D *p_area) { areas.insert(p_area); }
 	void area_removed(Box3DArea3D *p_area);
 
-	void set_default_area_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value);
-	Variant get_default_area_param(PhysicsServer3D::AreaParameter p_param) const;
+	void set_default_area_param(PS3DE::AreaParameter p_param, const Variant &p_value);
+	Variant get_default_area_param(PS3DE::AreaParameter p_param) const;
 };

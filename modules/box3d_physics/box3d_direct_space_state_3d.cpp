@@ -21,7 +21,7 @@
 
 static constexpr uint64_t BOX3D_QUERY_FILTER_BIT = UINT64_C(1) << 63;
 
-static Dictionary _box3d_ray_result_to_dictionary(const PhysicsDirectSpaceState3D::RayResult &p_result) {
+static Dictionary _box3d_ray_result_to_dictionary(const PS3DT::RayResult &p_result) {
 	Dictionary d;
 	d["position"] = p_result.position;
 	d["normal"] = p_result.normal;
@@ -114,7 +114,7 @@ bool Box3DDirectSpaceState3D::_can_query_shape(b3ShapeId p_shape_id, const HashS
 	return true;
 }
 
-void Box3DDirectSpaceState3D::_fill_shape_result(b3ShapeId p_shape_id, ShapeResult &r_result) const {
+void Box3DDirectSpaceState3D::_fill_shape_result(b3ShapeId p_shape_id, PS3DT::ShapeResult &r_result) const {
 	Box3DCollisionObject3D *object = _get_object(p_shape_id);
 	ERR_FAIL_NULL(object);
 
@@ -124,7 +124,7 @@ void Box3DDirectSpaceState3D::_fill_shape_result(b3ShapeId p_shape_id, ShapeResu
 	r_result.shape = _get_shape_index(p_shape_id);
 }
 
-void Box3DDirectSpaceState3D::_fill_ray_result(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, int p_triangle_index, RayResult &r_result) const {
+void Box3DDirectSpaceState3D::_fill_ray_result(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, int p_triangle_index, PS3DT::RayResult &r_result) const {
 	Box3DCollisionObject3D *object = _get_object(p_shape_id);
 	ERR_FAIL_NULL(object);
 
@@ -154,7 +154,7 @@ bool Box3DDirectSpaceState3D::_build_query_shape(RID p_shape_rid, const Transfor
 	const float margin = MAX(0.0f, (float)p_margin);
 
 	switch (shape->type) {
-		case PhysicsServer3D::SHAPE_SPHERE: {
+		case PS3DE::SHAPE_SPHERE: {
 			r_query_shape.points.push_back(b3Vec3{ 0.0f, 0.0f, 0.0f });
 			r_query_shape.kind = QueryShape::KIND_SPHERE;
 			r_query_shape.sphere.center = b3Vec3{ 0.0f, 0.0f, 0.0f };
@@ -162,7 +162,7 @@ bool Box3DDirectSpaceState3D::_build_query_shape(RID p_shape_rid, const Transfor
 			r_query_shape.proxy.radius = shape->sphere_radius + margin;
 		} break;
 
-		case PhysicsServer3D::SHAPE_CAPSULE: {
+		case PS3DE::SHAPE_CAPSULE: {
 			const float half_cylinder = MAX(0.0f, 0.5f * shape->capsule_height - shape->capsule_radius);
 			r_query_shape.kind = QueryShape::KIND_CAPSULE;
 			r_query_shape.capsule.center1 = b3Vec3{ 0.0f, half_cylinder, 0.0f };
@@ -173,7 +173,7 @@ bool Box3DDirectSpaceState3D::_build_query_shape(RID p_shape_rid, const Transfor
 			r_query_shape.proxy.radius = shape->capsule_radius + margin;
 		} break;
 
-		case PhysicsServer3D::SHAPE_BOX: {
+		case PS3DE::SHAPE_BOX: {
 			ERR_FAIL_COND_V(!shape->box_built, false);
 			const b3Vec3 *points = b3GetHullPoints(&shape->box_hull.base);
 			ERR_FAIL_NULL_V(points, false);
@@ -185,8 +185,8 @@ bool Box3DDirectSpaceState3D::_build_query_shape(RID p_shape_rid, const Transfor
 			r_query_shape.proxy.radius = margin;
 		} break;
 
-		case PhysicsServer3D::SHAPE_CYLINDER:
-		case PhysicsServer3D::SHAPE_CONVEX_POLYGON: {
+		case PS3DE::SHAPE_CYLINDER:
+		case PS3DE::SHAPE_CONVEX_POLYGON: {
 			ERR_FAIL_NULL_V(shape->hull, false);
 			ERR_FAIL_COND_V(shape->hull->vertexCount > B3_MAX_SHAPE_CAST_POINTS, false);
 			const b3Vec3 *points = b3GetHullPoints(shape->hull);
@@ -211,8 +211,8 @@ bool Box3DDirectSpaceState3D::_build_query_shape(RID p_shape_rid, const Transfor
 
 struct Box3DRayContext {
 	const Box3DDirectSpaceState3D *state = nullptr;
-	const PhysicsDirectSpaceState3D::RayParameters *parameters = nullptr;
-	PhysicsDirectSpaceState3D::RayResult *result = nullptr;
+	const PS3DT::RayParameters *parameters = nullptr;
+	PS3DT::RayResult *result = nullptr;
 	uint64_t *user_material_id = nullptr;
 	bool hit = false;
 };
@@ -231,7 +231,7 @@ static float _ray_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal,
 	return p_fraction;
 }
 
-bool Box3DDirectSpaceState3D::_intersect_ray_internal(const RayParameters &p_parameters, RayResult &r_result, uint64_t *r_user_material_id) const {
+bool Box3DDirectSpaceState3D::_intersect_ray_internal(const PS3DT::RayParameters &p_parameters, PS3DT::RayResult &r_result, uint64_t *r_user_material_id) const {
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "intersect_ray must not be called while the physics space is being stepped.");
 	if (p_parameters.hit_from_inside || p_parameters.hit_back_faces || p_parameters.pick_ray) {
@@ -251,7 +251,7 @@ bool Box3DDirectSpaceState3D::_intersect_ray_internal(const RayParameters &p_par
 Dictionary Box3DDirectSpaceState3D::intersect_ray_ex(const Ref<PhysicsRayQueryParameters3D> &p_ray_query) const {
 	ERR_FAIL_COND_V(p_ray_query.is_null(), Dictionary());
 
-	RayResult result;
+	PS3DT::RayResult result;
 	uint64_t user_material_id = 0;
 	if (!_intersect_ray_internal(p_ray_query->get_parameters(), result, &user_material_id)) {
 		return Dictionary();
@@ -262,14 +262,14 @@ Dictionary Box3DDirectSpaceState3D::intersect_ray_ex(const Ref<PhysicsRayQueryPa
 	return d;
 }
 
-bool Box3DDirectSpaceState3D::intersect_ray(const RayParameters &p_parameters, RayResult &r_result) {
+bool Box3DDirectSpaceState3D::intersect_ray(const PS3DT::RayParameters &p_parameters, PS3DT::RayResult &r_result) {
 	return _intersect_ray_internal(p_parameters, r_result);
 }
 
 struct Box3DOverlapContext {
 	const Box3DDirectSpaceState3D *state = nullptr;
 	const HashSet<RID> *exclude = nullptr;
-	PhysicsDirectSpaceState3D::ShapeResult *results = nullptr;
+	PS3DT::ShapeResult *results = nullptr;
 	int result_count = 0;
 	int result_max = 0;
 	bool collide_with_bodies = true;
@@ -288,7 +288,7 @@ static bool _overlap_callback(b3ShapeId p_shape_id, void *p_context) {
 	return ctx->result_count < ctx->result_max;
 }
 
-int Box3DDirectSpaceState3D::intersect_point(const PointParameters &p_parameters, ShapeResult *r_results, int p_result_max) {
+int Box3DDirectSpaceState3D::intersect_point(const PS3DT::PointParameters &p_parameters, PS3DT::ShapeResult *r_results, int p_result_max) {
 	ERR_FAIL_NULL_V(space, 0);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), 0, "intersect_point must not be called while the physics space is being stepped.");
 	if (p_result_max <= 0) {
@@ -313,7 +313,7 @@ int Box3DDirectSpaceState3D::intersect_point(const PointParameters &p_parameters
 	return ctx.result_count;
 }
 
-int Box3DDirectSpaceState3D::intersect_shape(const ShapeParameters &p_parameters, ShapeResult *r_results, int p_result_max) {
+int Box3DDirectSpaceState3D::intersect_shape(const PS3DT::ShapeParameters &p_parameters, PS3DT::ShapeResult *r_results, int p_result_max) {
 	ERR_FAIL_NULL_V(space, 0);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), 0, "intersect_shape must not be called while the physics space is being stepped.");
 	if (p_result_max <= 0) {
@@ -338,8 +338,8 @@ int Box3DDirectSpaceState3D::intersect_shape(const ShapeParameters &p_parameters
 
 struct Box3DCastContext {
 	const Box3DDirectSpaceState3D *state = nullptr;
-	const PhysicsDirectSpaceState3D::ShapeParameters *parameters = nullptr;
-	PhysicsDirectSpaceState3D::ShapeRestInfo *rest_info = nullptr;
+	const PS3DT::ShapeParameters *parameters = nullptr;
+	PS3DT::ShapeRestInfo *rest_info = nullptr;
 	float fraction = 1.0f;
 	bool hit = false;
 };
@@ -367,7 +367,7 @@ static float _shape_cast_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_
 	return p_fraction;
 }
 
-bool Box3DDirectSpaceState3D::cast_motion(const ShapeParameters &p_parameters, real_t &p_closest_safe, real_t &p_closest_unsafe, ShapeRestInfo *r_info) {
+bool Box3DDirectSpaceState3D::cast_motion(const PS3DT::ShapeParameters &p_parameters, real_t &p_closest_safe, real_t &p_closest_unsafe, PS3DT::ShapeRestInfo *r_info) {
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "cast_motion must not be called while the physics space is being stepped.");
 
@@ -375,7 +375,7 @@ bool Box3DDirectSpaceState3D::cast_motion(const ShapeParameters &p_parameters, r
 	ERR_FAIL_COND_V(!_build_query_shape(p_parameters.shape_rid, p_parameters.transform, query_shape), false);
 	_warn_ignored_shape_margin(p_parameters.margin);
 
-	ShapeResult overlap_result;
+	PS3DT::ShapeResult overlap_result;
 	if (intersect_shape(p_parameters, &overlap_result, 1) > 0) {
 		if (r_info) {
 			rest_info(p_parameters, r_info);
@@ -419,7 +419,7 @@ struct Box3DQueryContact {
 
 struct Box3DContactContext {
 	const Box3DDirectSpaceState3D *state = nullptr;
-	const PhysicsDirectSpaceState3D::ShapeParameters *parameters = nullptr;
+	const PS3DT::ShapeParameters *parameters = nullptr;
 	const Box3DDirectSpaceState3D::QueryShape *query_shape = nullptr;
 	const Box3DBody3D *motion_body = nullptr;
 	const HashSet<ObjectID> *exclude_objects = nullptr;
@@ -746,7 +746,7 @@ static bool _contact_callback(b3ShapeId p_shape_id, void *p_context) {
 	return ctx->collect_all || ctx->contacts.size() < (uint32_t)ctx->result_max;
 }
 
-bool Box3DDirectSpaceState3D::collide_shape(const ShapeParameters &p_parameters, Vector3 *r_results, int p_result_max, int &r_result_count) {
+bool Box3DDirectSpaceState3D::collide_shape(const PS3DT::ShapeParameters &p_parameters, Vector3 *r_results, int p_result_max, int &r_result_count) {
 	r_result_count = 0;
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "collide_shape must not be called while the physics space is being stepped.");
@@ -778,7 +778,7 @@ bool Box3DDirectSpaceState3D::collide_shape(const ShapeParameters &p_parameters,
 	return true;
 }
 
-bool Box3DDirectSpaceState3D::rest_info(const ShapeParameters &p_parameters, ShapeRestInfo *r_info) {
+bool Box3DDirectSpaceState3D::rest_info(const PS3DT::ShapeParameters &p_parameters, PS3DT::ShapeRestInfo *r_info) {
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_NULL_V(r_info, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "rest_info must not be called while the physics space is being stepped.");
@@ -862,19 +862,19 @@ static bool _motion_candidate_callback(b3ShapeId p_shape_id, void *p_context) {
 	return true;
 }
 
-bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const PhysicsServer3D::MotionParameters &p_parameters, PhysicsServer3D::MotionResult *r_result) const {
+bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const PS3DT::MotionParameters &p_parameters, PS3DT::MotionResult *r_result) const {
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "body_test_motion (maybe from move_and_slide?) must not be called while the physics space is being stepped.");
 	ERR_FAIL_COND_V(!p_body.in_space(), false);
 	ERR_FAIL_COND_V(p_parameters.max_collisions < 0, false);
 
 	if (r_result != nullptr) {
-		*r_result = PhysicsServer3D::MotionResult();
+		*r_result = PS3DT::MotionResult();
 	}
 
 	const real_t margin = MAX((real_t)0.0001, p_parameters.margin);
 	const real_t min_contact_depth = margin * (real_t)0.05;
-	const int max_collisions = MIN(p_parameters.max_collisions, PhysicsServer3D::MotionResult::MAX_COLLISIONS);
+	const int max_collisions = MIN(p_parameters.max_collisions, PS3DT::MotionResult::MAX_COLLISIONS);
 
 	HashSet<RID> excluded_bodies;
 	for (const RID &excluded : p_parameters.exclude_bodies) {
@@ -891,16 +891,16 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			if (slot.disabled || slot.shape == nullptr) {
 				continue;
 			}
-			if (slot.shape->type == PhysicsServer3D::SHAPE_SEPARATION_RAY) {
+			if (slot.shape->type == PS3DE::SHAPE_SEPARATION_RAY) {
 				WARN_PRINT_ONCE("Box3D: body_test_motion collide_separation_ray is not implemented; separation ray shapes are skipped.");
 				continue;
 			}
-			if (slot.shape->type == PhysicsServer3D::SHAPE_CONCAVE_POLYGON || slot.shape->type == PhysicsServer3D::SHAPE_HEIGHTMAP || slot.shape->type == PhysicsServer3D::SHAPE_WORLD_BOUNDARY) {
+			if (slot.shape->type == PS3DE::SHAPE_CONCAVE_POLYGON || slot.shape->type == PS3DE::SHAPE_HEIGHTMAP || slot.shape->type == PS3DE::SHAPE_WORLD_BOUNDARY) {
 				WARN_PRINT_ONCE("Box3D: body_test_motion only supports convex moving body shapes; skipping non-convex body shape.");
 				continue;
 			}
 
-			ShapeParameters shape_parameters;
+			PS3DT::ShapeParameters shape_parameters;
 			shape_parameters.shape_rid = slot.rid;
 			shape_parameters.transform = p_body_transform * slot.xform;
 			shape_parameters.margin = p_contact_margin;
@@ -972,7 +972,7 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			if (slot.disabled || slot.shape == nullptr) {
 				continue;
 			}
-			if (slot.shape->type == PhysicsServer3D::SHAPE_SEPARATION_RAY || slot.shape->type == PhysicsServer3D::SHAPE_CONCAVE_POLYGON || slot.shape->type == PhysicsServer3D::SHAPE_HEIGHTMAP || slot.shape->type == PhysicsServer3D::SHAPE_WORLD_BOUNDARY) {
+			if (slot.shape->type == PS3DE::SHAPE_SEPARATION_RAY || slot.shape->type == PS3DE::SHAPE_CONCAVE_POLYGON || slot.shape->type == PS3DE::SHAPE_HEIGHTMAP || slot.shape->type == PS3DE::SHAPE_WORLD_BOUNDARY) {
 				continue;
 			}
 
@@ -1099,7 +1099,7 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			const Box3DQueryContact contact = collision_contacts[best];
 			collision_contacts.remove_at(best);
 
-			PhysicsServer3D::MotionCollision &collision = r_result->collisions[collision_count++];
+			PS3DT::MotionCollision &collision = r_result->collisions[collision_count++];
 			collision.position = contact.collider_point;
 			collision.normal = contact.normal;
 			collision.collider_velocity = contact.linear_velocity;

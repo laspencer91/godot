@@ -446,13 +446,13 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 	for (int i = 0; i < STEP_CHECK_COUNT; i++) {
 		Vector3 current_step_height = up_direction * (step_height - (step_height / STEP_CHECK_COUNT) * i);
 
-		PhysicsServer3D::MotionParameters params;
-		PhysicsServer3D::MotionResult result;
+		PS3DT::MotionParameters params;
+		PS3DT::MotionResult result;
 
 		// Step 1: Test moving UP
 		Transform3D test_transform = start_transform;
 		if (!up_path_clear) {
-			params = PhysicsServer3D::MotionParameters(test_transform, current_step_height, margin);
+			params = PS3DT::MotionParameters(test_transform, current_step_height, margin);
 			params.recovery_as_collision = true;
 
 			bool hit_ceiling = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);
@@ -471,7 +471,7 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 		test_transform.origin += current_step_height;
 
 		// Step 2: Test moving FORWARD
-		params = PhysicsServer3D::MotionParameters(test_transform, forward_motion, margin);
+		params = PS3DT::MotionParameters(test_transform, forward_motion, margin);
 		params.recovery_as_collision = true;
 
 		bool hit_wall_forward = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);
@@ -481,7 +481,7 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 			test_transform.origin += forward_motion;
 
 			// Step 3: Test moving DOWN
-			params = PhysicsServer3D::MotionParameters(test_transform, -current_step_height, margin);
+			params = PS3DT::MotionParameters(test_transform, -current_step_height, margin);
 			params.recovery_as_collision = true;
 
 			bool hit_ground = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);
@@ -517,7 +517,7 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 					test_transform.origin += wall_normal_fwd * WALL_MARGIN;
 					Vector3 slide_motion = forward_motion.slide(wall_normal_fwd);
 
-					params = PhysicsServer3D::MotionParameters(test_transform, slide_motion, margin);
+					params = PS3DT::MotionParameters(test_transform, slide_motion, margin);
 					params.recovery_as_collision = true;
 
 					bool hit_after_slide = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);
@@ -526,7 +526,7 @@ bool CharacterBody3D::_try_step_up(const Vector3 &p_remainder) {
 						// Sliding worked - test moving down
 						test_transform.origin += slide_motion;
 
-						params = PhysicsServer3D::MotionParameters(test_transform, -current_step_height, margin);
+						params = PS3DT::MotionParameters(test_transform, -current_step_height, margin);
 						params.recovery_as_collision = true;
 
 						bool hit_ground = PhysicsServer3D::get_singleton()->body_test_motion(get_rid(), params, &result);

@@ -46,7 +46,7 @@ private:
 	LocalVector<b3MeshData *> instance_meshes;
 	LocalVector<ShapeSlot> slots;
 
-	PhysicsServer3D::BodyMode mode = PhysicsServer3D::BODY_MODE_RIGID;
+	PS3DE::BodyMode mode = PS3DE::BODY_MODE_RIGID;
 	Transform3D transform;
 	Vector3 linear_velocity_cache;
 	Vector3 angular_velocity_cache;
@@ -68,8 +68,8 @@ private:
 	Vector3 constant_torque;
 	real_t linear_damp = 0.0;
 	real_t angular_damp = 0.0;
-	PhysicsServer3D::BodyDampMode linear_damp_mode = PhysicsServer3D::BODY_DAMP_MODE_COMBINE;
-	PhysicsServer3D::BodyDampMode angular_damp_mode = PhysicsServer3D::BODY_DAMP_MODE_COMBINE;
+	PS3DE::BodyDampMode linear_damp_mode = PS3DE::BODY_DAMP_MODE_COMBINE;
+	PS3DE::BodyDampMode angular_damp_mode = PS3DE::BODY_DAMP_MODE_COMBINE;
 	bool omit_force_integration = false;
 	real_t total_linear_damp = 0.0;
 	real_t total_angular_damp = 0.0;
@@ -132,8 +132,8 @@ public:
 	void set_space(Box3DSpace3D *p_space);
 	virtual Box3DSpace3D *get_space() const override { return space; }
 
-	void set_mode(PhysicsServer3D::BodyMode p_mode);
-	PhysicsServer3D::BodyMode get_mode() const { return mode; }
+	void set_mode(PS3DE::BodyMode p_mode);
+	PS3DE::BodyMode get_mode() const { return mode; }
 
 	// Shape list management (server-facing).
 	void add_shape(RID p_shape_rid, Box3DShape3D *p_shape, const Transform3D &p_xform, bool p_disabled);
@@ -148,7 +148,7 @@ public:
 	const ShapeSlot *get_shape_slot(int p_index) const;
 	virtual void shapes_changed() override; // Rebuild all b3 shapes (shape data edited, filters changed, ...).
 
-	void set_transform(const Transform3D &p_transform); // Godot BODY_STATE_TRANSFORM semantics per mode.
+	void set_transform(const Transform3D &p_transform); // Godot PS3DE::BODY_STATE_TRANSFORM semantics per mode.
 	Transform3D get_transform() const { return transform; }
 
 	void set_linear_velocity(const Vector3 &p_velocity);
@@ -161,8 +161,8 @@ public:
 	void set_can_sleep(bool p_can_sleep);
 	bool get_can_sleep() const { return can_sleep; }
 
-	void set_param(PhysicsServer3D::BodyParameter p_param, const Variant &p_value);
-	Variant get_param(PhysicsServer3D::BodyParameter p_param) const;
+	void set_param(PS3DE::BodyParameter p_param, const Variant &p_value);
+	Variant get_param(PS3DE::BodyParameter p_param) const;
 
 	void set_collision_layer(uint32_t p_layer);
 	uint32_t get_collision_layer() const { return collision_layer; }

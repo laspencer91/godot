@@ -1586,7 +1586,7 @@ void GDScriptAnalyzer::resolve_class_body(GDScriptParser::ClassNode *p_class, co
 void GDScriptAnalyzer::check_trait_implementations(GDScriptParser::ClassNode *p_class) {
 	const String class_name = p_class->identifier == nullptr ? p_class->fqcn.get_file() : String(p_class->identifier->name);
 
-	GDScriptParser::DataType self_type = p_class->get_datatype();
+	GDScriptParser::DataType self_type = p_class->self_type;
 	self_type.is_meta_type = false;
 
 	for (GDScriptParser::TypeNode *trait_type_node : p_class->implemented_traits) {
@@ -6622,7 +6622,7 @@ bool GDScriptAnalyzer::check_type_compatibility(const GDScriptParser::DataType &
 				// A class is compatible with a trait it (or a base class) implements.
 				if (p_target.class_type->is_trait) {
 					for (const GDScriptParser::TypeNode *trait_type_node : src_class->implemented_traits) {
-						const GDScriptParser::DataType impl_trait = trait_type_node->get_datatype();
+						const GDScriptParser::DataType impl_trait = trait_type_node->resolved_type;
 						if (impl_trait.kind == GDScriptParser::DataType::CLASS && impl_trait.class_type != nullptr &&
 								(impl_trait.class_type == p_target.class_type || impl_trait.class_type->fqcn == p_target.class_type->fqcn)) {
 							return true;

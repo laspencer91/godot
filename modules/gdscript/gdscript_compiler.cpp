@@ -3026,7 +3026,7 @@ Error GDScriptCompiler::_compile_class(GDScript *p_script, const GDScriptParser:
 	p_script->implemented_traits.clear();
 	for (GDScriptParser::TypeNode *trait_node : p_class->implemented_traits) {
 		// `p_lower_traits = false` keeps the real trait script type instead of lowering it to untyped.
-		GDScriptDataType trait_type = _gdtype_from_datatype(trait_node->get_datatype(), p_script, false, false);
+		GDScriptDataType trait_type = _gdtype_from_datatype(trait_node->resolved_type, p_script, false, false);
 		if (trait_type.kind == GDScriptDataType::GDSCRIPT || trait_type.kind == GDScriptDataType::SCRIPT) {
 			Ref<GDScript> trait_script = Object::cast_to<GDScript>(trait_type.script_type);
 			if (trait_script.is_valid()) {

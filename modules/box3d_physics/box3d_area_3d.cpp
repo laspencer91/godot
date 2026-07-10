@@ -144,13 +144,13 @@ void Box3DArea3D::_build_all_shapes() {
 		const b3Vec3 unit_scale = b3Vec3{ 1.0f, 1.0f, 1.0f };
 
 		switch (s->type) {
-			case PhysicsServer3D::SHAPE_SPHERE: {
+			case PS3DE::SHAPE_SPHERE: {
 				b3Sphere sphere;
 				sphere.center = to_box3d(slot.xform.origin);
 				sphere.radius = s->sphere_radius;
 				shape_id = b3CreateSphereShape(body_id, &def, &sphere);
 			} break;
-			case PhysicsServer3D::SHAPE_CAPSULE: {
+			case PS3DE::SHAPE_CAPSULE: {
 				const float half_cylinder = MAX(0.0f, 0.5f * s->capsule_height - s->capsule_radius);
 				b3Capsule capsule;
 				capsule.center1 = to_box3d(slot.xform.xform(Vector3(0, half_cylinder, 0)));
@@ -158,19 +158,19 @@ void Box3DArea3D::_build_all_shapes() {
 				capsule.radius = s->capsule_radius;
 				shape_id = b3CreateCapsuleShape(body_id, &def, &capsule);
 			} break;
-			case PhysicsServer3D::SHAPE_BOX: {
+			case PS3DE::SHAPE_BOX: {
 				if (s->box_built) {
 					shape_id = b3CreateTransformedHullShape(body_id, &def, &s->box_hull.base, to_box3d(slot.xform), unit_scale);
 				}
 			} break;
-			case PhysicsServer3D::SHAPE_CYLINDER:
-			case PhysicsServer3D::SHAPE_CONVEX_POLYGON: {
+			case PS3DE::SHAPE_CYLINDER:
+			case PS3DE::SHAPE_CONVEX_POLYGON: {
 				if (s->hull) {
 					shape_id = b3CreateTransformedHullShape(body_id, &def, s->hull, to_box3d(slot.xform), unit_scale);
 				}
 			} break;
-			case PhysicsServer3D::SHAPE_CONCAVE_POLYGON:
-			case PhysicsServer3D::SHAPE_HEIGHTMAP: {
+			case PS3DE::SHAPE_CONCAVE_POLYGON:
+			case PS3DE::SHAPE_HEIGHTMAP: {
 				if (s->mesh) {
 					b3MeshData *mesh = s->mesh;
 					if (!slot.xform.is_equal_approx(Transform3D())) {
@@ -300,82 +300,82 @@ void Box3DArea3D::set_monitorable(bool p_monitorable) {
 	monitorable = p_monitorable;
 }
 
-void Box3DArea3D::set_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value) {
+void Box3DArea3D::set_param(PS3DE::AreaParameter p_param, const Variant &p_value) {
 	switch (p_param) {
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_OVERRIDE_MODE:
-			gravity_override_mode = (PhysicsServer3D::AreaSpaceOverrideMode)(int)p_value;
+		case PS3DE::AREA_PARAM_GRAVITY_OVERRIDE_MODE:
+			gravity_override_mode = (PS3DE::AreaSpaceOverrideMode)(int)p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY:
+		case PS3DE::AREA_PARAM_GRAVITY:
 			gravity = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_VECTOR:
+		case PS3DE::AREA_PARAM_GRAVITY_VECTOR:
 			gravity_vector = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_IS_POINT:
+		case PS3DE::AREA_PARAM_GRAVITY_IS_POINT:
 			gravity_is_point = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_POINT_UNIT_DISTANCE:
+		case PS3DE::AREA_PARAM_GRAVITY_POINT_UNIT_DISTANCE:
 			gravity_point_unit_distance = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_LINEAR_DAMP_OVERRIDE_MODE:
-			linear_damp_override_mode = (PhysicsServer3D::AreaSpaceOverrideMode)(int)p_value;
+		case PS3DE::AREA_PARAM_LINEAR_DAMP_OVERRIDE_MODE:
+			linear_damp_override_mode = (PS3DE::AreaSpaceOverrideMode)(int)p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_LINEAR_DAMP:
+		case PS3DE::AREA_PARAM_LINEAR_DAMP:
 			linear_damp = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_ANGULAR_DAMP_OVERRIDE_MODE:
-			angular_damp_override_mode = (PhysicsServer3D::AreaSpaceOverrideMode)(int)p_value;
+		case PS3DE::AREA_PARAM_ANGULAR_DAMP_OVERRIDE_MODE:
+			angular_damp_override_mode = (PS3DE::AreaSpaceOverrideMode)(int)p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_ANGULAR_DAMP:
+		case PS3DE::AREA_PARAM_ANGULAR_DAMP:
 			angular_damp = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_PRIORITY:
+		case PS3DE::AREA_PARAM_PRIORITY:
 			priority = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_WIND_FORCE_MAGNITUDE:
+		case PS3DE::AREA_PARAM_WIND_FORCE_MAGNITUDE:
 			wind_force_magnitude = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_WIND_SOURCE:
+		case PS3DE::AREA_PARAM_WIND_SOURCE:
 			wind_source = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_WIND_DIRECTION:
+		case PS3DE::AREA_PARAM_WIND_DIRECTION:
 			wind_direction = p_value;
 			break;
-		case PhysicsServer3D::AREA_PARAM_WIND_ATTENUATION_FACTOR:
+		case PS3DE::AREA_PARAM_WIND_ATTENUATION_FACTOR:
 			wind_attenuation_factor = p_value;
 			break;
 	}
 }
 
-Variant Box3DArea3D::get_param(PhysicsServer3D::AreaParameter p_param) const {
+Variant Box3DArea3D::get_param(PS3DE::AreaParameter p_param) const {
 	switch (p_param) {
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_OVERRIDE_MODE:
+		case PS3DE::AREA_PARAM_GRAVITY_OVERRIDE_MODE:
 			return gravity_override_mode;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY:
+		case PS3DE::AREA_PARAM_GRAVITY:
 			return gravity;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_VECTOR:
+		case PS3DE::AREA_PARAM_GRAVITY_VECTOR:
 			return gravity_vector;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_IS_POINT:
+		case PS3DE::AREA_PARAM_GRAVITY_IS_POINT:
 			return gravity_is_point;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_POINT_UNIT_DISTANCE:
+		case PS3DE::AREA_PARAM_GRAVITY_POINT_UNIT_DISTANCE:
 			return gravity_point_unit_distance;
-		case PhysicsServer3D::AREA_PARAM_LINEAR_DAMP_OVERRIDE_MODE:
+		case PS3DE::AREA_PARAM_LINEAR_DAMP_OVERRIDE_MODE:
 			return linear_damp_override_mode;
-		case PhysicsServer3D::AREA_PARAM_LINEAR_DAMP:
+		case PS3DE::AREA_PARAM_LINEAR_DAMP:
 			return linear_damp;
-		case PhysicsServer3D::AREA_PARAM_ANGULAR_DAMP_OVERRIDE_MODE:
+		case PS3DE::AREA_PARAM_ANGULAR_DAMP_OVERRIDE_MODE:
 			return angular_damp_override_mode;
-		case PhysicsServer3D::AREA_PARAM_ANGULAR_DAMP:
+		case PS3DE::AREA_PARAM_ANGULAR_DAMP:
 			return angular_damp;
-		case PhysicsServer3D::AREA_PARAM_PRIORITY:
+		case PS3DE::AREA_PARAM_PRIORITY:
 			return priority;
-		case PhysicsServer3D::AREA_PARAM_WIND_FORCE_MAGNITUDE:
+		case PS3DE::AREA_PARAM_WIND_FORCE_MAGNITUDE:
 			return wind_force_magnitude;
-		case PhysicsServer3D::AREA_PARAM_WIND_SOURCE:
+		case PS3DE::AREA_PARAM_WIND_SOURCE:
 			return wind_source;
-		case PhysicsServer3D::AREA_PARAM_WIND_DIRECTION:
+		case PS3DE::AREA_PARAM_WIND_DIRECTION:
 			return wind_direction;
-		case PhysicsServer3D::AREA_PARAM_WIND_ATTENUATION_FACTOR:
+		case PS3DE::AREA_PARAM_WIND_ATTENUATION_FACTOR:
 			return wind_attenuation_factor;
 	}
 	return Variant();
@@ -424,7 +424,7 @@ void Box3DArea3D::call_queries() {
 				if (E.value.state == 0) {
 					continue;
 				}
-				res[0] = E.value.state > 0 ? PhysicsServer3D::AREA_BODY_ADDED : PhysicsServer3D::AREA_BODY_REMOVED;
+				res[0] = E.value.state > 0 ? PS3DE::AREA_BODY_ADDED : PS3DE::AREA_BODY_REMOVED;
 				res[1] = E.key.rid;
 				res[2] = E.key.instance_id;
 				res[3] = (int)E.key.collider_shape;
@@ -448,7 +448,7 @@ void Box3DArea3D::call_queries() {
 				if (E.value.state == 0) {
 					continue;
 				}
-				res[0] = E.value.state > 0 ? PhysicsServer3D::AREA_BODY_ADDED : PhysicsServer3D::AREA_BODY_REMOVED;
+				res[0] = E.value.state > 0 ? PS3DE::AREA_BODY_ADDED : PS3DE::AREA_BODY_REMOVED;
 				res[1] = E.key.rid;
 				res[2] = E.key.instance_id;
 				res[3] = (int)E.key.collider_shape;

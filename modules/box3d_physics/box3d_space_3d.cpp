@@ -283,20 +283,20 @@ void Box3DSpace3D::_harvest_body_contacts() {
 	}
 }
 
-void Box3DSpace3D::set_default_area_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value) {
+void Box3DSpace3D::set_default_area_param(PS3DE::AreaParameter p_param, const Variant &p_value) {
 	switch (p_param) {
-		case PhysicsServer3D::AREA_PARAM_GRAVITY: {
+		case PS3DE::AREA_PARAM_GRAVITY: {
 			default_gravity = p_value;
 			_update_world_gravity();
 		} break;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_VECTOR: {
+		case PS3DE::AREA_PARAM_GRAVITY_VECTOR: {
 			default_gravity_vector = p_value;
 			_update_world_gravity();
 		} break;
-		case PhysicsServer3D::AREA_PARAM_LINEAR_DAMP: {
+		case PS3DE::AREA_PARAM_LINEAR_DAMP: {
 			default_linear_damp = p_value; // Applied per body once damping lands (milestone 2).
 		} break;
-		case PhysicsServer3D::AREA_PARAM_ANGULAR_DAMP: {
+		case PS3DE::AREA_PARAM_ANGULAR_DAMP: {
 			default_angular_damp = p_value;
 		} break;
 		default: {
@@ -305,15 +305,15 @@ void Box3DSpace3D::set_default_area_param(PhysicsServer3D::AreaParameter p_param
 	}
 }
 
-Variant Box3DSpace3D::get_default_area_param(PhysicsServer3D::AreaParameter p_param) const {
+Variant Box3DSpace3D::get_default_area_param(PS3DE::AreaParameter p_param) const {
 	switch (p_param) {
-		case PhysicsServer3D::AREA_PARAM_GRAVITY:
+		case PS3DE::AREA_PARAM_GRAVITY:
 			return default_gravity;
-		case PhysicsServer3D::AREA_PARAM_GRAVITY_VECTOR:
+		case PS3DE::AREA_PARAM_GRAVITY_VECTOR:
 			return default_gravity_vector;
-		case PhysicsServer3D::AREA_PARAM_LINEAR_DAMP:
+		case PS3DE::AREA_PARAM_LINEAR_DAMP:
 			return default_linear_damp;
-		case PhysicsServer3D::AREA_PARAM_ANGULAR_DAMP:
+		case PS3DE::AREA_PARAM_ANGULAR_DAMP:
 			return default_angular_damp;
 		default:
 			return Variant();

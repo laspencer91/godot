@@ -53,20 +53,20 @@ public:
 	static void _warn_ignored_shape_margin(real_t p_margin);
 
 	bool _can_query_shape(b3ShapeId p_shape_id, const HashSet<RID> &p_exclude, bool p_collide_with_bodies, bool p_collide_with_areas) const;
-	void _fill_shape_result(b3ShapeId p_shape_id, ShapeResult &r_result) const;
-	void _fill_ray_result(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, int p_triangle_index, RayResult &r_result) const;
+	void _fill_shape_result(b3ShapeId p_shape_id, PS3DT::ShapeResult &r_result) const;
+	void _fill_ray_result(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, int p_triangle_index, PS3DT::RayResult &r_result) const;
 	bool _build_query_shape(RID p_shape_rid, const Transform3D &p_transform, QueryShape &r_query_shape, real_t p_margin = 0.0) const;
-	bool _intersect_ray_internal(const RayParameters &p_parameters, RayResult &r_result, uint64_t *r_user_material_id = nullptr) const;
+	bool _intersect_ray_internal(const PS3DT::RayParameters &p_parameters, PS3DT::RayResult &r_result, uint64_t *r_user_material_id = nullptr) const;
 
 	void setup(Box3DSpace3D *p_space, RID_PtrOwner<Box3DShape3D> *p_shape_owner, RID_PtrOwner<Box3DBody3D> *p_body_owner);
 
 	Dictionary intersect_ray_ex(const Ref<PhysicsRayQueryParameters3D> &p_ray_query) const;
-	virtual bool intersect_ray(const RayParameters &p_parameters, RayResult &r_result) override;
-	virtual int intersect_point(const PointParameters &p_parameters, ShapeResult *r_results, int p_result_max) override;
-	virtual int intersect_shape(const ShapeParameters &p_parameters, ShapeResult *r_results, int p_result_max) override;
-	virtual bool cast_motion(const ShapeParameters &p_parameters, real_t &p_closest_safe, real_t &p_closest_unsafe, ShapeRestInfo *r_info = nullptr) override;
-	virtual bool collide_shape(const ShapeParameters &p_parameters, Vector3 *r_results, int p_result_max, int &r_result_count) override;
-	virtual bool rest_info(const ShapeParameters &p_parameters, ShapeRestInfo *r_info) override;
+	virtual bool intersect_ray(const PS3DT::RayParameters &p_parameters, PS3DT::RayResult &r_result) override;
+	virtual int intersect_point(const PS3DT::PointParameters &p_parameters, PS3DT::ShapeResult *r_results, int p_result_max) override;
+	virtual int intersect_shape(const PS3DT::ShapeParameters &p_parameters, PS3DT::ShapeResult *r_results, int p_result_max) override;
+	virtual bool cast_motion(const PS3DT::ShapeParameters &p_parameters, real_t &p_closest_safe, real_t &p_closest_unsafe, PS3DT::ShapeRestInfo *r_info = nullptr) override;
+	virtual bool collide_shape(const PS3DT::ShapeParameters &p_parameters, Vector3 *r_results, int p_result_max, int &r_result_count) override;
+	virtual bool rest_info(const PS3DT::ShapeParameters &p_parameters, PS3DT::ShapeRestInfo *r_info) override;
 	virtual Vector3 get_closest_point_to_object_volume(RID p_object, const Vector3 p_point) const override;
-	bool body_test_motion(const Box3DBody3D &p_body, const PhysicsServer3D::MotionParameters &p_parameters, PhysicsServer3D::MotionResult *r_result) const;
+	bool body_test_motion(const Box3DBody3D &p_body, const PS3DT::MotionParameters &p_parameters, PS3DT::MotionResult *r_result) const;
 };

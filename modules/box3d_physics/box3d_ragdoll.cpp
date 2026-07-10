@@ -316,7 +316,7 @@ Transform3D Box3DRagdoll::_bone_world_pose(Skeleton3D *p_skeleton, const BoneRun
 }
 
 void Box3DRagdoll::_set_body_transform(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone, const Transform3D &p_transform) {
-	p_server->body_set_state(r_bone.body, PhysicsServer3D::BODY_STATE_TRANSFORM, p_transform);
+	p_server->body_set_state(r_bone.body, PS3DE::BODY_STATE_TRANSFORM, p_transform);
 }
 
 bool Box3DRagdoll::_create_body_for_bone(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton, BoneRuntime &r_bone) {
@@ -328,10 +328,10 @@ bool Box3DRagdoll::_create_body_for_bone(Box3DPhysicsServer3D *p_server, Skeleto
 	p_server->shape_set_data(r_bone.shape, capsule);
 
 	r_bone.body = p_server->body_create();
-	p_server->body_set_mode(r_bone.body, PhysicsServer3D::BODY_MODE_KINEMATIC);
+	p_server->body_set_mode(r_bone.body, PS3DE::BODY_MODE_KINEMATIC);
 	p_server->body_set_collision_layer(r_bone.body, profile->get_collision_layer());
 	p_server->body_set_collision_mask(r_bone.body, profile->get_collision_mask());
-	p_server->body_set_param(r_bone.body, PhysicsServer3D::BODY_PARAM_MASS, _bone_mass(r_bone));
+	p_server->body_set_param(r_bone.body, PS3DE::BODY_PARAM_MASS, _bone_mass(r_bone));
 	p_server->body_add_shape(r_bone.body, r_bone.shape, Transform3D(), false);
 	p_server->body_set_state_sync_callback(r_bone.body, callable_mp(this, &Box3DRagdoll::_body_state_changed));
 	Box3DBody3D *body = p_server->get_body(r_bone.body);
@@ -717,12 +717,12 @@ bool Box3DRagdoll::_create_editor_ground(Box3DPhysicsServer3D *p_server, Skeleto
 	editor_ground_shape = p_server->box_shape_create();
 	p_server->shape_set_data(editor_ground_shape, Vector3(10.0, 0.1, 10.0));
 	editor_ground_body = p_server->body_create();
-	p_server->body_set_mode(editor_ground_body, PhysicsServer3D::BODY_MODE_STATIC);
+	p_server->body_set_mode(editor_ground_body, PS3DE::BODY_MODE_STATIC);
 	p_server->body_set_collision_layer(editor_ground_body, profile->get_collision_mask());
 	p_server->body_set_collision_mask(editor_ground_body, profile->get_collision_layer());
 	p_server->body_add_shape(editor_ground_body, editor_ground_shape);
 	const Vector3 skeleton_origin = p_skeleton->get_global_transform().origin;
-	p_server->body_set_state(editor_ground_body, PhysicsServer3D::BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(skeleton_origin.x, foot_y - 0.1, skeleton_origin.z)));
+	p_server->body_set_state(editor_ground_body, PS3DE::BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(skeleton_origin.x, foot_y - 0.1, skeleton_origin.z)));
 	p_server->body_set_space(editor_ground_body, editor_space_rid);
 	return true;
 }
@@ -748,10 +748,10 @@ bool Box3DRagdoll::_start_editor_simulation() {
 		return false;
 	}
 	for (uint32_t i = 0; i < bones.size(); i++) {
-		server->body_set_mode(bones[i].body, PhysicsServer3D::BODY_MODE_RIGID);
-		server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, Vector3());
-		server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, Vector3());
-		server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_SLEEPING, false);
+		server->body_set_mode(bones[i].body, PS3DE::BODY_MODE_RIGID);
+		server->body_set_state(bones[i].body, PS3DE::BODY_STATE_LINEAR_VELOCITY, Vector3());
+		server->body_set_state(bones[i].body, PS3DE::BODY_STATE_ANGULAR_VELOCITY, Vector3());
+		server->body_set_state(bones[i].body, PS3DE::BODY_STATE_SLEEPING, false);
 	}
 	ragdoll_active = true;
 	asleep_emitted = false;
@@ -859,8 +859,8 @@ void Box3DRagdoll::_capture_animation_pose(real_t p_delta) {
 			Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 			if (server != nullptr) {
 				_set_body_transform(server, bone, pose);
-				server->body_set_state(bone.body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, Vector3());
-				server->body_set_state(bone.body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, Vector3());
+				server->body_set_state(bone.body, PS3DE::BODY_STATE_LINEAR_VELOCITY, Vector3());
+				server->body_set_state(bone.body, PS3DE::BODY_STATE_ANGULAR_VELOCITY, Vector3());
 			}
 		}
 	}
@@ -870,9 +870,9 @@ void Box3DRagdoll::_seed_body_velocity(Box3DPhysicsServer3D *p_server, BoneRunti
 	const real_t delta = MAX(p_delta, (real_t)CMP_EPSILON);
 	const Vector3 linear_velocity = (r_bone.current_pose.origin - r_bone.previous_pose.origin) / delta;
 	const Vector3 angular_velocity = _angular_velocity_between(r_bone.previous_pose.basis, r_bone.current_pose.basis, delta);
-	p_server->body_set_state(r_bone.body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, linear_velocity);
-	p_server->body_set_state(r_bone.body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, angular_velocity);
-	p_server->body_set_state(r_bone.body, PhysicsServer3D::BODY_STATE_SLEEPING, false);
+	p_server->body_set_state(r_bone.body, PS3DE::BODY_STATE_LINEAR_VELOCITY, linear_velocity);
+	p_server->body_set_state(r_bone.body, PS3DE::BODY_STATE_ANGULAR_VELOCITY, angular_velocity);
+	p_server->body_set_state(r_bone.body, PS3DE::BODY_STATE_SLEEPING, false);
 }
 
 bool Box3DRagdoll::_has_velocity_history() const {
@@ -900,7 +900,7 @@ void Box3DRagdoll::die(const Vector3 &p_impulse, const StringName &p_hit_bone, r
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	ERR_FAIL_NULL(server);
 	for (uint32_t i = 0; i < bones.size(); i++) {
-		server->body_set_mode(bones[i].body, PhysicsServer3D::BODY_MODE_RIGID);
+		server->body_set_mode(bones[i].body, PS3DE::BODY_MODE_RIGID);
 		_set_body_transform(server, bones[i], bones[i].current_pose);
 		_seed_body_velocity(server, bones[i], last_capture_delta);
 	}
@@ -924,9 +924,9 @@ void Box3DRagdoll::revive() {
 	Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 	if (server != nullptr) {
 		for (uint32_t i = 0; i < bones.size(); i++) {
-			server->body_set_mode(bones[i].body, PhysicsServer3D::BODY_MODE_KINEMATIC);
-			server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, Vector3());
-			server->body_set_state(bones[i].body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, Vector3());
+			server->body_set_mode(bones[i].body, PS3DE::BODY_MODE_KINEMATIC);
+			server->body_set_state(bones[i].body, PS3DE::BODY_STATE_LINEAR_VELOCITY, Vector3());
+			server->body_set_state(bones[i].body, PS3DE::BODY_STATE_ANGULAR_VELOCITY, Vector3());
 		}
 	}
 	ragdoll_active = false;

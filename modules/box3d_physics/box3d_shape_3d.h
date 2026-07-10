@@ -23,7 +23,7 @@ class Box3DShape3D {
 	friend class Box3DBody3D;
 	friend class Box3DDirectSpaceState3D;
 
-	PhysicsServer3D::ShapeType type = PhysicsServer3D::SHAPE_CUSTOM;
+	PS3DE::ShapeType type = PS3DE::SHAPE_CUSTOM;
 	Variant data;
 
 	// Built geometry, by type.
@@ -44,11 +44,11 @@ class Box3DShape3D {
 	void _clear_geometry();
 
 public:
-	explicit Box3DShape3D(PhysicsServer3D::ShapeType p_type) :
+	explicit Box3DShape3D(PS3DE::ShapeType p_type) :
 			type(p_type) {}
 	~Box3DShape3D();
 
-	PhysicsServer3D::ShapeType get_type() const { return type; }
+	PS3DE::ShapeType get_type() const { return type; }
 
 	void set_data(const Variant &p_data);
 	Variant get_data() const { return data; }

@@ -302,7 +302,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 				continue;
 			}
 			Box3DBody3D *body = server->get_body((RID)plane["rid"]);
-			if (body == nullptr || body->get_mode() != PhysicsServer3D::BODY_MODE_RIGID) {
+			if (body == nullptr || body->get_mode() != PS3DE::BODY_MODE_RIGID) {
 				continue;
 			}
 			const Vector3 normal = plane["normal"];

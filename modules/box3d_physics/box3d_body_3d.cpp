@@ -12,6 +12,8 @@
 #include "box3d_space_3d.h"
 #include "box3d_surface_materials.h"
 
+#include "servers/physics_3d/physics_server_3d_constants.h"
+
 #include "box3d/collision.h"
 #include "box3d/math_functions.h"
 
@@ -34,9 +36,9 @@ bool Box3DBody3D::in_space() const {
 
 b3BodyType Box3DBody3D::_box3d_type() const {
 	switch (mode) {
-		case PhysicsServer3D::BODY_MODE_STATIC:
+		case PS3DE::BODY_MODE_STATIC:
 			return b3_staticBody;
-		case PhysicsServer3D::BODY_MODE_KINEMATIC:
+		case PS3DE::BODY_MODE_KINEMATIC:
 			return b3_kinematicBody;
 		default:
 			return b3_dynamicBody;
@@ -45,7 +47,7 @@ b3BodyType Box3DBody3D::_box3d_type() const {
 
 b3MotionLocks Box3DBody3D::_motion_locks() const {
 	b3MotionLocks locks = {};
-	if (mode == PhysicsServer3D::BODY_MODE_RIGID_LINEAR) {
+	if (mode == PS3DE::BODY_MODE_RIGID_LINEAR) {
 		locks.angularX = true;
 		locks.angularY = true;
 		locks.angularZ = true;
@@ -99,12 +101,12 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 	}
 }
 
-void Box3DBody3D::set_mode(PhysicsServer3D::BodyMode p_mode) {
+void Box3DBody3D::set_mode(PS3DE::BodyMode p_mode) {
 	if (mode == p_mode) {
 		return;
 	}
 	mode = p_mode;
-	if (mode != PhysicsServer3D::BODY_MODE_KINEMATIC) {
+	if (mode != PS3DE::BODY_MODE_KINEMATIC) {
 		has_kinematic_target = false;
 	}
 	if (in_space()) {
@@ -228,14 +230,14 @@ void Box3DBody3D::_build_all_shapes() {
 		const b3Vec3 unit_scale = b3Vec3{ 1.0f, 1.0f, 1.0f };
 
 		switch (s->type) {
-			case PhysicsServer3D::SHAPE_SPHERE: {
+			case PS3DE::SHAPE_SPHERE: {
 				b3Sphere sphere;
 				sphere.center = to_box3d(slot.xform.origin);
 				sphere.radius = s->sphere_radius;
 				shape_id = b3CreateSphereShape(body_id, &def, &sphere);
 			} break;
 
-			case PhysicsServer3D::SHAPE_CAPSULE: {
+			case PS3DE::SHAPE_CAPSULE: {
 				const float half_cylinder = MAX(0.0f, 0.5f * s->capsule_height - s->capsule_radius);
 				b3Capsule capsule;
 				capsule.center1 = to_box3d(slot.xform.xform(Vector3(0, half_cylinder, 0)));
@@ -244,22 +246,22 @@ void Box3DBody3D::_build_all_shapes() {
 				shape_id = b3CreateCapsuleShape(body_id, &def, &capsule);
 			} break;
 
-			case PhysicsServer3D::SHAPE_BOX: {
+			case PS3DE::SHAPE_BOX: {
 				if (s->box_built) {
 					shape_id = b3CreateTransformedHullShape(body_id, &def, &s->box_hull.base, to_box3d(slot.xform), unit_scale);
 				}
 			} break;
 
-			case PhysicsServer3D::SHAPE_CYLINDER:
-			case PhysicsServer3D::SHAPE_CONVEX_POLYGON: {
+			case PS3DE::SHAPE_CYLINDER:
+			case PS3DE::SHAPE_CONVEX_POLYGON: {
 				if (s->hull) {
 					shape_id = b3CreateTransformedHullShape(body_id, &def, s->hull, to_box3d(slot.xform), unit_scale);
 				}
 			} break;
 
-			case PhysicsServer3D::SHAPE_CONCAVE_POLYGON: {
+			case PS3DE::SHAPE_CONCAVE_POLYGON: {
 				if (s->mesh) {
-					if (mode != PhysicsServer3D::BODY_MODE_STATIC && mode != PhysicsServer3D::BODY_MODE_KINEMATIC) {
+					if (mode != PS3DE::BODY_MODE_STATIC && mode != PS3DE::BODY_MODE_KINEMATIC) {
 						WARN_PRINT("Box3D: concave (trimesh) shapes are only supported on static/kinematic bodies.");
 						continue;
 					}
@@ -277,9 +279,9 @@ void Box3DBody3D::_build_all_shapes() {
 				}
 			} break;
 
-			case PhysicsServer3D::SHAPE_HEIGHTMAP: {
+			case PS3DE::SHAPE_HEIGHTMAP: {
 				if (s->mesh) {
-					if (mode != PhysicsServer3D::BODY_MODE_STATIC && mode != PhysicsServer3D::BODY_MODE_KINEMATIC) {
+					if (mode != PS3DE::BODY_MODE_STATIC && mode != PS3DE::BODY_MODE_KINEMATIC) {
 						WARN_PRINT("Box3D: heightmap shapes are only supported on static/kinematic bodies.");
 						continue;
 					}
@@ -429,7 +431,7 @@ void Box3DBody3D::set_transform(const Transform3D &p_transform) {
 	if (!in_space()) {
 		return;
 	}
-	if (mode == PhysicsServer3D::BODY_MODE_KINEMATIC) {
+	if (mode == PS3DE::BODY_MODE_KINEMATIC) {
 		// Deferred: applied as a velocity-consistent target next step (moving platforms).
 		kinematic_target = p_transform;
 		has_kinematic_target = true;
@@ -457,17 +459,17 @@ bool Box3DBody3D::AreaRef::operator<(const AreaRef &p_ref) const {
 	return a_priority < b_priority;
 }
 
-static void _combine_area_scalar(PhysicsServer3D::AreaSpaceOverrideMode p_mode, real_t p_value, real_t &r_total, bool &r_done) {
+static void _combine_area_scalar(PS3DE::AreaSpaceOverrideMode p_mode, real_t p_value, real_t &r_total, bool &r_done) {
 	switch (p_mode) {
-		case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE:
-		case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE:
+		case PS3DE::AREA_SPACE_OVERRIDE_COMBINE:
+		case PS3DE::AREA_SPACE_OVERRIDE_COMBINE_REPLACE:
 			r_total += p_value;
-			r_done = p_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+			r_done = p_mode == PS3DE::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
 			break;
-		case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE:
-		case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE:
+		case PS3DE::AREA_SPACE_OVERRIDE_REPLACE:
+		case PS3DE::AREA_SPACE_OVERRIDE_REPLACE_COMBINE:
 			r_total = p_value;
-			r_done = p_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE;
+			r_done = p_mode == PS3DE::AREA_SPACE_OVERRIDE_REPLACE;
 			break;
 		default:
 			break;
@@ -475,7 +477,7 @@ static void _combine_area_scalar(PhysicsServer3D::AreaSpaceOverrideMode p_mode, 
 }
 
 void Box3DBody3D::apply_environment_forces(float p_step) {
-	if (!in_space() || mode == PhysicsServer3D::BODY_MODE_STATIC || mode == PhysicsServer3D::BODY_MODE_KINEMATIC) {
+	if (!in_space() || mode == PS3DE::BODY_MODE_STATIC || mode == PS3DE::BODY_MODE_KINEMATIC) {
 		return;
 	}
 	total_gravity = Vector3();
@@ -494,20 +496,20 @@ void Box3DBody3D::apply_environment_forces(float p_step) {
 				continue;
 			}
 			if (!gravity_done) {
-				const PhysicsServer3D::AreaSpaceOverrideMode area_override_mode = area->get_gravity_override_mode();
-				if (area_override_mode != PhysicsServer3D::AREA_SPACE_OVERRIDE_DISABLED) {
+				const PS3DE::AreaSpaceOverrideMode area_override_mode = area->get_gravity_override_mode();
+				if (area_override_mode != PS3DE::AREA_SPACE_OVERRIDE_DISABLED) {
 					Vector3 area_gravity;
 					area->compute_gravity(get_transform().origin, area_gravity);
 					switch (area_override_mode) {
-						case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE:
-						case PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE:
+						case PS3DE::AREA_SPACE_OVERRIDE_COMBINE:
+						case PS3DE::AREA_SPACE_OVERRIDE_COMBINE_REPLACE:
 							total_gravity += area_gravity;
-							gravity_done = area_override_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+							gravity_done = area_override_mode == PS3DE::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
 							break;
-						case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE:
-						case PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE:
+						case PS3DE::AREA_SPACE_OVERRIDE_REPLACE:
+						case PS3DE::AREA_SPACE_OVERRIDE_REPLACE_COMBINE:
 							total_gravity = area_gravity;
-							gravity_done = area_override_mode == PhysicsServer3D::AREA_SPACE_OVERRIDE_REPLACE;
+							gravity_done = area_override_mode == PS3DE::AREA_SPACE_OVERRIDE_REPLACE;
 							break;
 						default:
 							break;
@@ -537,8 +539,8 @@ void Box3DBody3D::apply_environment_forces(float p_step) {
 	}
 
 	total_gravity *= gravity_scale;
-	total_linear_damp = linear_damp_mode == PhysicsServer3D::BODY_DAMP_MODE_REPLACE ? linear_damp : total_linear_damp + linear_damp;
-	total_angular_damp = angular_damp_mode == PhysicsServer3D::BODY_DAMP_MODE_REPLACE ? angular_damp : total_angular_damp + angular_damp;
+	total_linear_damp = linear_damp_mode == PS3DE::BODY_DAMP_MODE_REPLACE ? linear_damp : total_linear_damp + linear_damp;
+	total_angular_damp = angular_damp_mode == PS3DE::BODY_DAMP_MODE_REPLACE ? angular_damp : total_angular_damp + angular_damp;
 
 	// Totals above stay valid for the direct-state getters even when the user integrates
 	// forces themselves (stock behavior: omit only skips the APPLICATION, custom integrators
@@ -610,51 +612,51 @@ void Box3DBody3D::set_can_sleep(bool p_can_sleep) {
 	}
 }
 
-void Box3DBody3D::set_param(PhysicsServer3D::BodyParameter p_param, const Variant &p_value) {
+void Box3DBody3D::set_param(PS3DE::BodyParameter p_param, const Variant &p_value) {
 	switch (p_param) {
-		case PhysicsServer3D::BODY_PARAM_FRICTION: {
+		case PS3DE::BODY_PARAM_FRICTION: {
 			friction = p_value;
 			for (uint32_t i = 0; i < shape_ids.size(); i++) {
 				if (_slot_has_named_surface_material(i)) {
-					WARN_PRINT_ONCE("Box3D: BODY_PARAM_FRICTION ignored on shapes with named Box3D surface materials.");
+					WARN_PRINT_ONCE("Box3D: PS3DE::BODY_PARAM_FRICTION ignored on shapes with named Box3D surface materials.");
 					continue;
 				}
 				b3Shape_SetFriction(shape_ids[i], (float)friction);
 			}
 		} break;
-		case PhysicsServer3D::BODY_PARAM_BOUNCE: {
+		case PS3DE::BODY_PARAM_BOUNCE: {
 			bounce = p_value;
 			for (uint32_t i = 0; i < shape_ids.size(); i++) {
 				if (_slot_has_named_surface_material(i)) {
-					WARN_PRINT_ONCE("Box3D: BODY_PARAM_BOUNCE ignored on shapes with named Box3D surface materials.");
+					WARN_PRINT_ONCE("Box3D: PS3DE::BODY_PARAM_BOUNCE ignored on shapes with named Box3D surface materials.");
 					continue;
 				}
 				b3Shape_SetRestitution(shape_ids[i], (float)bounce);
 			}
 		} break;
-		case PhysicsServer3D::BODY_PARAM_MASS: {
+		case PS3DE::BODY_PARAM_MASS: {
 			mass = p_value;
 			_update_mass();
 		} break;
-		case PhysicsServer3D::BODY_PARAM_GRAVITY_SCALE: {
+		case PS3DE::BODY_PARAM_GRAVITY_SCALE: {
 			gravity_scale = p_value;
 			if (in_space()) {
 				b3Body_SetGravityScale(body_id, (float)gravity_scale);
 			}
 		} break;
-		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP_MODE: {
-			linear_damp_mode = (PhysicsServer3D::BodyDampMode)(int)p_value;
+		case PS3DE::BODY_PARAM_LINEAR_DAMP_MODE: {
+			linear_damp_mode = (PS3DE::BodyDampMode)(int)p_value;
 		} break;
-		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP_MODE: {
-			angular_damp_mode = (PhysicsServer3D::BodyDampMode)(int)p_value;
+		case PS3DE::BODY_PARAM_ANGULAR_DAMP_MODE: {
+			angular_damp_mode = (PS3DE::BodyDampMode)(int)p_value;
 		} break;
-		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP: {
+		case PS3DE::BODY_PARAM_LINEAR_DAMP: {
 			linear_damp = p_value;
 			if (in_space()) {
 				b3Body_SetLinearDamping(body_id, (float)linear_damp);
 			}
 		} break;
-		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP: {
+		case PS3DE::BODY_PARAM_ANGULAR_DAMP: {
 			angular_damp = p_value;
 			if (in_space()) {
 				b3Body_SetAngularDamping(body_id, (float)angular_damp);
@@ -665,23 +667,23 @@ void Box3DBody3D::set_param(PhysicsServer3D::BodyParameter p_param, const Varian
 	}
 }
 
-Variant Box3DBody3D::get_param(PhysicsServer3D::BodyParameter p_param) const {
+Variant Box3DBody3D::get_param(PS3DE::BodyParameter p_param) const {
 	switch (p_param) {
-		case PhysicsServer3D::BODY_PARAM_FRICTION:
+		case PS3DE::BODY_PARAM_FRICTION:
 			return friction;
-		case PhysicsServer3D::BODY_PARAM_BOUNCE:
+		case PS3DE::BODY_PARAM_BOUNCE:
 			return bounce;
-		case PhysicsServer3D::BODY_PARAM_MASS:
+		case PS3DE::BODY_PARAM_MASS:
 			return mass;
-		case PhysicsServer3D::BODY_PARAM_GRAVITY_SCALE:
+		case PS3DE::BODY_PARAM_GRAVITY_SCALE:
 			return gravity_scale;
-		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP_MODE:
+		case PS3DE::BODY_PARAM_LINEAR_DAMP_MODE:
 			return linear_damp_mode;
-		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP_MODE:
+		case PS3DE::BODY_PARAM_ANGULAR_DAMP_MODE:
 			return angular_damp_mode;
-		case PhysicsServer3D::BODY_PARAM_LINEAR_DAMP:
+		case PS3DE::BODY_PARAM_LINEAR_DAMP:
 			return linear_damp;
-		case PhysicsServer3D::BODY_PARAM_ANGULAR_DAMP:
+		case PS3DE::BODY_PARAM_ANGULAR_DAMP:
 			return angular_damp;
 		default:
 			return Variant();
@@ -798,7 +800,7 @@ void Box3DBody3D::set_omit_force_integration(bool p_omit) {
 
 void Box3DBody3D::set_max_contacts_reported(int p_count) {
 	ERR_FAIL_COND(p_count < 0);
-	ERR_FAIL_COND(p_count > MAX_CONTACTS_REPORTED_3D_MAX);
+	ERR_FAIL_COND(p_count > PS3DC::MAX_CONTACTS_REPORTED_3D_MAX);
 	contacts.resize(p_count);
 	contact_count = 0;
 	for (const b3ShapeId &shape_id : shape_ids) {

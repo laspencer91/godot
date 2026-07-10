@@ -43,23 +43,23 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 	_clear_geometry();
 
 	switch (type) {
-		case PhysicsServer3D::SHAPE_SPHERE: {
+		case PS3DE::SHAPE_SPHERE: {
 			sphere_radius = p_data;
 		} break;
 
-		case PhysicsServer3D::SHAPE_BOX: {
+		case PS3DE::SHAPE_BOX: {
 			Vector3 half_extents = p_data;
 			box_hull = b3MakeBoxHull((float)half_extents.x, (float)half_extents.y, (float)half_extents.z);
 			box_built = true;
 		} break;
 
-		case PhysicsServer3D::SHAPE_CAPSULE: {
+		case PS3DE::SHAPE_CAPSULE: {
 			Dictionary d = p_data;
 			capsule_radius = d["radius"];
 			capsule_height = d["height"];
 		} break;
 
-		case PhysicsServer3D::SHAPE_CYLINDER: {
+		case PS3DE::SHAPE_CYLINDER: {
 			Dictionary d = p_data;
 			float radius = d["radius"];
 			float height = d["height"];
@@ -69,7 +69,7 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			ERR_FAIL_NULL_MSG(hull, "Box3D: failed to build cylinder hull.");
 		} break;
 
-		case PhysicsServer3D::SHAPE_CONVEX_POLYGON: {
+		case PS3DE::SHAPE_CONVEX_POLYGON: {
 			PackedVector3Array points = p_data;
 			int count = points.size();
 			ERR_FAIL_COND_MSG(count < 4, "Box3D: convex polygon shape needs at least 4 points.");
@@ -83,7 +83,7 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			ERR_FAIL_NULL_MSG(hull, "Box3D: failed to build convex hull (degenerate input).");
 		} break;
 
-		case PhysicsServer3D::SHAPE_CONCAVE_POLYGON: {
+		case PS3DE::SHAPE_CONCAVE_POLYGON: {
 			Dictionary d = p_data;
 			PackedVector3Array faces = d["faces"];
 			const bool backface_collision = d.get("backface_collision", false);
@@ -133,7 +133,7 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			ERR_FAIL_NULL_MSG(mesh, "Box3D: failed to build collision mesh.");
 		} break;
 
-		case PhysicsServer3D::SHAPE_HEIGHTMAP: {
+		case PS3DE::SHAPE_HEIGHTMAP: {
 			Dictionary d = p_data;
 			ERR_FAIL_COND_MSG(!d.has("width") || !d.has("depth") || !d.has("heights"), "Box3D: heightmap data must contain width, depth, and heights.");
 
@@ -213,11 +213,11 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			ERR_FAIL_NULL_MSG(mesh, "Box3D: failed to build heightmap mesh.");
 		} break;
 
-		case PhysicsServer3D::SHAPE_WORLD_BOUNDARY: {
+		case PS3DE::SHAPE_WORLD_BOUNDARY: {
 			WARN_PRINT_ONCE("Box3D: world boundary shapes not implemented yet; shape will not collide.");
 		} break;
 
-		case PhysicsServer3D::SHAPE_SEPARATION_RAY: {
+		case PS3DE::SHAPE_SEPARATION_RAY: {
 			WARN_PRINT_ONCE("Box3D: separation ray shapes not implemented yet; shape will not collide.");
 		} break;
 

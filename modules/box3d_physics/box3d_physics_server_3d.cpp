@@ -19,7 +19,7 @@ Box3DPhysicsServer3D::~Box3DPhysicsServer3D() {
 
 // --- Shapes ---
 
-RID Box3DPhysicsServer3D::_create_shape(ShapeType p_type) {
+RID Box3DPhysicsServer3D::_create_shape(PS3DE::ShapeType p_type) {
 	Box3DShape3D *shape = memnew(Box3DShape3D(p_type));
 	return shape_owner.make_rid(shape);
 }
@@ -75,9 +75,9 @@ Variant Box3DPhysicsServer3D::shape_get_data(RID p_shape) const {
 	return shape->get_data();
 }
 
-PhysicsServer3D::ShapeType Box3DPhysicsServer3D::shape_get_type(RID p_shape) const {
+PS3DE::ShapeType Box3DPhysicsServer3D::shape_get_type(RID p_shape) const {
 	Box3DShape3D *shape = shape_owner.get_or_null(p_shape);
-	ERR_FAIL_NULL_V(shape, SHAPE_CUSTOM);
+	ERR_FAIL_NULL_V(shape, PS3DE::SHAPE_CUSTOM);
 	return shape->get_type();
 }
 
@@ -271,7 +271,7 @@ ObjectID Box3DPhysicsServer3D::area_get_object_instance_id(RID p_area) const {
 	return area->get_instance_id();
 }
 
-void Box3DPhysicsServer3D::area_set_param(RID p_area, AreaParameter p_param, const Variant &p_value) {
+void Box3DPhysicsServer3D::area_set_param(RID p_area, PS3DE::AreaParameter p_param, const Variant &p_value) {
 	// World3D configures the default area through the *space* RID.
 	Box3DSpace3D *space = space_owner.get_or_null(p_area);
 	if (space) {
@@ -283,7 +283,7 @@ void Box3DPhysicsServer3D::area_set_param(RID p_area, AreaParameter p_param, con
 	area->set_param(p_param, p_value);
 }
 
-Variant Box3DPhysicsServer3D::area_get_param(RID p_area, AreaParameter p_param) const {
+Variant Box3DPhysicsServer3D::area_get_param(RID p_area, PS3DE::AreaParameter p_param) const {
 	Box3DSpace3D *space = space_owner.get_or_null(p_area);
 	if (space) {
 		return space->get_default_area_param(p_param);
@@ -380,15 +380,15 @@ RID Box3DPhysicsServer3D::body_get_space(RID p_body) const {
 	return body->get_space_rid();
 }
 
-void Box3DPhysicsServer3D::body_set_mode(RID p_body, BodyMode p_mode) {
+void Box3DPhysicsServer3D::body_set_mode(RID p_body, PS3DE::BodyMode p_mode) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
 	body->set_mode(p_mode);
 }
 
-PhysicsServer3D::BodyMode Box3DPhysicsServer3D::body_get_mode(RID p_body) const {
+PS3DE::BodyMode Box3DPhysicsServer3D::body_get_mode(RID p_body) const {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
-	ERR_FAIL_NULL_V(body, BODY_MODE_STATIC);
+	ERR_FAIL_NULL_V(body, PS3DE::BODY_MODE_STATIC);
 	return body->get_mode();
 }
 
@@ -523,53 +523,53 @@ void Box3DPhysicsServer3D::body_set_enable_continuous_collision_detection(RID p_
 	body->set_enable_continuous_collision_detection(p_enable);
 }
 
-void Box3DPhysicsServer3D::body_set_param(RID p_body, BodyParameter p_param, const Variant &p_value) {
+void Box3DPhysicsServer3D::body_set_param(RID p_body, PS3DE::BodyParameter p_param, const Variant &p_value) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
 	body->set_param(p_param, p_value);
 }
 
-Variant Box3DPhysicsServer3D::body_get_param(RID p_body, BodyParameter p_param) const {
+Variant Box3DPhysicsServer3D::body_get_param(RID p_body, PS3DE::BodyParameter p_param) const {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL_V(body, Variant());
 	return body->get_param(p_param);
 }
 
-void Box3DPhysicsServer3D::body_set_state(RID p_body, BodyState p_state, const Variant &p_variant) {
+void Box3DPhysicsServer3D::body_set_state(RID p_body, PS3DE::BodyState p_state, const Variant &p_variant) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);
 	switch (p_state) {
-		case BODY_STATE_TRANSFORM:
+		case PS3DE::BODY_STATE_TRANSFORM:
 			body->set_transform(p_variant);
 			break;
-		case BODY_STATE_LINEAR_VELOCITY:
+		case PS3DE::BODY_STATE_LINEAR_VELOCITY:
 			body->set_linear_velocity(p_variant);
 			break;
-		case BODY_STATE_ANGULAR_VELOCITY:
+		case PS3DE::BODY_STATE_ANGULAR_VELOCITY:
 			body->set_angular_velocity(p_variant);
 			break;
-		case BODY_STATE_SLEEPING:
+		case PS3DE::BODY_STATE_SLEEPING:
 			body->set_sleep_state(p_variant);
 			break;
-		case BODY_STATE_CAN_SLEEP:
+		case PS3DE::BODY_STATE_CAN_SLEEP:
 			body->set_can_sleep(p_variant);
 			break;
 	}
 }
 
-Variant Box3DPhysicsServer3D::body_get_state(RID p_body, BodyState p_state) const {
+Variant Box3DPhysicsServer3D::body_get_state(RID p_body, PS3DE::BodyState p_state) const {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL_V(body, Variant());
 	switch (p_state) {
-		case BODY_STATE_TRANSFORM:
+		case PS3DE::BODY_STATE_TRANSFORM:
 			return body->get_transform();
-		case BODY_STATE_LINEAR_VELOCITY:
+		case PS3DE::BODY_STATE_LINEAR_VELOCITY:
 			return body->get_linear_velocity();
-		case BODY_STATE_ANGULAR_VELOCITY:
+		case PS3DE::BODY_STATE_ANGULAR_VELOCITY:
 			return body->get_angular_velocity();
-		case BODY_STATE_SLEEPING:
+		case PS3DE::BODY_STATE_SLEEPING:
 			return body->is_sleeping();
-		case BODY_STATE_CAN_SLEEP:
+		case PS3DE::BODY_STATE_CAN_SLEEP:
 			return body->get_can_sleep();
 	}
 	return Variant();
@@ -708,7 +708,7 @@ PhysicsDirectBodyState3D *Box3DPhysicsServer3D::body_get_direct_state(RID p_body
 	return body->get_direct_state();
 }
 
-bool Box3DPhysicsServer3D::body_test_motion(RID p_body, const MotionParameters &p_parameters, MotionResult *r_result) {
+bool Box3DPhysicsServer3D::body_test_motion(RID p_body, const PS3DT::MotionParameters &p_parameters, PS3DT::MotionResult *r_result) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL_V(body, false);
 	Box3DSpace3D *space = body->get_space();
@@ -733,9 +733,9 @@ void Box3DPhysicsServer3D::joint_clear(RID p_joint) {
 	joint->clear();
 }
 
-PhysicsServer3D::JointType Box3DPhysicsServer3D::joint_get_type(RID p_joint) const {
+PS3DE::JointType Box3DPhysicsServer3D::joint_get_type(RID p_joint) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
-	ERR_FAIL_NULL_V(joint, JOINT_TYPE_PIN);
+	ERR_FAIL_NULL_V(joint, PS3DE::JOINT_TYPE_PIN);
 	return joint->get_type();
 }
 
@@ -777,24 +777,24 @@ void Box3DPhysicsServer3D::joint_make_pin(RID p_joint, RID p_body_A, const Vecto
 	joint->make_pin(body_a, body_b, p_local_A, p_local_B);
 }
 
-void Box3DPhysicsServer3D::pin_joint_set_param(RID p_joint, PinJointParam p_param, real_t p_value) {
+void Box3DPhysicsServer3D::pin_joint_set_param(RID p_joint, PS3DE::PinJointParam p_param, real_t p_value) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_PIN);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_PIN);
 	joint->pin_set_param(p_param, p_value);
 }
 
-real_t Box3DPhysicsServer3D::pin_joint_get_param(RID p_joint, PinJointParam p_param) const {
+real_t Box3DPhysicsServer3D::pin_joint_get_param(RID p_joint, PS3DE::PinJointParam p_param) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, 0.0);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_PIN, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_PIN, 0.0);
 	return joint->pin_get_param(p_param);
 }
 
 void Box3DPhysicsServer3D::pin_joint_set_local_a(RID p_joint, const Vector3 &p_A) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_PIN);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_PIN);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->pin_set_local_a(p_A);
 }
@@ -802,14 +802,14 @@ void Box3DPhysicsServer3D::pin_joint_set_local_a(RID p_joint, const Vector3 &p_A
 Vector3 Box3DPhysicsServer3D::pin_joint_get_local_a(RID p_joint) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, Vector3());
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_PIN, Vector3());
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_PIN, Vector3());
 	return joint->pin_get_local_a();
 }
 
 void Box3DPhysicsServer3D::pin_joint_set_local_b(RID p_joint, const Vector3 &p_B) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_PIN);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_PIN);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->pin_set_local_b(p_B);
 }
@@ -817,7 +817,7 @@ void Box3DPhysicsServer3D::pin_joint_set_local_b(RID p_joint, const Vector3 &p_B
 Vector3 Box3DPhysicsServer3D::pin_joint_get_local_b(RID p_joint) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, Vector3());
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_PIN, Vector3());
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_PIN, Vector3());
 	return joint->pin_get_local_b();
 }
 
@@ -838,33 +838,33 @@ void Box3DPhysicsServer3D::joint_make_hinge_simple(RID p_joint, RID p_body_A, co
 	ERR_FAIL_MSG("Box3D: simple hinge joints are not supported; use joint_make_hinge with explicit local frames.");
 }
 
-void Box3DPhysicsServer3D::hinge_joint_set_param(RID p_joint, HingeJointParam p_param, real_t p_value) {
+void Box3DPhysicsServer3D::hinge_joint_set_param(RID p_joint, PS3DE::HingeJointParam p_param, real_t p_value) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_HINGE);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_HINGE);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->hinge_set_param(p_param, p_value);
 }
 
-real_t Box3DPhysicsServer3D::hinge_joint_get_param(RID p_joint, HingeJointParam p_param) const {
+real_t Box3DPhysicsServer3D::hinge_joint_get_param(RID p_joint, PS3DE::HingeJointParam p_param) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, 0.0);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_HINGE, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_HINGE, 0.0);
 	return joint->hinge_get_param(p_param);
 }
 
-void Box3DPhysicsServer3D::hinge_joint_set_flag(RID p_joint, HingeJointFlag p_flag, bool p_enabled) {
+void Box3DPhysicsServer3D::hinge_joint_set_flag(RID p_joint, PS3DE::HingeJointFlag p_flag, bool p_enabled) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_HINGE);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_HINGE);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->hinge_set_flag(p_flag, p_enabled);
 }
 
-bool Box3DPhysicsServer3D::hinge_joint_get_flag(RID p_joint, HingeJointFlag p_flag) const {
+bool Box3DPhysicsServer3D::hinge_joint_get_flag(RID p_joint, PS3DE::HingeJointFlag p_flag) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, false);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_HINGE, false);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_HINGE, false);
 	return joint->hinge_get_flag(p_flag);
 }
 
@@ -881,18 +881,18 @@ void Box3DPhysicsServer3D::joint_make_slider(RID p_joint, RID p_body_A, const Tr
 	joint->make_slider(body_a, body_b, p_local_frame_A, p_local_frame_B);
 }
 
-void Box3DPhysicsServer3D::slider_joint_set_param(RID p_joint, SliderJointParam p_param, real_t p_value) {
+void Box3DPhysicsServer3D::slider_joint_set_param(RID p_joint, PS3DE::SliderJointParam p_param, real_t p_value) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_SLIDER);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_SLIDER);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->slider_set_param(p_param, p_value);
 }
 
-real_t Box3DPhysicsServer3D::slider_joint_get_param(RID p_joint, SliderJointParam p_param) const {
+real_t Box3DPhysicsServer3D::slider_joint_get_param(RID p_joint, PS3DE::SliderJointParam p_param) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, 0.0);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_SLIDER, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_SLIDER, 0.0);
 	return joint->slider_get_param(p_param);
 }
 
@@ -909,18 +909,18 @@ void Box3DPhysicsServer3D::joint_make_cone_twist(RID p_joint, RID p_body_A, cons
 	joint->make_cone_twist(body_a, body_b, p_local_frame_A, p_local_frame_B);
 }
 
-void Box3DPhysicsServer3D::cone_twist_joint_set_param(RID p_joint, ConeTwistJointParam p_param, real_t p_value) {
+void Box3DPhysicsServer3D::cone_twist_joint_set_param(RID p_joint, PS3DE::ConeTwistJointParam p_param, real_t p_value) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_CONE_TWIST);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_CONE_TWIST);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->cone_twist_set_param(p_param, p_value);
 }
 
-real_t Box3DPhysicsServer3D::cone_twist_joint_get_param(RID p_joint, ConeTwistJointParam p_param) const {
+real_t Box3DPhysicsServer3D::cone_twist_joint_get_param(RID p_joint, PS3DE::ConeTwistJointParam p_param) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, 0.0);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_CONE_TWIST, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_CONE_TWIST, 0.0);
 	return joint->cone_twist_get_param(p_param);
 }
 
@@ -937,33 +937,33 @@ void Box3DPhysicsServer3D::joint_make_generic_6dof(RID p_joint, RID p_body_A, co
 	joint->make_generic_6dof(body_a, body_b, p_local_frame_A, p_local_frame_B);
 }
 
-void Box3DPhysicsServer3D::generic_6dof_joint_set_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param, real_t p_value) {
+void Box3DPhysicsServer3D::generic_6dof_joint_set_param(RID p_joint, Vector3::Axis p_axis, PS3DE::G6DOFJointAxisParam p_param, real_t p_value) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_6DOF);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_6DOF);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->generic_6dof_set_param(p_axis, p_param, p_value);
 }
 
-real_t Box3DPhysicsServer3D::generic_6dof_joint_get_param(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisParam p_param) const {
+real_t Box3DPhysicsServer3D::generic_6dof_joint_get_param(RID p_joint, Vector3::Axis p_axis, PS3DE::G6DOFJointAxisParam p_param) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, 0.0);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_6DOF, 0.0);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_6DOF, 0.0);
 	return joint->generic_6dof_get_param(p_axis, p_param);
 }
 
-void Box3DPhysicsServer3D::generic_6dof_joint_set_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag, bool p_enable) {
+void Box3DPhysicsServer3D::generic_6dof_joint_set_flag(RID p_joint, Vector3::Axis p_axis, PS3DE::G6DOFJointAxisFlag p_flag, bool p_enable) {
 	Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL(joint);
-	ERR_FAIL_COND(joint->get_type() != JOINT_TYPE_6DOF);
+	ERR_FAIL_COND(joint->get_type() != PS3DE::JOINT_TYPE_6DOF);
 	ERR_FAIL_COND_MSG(!_can_mutate_joint(joint), "Box3D: joint changes are inaccessible right now, wait for iteration or physics process notification.");
 	joint->generic_6dof_set_flag(p_axis, p_flag, p_enable);
 }
 
-bool Box3DPhysicsServer3D::generic_6dof_joint_get_flag(RID p_joint, Vector3::Axis p_axis, G6DOFJointAxisFlag p_flag) const {
+bool Box3DPhysicsServer3D::generic_6dof_joint_get_flag(RID p_joint, Vector3::Axis p_axis, PS3DE::G6DOFJointAxisFlag p_flag) const {
 	const Box3DJoint3D *joint = joint_owner.get_or_null(p_joint);
 	ERR_FAIL_NULL_V(joint, false);
-	ERR_FAIL_COND_V(joint->get_type() != JOINT_TYPE_6DOF, false);
+	ERR_FAIL_COND_V(joint->get_type() != PS3DE::JOINT_TYPE_6DOF, false);
 	return joint->generic_6dof_get_flag(p_axis, p_flag);
 }
 

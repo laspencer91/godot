@@ -55,9 +55,9 @@ private:
 	bool monitorable = false;
 	bool ray_pickable = false;
 
-	PhysicsServer3D::AreaSpaceOverrideMode gravity_override_mode = PhysicsServer3D::AREA_SPACE_OVERRIDE_DISABLED;
-	PhysicsServer3D::AreaSpaceOverrideMode linear_damp_override_mode = PhysicsServer3D::AREA_SPACE_OVERRIDE_DISABLED;
-	PhysicsServer3D::AreaSpaceOverrideMode angular_damp_override_mode = PhysicsServer3D::AREA_SPACE_OVERRIDE_DISABLED;
+	PS3DE::AreaSpaceOverrideMode gravity_override_mode = PS3DE::AREA_SPACE_OVERRIDE_DISABLED;
+	PS3DE::AreaSpaceOverrideMode linear_damp_override_mode = PS3DE::AREA_SPACE_OVERRIDE_DISABLED;
+	PS3DE::AreaSpaceOverrideMode angular_damp_override_mode = PS3DE::AREA_SPACE_OVERRIDE_DISABLED;
 	real_t gravity = 9.80665;
 	Vector3 gravity_vector = Vector3(0, -1, 0);
 	bool gravity_is_point = false;
@@ -118,12 +118,12 @@ public:
 	void set_monitor_callback(const Callable &p_callback) { monitor_callback = p_callback; }
 	void set_area_monitor_callback(const Callable &p_callback) { area_monitor_callback = p_callback; }
 
-	void set_param(PhysicsServer3D::AreaParameter p_param, const Variant &p_value);
-	Variant get_param(PhysicsServer3D::AreaParameter p_param) const;
+	void set_param(PS3DE::AreaParameter p_param, const Variant &p_value);
+	Variant get_param(PS3DE::AreaParameter p_param) const;
 	int get_priority() const { return priority; }
-	PhysicsServer3D::AreaSpaceOverrideMode get_gravity_override_mode() const { return gravity_override_mode; }
-	PhysicsServer3D::AreaSpaceOverrideMode get_linear_damp_override_mode() const { return linear_damp_override_mode; }
-	PhysicsServer3D::AreaSpaceOverrideMode get_angular_damp_override_mode() const { return angular_damp_override_mode; }
+	PS3DE::AreaSpaceOverrideMode get_gravity_override_mode() const { return gravity_override_mode; }
+	PS3DE::AreaSpaceOverrideMode get_linear_damp_override_mode() const { return linear_damp_override_mode; }
+	PS3DE::AreaSpaceOverrideMode get_angular_damp_override_mode() const { return angular_damp_override_mode; }
 	real_t get_linear_damp() const { return linear_damp; }
 	real_t get_angular_damp() const { return angular_damp; }
 	void compute_gravity(const Vector3 &p_position, Vector3 &r_gravity) const;
