@@ -49,6 +49,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/editor_workspace.h"
 #include "editor/plugins/editor_plugin_list.h"
 #include "editor/run/editor_run_bar.h"
 #include "editor/scene/3d/node_3d_editor_constants.h"
@@ -1872,6 +1873,17 @@ void Node3DEditorViewport::_reset_transform(TransformType p_type) {
 void Node3DEditorViewport::_surface_mouse_enter() {
 	if (Input::get_singleton()->get_mouse_mode() == Input::MouseMode::MOUSE_MODE_CAPTURED) {
 		return;
+	}
+
+	// Hover may only re-grab focus within the already-focused pane (keeps viewport shortcuts live
+	// under the cursor there, including across the 4-viewport layout). Grabbing from another pane
+	// would ride EditorWorkspace's gui_focus_changed listener and silently switch the active
+	// document/scene context mid mouse-travel; pane switching is click-driven.
+	if (WorkspacePane *pane = WorkspacePane::of(surface)) {
+		EditorWorkspace *workspace = pane->get_workspace();
+		if (workspace && workspace->get_focused_pane() != pane) {
+			return;
+		}
 	}
 
 	if (!surface->has_focus() && (!get_viewport()->gui_get_focus_owner() || !get_viewport()->gui_get_focus_owner()->is_text_field())) {

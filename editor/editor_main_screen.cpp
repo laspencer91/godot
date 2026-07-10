@@ -584,10 +584,11 @@ void EditorMainScreen::add_main_plugin(EditorPlugin *p_editor) {
 	if (pname == "2D" || pname == "3D" || pname == "Script") {
 		tb->hide();
 		tb->set_meta("_g2_strip_retired", true); // marker so set_button_enabled keeps it hidden.
-	} else if (pname == "Game" || pname == "AssetLib") {
+	} else if (pname == "Game" || pname == "AssetLib" || pname == "Asset Store") {
 		// G4: on-demand singleton screens — kept OFF the permanent strip. Game gets strip presence
-		// only while an embedded game is running (GameView drives it); AssetLib opens from
-		// Editor → Open Asset Library. reveal_main_plugin() is the only thing that shows them.
+		// only while an embedded game is running (GameView drives it); the asset library opens from
+		// Editor → Open Asset Store. reveal_main_plugin() is the only thing that shows them.
+		// ("Asset Store" is upstream's 4.8 rename of the AssetLib plugin; both names kept matched.)
 		tb->hide();
 		tb->set_meta("_g2_on_demand", true);
 	}
