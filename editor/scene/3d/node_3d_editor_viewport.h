@@ -497,6 +497,7 @@ private:
 	void _pilot_tick_undo_session(real_t p_delta);
 
 	bool _is_node_locked(const Node *p_node) const;
+	bool _is_node_in_edited_scene(const Node3D *p_node) const;
 	void _preview_exited_scene();
 	void _preview_camera_property_changed();
 	void _sync_cursor_from_transform(const Transform3D &p_transform);
