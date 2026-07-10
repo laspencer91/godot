@@ -31,7 +31,6 @@
 #include "quick_settings_dialog.h"
 
 #include "core/object/callable_mp.h"
-#include "core/object/class_db.h" // IWYU pragma: keep. `ADD_SIGNAL` macro.
 #include "editor/doc/editor_help.h"
 #include "editor/editor_string_names.h"
 #include "editor/inspector/editor_properties.h"
@@ -325,6 +324,7 @@ QuickSettingsDialog::QuickSettingsDialog() {
 			language_option_button = memnew(OptionButton);
 			language_option_button->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
 			language_option_button->set_fit_to_longest_item(false);
+			language_option_button->set_search_bar_enabled(true);
 			language_option_button->connect(SceneStringName(item_selected), callable_mp(this, &QuickSettingsDialog::_language_selected));
 
 			for (int i = 0; i < editor_languages.size(); i++) {

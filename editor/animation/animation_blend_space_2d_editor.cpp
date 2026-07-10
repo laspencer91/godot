@@ -141,9 +141,15 @@ void AnimationNodeBlendSpace2DEditor::_blend_space_gui_input(const Ref<InputEven
 
 			menu->add_submenu_node_item(TTR("Add Animation"), animations_menu);
 
-			for (const StringName &E : tree->get_sorted_animation_list()) {
-				animations_menu->add_icon_item(get_editor_theme_icon(SNAME("Animation")), E);
-				animations_to_add.push_back(E);
+			const LocalVector<StringName> &animation_list = tree->get_sorted_animation_list();
+			if (animation_list.is_empty()) {
+				animations_menu->add_item(TTR("No available animations"));
+				animations_menu->set_item_disabled(-1, true);
+			} else {
+				for (const StringName &E : animation_list) {
+					animations_menu->add_icon_item(get_editor_theme_icon(SNAME("Animation")), E);
+					animations_to_add.push_back(E);
+				}
 			}
 
 			for (const StringName &E : classes) {
@@ -630,7 +636,6 @@ void AnimationNodeBlendSpace2DEditor::_blend_space_draw() {
 		blend_space_draw->draw_primitive(bl_points, colors, Vector<Vector2>());
 	}
 
-	bool does_include_invalid_key = false;
 	points.clear();
 	for (int i = 0; i < blend_space->get_blend_point_count(); i++) {
 		Vector2 point = blend_space->get_blend_point_position(i);
@@ -656,7 +661,6 @@ void AnimationNodeBlendSpace2DEditor::_blend_space_draw() {
 			Ref<AnimationNodeAnimation> anim_node = node;
 			if (anim_node.is_null()) {
 				is_key_valid = false;
-				does_include_invalid_key = true;
 			}
 		}
 		Vector2 gui_point = (ofs + point - icon->get_size() / 2).floor();
@@ -681,11 +685,6 @@ void AnimationNodeBlendSpace2DEditor::_blend_space_draw() {
 
 			text_rects.write[i] = Rect2(Vector2(text_pos.x, text_pos.y - font->get_ascent(font_size)), text_size);
 		}
-	}
-	if (does_include_invalid_key) {
-		invalid_point_warning_hb->show();
-	} else {
-		invalid_point_warning_hb->hide();
 	}
 
 	if (making_triangle.size()) {
@@ -749,7 +748,7 @@ void AnimationNodeBlendSpace2DEditor::_snap_toggled() {
 }
 
 void AnimationNodeBlendSpace2DEditor::_update_space() {
-	if (updating) {
+	if (updating || blend_space.is_null()) {
 		return;
 	}
 
@@ -893,7 +892,7 @@ void AnimationNodeBlendSpace2DEditor::_erase_selected() {
 }
 
 void AnimationNodeBlendSpace2DEditor::_update_edited_point_pos() {
-	if (updating) {
+	if (updating || blend_space.is_null()) {
 		return;
 	}
 
@@ -970,6 +969,9 @@ void AnimationNodeBlendSpace2DEditor::_edit_point_index(double p_index) {
 
 void AnimationNodeBlendSpace2DEditor::_set_selected_point(int p_index) {
 	selected_point = p_index;
+	if (blend_space.is_null()) {
+		return;
+	}
 	_update_tool_erase();
 	if (p_index != -1) {
 		_update_edited_point_pos();
@@ -1009,8 +1011,6 @@ void AnimationNodeBlendSpace2DEditor::_edit_point_name(const String &p_name) {
 void AnimationNodeBlendSpace2DEditor::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_THEME_CHANGED: {
-			error_panel->add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SceneStringName(panel), SNAME("Tree")));
-			error_label->add_theme_color_override(SNAME("default_color"), get_theme_color(SNAME("error_color"), EditorStringName(Editor)));
 			panel->add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SceneStringName(panel), SNAME("GraphBlendSpace")));
 			tool_blend->set_button_icon(get_editor_theme_icon(SNAME("EditPivot")));
 			tool_select->set_button_icon(get_editor_theme_icon(SNAME("ToolSelect")));
@@ -1024,27 +1024,8 @@ void AnimationNodeBlendSpace2DEditor::_notification(int p_what) {
 			interpolation->add_icon_item(get_editor_theme_icon(SNAME("TrackContinuous")), TTR("Continuous"), 0);
 			interpolation->add_icon_item(get_editor_theme_icon(SNAME("TrackDiscrete")), TTR("Discrete"), 1);
 			interpolation->add_icon_item(get_editor_theme_icon(SNAME("TrackCapture")), TTR("Capture"), 2);
-			invalid_point_warning->set_button_icon(get_editor_theme_icon(SNAME("NodeWarning")));
-		} break;
-
-		case NOTIFICATION_PROCESS: {
-			AnimationTree *tree = AnimationTreeEditor::get_singleton()->get_animation_tree();
-			if (!tree) {
-				return;
-			}
-
-			update_error_message(tree, error_panel, error_label);
-		} break;
-
-		case NOTIFICATION_VISIBILITY_CHANGED: {
-			set_process(is_visible_in_tree());
 		} break;
 	}
-}
-
-void AnimationNodeBlendSpace2DEditor::_show_invalid_point_warning() {
-	EditorNode::get_singleton()->show_warning(
-			TTR("BlendSpace contains points that are not AnimationNodeAnimation.\nCyclic sync modes require that all blend points use AnimationNodeAnimation with a finite, immutable length."));
 }
 
 void AnimationNodeBlendSpace2DEditor::_open_editor() {
@@ -1463,22 +1444,6 @@ AnimationNodeBlendSpace2DEditor::AnimationNodeBlendSpace2DEditor() {
 	min_y_value->connect(SceneStringName(value_changed), callable_mp(this, &AnimationNodeBlendSpace2DEditor::_config_changed));
 	label_x->connect(SceneStringName(text_changed), callable_mp(this, &AnimationNodeBlendSpace2DEditor::_labels_changed));
 	label_y->connect(SceneStringName(text_changed), callable_mp(this, &AnimationNodeBlendSpace2DEditor::_labels_changed));
-
-	error_panel = memnew(PanelContainer);
-	add_child(error_panel);
-	error_label = create_error_label_node();
-	error_panel->add_child(error_label);
-	error_panel->hide();
-
-	invalid_point_warning_hb = memnew(HBoxContainer);
-	add_child(invalid_point_warning_hb);
-	invalid_point_warning_hb->hide();
-
-	invalid_point_warning = memnew(Button);
-	invalid_point_warning->set_text(TTRC("Contains Invalid Point"));
-	invalid_point_warning->set_tooltip_text(TTRC("Warning: BlendSpace contains invalid points for cyclic sync"));
-	invalid_point_warning->connect(SceneStringName(pressed), callable_mp(this, &AnimationNodeBlendSpace2DEditor::_show_invalid_point_warning));
-	invalid_point_warning_hb->add_child(invalid_point_warning);
 
 	set_custom_minimum_size(Size2(0, 300 * EDSCALE));
 

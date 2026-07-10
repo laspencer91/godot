@@ -201,6 +201,19 @@ void ShaderEditorPlugin::make_visible(bool p_visible) {
 	// G-Shader: not a main-screen plugin — shaders are workspace tabs, visibility is the tab's job.
 }
 
+void ShaderEditorPlugin::set_current() {
+	// Only focus the shader text editor when the shader was directly opened (upstream behavior),
+	// adapted to the workspace model: revealing the tab is edit()'s job; focus the current shader
+	// tab's text editor if one is hosting the File menu.
+	if (!current_shader_editor_id.is_valid()) {
+		return;
+	}
+	TextShaderEditor *text_shader_editor = Object::cast_to<TextShaderEditor>(ObjectDB::get_instance(current_shader_editor_id));
+	if (text_shader_editor) {
+		text_shader_editor->get_code_editor()->get_text_editor()->grab_focus();
+	}
+}
+
 ShaderEditor *ShaderEditorPlugin::get_shader_editor(const Ref<Shader> &p_for_shader) {
 	for (EditedShader &edited_shader : edited_shaders) {
 		if (edited_shader.shader == p_for_shader) {

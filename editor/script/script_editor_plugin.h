@@ -79,6 +79,31 @@ public:
 	ScriptEditorQuickOpen();
 };
 
+class DocumentOutline : public VBoxContainer {
+	GDCLASS(DocumentOutline, VBoxContainer);
+
+	ItemList *item_list = nullptr;
+	HBoxContainer *buttons_hbox = nullptr;
+	FilterLineEdit *filter = nullptr;
+	Button *sort_button = nullptr;
+
+	bool members_overview_enabled = false;
+	bool help_overview_enabled = false;
+
+	void _toggle_sort(bool p_alphabetic_sort);
+	void _item_list_selected(int p_idx);
+
+protected:
+	void _notification(int p_what);
+
+public:
+	void update_editor_settings();
+	void update_outline();
+	void update_visibility();
+
+	DocumentOutline();
+};
+
 class EditorScriptCodeCompletionCache;
 class FindInFiles;
 
@@ -166,9 +191,9 @@ class ScriptEditor : public PanelContainer {
 	bool is_floating = false;
 	EditorHelpSearch *help_search_dialog = nullptr;
 
-	// G2 S7: script_list, the members/help overviews, list_split, script_split, and the internal
-	// TabContainer are GONE — the workspace tab bar IS the script list; views live in
-	// workspace-tab DocumentViews.
+	// G2 S7: script_list, the members/help overviews (upstream's DocumentOutline), list_split,
+	// script_split, and the internal TabContainer are GONE — the workspace tab bar IS the script
+	// list; views live in workspace-tab DocumentViews.
 
 	// G2 S1: the authoritative set of open script VIEWS. Appended in open (edit()) order and
 	// self-heals via each view's tree_exiting (fires on workspace-tab close and on editor-shutdown
@@ -225,7 +250,7 @@ class ScriptEditor : public PanelContainer {
 		// G2 S6b: the view by ObjectID — workspace tabs can be closed out from under the history,
 		// so records must degrade to "skip" instead of dangling.
 		ObjectID control_id;
-		Variant state;
+		Dictionary state;
 	};
 
 	Vector<ScriptHistory> history;
@@ -329,6 +354,7 @@ class ScriptEditor : public PanelContainer {
 	bool trim_final_newlines_on_save;
 	bool convert_indent_on_save;
 	bool external_editor_active;
+	bool highlight_scene_scripts = false;
 
 	void _goto_script_line2(int p_line);
 	void _goto_script_line(Ref<RefCounted> p_script, int p_line);
@@ -356,11 +382,15 @@ class ScriptEditor : public PanelContainer {
 	void _reload_scripts(bool p_refresh_only = false);
 	void _auto_format_text(ScriptEditorBase *p_seb);
 
+	// Upstream (bf898d1bb7): scene-script highlighting refresh hooks — replaced the old
+	// `tree_changed` connection. Harmless in the workspace model (kept for the READY wiring;
+	// _update_script_names only refreshes the toolbar name button now).
+	void _connect_to_scene();
+	void _connect_to_scene_recursive(Node *p_current, Node *p_base);
+	void _queue_update_script_names();
 	void _update_script_names();
 
 	void _update_online_doc();
-
-	void _tree_changed();
 
 	virtual void input(const Ref<InputEvent> &p_event) override;
 	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;
@@ -373,16 +403,19 @@ class ScriptEditor : public PanelContainer {
 	void _history_forward();
 	void _history_back();
 
-	bool waiting_update_names;
-	bool lock_history = false;
-	void _unlock_history();
+	bool script_names_update_queued = false;
 
 	void _help_class_open(const String &p_class);
 	void _help_class_goto(const String &p_desc);
 	bool _help_tab_goto(const String &p_name, const String &p_desc);
 	void _update_history_arrows();
-	void _save_history();
-	void _save_previous_state(Dictionary p_state);
+	// Upstream (902035ee81) history engine ported to the workspace: records reference views by
+	// ObjectID (G2 S6b) instead of raw Control pointers; _go_to_tab/_roll_back_to_pre_tab stayed
+	// behind with the retired internal TabContainer.
+	void _save_history(Control *p_control);
+	void _save_new_history(const Dictionary &p_state, Control *p_control);
+	void _save_previous_state(const Dictionary &p_state, Control *p_control);
+	void _compress_history_patterns(bool p_once);
 	void _update_history_pos(int p_new_pos);
 	void _update_modified_scripts_for_external_editor(Ref<Script> p_for_script = Ref<Script>());
 
@@ -456,6 +489,10 @@ public:
 	// G2 S6b: help twin of create_editor_view — create + wire an EditorHelp view for p_class,
 	// registered in the open-help registry but NOT parented (a workspace DocumentView hosts it).
 	EditorHelp *create_help_view(const String &p_class);
+
+	// Upstream: the active script/help surface (used by DocumentOutline) — the workspace's current
+	// surface here.
+	Control *get_active_editor() const;
 
 	Vector<String> _get_breakpoints();
 	void get_breakpoints(List<String> *p_breakpoints);

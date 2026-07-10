@@ -256,6 +256,14 @@ private:
 		bool updating_last_minimum_size = false;
 		bool block_minimum_size_adjust = false;
 
+		mutable Size2 desired_size_cache;
+		mutable bool desired_size_valid = false;
+
+		Size2 last_desired_size;
+		bool updating_last_desired_size = false;
+
+		bool expanded_by_desired_size = false;
+
 		bool layout_pending = false;
 
 		bool size_warning = true;
@@ -333,6 +341,7 @@ private:
 		// Extra properties.
 
 		String tooltip;
+		StringName translation_context;
 		AutoTranslateMode tooltip_auto_translate_mode = AUTO_TRANSLATE_MODE_INHERIT;
 
 	} data;
@@ -356,8 +365,7 @@ private:
 	void _set_global_position(const Point2 &p_point);
 	void _set_size(const Size2 &p_size);
 
-	void _compute_offsets(Rect2 p_rect, const real_t p_anchors[4], real_t (&r_offsets)[4]);
-	void _compute_anchors(Rect2 p_rect, const real_t p_offsets[4], real_t (&r_anchors)[4]);
+	void _compute_layout_rect(Rect2 p_rect, bool p_keep_offsets = false);
 
 	void _set_layout_mode(LayoutMode p_mode);
 	void _update_layout_mode();
@@ -370,6 +378,9 @@ private:
 	void _update_maximum_size();
 	void _update_minimum_size_cache() const;
 	void _update_minimum_size();
+	void _update_desired_size_cache() const;
+	void _update_desired_size();
+	void _grow_to_desired_size();
 	void _size_changed();
 
 	void _top_level_changed() override {} // Controls don't need to do anything, only other CanvasItems.
@@ -389,7 +400,6 @@ private:
 
 	// Focus.
 
-	bool _is_focusable() const;
 	void _window_find_focus_neighbor(const Vector2 &p_dir, Node *p_at, const Rect2 &p_rect, const Rect2 &p_clamp, real_t p_min, real_t &r_closest_dist_squared, Control **r_closest);
 	Control *_get_focus_neighbor(Side p_side, int p_count = 0);
 	bool _is_focus_mode_enabled() const;
@@ -419,6 +429,10 @@ protected:
 	bool _property_can_revert(const StringName &p_name) const;
 	bool _property_get_revert(const StringName &p_name, Variant &r_property) const;
 
+	// Localization
+
+	virtual StringName _get_translation_context_with_override(const StringName &p_context) const override;
+
 	// Theming.
 
 	virtual void _update_theme_item_cache();
@@ -443,6 +457,9 @@ protected:
 	void _grab_focus_bind_compat_110250();
 	static void _bind_compatibility_methods();
 #endif //DISABLE_DEPRECATED
+
+	// Focus.
+	bool _is_focusable() const;
 
 	// Node overrides.
 
@@ -598,6 +615,10 @@ public:
 
 	void update_maximum_size();
 	void update_minimum_size();
+	void update_desired_size();
+
+	void grow_to_desired_size();
+	bool is_expanded_by_desired_size() const;
 
 	void set_block_maximum_size_adjust(bool p_block);
 	void set_block_minimum_size_adjust(bool p_block);
@@ -618,6 +639,9 @@ public:
 	Size2 get_custom_minimum_size() const;
 
 	virtual Size2 get_bound_minimum_size() const;
+
+	Size2 get_bound_desired_size() const;
+	virtual Size2 get_desired_size() const;
 
 	bool is_layout_pending() const;
 	bool is_layout_pending_in_tree() const;
@@ -741,6 +765,8 @@ public:
 	void set_accessibility_flow_to_nodes(const TypedArray<NodePath> &p_node_path);
 	TypedArray<NodePath> get_accessibility_flow_to_nodes() const;
 
+	virtual Transform2D get_accessibility_transform() const override { return get_transform(); }
+
 	// Rendering.
 
 	void set_default_cursor_shape(CursorShape p_shape);
@@ -836,6 +862,8 @@ public:
 
 	String get_tooltip_text() const;
 	void set_tooltip_text(const String &text);
+	StringName get_translation_context() const;
+	void set_translation_context(const StringName &p_context);
 	virtual String get_tooltip(const Point2 &p_pos) const;
 	virtual Control *make_custom_tooltip(const String &p_text) const;
 

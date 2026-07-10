@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "object.h"
+#include "object.compat.inc"
 
 #include "core/config/engine.h"
 #include "core/extension/gdextension_manager.h"
@@ -123,13 +124,26 @@ void ObjectGDExtension::create_gdtype() {
 void ObjectGDExtension::destroy_gdtype() {
 	ERR_FAIL_COND(!gdtype);
 
-	memdelete(const_cast<GDType *>(gdtype));
+#ifdef TOOLS_ENABLED
+	if (!is_placeholder) {
+#endif
+		memdelete(const_cast<GDType *>(gdtype));
+#ifdef TOOLS_ENABLED
+	}
+#endif
+
 	gdtype = nullptr;
 }
 
 ObjectGDExtension::~ObjectGDExtension() {
 	if (gdtype) {
-		memdelete(const_cast<GDType *>(gdtype));
+#ifdef TOOLS_ENABLED
+		if (!is_placeholder) {
+#endif
+			memdelete(const_cast<GDType *>(gdtype));
+#ifdef TOOLS_ENABLED
+		}
+#endif
 	}
 }
 
@@ -262,9 +276,9 @@ void Object::set(const StringName &p_name, const Variant &p_value, bool *r_valid
 				*r_valid = true;
 			}
 			return;
-		} else if (p_name.operator String().begins_with("metadata/")) {
+		} else if (p_name.string().begins_with("metadata/")) {
 			// Must exist, otherwise duplicate() will not work.
-			set_meta(p_name.operator String().replace_first("metadata/", ""), p_value);
+			set_meta(p_name.string().replace_first("metadata/", ""), p_value);
 			if (r_valid) {
 				*r_valid = true;
 			}
@@ -508,7 +522,7 @@ void Object::get_property_list(List<PropertyInfo> *p_list, bool p_reversed) cons
 	}
 
 	for (const KeyValue<StringName, Variant> &K : metadata) {
-		PropertyInfo pi = PropertyInfo(K.value.get_type(), "metadata/" + K.key.operator String());
+		PropertyInfo pi = PropertyInfo(K.value.get_type(), "metadata/" + K.key.string());
 		if (K.value.get_type() == Variant::OBJECT) {
 			pi.hint = PROPERTY_HINT_RESOURCE_TYPE;
 			Object *obj = K.value;
@@ -1019,7 +1033,7 @@ void Object::set_meta(const StringName &p_name, const Variant &p_value) {
 	if (E) {
 		E->value = p_value;
 	} else {
-		ERR_FAIL_COND_MSG(!p_name.operator String().is_valid_ascii_identifier(), vformat("Invalid metadata identifier: '%s'.", p_name));
+		ERR_FAIL_COND_MSG(!p_name.string().is_valid_unicode_identifier(), vformat("Invalid metadata identifier: '%s'.", p_name));
 		Variant *V = &metadata.insert(p_name, p_value)->value;
 
 		const String &sname = p_name;
@@ -1525,7 +1539,7 @@ Error Object::connect(const StringName &p_signal, const Callable &p_callable, ui
 #ifdef TOOLS_ENABLED
 			else {
 				//allow connecting signals anyway if script is invalid, see issue #17070
-				if (!script_instance->get_script()->is_valid()) {
+				if (!script_instance->get_script()->is_script_valid()) {
 					signal_is_valid = true;
 				}
 			}
@@ -2094,13 +2108,8 @@ const GDType &Object::get_gdtype() const {
 	return *_gdtype_ptr;
 }
 
-bool Object::is_class(const String &p_class) const {
-	for (const StringName &name : get_gdtype().get_name_hierarchy()) {
-		if (name == p_class) {
-			return true;
-		}
-	}
-	return false;
+bool Object::is_class(const StringName &p_class) const {
+	return get_gdtype().get_name_hierarchy().has(p_class);
 }
 
 const StringName &Object::get_class_name() const {

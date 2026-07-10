@@ -109,6 +109,7 @@ public:
 	virtual void edit(Object *p_object) override;
 	virtual bool handles(Object *p_object) const override;
 	virtual void make_visible(bool p_visible) override;
+	virtual void set_current() override;
 
 	// G-Shader: mint + wire the editor widget for one shader resource (text -> code editor, visual ->
 	// node-graph editor, via the shader-language factory) and track it, without parenting it anywhere.

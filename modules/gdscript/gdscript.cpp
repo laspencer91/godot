@@ -41,6 +41,7 @@
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/templates/rb_set.h"
 
 #ifdef TOOLS_ENABLED
 #include "editor/gdscript_docgen.h"
@@ -273,7 +274,7 @@ StringName GDScript::get_instance_base_type() const {
 	if (native.is_valid()) {
 		return native->get_name();
 	}
-	if (base.is_valid() && base->is_valid()) {
+	if (base.is_valid() && base->is_script_valid()) {
 		return base->get_instance_base_type();
 	}
 	return StringName();
@@ -412,7 +413,7 @@ ScriptInstance *GDScript::instance_create(Object *p_this) {
 	}
 
 	if (top->native.is_valid()) {
-		if (!ClassDB::is_parent_class(p_this->get_class_name(), top->native->get_name())) {
+		if (!p_this->is_class(top->native->get_name())) {
 			if (EngineDebugger::is_active()) {
 				GDScriptLanguage::get_singleton()->debug_break_parse(_get_debug_path(), 1, "Script inherits from native type '" + String(top->native->get_name()) + "', so it can't be assigned to an object of type: '" + p_this->get_class() + "'");
 			}
@@ -582,7 +583,7 @@ bool GDScript::_update_exports(bool *r_err, bool p_recursive_call, PlaceHolderSc
 
 	placeholder_fallback_enabled = false;
 
-	if (base_cache.is_valid() && base_cache->is_valid()) {
+	if (base_cache.is_valid() && base_cache->is_script_valid()) {
 		for (int i = 0; i < base_caches.size(); i++) {
 			if (base_caches[i] == base_cache.ptr()) {
 				if (r_err) {
@@ -803,7 +804,7 @@ Error GDScript::reload(bool p_keep_state) {
 	bool can_run = ScriptServer::is_scripting_enabled() || is_tool();
 
 #ifdef TOOLS_ENABLED
-	if (p_keep_state && can_run && is_valid()) {
+	if (p_keep_state && can_run && is_script_valid()) {
 		_save_old_static_data();
 	}
 #endif
@@ -1482,6 +1483,11 @@ void GDScript::clear() {
 		memdelete(E);
 	}
 	functions_to_clear.clear();
+
+#ifdef TOOLS_ENABLED
+	base_cache = Ref<GDScript>();
+#endif
+	base = Ref<GDScript>();
 }
 
 void GDScript::cancel_pending_functions(bool warn) {
@@ -1553,7 +1559,7 @@ bool GDScriptInstance::set(const StringName &p_name, const Variant &p_value) {
 				callp(member->setter, &args, 1, err);
 				return err.error == Callable::CallError::CALL_OK;
 			} else {
-				members.write[member->index] = value;
+				members[member->index] = value;
 				return true;
 			}
 		}
@@ -1741,9 +1747,48 @@ void GDScriptInstance::get_property_list(List<PropertyInfo> *p_properties) const
 				Callable::CallError err;
 				Variant ret = E->value->call(const_cast<GDScriptInstance *>(this), nullptr, 0, err);
 				if (err.error == Callable::CallError::CALL_OK) {
-					ERR_FAIL_COND_MSG(ret.get_type() != Variant::ARRAY, "Wrong type for _get_property_list, must be an array of dictionaries.");
+					// GH-118877. We decided to make an exception to maintain compatibility, since the problem can only be detected at runtime.
+#ifdef DISABLE_DEPRECATED
+					ERR_FAIL_COND_MSG(ret.get_type() != Variant::ARRAY, R"*(Wrong type for "_get_property_list()", must be "Array[Dictionary]".)*");
+#else // !DISABLE_DEPRECATED
+					ERR_FAIL_COND_MSG(ret.get_type() != Variant::ARRAY, R"*(Wrong type for "_get_property_list()", must be an array of dictionaries.)*");
+#endif // DISABLE_DEPRECATED
 
 					Array arr = ret;
+
+					// GH-118877. We decided to make an exception to maintain compatibility, since the problem can only be detected at runtime.
+#ifdef DISABLE_DEPRECATED
+					ERR_FAIL_COND_MSG(arr.get_typed_builtin() != Variant::DICTIONARY, R"*(Wrong type for "_get_property_list()", must be "Array[Dictionary]".)*");
+#else // !DISABLE_DEPRECATED
+#ifdef DEBUG_ENABLED
+					if (arr.get_typed_builtin() != Variant::DICTIONARY) {
+						static bool error_shown = false;
+						if (unlikely(!error_shown)) {
+							error_shown = true;
+
+							String elem_type;
+							if (arr.is_typed()) {
+								const Ref<Script> script_type = arr.get_typed_script();
+								if (script_type.is_valid() && script_type->is_script_valid()) {
+									elem_type = GDScript::debug_get_script_name(script_type);
+								} else if (!arr.get_typed_class_name().is_empty()) {
+									elem_type = arr.get_typed_class_name();
+								} else {
+									elem_type = Variant::get_type_name((Variant::Type)arr.get_typed_builtin());
+								}
+								elem_type = vformat("[%s]", elem_type);
+							}
+
+							String msg = vformat(R"*("_get_property_list()" should return "Array[Dictionary]", not "Array%s".)*", elem_type);
+							msg += " The old behavior is supported for compatibility and may be removed in the future.";
+							msg += " This message is printed once and will not be repeated for similar errors.";
+
+							ERR_PRINT(msg);
+						}
+					}
+#endif // DEBUG_ENABLED
+#endif // DISABLE_DEPRECATED
+
 					for (int i = 0; i < arr.size(); i++) {
 						Dictionary d = arr[i];
 						ERR_CONTINUE(!d.has("name"));
@@ -1999,23 +2044,19 @@ const Variant GDScriptInstance::get_rpc_config() const {
 void GDScriptInstance::reload_members() {
 #ifdef DEBUG_ENABLED
 
-	Vector<Variant> new_members;
+	TightLocalVector<Variant> new_members;
 	new_members.resize(script->member_indices.size());
 
-	//pass the values to the new indices
+	// Transfer the old members into their new position.
 	for (KeyValue<StringName, GDScript::MemberInfo> &E : script->member_indices) {
 		if (member_indices_cache.has(E.key)) {
 			Variant value = members[member_indices_cache[E.key]];
-			new_members.write[E.value.index] = value;
+			new_members[E.value.index] = value;
 		}
 	}
+	members = std::move(new_members);
 
-	members.resize(new_members.size()); //resize
-
-	//apply
-	members = new_members;
-
-	//pass the values to the new indices
+	// Cache the new indices.
 	member_indices_cache.clear();
 	for (const KeyValue<StringName, GDScript::MemberInfo> &E : script->member_indices) {
 		member_indices_cache[E.key] = E.value.index;
@@ -2106,7 +2147,7 @@ void GDScriptLanguage::remove_named_global_constant(const StringName &p_name) {
 }
 
 void GDScriptLanguage::init() {
-	//populate global constants
+	// Populate core constants.
 	int gcc = CoreConstants::get_global_constant_count();
 	for (int i = 0; i < gcc; i++) {
 		_add_global(StringName(CoreConstants::get_global_constant_name(i)), CoreConstants::get_global_constant_value(i));
@@ -2117,19 +2158,19 @@ void GDScriptLanguage::init() {
 	_add_global(StringName("INF"), Math::INF);
 	_add_global(StringName("NAN"), Math::NaN);
 
-	//populate native classes
+	// Populate native classes.
 
 	LocalVector<StringName> class_list;
 	ClassDB::get_class_list(class_list);
 	for (const StringName &class_name : class_list) {
-		if (globals.has(class_name)) {
+		if (globals.has(class_name) || !GDScriptAnalyzer::class_exists(class_name)) {
 			continue;
 		}
 		Ref<GDScriptNativeClass> nc = memnew(GDScriptNativeClass(class_name));
 		_add_global(class_name, nc);
 	}
 
-	//populate singletons
+	// Populate singletons (overriding the native class registered under the same name).
 
 	List<Engine::Singleton> singletons;
 	Engine::get_singleton()->get_singletons(&singletons);
@@ -2720,15 +2761,19 @@ String GDScriptLanguage::_get_global_class_name(const String &p_path, String *r_
 		while (subclass) {
 			if (subclass->extends_used) {
 				if (!subclass->extends_path.is_empty()) {
+					String subpath = subclass->extends_path;
+					if (subpath.is_relative_path()) {
+						subpath = path.get_base_dir().path_join(subpath).simplify_path();
+					}
 					if (subclass->extends.is_empty()) {
 						// We only care about the referenced class_name.
-						_ALLOW_DISCARD_ _get_global_class_name(subclass->extends_path, r_base_type, nullptr, nullptr, nullptr, r_visited);
+						_ALLOW_DISCARD_ _get_global_class_name(subpath, r_base_type, nullptr, nullptr, nullptr, r_visited);
 						subclass = nullptr;
 						break;
 					} else {
 						Vector<GDScriptParser::IdentifierNode *> extend_classes = subclass->extends;
 
-						Ref<FileAccess> subfile = FileAccess::open(subclass->extends_path, FileAccess::READ);
+						Ref<FileAccess> subfile = FileAccess::open(subpath, FileAccess::READ);
 						if (subfile.is_null()) {
 							break;
 						}
@@ -2736,10 +2781,6 @@ String GDScriptLanguage::_get_global_class_name(const String &p_path, String *r_
 
 						if (subsource.is_empty()) {
 							break;
-						}
-						String subpath = subclass->extends_path;
-						if (subpath.is_relative_path()) {
-							subpath = path.get_base_dir().path_join(subpath).simplify_path();
 						}
 
 						if (OK != subparser.parse(subsource, subpath, false)) {

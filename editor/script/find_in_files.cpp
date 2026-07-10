@@ -51,6 +51,7 @@
 #include "scene/gui/tab_container.h"
 #include "scene/gui/tree.h"
 #include "scene/main/scene_tree.h"
+#include "servers/rendering/rendering_server.h"
 
 // TODO: Would be nice in Vector and Vectors.
 template <typename T>
@@ -736,19 +737,13 @@ void FindInFilesPanel::stop_search() {
 	cancel_button->hide();
 }
 
-void FindInFilesPanel::update_layout(EditorDock::DockLayout p_layout) {
-	bool new_floating = (p_layout == EditorDock::DOCK_LAYOUT_FLOATING);
-	if (floating == new_floating) {
-		return;
-	}
-	floating = new_floating;
-
-	if (floating) {
-		results_mc->set_theme_type_variation("NoBorderHorizontalBottom");
-		results_display->set_scroll_hint_mode(Tree::SCROLL_HINT_MODE_TOP);
-	} else {
-		results_mc->set_theme_type_variation("NoBorderHorizontal");
+void FindInFilesPanel::update_layout(EditorDock::DockLayout p_layout, int p_slot) {
+	if (p_slot != EditorDock::DOCK_SLOT_BOTTOM) {
+		results_display->set_theme_type_variation("NoBorderHorizontal");
 		results_display->set_scroll_hint_mode(Tree::SCROLL_HINT_MODE_BOTH);
+	} else {
+		results_display->set_theme_type_variation("NoBorderHorizontalBottom");
+		results_display->set_scroll_hint_mode(Tree::SCROLL_HINT_MODE_TOP);
 	}
 }
 
@@ -905,9 +900,19 @@ void FindInFilesPanel::_draw_result_text(Object *p_item_obj, const Rect2 &p_rect
 	match_rect.position.y += 1 * EDSCALE;
 	match_rect.size.y -= 2 * EDSCALE;
 
+	RID ci = item->get_tree()->get_custom_drawing_canvas_item();
+
+	Vector<Vector2> points;
+	points.resize(5);
+	points.write[0] = match_rect.position;
+	points.write[1] = match_rect.position + Vector2(match_rect.size.x, 0);
+	points.write[2] = match_rect.position + match_rect.size;
+	points.write[3] = match_rect.position + Vector2(0, match_rect.size.y);
+	points.write[4] = match_rect.position;
 	Color accent_color = get_theme_color(SNAME("accent_color"), EditorStringName(Editor));
-	results_display->draw_rect(match_rect, Color(accent_color, 0.33), false, 2.0);
-	results_display->draw_rect(match_rect, Color(accent_color, 0.17), true);
+	Vector<Color> colors = { Color(accent_color, 0.33) };
+	RenderingServer::get_singleton()->canvas_item_add_polyline(ci, points, colors, 2.0);
+	RenderingServer::get_singleton()->canvas_item_add_rect(ci, match_rect, Color(accent_color, 0.17));
 
 	// Text is drawn by Tree already.
 }
@@ -1451,11 +1456,11 @@ void FindInFilesContainer::_bar_input(const Ref<InputEvent> &p_input) {
 	}
 }
 
-void FindInFilesContainer::update_layout(EditorDock::DockLayout p_layout) {
+void FindInFilesContainer::update_layout(EditorDock::DockLayout p_layout, int p_slot) {
 	for (Node *node : tabs->iterate_children()) {
 		FindInFilesPanel *panel = Object::cast_to<FindInFilesPanel>(node);
 		if (panel) {
-			panel->update_layout(p_layout);
+			panel->update_layout(p_layout, p_slot);
 		}
 	}
 }

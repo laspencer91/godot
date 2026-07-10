@@ -105,15 +105,15 @@ def configure(env: "SConsEnvironment"):
 
     # CPU architecture.
     if env["arch"] == "arm64":
-        print("Building for macOS 11.0+.")
-        env.Append(ASFLAGS=["-arch", "arm64", "-mmacosx-version-min=11.0"])
-        env.Append(CCFLAGS=["-arch", "arm64", "-mmacosx-version-min=11.0"])
-        env.Append(LINKFLAGS=["-arch", "arm64", "-mmacosx-version-min=11.0"])
+        print("Building for macOS 13.0+.")
+        env.Append(ASFLAGS=["-arch", "arm64", "-mmacosx-version-min=13.0"])
+        env.Append(CCFLAGS=["-arch", "arm64", "-mmacosx-version-min=13.0"])
+        env.Append(LINKFLAGS=["-arch", "arm64", "-mmacosx-version-min=13.0"])
     elif env["arch"] == "x86_64":
-        print("Building for macOS 10.13+.")
-        env.Append(ASFLAGS=["-arch", "x86_64", "-mmacosx-version-min=10.13"])
-        env.Append(CCFLAGS=["-arch", "x86_64", "-mmacosx-version-min=10.13"])
-        env.Append(LINKFLAGS=["-arch", "x86_64", "-mmacosx-version-min=10.13"])
+        print("Building for macOS 11.0+.")
+        env.Append(ASFLAGS=["-arch", "x86_64", "-mmacosx-version-min=11.0"])
+        env.Append(CCFLAGS=["-arch", "x86_64", "-mmacosx-version-min=11.0"])
+        env.Append(LINKFLAGS=["-arch", "x86_64", "-mmacosx-version-min=11.0"])
 
     env.Append(CCFLAGS=["-ffp-contract=off"])
     env.Append(CCFLAGS=["-fobjc-arc", "-fvisibility=hidden"])
@@ -293,6 +293,7 @@ def configure(env: "SConsEnvironment"):
                 env.Append(LINKFLAGS=["-lANGLE.macos." + env["arch"]])
                 env.Append(LINKFLAGS=["-lEGL.macos." + env["arch"]])
                 env.Append(LINKFLAGS=["-lGLES.macos." + env["arch"]])
+                extra_frameworks.add("Metal")
             else:
                 print_warning(
                     "The ANGLE rendering driver requires dependencies to be installed.\n"

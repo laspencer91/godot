@@ -63,6 +63,7 @@
 #include "core/variant/dictionary.h"
 #include "core/variant/variant_deep_duplicate.h"
 
+class GDType;
 class Object;
 class RefCounted;
 
@@ -165,6 +166,10 @@ private:
 	// and PackedArray/Array/Dictionary (platform-dependent).
 
 	Type type = NIL;
+
+	static GDType &_get_gdtype_for_type(Variant::Type p_type);
+	static void _register_variant_gdtypes();
+	static void _unregister_variant_gdtypes();
 
 	struct ObjData {
 		ObjectID id;
@@ -825,7 +830,7 @@ public:
 	uint32_t hash() const;
 	uint32_t recursive_hash(int recursion_count) const;
 
-	// By default, performs a semantic comparison. Otherwise, numeric/binary comparison (if appropriate).
+	// Performs a semantic comparison (where NaN == NaN). Falls back to normal equality comparison (OP_EQUAL) when no special handling is needed.
 	bool hash_compare(const Variant &p_variant, int recursion_count = 0, bool semantic_comparison = true) const;
 	bool identity_compare(const Variant &p_variant) const;
 	bool booleanize() const;
