@@ -11,6 +11,7 @@
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/math/geometry_3d.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_set.h"
@@ -20,8 +21,6 @@
 #include "scene/resources/animation.h"
 #include "scene/resources/animation_library.h"
 #include "scene/resources/mesh.h"
-
-int Box3DRagdoll::next_group_index = -1;
 
 static real_t _dict_real(const Dictionary &p_dict, const StringName &p_key, real_t p_default) {
 	return p_dict.has(p_key) ? (real_t)p_dict[p_key] : p_default;
@@ -35,8 +34,21 @@ static bool _dict_bool(const Dictionary &p_dict, const StringName &p_key, bool p
 	return p_dict.has(p_key) ? (bool)p_dict[p_key] : p_default;
 }
 
+static bool _bone_name_uses_hinge_joint(const String &p_lower_name) {
+	return p_lower_name.contains("lowerarm") || p_lower_name.contains("forearm") || p_lower_name.contains("elbow") ||
+			p_lower_name.contains("lowerleg") || p_lower_name.contains("shin") || p_lower_name.contains("calf") || p_lower_name.contains("knee");
+}
+
 static Transform3D _dict_transform(const Dictionary &p_dict, const StringName &p_key, const Transform3D &p_default) {
 	return p_dict.has(p_key) ? (Transform3D)p_dict[p_key] : p_default;
+}
+
+static Quaternion _dict_quaternion(const Dictionary &p_dict, const StringName &p_key, const Quaternion &p_default) {
+	if (!p_dict.has(p_key)) {
+		return p_default;
+	}
+	Quaternion q = p_dict[p_key];
+	return q.length_squared() > CMP_EPSILON ? q.normalized() : p_default;
 }
 
 static real_t _capsule_clamped_radius(real_t p_radius) {
@@ -167,6 +179,7 @@ Box3DRagdollProfile::BoneParams Box3DRagdollProfile::parse_bone_entry(const Dict
 	params.offset = _dict_transform(p_entry, SNAME("offset"), params.offset);
 	params.has_joint_frame = p_entry.has(SNAME("joint_frame"));
 	params.joint_frame = _dict_transform(p_entry, SNAME("joint_frame"), params.joint_frame);
+	params.rest_delta = _dict_quaternion(p_entry, SNAME("rest_delta"), params.rest_delta);
 	params.enabled = _dict_bool(p_entry, SNAME("enabled"), params.enabled);
 	params.joint_type = (JointType)_dict_int(p_entry, SNAME("joint_type"), params.joint_type);
 	params.radius = _dict_real(p_entry, SNAME("radius"), params.radius);
@@ -260,6 +273,7 @@ void Box3DRagdoll::set_profile(const Ref<Box3DRagdollProfile> &p_profile) {
 		profile->connect_changed(callable_mp(this, &Box3DRagdoll::_profile_changed));
 	}
 	update_gizmos();
+	notify_property_list_changed();
 	if (restart_editor_simulation) {
 		set_simulate_in_editor(true);
 	}
@@ -285,6 +299,7 @@ void Box3DRagdoll::_load_runtime_from_profile(BoneRuntime &r_bone, const Diction
 	r_bone.offset = params.offset;
 	r_bone.has_joint_frame = params.has_joint_frame;
 	r_bone.joint_frame = params.joint_frame;
+	r_bone.rest_delta = params.rest_delta;
 	r_bone.radius = params.radius;
 	r_bone.height = params.height;
 	r_bone.density_scale = params.density_scale;
@@ -321,7 +336,10 @@ bool Box3DRagdoll::_create_body_for_bone(Box3DPhysicsServer3D *p_server, Skeleto
 	p_server->body_set_state_sync_callback(r_bone.body, callable_mp(this, &Box3DRagdoll::_body_state_changed));
 	Box3DBody3D *body = p_server->get_body(r_bone.body);
 	ERR_FAIL_NULL_V(body, false);
-	body->set_collision_group_index(group_index);
+	// Bodies of one ragdoll DO collide with each other: that contact is what
+	// keeps a limb draping over the torso instead of folding through it.
+	// Jointed pairs are exempt via collideConnected and the profile's
+	// filter_pairs cover neighbors that overlap in the rest pose.
 	_set_body_transform(p_server, r_bone, _bone_world_pose(p_skeleton, r_bone));
 	p_server->body_set_space(r_bone.body, space_rid);
 	return true;
@@ -335,7 +353,7 @@ Transform3D Box3DRagdoll::_remap_twist_x_to_z(const Transform3D &p_frame) const 
 	return Transform3D(p_frame.basis * x_to_z, p_frame.origin);
 }
 
-void Box3DRagdoll::_create_joint_for_bone(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone) {
+void Box3DRagdoll::_create_joint_for_bone(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton, BoneRuntime &r_bone) {
 	if (r_bone.parent_runtime < 0 || r_bone.joint_type == Box3DRagdollProfile::JOINT_TYPE_NONE) {
 		return;
 	}
@@ -347,11 +365,19 @@ void Box3DRagdoll::_create_joint_for_bone(Box3DPhysicsServer3D *p_server, BoneRu
 	Box3DSpace3D *space = body->get_space();
 	ERR_FAIL_NULL(space);
 
-	const Transform3D parent_world = parent_body->get_transform();
-	const Transform3D child_world = body->get_transform();
-	const Transform3D joint_world = r_bone.has_joint_frame ? child_world * r_bone.joint_frame : child_world;
-	Transform3D parent_frame = parent_world.affine_inverse() * joint_world;
+	// Derive both anchor frames from the skeleton rest pose: profile joint
+	// frames and generated limits are measured relative to rest, so deriving
+	// the parent frame from build-time body transforms would silently rotate
+	// every limit by whatever animation pose was playing when build() ran. The
+	// anchor point (the bone origin) is pose-invariant in both body-local
+	// frames, so the joint stays coincident regardless of the current pose.
+	// rest_delta shifts the parent frame so the joint's neutral sits at the
+	// generator's re-centered pose instead of the rest pose itself.
+	const BoneRuntime &parent_bone = bones[r_bone.parent_runtime];
+	const Transform3D parent_capsule_rest = p_skeleton->get_bone_global_rest(parent_bone.bone) * parent_bone.offset;
+	const Transform3D child_capsule_rest = p_skeleton->get_bone_global_rest(r_bone.bone) * r_bone.offset;
 	Transform3D child_frame = r_bone.has_joint_frame ? r_bone.joint_frame : Transform3D();
+	Transform3D parent_frame = parent_capsule_rest.affine_inverse() * child_capsule_rest * child_frame * Transform3D(Basis(r_bone.rest_delta), Vector3());
 
 	if (r_bone.joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE) {
 		b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
@@ -452,11 +478,6 @@ bool Box3DRagdoll::_build_in_space(RID p_space) {
 	ERR_FAIL_NULL_V(server, false);
 	ERR_FAIL_NULL_V(server->get_space(space_rid), false);
 
-	group_index = next_group_index--;
-	if (next_group_index >= 0) {
-		next_group_index = -1;
-	}
-
 	bones.clear();
 	bone_lookup.clear();
 	TypedArray<Dictionary> entries = profile->get_bones();
@@ -518,7 +539,7 @@ bool Box3DRagdoll::_build_in_space(RID p_space) {
 		}
 	}
 	for (uint32_t i = 0; i < bones.size(); i++) {
-		_create_joint_for_bone(server, bones[i]);
+		_create_joint_for_bone(server, skeleton, bones[i]);
 	}
 	_create_filter_joints(server);
 
@@ -1107,6 +1128,8 @@ void Box3DRagdollProfileGenerator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_fallback_radius_ratio"), &Box3DRagdollProfileGenerator::get_fallback_radius_ratio);
 	ClassDB::bind_method(D_METHOD("set_maximum_adjacent_mass_ratio", "ratio"), &Box3DRagdollProfileGenerator::set_maximum_adjacent_mass_ratio);
 	ClassDB::bind_method(D_METHOD("get_maximum_adjacent_mass_ratio"), &Box3DRagdollProfileGenerator::get_maximum_adjacent_mass_ratio);
+	ClassDB::bind_method(D_METHOD("set_maximum_swing_limit", "radians"), &Box3DRagdollProfileGenerator::set_maximum_swing_limit);
+	ClassDB::bind_method(D_METHOD("get_maximum_swing_limit"), &Box3DRagdollProfileGenerator::get_maximum_swing_limit);
 	ClassDB::bind_method(D_METHOD("get_warnings"), &Box3DRagdollProfileGenerator::get_warnings);
 	ClassDB::bind_method(D_METHOD("clear_warnings"), &Box3DRagdollProfileGenerator::clear_warnings);
 	ClassDB::bind_method(D_METHOD("generate_profile", "skeleton", "mesh_instance", "animation_library"), &Box3DRagdollProfileGenerator::generate_profile, DEFVAL(Variant()), DEFVAL(Variant()));
@@ -1122,6 +1145,7 @@ void Box3DRagdollProfileGenerator::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "minimum_radius", PROPERTY_HINT_RANGE, "0.001,2,0.001,or_greater,suffix:m"), "set_minimum_radius", "get_minimum_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "fallback_radius_ratio", PROPERTY_HINT_RANGE, "0.01,1,0.01"), "set_fallback_radius_ratio", "get_fallback_radius_ratio");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "maximum_adjacent_mass_ratio", PROPERTY_HINT_RANGE, "1,100,0.1"), "set_maximum_adjacent_mass_ratio", "get_maximum_adjacent_mass_ratio");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "maximum_swing_limit", PROPERTY_HINT_RANGE, "0,3.14159,0.001,radians"), "set_maximum_swing_limit", "get_maximum_swing_limit");
 }
 
 void Box3DRagdollProfileGenerator::_warn(const String &p_warning) {
@@ -1129,13 +1153,23 @@ void Box3DRagdollProfileGenerator::_warn(const String &p_warning) {
 	WARN_PRINT(p_warning);
 }
 
+static bool _bone_name_is_right_side(const String &p_lower_name) {
+	if (p_lower_name.contains("right")) {
+		return true;
+	}
+	if (p_lower_name.contains("left")) {
+		return false;
+	}
+	return p_lower_name.ends_with("_r") || p_lower_name.ends_with(".r") || p_lower_name.ends_with("r");
+}
+
 StringName Box3DRagdollProfileGenerator::_chain_for_bone(const String &p_bone) const {
 	const String lower = p_bone.to_lower();
-	if (lower.contains("arm") || lower.contains("hand") || lower.contains("elbow") || lower.contains("forearm")) {
-		return lower.contains("_r") || lower.ends_with("r") || lower.contains("right") ? SNAME("arm_r") : SNAME("arm_l");
+	if (lower.contains("arm") || lower.contains("hand") || lower.contains("elbow") || lower.contains("forearm") || lower.contains("shoulder") || lower.contains("clavicle") || lower.contains("palm") || lower.contains("finger") || lower.contains("thumb")) {
+		return _bone_name_is_right_side(lower) ? SNAME("arm_r") : SNAME("arm_l");
 	}
-	if (lower.contains("leg") || lower.contains("foot") || lower.contains("knee") || lower.contains("thigh") || lower.contains("shin")) {
-		return lower.contains("_r") || lower.ends_with("r") || lower.contains("right") ? SNAME("leg_r") : SNAME("leg_l");
+	if (lower.contains("leg") || lower.contains("foot") || lower.contains("knee") || lower.contains("thigh") || lower.contains("shin") || lower.contains("toe")) {
+		return _bone_name_is_right_side(lower) ? SNAME("leg_r") : SNAME("leg_l");
 	}
 	if (lower.contains("head") || lower.contains("neck")) {
 		return SNAME("head");
@@ -1167,25 +1201,65 @@ Vector3 Box3DRagdollProfileGenerator::_bone_axis(Skeleton3D *p_skeleton, int p_b
 	return axis;
 }
 
+// Tip-to-tip capsule extent for a fitted bone: the hemisphere caps end at the
+// bone endpoints instead of protruding a full radius past each joint. Stubby
+// fits degenerate toward a sphere.
+static real_t _fitted_capsule_height(real_t p_length, real_t p_radius) {
+	return MAX(p_length, p_radius * (real_t)2.1);
+}
+
 void Box3DRagdollProfileGenerator::_fit_bone_capsule(Skeleton3D *p_skeleton, int p_bone, const LocalVector<Vector3> *p_vertices, Vector3 &r_axis, real_t &r_length, real_t &r_radius) const {
 	Vector3 axis = _bone_axis(p_skeleton, p_bone);
-	if (axis.length() < minimum_bone_length) {
+	if (axis.length_squared() <= CMP_EPSILON) {
 		axis = Vector3(0, minimum_bone_length, 0);
+	} else if (axis.length() < minimum_bone_length) {
+		// Keep the bone's real direction — a palm bone's stubby axis still
+		// points along the hand, and the span extension below projects the
+		// hand geometry onto it.
+		axis = axis.normalized() * minimum_bone_length;
 	}
-	const real_t length = MAX(axis.length(), minimum_bone_length);
+	real_t length = MAX(axis.length(), minimum_bone_length);
 	const Vector3 axis_dir = axis.normalized();
 	real_t radius = MAX(minimum_radius, length * fallback_radius_ratio);
 	if (p_vertices != nullptr && p_vertices->size() > 0) {
 		const Transform3D bone_rest = p_skeleton->get_bone_global_rest(p_bone);
+		Vector<real_t> projections;
+		for (uint32_t i = 0; i < p_vertices->size(); i++) {
+			projections.append(((*p_vertices)[i] - bone_rest.origin).dot(axis_dir));
+		}
+		if (projections.size() >= 4) {
+			// Extend the span toward the tip when the weighted geometry reaches
+			// past the last bone (hands past a stubby palm bone, feet past the
+			// toe base); a leaf bone's nominal length covers almost none of it.
+			Vector<real_t> sorted_projections = projections;
+			sorted_projections.sort();
+			const real_t tip = sorted_projections[(int)((real_t)sorted_projections.size() * (real_t)0.9)];
+			length = CLAMP(tip, length, length * (real_t)2.5);
+		}
+		// Only vertices whose axial projection falls within the bone span vote
+		// on the radius, and they vote with their perpendicular distance.
+		// Vertices past the endpoints (shoulder pads, gear hanging off a joint)
+		// otherwise inflate the estimate with their axial distance component.
 		Vector<real_t> distances;
 		for (uint32_t i = 0; i < p_vertices->size(); i++) {
+			if (projections[i] < (real_t)0.0 || projections[i] > length) {
+				continue;
+			}
 			const Vector3 rel = (*p_vertices)[i] - bone_rest.origin;
-			const real_t projection = CLAMP(rel.dot(axis_dir), (real_t)0.0, length);
-			const Vector3 closest = bone_rest.origin + axis_dir * projection;
-			distances.append(((*p_vertices)[i] - closest).length());
+			distances.append((rel - axis_dir * projections[i]).length());
+		}
+		if (distances.size() < 4) {
+			// Nearly all weighted vertices sit beyond the bone span (stubby leaf
+			// bones); fall back to distance-to-segment over the full set.
+			distances.clear();
+			for (uint32_t i = 0; i < p_vertices->size(); i++) {
+				const Vector3 rel = (*p_vertices)[i] - bone_rest.origin;
+				const real_t projection = CLAMP(projections[i], (real_t)0.0, length);
+				distances.append((rel - axis_dir * projection).length());
+			}
 		}
 		distances.sort();
-		radius = CLAMP(distances[distances.size() / 2], minimum_radius, length * (real_t)0.45);
+		radius = MAX(distances[distances.size() / 2], minimum_radius);
 	}
 	r_axis = axis;
 	r_length = length;
@@ -1216,14 +1290,25 @@ void Box3DRagdollProfileGenerator::_collect_weighted_vertices(Skeleton3D *p_skel
 	Ref<Mesh> mesh = p_mesh_instance->get_mesh();
 	Ref<Skin> skin = p_mesh_instance->get_skin();
 	Vector<int> bind_to_bone;
+	Vector<Transform3D> bind_rest_transform;
 	if (skin.is_valid()) {
 		bind_to_bone.resize(skin->get_bind_count());
+		bind_rest_transform.resize(skin->get_bind_count());
 		for (int i = 0; i < skin->get_bind_count(); i++) {
 			int bone = skin->get_bind_bone(i);
 			if (bone < 0 && skin->get_bind_name(i) != StringName()) {
 				bone = p_skeleton->find_bone(String(skin->get_bind_name(i)));
 			}
 			bind_to_bone.write[i] = bone;
+			// Rest-pose skinning transform: inverse bind matrix into bone space,
+			// then out through the bone's rest. Vertices measured this way always
+			// line up with the rest-space bones capsules are fitted against, even
+			// on retargeted rigs whose rests were rotated away from the bind pose
+			// (mapping vertices with only the mesh transform silently inflates
+			// every fit on bones whose rest no longer matches the bind).
+			if (bone >= 0 && bone < p_skeleton->get_bone_count()) {
+				bind_rest_transform.write[i] = p_skeleton->get_bone_global_rest(bone) * skin->get_bind_pose(i);
+			}
 		}
 	}
 
@@ -1249,10 +1334,12 @@ void Box3DRagdollProfileGenerator::_collect_weighted_vertices(Skeleton3D *p_skel
 					continue;
 				}
 				int bone = bones[influence_idx];
+				int bind = -1;
 				if (bind_to_bone.size() > 0) {
 					if (bone < 0 || bone >= bind_to_bone.size()) {
 						continue;
 					}
+					bind = bone;
 					bone = bind_to_bone[bone];
 				}
 				if (bone < 0 || bone >= p_skeleton->get_bone_count()) {
@@ -1262,7 +1349,7 @@ void Box3DRagdollProfileGenerator::_collect_weighted_vertices(Skeleton3D *p_skel
 					r_vertices.insert(bone, LocalVector<Vector3>());
 				}
 				LocalVector<Vector3> *bucket = r_vertices.getptr(bone);
-				bucket->push_back(mesh_to_skeleton.xform(vertices[vertex]));
+				bucket->push_back(bind >= 0 ? bind_rest_transform[bind].xform(vertices[vertex]) : mesh_to_skeleton.xform(vertices[vertex]));
 			}
 		}
 	}
@@ -1272,6 +1359,10 @@ void Box3DRagdollProfileGenerator::_apply_animation_limits(Skeleton3D *p_skeleto
 	if (p_animation_library.is_null()) {
 		return;
 	}
+	// Gather rest-relative rotation samples per bone across the whole library
+	// first, so limits cover the union of every animation instead of whichever
+	// track happened to be sampled last.
+	HashMap<StringName, LocalVector<Quaternion>> bone_samples;
 	LocalVector<StringName> animation_names;
 	p_animation_library->get_animation_list(&animation_names);
 	bool found_rotation_track = false;
@@ -1291,20 +1382,15 @@ void Box3DRagdollProfileGenerator::_apply_animation_limits(Skeleton3D *p_skeleto
 				continue;
 			}
 			const StringName bone_name = StringName(p_skeleton->get_bone_name(bone_idx));
-			Dictionary *entry = r_entries.getptr(bone_name);
-			if (entry == nullptr) {
+			if (!r_entries.has(bone_name)) {
 				continue;
 			}
-			const Transform3D offset = _dict_transform(*entry, SNAME("offset"), Transform3D());
-			const Transform3D joint_frame = _dict_transform(*entry, SNAME("joint_frame"), Transform3D());
-			const Quaternion rest_rotation = p_skeleton->get_bone_rest(bone_idx).basis.get_rotation_quaternion();
-			const Quaternion joint_basis_in_bone = (offset.basis * joint_frame.basis).get_rotation_quaternion();
-			const int twist_axis = _dict_int(*entry, SNAME("joint_type"), Box3DRagdollProfile::JOINT_TYPE_SPHERICAL) == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? 2 : 0;
 			found_rotation_track = true;
-			real_t swing = 0.0;
-			real_t twist_lower = 0.0;
-			real_t twist_upper = 0.0;
-			bool has_sample = false;
+			const Quaternion rest_rotation = p_skeleton->get_bone_rest(bone_idx).basis.get_rotation_quaternion();
+			LocalVector<Quaternion> *samples = bone_samples.getptr(bone_name);
+			if (samples == nullptr) {
+				samples = &bone_samples.insert(bone_name, LocalVector<Quaternion>())->value;
+			}
 			for (int sample = 0; sample < sample_count; sample++) {
 				const double time = length * (double)sample / (double)(sample_count - 1);
 				Quaternion q;
@@ -1313,29 +1399,128 @@ void Box3DRagdollProfileGenerator::_apply_animation_limits(Skeleton3D *p_skeleto
 				}
 				Quaternion delta = rest_rotation.inverse() * q;
 				delta.normalize();
-				Quaternion joint_delta = joint_basis_in_bone.inverse() * delta * joint_basis_in_bone;
-				joint_delta.normalize();
-				const real_t sample_twist = _signed_twist_angle(joint_delta, twist_axis);
-				const real_t sample_swing = _swing_angle_without_twist(joint_delta, twist_axis);
-				if (!has_sample) {
-					twist_lower = sample_twist;
-					twist_upper = sample_twist;
-					has_sample = true;
-				} else {
-					twist_lower = MIN(twist_lower, sample_twist);
-					twist_upper = MAX(twist_upper, sample_twist);
-				}
-				swing = MAX(swing, sample_swing);
-			}
-			if (has_sample) {
-				(*entry)[SNAME("swing_limit")] = CLAMP(swing + animation_padding, (real_t)0.0, (real_t)Math::PI);
-				(*entry)[SNAME("twist_lower")] = CLAMP(twist_lower - animation_padding, (real_t)-Math::PI, (real_t)Math::PI);
-				(*entry)[SNAME("twist_upper")] = CLAMP(twist_upper + animation_padding, (real_t)-Math::PI, (real_t)Math::PI);
+				samples->push_back(delta);
 			}
 		}
 	}
 	if (!found_rotation_track) {
 		_warn("Box3D: ragdoll generator received an AnimationLibrary but found no rotation tracks matching skeleton bones.");
+		return;
+	}
+
+	for (const KeyValue<StringName, LocalVector<Quaternion>> &kv : bone_samples) {
+		Dictionary *entry = r_entries.getptr(kv.key);
+		if (entry == nullptr || kv.value.is_empty()) {
+			continue;
+		}
+		const Transform3D offset = _dict_transform(*entry, SNAME("offset"), Transform3D());
+		Transform3D joint_frame = _dict_transform(*entry, SNAME("joint_frame"), Transform3D());
+		const bool revolute = _dict_int(*entry, SNAME("joint_type"), Box3DRagdollProfile::JOINT_TYPE_SPHERICAL) == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE;
+		const Quaternion joint_basis_in_bone = (offset.basis * joint_frame.basis).get_rotation_quaternion();
+
+		// Express every sampled delta in the joint frame, canonicalized to the
+		// shortest-arc hemisphere so axis extraction and averaging are stable.
+		LocalVector<Quaternion> deltas;
+		deltas.reserve(kv.value.size());
+		for (const Quaternion &sample : kv.value) {
+			Quaternion d = joint_basis_in_bone.inverse() * sample * joint_basis_in_bone;
+			d.normalize();
+			if (d.w < (real_t)0.0) {
+				d = Quaternion(-d.x, -d.y, -d.z, -d.w);
+			}
+			deltas.push_back(d);
+		}
+
+		if (revolute) {
+			// The name-based hinge axis guess frequently misses the rig's real
+			// elbow/knee axis; the joint then locks because the actual bending
+			// registers as swing, which a hinge forbids. Recover the dominant
+			// rotation axis from the samples and re-aim the frame's Z at it.
+			Vector3 axis_accumulator;
+			real_t max_angle = 0.0;
+			for (const Quaternion &d : deltas) {
+				Vector3 axis;
+				real_t angle = 0.0;
+				d.get_axis_angle(axis, angle);
+				if (!axis.is_finite() || angle <= CMP_EPSILON) {
+					continue;
+				}
+				Vector3 weighted = axis * angle;
+				if (weighted.dot(axis_accumulator) < (real_t)0.0) {
+					weighted = -weighted;
+				}
+				axis_accumulator += weighted;
+				max_angle = MAX(max_angle, angle);
+			}
+			if (max_angle > (real_t)0.1 && axis_accumulator.length_squared() > CMP_EPSILON) {
+				Vector3 hinge_axis = axis_accumulator.normalized();
+				if (hinge_axis.z < (real_t)0.0) {
+					hinge_axis = -hinge_axis;
+				}
+				const real_t misalignment = Vector3(0, 0, 1).angle_to(hinge_axis);
+				if (misalignment > Math::deg_to_rad((real_t)5.0)) {
+					const Quaternion correction(Vector3(0, 0, 1), hinge_axis);
+					joint_frame.basis = joint_frame.basis * Basis(correction);
+					(*entry)[SNAME("joint_frame")] = joint_frame;
+					for (Quaternion &d : deltas) {
+						d = correction.inverse() * d * correction;
+						d.normalize();
+					}
+					_warn(vformat("Box3D: ragdoll generator re-aimed the hinge axis on '%s' by %.0f degrees to match the sampled animation axis.", kv.key, Math::rad_to_deg(misalignment)));
+				}
+			}
+		}
+
+		// Center the joint neutral on the mean sampled pose. Rest-relative
+		// ranges routinely exclude the rest pose entirely (T-pose rigs whose
+		// animations keep the arms lowered), which otherwise produces huge
+		// one-sided cones and joints that start outside their own limits.
+		Quaternion mean;
+		{
+			real_t x = 0.0, y = 0.0, z = 0.0, w = 0.0;
+			for (const Quaternion &d : deltas) {
+				x += d.x;
+				y += d.y;
+				z += d.z;
+				w += d.w;
+			}
+			const Quaternion sum(x, y, z, w);
+			mean = sum.length_squared() > CMP_EPSILON ? sum.normalized() : Quaternion();
+		}
+
+		const int twist_axis = revolute ? 2 : 0;
+		real_t swing = 0.0;
+		real_t twist_lower = 0.0;
+		real_t twist_upper = 0.0;
+		bool has_sample = false;
+		for (const Quaternion &d : deltas) {
+			Quaternion residual = mean.inverse() * d;
+			residual.normalize();
+			const real_t sample_twist = _signed_twist_angle(residual, twist_axis);
+			const real_t sample_swing = _swing_angle_without_twist(residual, twist_axis);
+			if (!has_sample) {
+				twist_lower = sample_twist;
+				twist_upper = sample_twist;
+				has_sample = true;
+			} else {
+				twist_lower = MIN(twist_lower, sample_twist);
+				twist_upper = MAX(twist_upper, sample_twist);
+			}
+			swing = MAX(swing, sample_swing);
+		}
+		if (!has_sample) {
+			continue;
+		}
+		(*entry)[SNAME("rest_delta")] = mean;
+		// Cap the cone: the union of a whole animation library (aiming, sprints,
+		// deaths) can span nearly the full sphere, and an uncapped cone leaves
+		// the joint effectively free.
+		(*entry)[SNAME("swing_limit")] = CLAMP(swing + animation_padding, (real_t)0.0, maximum_swing_limit);
+		(*entry)[SNAME("twist_lower")] = CLAMP(twist_lower - animation_padding, (real_t)-Math::PI, (real_t)Math::PI);
+		(*entry)[SNAME("twist_upper")] = CLAMP(twist_upper + animation_padding, (real_t)-Math::PI, (real_t)Math::PI);
+		if (revolute && swing > Math::deg_to_rad((real_t)20.0)) {
+			_warn(vformat("Box3D: ragdoll generator measured %.0f degrees of off-axis rotation on hinge bone '%s'; the sampled motion is not a pure hinge, consider a spherical joint.", Math::rad_to_deg(swing), kv.key));
+		}
 	}
 }
 
@@ -1428,6 +1613,12 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 	LocalVector<int> selected_bones;
 	HashSet<int> selected_set;
 	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
+		// Importer-generated neutral bones collect the skin's unassigned strays;
+		// those vertices are scattered across the whole mesh and would fit a
+		// character-sized capsule.
+		if (String(p_skeleton->get_bone_name(bone)).to_lower().contains("neutral_bone")) {
+			continue;
+		}
 		const LocalVector<Vector3> *vertices = weighted_vertices.getptr(bone);
 		if (select_by_weights && (vertices == nullptr || vertices->size() == 0)) {
 			continue;
@@ -1436,13 +1627,29 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		selected_set.insert(bone);
 	}
 
-	// Prune short selected bones (fingers, toes, tiny helpers): their skin
-	// vertices are reassigned to the nearest kept selected ancestor so the
-	// surviving capsule still covers the pruned geometry and mass stays honest.
+	// Prune short selected bones (fingers, toes, tiny helpers) and secondary
+	// motion bones (breast/hair/cloth jiggle helpers): their skin vertices are
+	// reassigned to the nearest kept selected ancestor so the surviving capsule
+	// still covers the pruned geometry and mass stays honest.
 	HashSet<int> pruned;
-	if (select_by_weights && prune_bone_length > (real_t)0.0) {
+	HashSet<int> secondary;
+	if (select_by_weights) {
 		for (const int bone : selected_bones) {
-			if (p_skeleton->get_bone_parent(bone) >= 0 && _bone_axis(p_skeleton, bone).length() < prune_bone_length) {
+			if (p_skeleton->get_bone_parent(bone) < 0) {
+				continue;
+			}
+			const String lower = String(p_skeleton->get_bone_name(bone)).to_lower();
+			// Extremities fold into the limb: separate toe bodies are short fat
+			// levers that prop the boot up at odd angles, and per-palm/finger
+			// bodies clutter the hand where one capsule reads better. The
+			// surviving parent capsule extends over the folded geometry, so the
+			// forearm+hand or foot+toes become a single body (a rig with a real
+			// Hand bone longer than prune_bone_length keeps it and folds the
+			// palms/fingers into that instead).
+			if (lower.contains("breast") || lower.contains("hair") || lower.contains("skirt") || lower.contains("cloth") || lower.contains("jiggle") || lower.contains("toe") || lower.contains("palm") || lower.contains("finger") || lower.contains("thumb")) {
+				pruned.insert(bone);
+				secondary.insert(bone);
+			} else if (prune_bone_length > (real_t)0.0 && _bone_axis(p_skeleton, bone).length() < prune_bone_length) {
 				pruned.insert(bone);
 			}
 		}
@@ -1472,6 +1679,7 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 			}
 		}
 		PackedStringArray pruned_names;
+		PackedStringArray secondary_names;
 		for (const int bone : selected_bones) {
 			if (!pruned.has(bone)) {
 				continue;
@@ -1485,7 +1693,11 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 			for (uint32_t vertex = 0; vertex < source->size(); vertex++) {
 				target->push_back((*source)[vertex]);
 			}
-			pruned_names.append(p_skeleton->get_bone_name(bone));
+			if (secondary.has(bone)) {
+				secondary_names.append(p_skeleton->get_bone_name(bone));
+			} else {
+				pruned_names.append(p_skeleton->get_bone_name(bone));
+			}
 		}
 		if (!pruned_names.is_empty()) {
 			String shown = String(", ").join(pruned_names.slice(0, 8));
@@ -1493,6 +1705,13 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 				shown += vformat(", +%d more", pruned_names.size() - 8);
 			}
 			_warn(vformat("Box3D: ragdoll generator merged %d bones shorter than %.2f m into kept ancestors (%s); set prune_bone_length to 0 to disable.", pruned_names.size(), prune_bone_length, shown));
+		}
+		if (!secondary_names.is_empty()) {
+			String shown = String(", ").join(secondary_names.slice(0, 8));
+			if (secondary_names.size() > 8) {
+				shown += vformat(", +%d more", secondary_names.size() - 8);
+			}
+			_warn(vformat("Box3D: ragdoll generator merged %d secondary and extremity bones (%s) into their parent capsules.", secondary_names.size(), shown));
 		}
 	}
 
@@ -1537,7 +1756,7 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 			fit_origin.insert(bone, p_skeleton->get_bone_global_rest(bone).origin);
 			fit_axis.insert(bone, axis.normalized() * length);
 			fit_radius.insert(bone, radius);
-			component_mass[component_root[bone]] += _capsule_mass(radius, MAX(length + radius * (real_t)2.0, radius * (real_t)2.1), 1.0);
+			component_mass[component_root[bone]] += _capsule_mass(radius, _fitted_capsule_height(length, radius), 1.0);
 		}
 		// The heaviest component anchors the assembly; its root is exempt.
 		int primary_root = -1;
@@ -1594,6 +1813,66 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 			}
 			_warn(vformat("Box3D: ragdoll generator merged %d socket bones embedded in larger capsules (%s); limbs attach to the containing body instead.", socket_names.size(), shown));
 		}
+
+		// Merge mutually-coincident sibling capsules. Rigs that split one
+		// anatomical body across parallel bones (four palm bones spanning one
+		// hand) otherwise produce a stack of overlapping bodies whose combined
+		// mass dwarfs the limb they hang from.
+		auto capsule_contains = [&](int p_container, const Vector3 &p_point) {
+			const Vector3 origin = fit_origin[p_container];
+			const Vector3 capsule_axis = fit_axis[p_container];
+			const real_t axis_length = capsule_axis.length();
+			Vector3 closest = origin;
+			if (axis_length > (real_t)CMP_EPSILON) {
+				const Vector3 dir = capsule_axis / axis_length;
+				closest = origin + dir * CLAMP((p_point - origin).dot(dir), (real_t)0.0, axis_length);
+			}
+			return p_point.distance_to(closest) < fit_radius[p_container];
+		};
+		auto nearest_unpruned_ancestor = [&](int p_bone) {
+			int ancestor = p_skeleton->get_bone_parent(p_bone);
+			while (ancestor >= 0) {
+				if (selected_set.has(ancestor) && !pruned.has(ancestor)) {
+					return ancestor;
+				}
+				ancestor = p_skeleton->get_bone_parent(ancestor);
+			}
+			return -1;
+		};
+		PackedStringArray coincident_names;
+		for (uint32_t i = 0; i < kept_bones.size(); i++) {
+			const int winner = kept_bones[i];
+			if (pruned.has(winner)) {
+				continue;
+			}
+			for (uint32_t j = i + 1; j < kept_bones.size(); j++) {
+				const int loser = kept_bones[j];
+				if (pruned.has(loser) || nearest_unpruned_ancestor(loser) != nearest_unpruned_ancestor(winner)) {
+					continue;
+				}
+				const Vector3 winner_center = fit_origin[winner] + fit_axis[winner] * (real_t)0.5;
+				const Vector3 loser_center = fit_origin[loser] + fit_axis[loser] * (real_t)0.5;
+				if (!capsule_contains(winner, loser_center) || !capsule_contains(loser, winner_center)) {
+					continue;
+				}
+				pruned.insert(loser);
+				const LocalVector<Vector3> *source = weighted_vertices.getptr(loser);
+				LocalVector<Vector3> *target = weighted_vertices.getptr(winner);
+				if (source != nullptr && target != nullptr) {
+					for (uint32_t vertex = 0; vertex < source->size(); vertex++) {
+						target->push_back((*source)[vertex]);
+					}
+				}
+				coincident_names.append(p_skeleton->get_bone_name(loser));
+			}
+		}
+		if (!coincident_names.is_empty()) {
+			String shown = String(", ").join(coincident_names.slice(0, 8));
+			if (coincident_names.size() > 8) {
+				shown += vformat(", +%d more", coincident_names.size() - 8);
+			}
+			_warn(vformat("Box3D: ragdoll generator merged %d sibling bones whose capsules coincide (%s) into single bodies.", coincident_names.size(), shown));
+		}
 	}
 
 	HashMap<StringName, Dictionary> entries;
@@ -1611,8 +1890,11 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		real_t length = 0.0;
 		real_t radius = 0.0;
 		_fit_bone_capsule(p_skeleton, bone, vertices, axis, length, radius);
+		if (radius > MAX(length, minimum_bone_length) * (real_t)1.5) {
+			_warn(vformat("Box3D: ragdoll generator fitted an implausibly fat capsule on '%s' (radius %.2f m vs length %.2f m); the skinned vertices may not line up with the skeleton rest pose.", bone_name, radius, length));
+		}
 		const Vector3 axis_dir = axis.normalized();
-		const real_t height = MAX(length + radius * (real_t)2.0, radius * (real_t)2.1);
+		const real_t height = _fitted_capsule_height(length, radius);
 		const Vector3 center = bone_rest.origin + axis_dir * (length * (real_t)0.5);
 		const Transform3D capsule_world(_basis_from_y_axis(axis, reference_basis), center);
 		const Transform3D offset = bone_rest.affine_inverse() * capsule_world;
@@ -1621,11 +1903,14 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		Box3DRagdollProfile::JointType joint_type = Box3DRagdollProfile::JOINT_TYPE_SPHERICAL;
 		if (p_skeleton->get_bone_parent(bone) < 0) {
 			joint_type = Box3DRagdollProfile::JOINT_TYPE_NONE;
-		} else if (lower.contains("leg") || lower.contains("knee") || lower.contains("shin") || lower.contains("forearm") || lower.contains("elbow")) {
+		} else if (_bone_name_uses_hinge_joint(lower)) {
 			joint_type = Box3DRagdollProfile::JOINT_TYPE_REVOLUTE;
 		}
 		const Basis joint_basis = joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE ? _basis_from_z_axis_with_x(_project_perpendicular(reference_basis.get_column(0), axis_dir), axis_dir) : _basis_from_x_axis(axis, reference_basis);
-		const Transform3D joint_world(joint_basis, center);
+		// A bone's origin is its anatomical connection to its parent. Anchoring at
+		// the capsule center makes the limb pivot through its middle and visibly
+		// detach from the skeleton when physics takes over.
+		const Transform3D joint_world(joint_basis, bone_rest.origin);
 		const Transform3D joint_frame = capsule_world.affine_inverse() * joint_world;
 
 		Dictionary entry;
@@ -1653,6 +1938,29 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 	}
 
 	_apply_animation_limits(p_skeleton, p_animation_library, entries);
+
+	// Anatomical caps for joints whose animation envelope routinely exceeds
+	// what the joint does on a real body: clavicles barely rotate (a wide
+	// clavicle cone stacked under the shoulder cone reads as a detached arm),
+	// and ankles past ~30 degrees leave the boot propped at odd angles.
+	for (KeyValue<StringName, Dictionary> &kv : entries) {
+		const String lower = String(kv.key).to_lower();
+		real_t swing_cap;
+		real_t twist_cap;
+		if (lower.contains("shoulder") || lower.contains("clavicle")) {
+			swing_cap = Math::deg_to_rad((real_t)15.0);
+			twist_cap = Math::deg_to_rad((real_t)15.0);
+		} else if (lower.contains("foot") || lower.contains("ankle")) {
+			swing_cap = Math::deg_to_rad((real_t)30.0);
+			twist_cap = Math::deg_to_rad((real_t)20.0);
+		} else {
+			continue;
+		}
+		kv.value[SNAME("swing_limit")] = MIN(_dict_real(kv.value, SNAME("swing_limit"), swing_cap), swing_cap);
+		kv.value[SNAME("twist_lower")] = CLAMP(_dict_real(kv.value, SNAME("twist_lower"), -twist_cap), -twist_cap, (real_t)0.0);
+		kv.value[SNAME("twist_upper")] = CLAMP(_dict_real(kv.value, SNAME("twist_upper"), twist_cap), (real_t)0.0, twist_cap);
+	}
+
 	_clamp_adjacent_mass_ratios(p_skeleton, entries);
 
 	if (target_total_mass > (real_t)0.0) {
@@ -1670,8 +1978,17 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		}
 	}
 
+	// Joint friction models stiffened tissue, but a flat torque that suits a
+	// heavy thigh freezes a one-kilogram foot or hand at whatever angle motion
+	// left it. Scale each bone's friction down with the mass it carries; the
+	// cap at 1.0 keeps every heavier bone exactly at the profile's tuned feel.
+	for (KeyValue<StringName, Dictionary> &kv : entries) {
+		const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(kv.value);
+		const real_t mass = _capsule_mass(params.radius, params.height, params.density_scale);
+		kv.value[SNAME("joint_friction_scale")] = params.joint_friction_scale * CLAMP(mass / (real_t)10.0, (real_t)0.05, (real_t)1.0);
+	}
+
 	TypedArray<Dictionary> bones_array;
-	Array filter_pairs;
 	for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
 		const StringName bone_name = StringName(p_skeleton->get_bone_name(bone));
 		Dictionary *entry = entries.getptr(bone_name);
@@ -1680,6 +1997,84 @@ Ref<Box3DRagdollProfile> Box3DRagdollProfileGenerator::generate_profile(Skeleton
 		}
 		bones_array.push_back(*entry);
 	}
+
+	// Ragdoll bodies self-collide at runtime (that contact keeps limbs draping
+	// over the torso instead of folding through it), so emit filter pairs for
+	// the neighborhoods where contact would only fight the joints: bodies
+	// within two joint hops, and bodies that already overlap in the rest pose.
+	Array filter_pairs;
+	{
+		struct CapsuleFit {
+			StringName name;
+			Vector3 a;
+			Vector3 b;
+			real_t radius = 0.0;
+			int parent = -1;
+			int depth = 0;
+		};
+		LocalVector<CapsuleFit> capsule_fits;
+		HashMap<int, int> bone_to_fit;
+		for (int bone = 0; bone < p_skeleton->get_bone_count(); bone++) {
+			const StringName bone_name = StringName(p_skeleton->get_bone_name(bone));
+			Dictionary *entry = entries.getptr(bone_name);
+			if (entry == nullptr) {
+				continue;
+			}
+			const Box3DRagdollProfile::BoneParams params = Box3DRagdollProfile::parse_bone_entry(*entry);
+			const Transform3D capsule_rest = p_skeleton->get_bone_global_rest(bone) * params.offset;
+			const Vector3 half_axis = capsule_rest.basis.get_column(1).normalized() * _capsule_half_axis(params.radius, params.height);
+			CapsuleFit fit;
+			fit.name = bone_name;
+			fit.a = capsule_rest.origin - half_axis;
+			fit.b = capsule_rest.origin + half_axis;
+			fit.radius = _capsule_clamped_radius(params.radius);
+			int ancestor = p_skeleton->get_bone_parent(bone);
+			while (ancestor >= 0) {
+				const int *ancestor_fit = bone_to_fit.getptr(ancestor);
+				if (ancestor_fit != nullptr) {
+					fit.parent = *ancestor_fit;
+					fit.depth = capsule_fits[*ancestor_fit].depth + 1;
+					break;
+				}
+				ancestor = p_skeleton->get_bone_parent(ancestor);
+			}
+			bone_to_fit[bone] = capsule_fits.size();
+			capsule_fits.push_back(fit);
+		}
+		auto joint_hops = [&](int p_first, int p_second) {
+			int a = p_first;
+			int b = p_second;
+			int hops = 0;
+			while (a != b && a >= 0 && b >= 0) {
+				if (capsule_fits[a].depth >= capsule_fits[b].depth) {
+					a = capsule_fits[a].parent;
+				} else {
+					b = capsule_fits[b].parent;
+				}
+				hops++;
+			}
+			// Different components never meet; treat as far apart.
+			return a == b ? hops : 1 << 30;
+		};
+		for (uint32_t i = 0; i < capsule_fits.size(); i++) {
+			for (uint32_t j = i + 1; j < capsule_fits.size(); j++) {
+				bool filtered = joint_hops(i, j) <= 2;
+				if (!filtered) {
+					Vector3 closest_a;
+					Vector3 closest_b;
+					Geometry3D::get_closest_points_between_segments(capsule_fits[i].a, capsule_fits[i].b, capsule_fits[j].a, capsule_fits[j].b, closest_a, closest_b);
+					filtered = closest_a.distance_to(closest_b) < capsule_fits[i].radius + capsule_fits[j].radius + (real_t)0.01;
+				}
+				if (filtered) {
+					PackedStringArray pair;
+					pair.append(String(capsule_fits[i].name));
+					pair.append(String(capsule_fits[j].name));
+					filter_pairs.append(pair);
+				}
+			}
+		}
+	}
+
 	profile->set_bones(bones_array);
 	profile->set_filter_pairs(filter_pairs);
 	profile->set_bone_chains(chains);
@@ -1828,7 +2223,10 @@ Dictionary Box3DRagdollProfileGenerator::get_gizmo_line_groups(const Ref<Box3DRa
 		_append_capsule_gizmo(*lines, body_pose, params.radius, params.height);
 
 		if (params.joint_type != Box3DRagdollProfile::JOINT_TYPE_NONE) {
-			_append_joint_limit_gizmo(*lines, body_pose * params.joint_frame, params.joint_type, params.radius, params.swing_limit, params.twist_lower, params.twist_upper);
+			// Limits are ranges around the joint's neutral pose, which sits
+			// rest_delta away from the rest pose the skeleton is displayed in.
+			const Transform3D neutral_frame = body_pose * params.joint_frame * Transform3D(Basis(params.rest_delta), Vector3());
+			_append_joint_limit_gizmo(*lines, neutral_frame, params.joint_type, params.radius, params.swing_limit, params.twist_lower, params.twist_upper);
 		}
 	}
 	for (const StringName &chain_name : chain_order) {

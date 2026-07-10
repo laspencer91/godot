@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "box3d/box3d.h"
+#include <thirdparty/box3d/include/box3d/box3d.h>
 
 #include "core/io/resource.h"
 #include "core/templates/hash_map.h"
@@ -46,6 +46,10 @@ public:
 	struct BoneParams {
 		Transform3D offset;
 		Transform3D joint_frame;
+		// Rotation from the rest pose to the joint's neutral pose, expressed in
+		// the joint frame. Generated profiles center this on the mean animation
+		// pose so limits are symmetric ranges around it.
+		Quaternion rest_delta;
 		bool has_joint_frame = false;
 		bool enabled = true;
 		JointType joint_type = JOINT_TYPE_SPHERICAL;
@@ -123,6 +127,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 		Box3DRagdollProfile::JointType joint_type = Box3DRagdollProfile::JOINT_TYPE_SPHERICAL;
 		Transform3D offset;
 		Transform3D joint_frame;
+		Quaternion rest_delta;
 		real_t radius = 0.12;
 		real_t height = 0.5;
 		real_t density_scale = 1.0;
@@ -145,7 +150,6 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	LocalVector<b3JointId> filter_joints;
 	HashMap<StringName, int> bone_lookup;
 	RID space_rid;
-	int group_index = 0;
 	bool built = false;
 	bool ragdoll_active = false;
 	bool asleep_emitted = false;
@@ -161,8 +165,6 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	real_t editor_step_accumulator = 0.0;
 #endif
 
-	static int next_group_index;
-
 	void _clear_native_joints();
 	void _clear_bodies();
 	void _capture_animation_pose(real_t p_delta);
@@ -171,7 +173,7 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	Transform3D _bone_world_pose(Skeleton3D *p_skeleton, const BoneRuntime &p_bone) const;
 	void _set_body_transform(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone, const Transform3D &p_transform);
 	bool _create_body_for_bone(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton, BoneRuntime &r_bone);
-	void _create_joint_for_bone(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone);
+	void _create_joint_for_bone(Box3DPhysicsServer3D *p_server, Skeleton3D *p_skeleton, BoneRuntime &r_bone);
 	void _create_filter_joints(Box3DPhysicsServer3D *p_server);
 	void _seed_body_velocity(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone, real_t p_delta);
 	real_t _bone_mass(const BoneRuntime &p_bone) const;
@@ -237,6 +239,7 @@ class Box3DRagdollProfileGenerator : public RefCounted {
 	real_t minimum_radius = 0.04;
 	real_t fallback_radius_ratio = 0.2;
 	real_t maximum_adjacent_mass_ratio = 10.0;
+	real_t maximum_swing_limit = Math::deg_to_rad((real_t)80.0);
 
 	void _warn(const String &p_warning);
 	StringName _chain_for_bone(const String &p_bone) const;
@@ -267,6 +270,8 @@ public:
 	real_t get_fallback_radius_ratio() const { return fallback_radius_ratio; }
 	void set_maximum_adjacent_mass_ratio(real_t p_ratio) { maximum_adjacent_mass_ratio = MAX((real_t)1.0, p_ratio); }
 	real_t get_maximum_adjacent_mass_ratio() const { return maximum_adjacent_mass_ratio; }
+	void set_maximum_swing_limit(real_t p_limit) { maximum_swing_limit = CLAMP(p_limit, (real_t)0.0, (real_t)Math::PI); }
+	real_t get_maximum_swing_limit() const { return maximum_swing_limit; }
 
 	PackedStringArray get_warnings() const { return warnings; }
 	void clear_warnings() { warnings.clear(); }

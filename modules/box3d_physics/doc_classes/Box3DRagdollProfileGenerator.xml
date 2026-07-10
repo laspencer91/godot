@@ -4,7 +4,9 @@
 		Generates [Box3DRagdollProfile] resources from a [Skeleton3D].
 	</brief_description>
 	<description>
-		Builds the authoring profile used by [Box3DRagdoll]. The generator fits one capsule per generated bone, uses vertices weighted to the bone when a skinned [MeshInstance3D] is supplied, derives capsule mass from the runtime profile's density-based mass model, and can sample an [AnimationLibrary] to derive editable swing/twist limits. Generated profiles store a per-bone [code]joint_frame[/code] whose local X axis follows the anatomical bone axis; rotation tracks are converted to deltas from the rest pose and decomposed in that same frame before the runtime remaps spherical twist to Box3D's local Z axis.
+		Builds the authoring profile used by [Box3DRagdoll]. The generator fits one capsule per generated bone, uses vertices weighted to the bone when a skinned [MeshInstance3D] is supplied (mapped through the skin's bind poses so retargeted rests still line up), derives capsule mass from the runtime profile's density-based mass model, and can sample an [AnimationLibrary] to derive editable swing/twist limits. Capsules are fitted tip-to-tip over the bone span (hemisphere caps end at the joints), extended toward the tip when weighted geometry reaches past a stubby leaf bone (hands past a palm bone), and the radius comes from the median perpendicular distance of weighted vertices whose axial projection falls inside the span, so gear hanging past a joint does not inflate the fit. Importer [code]neutral_bone[/code] artifacts are skipped; secondary-motion bones (breast/hair/cloth helpers) and extremities (toes, palms, fingers) fold into their parent capsules so the forearm+hand and foot+toes each become one body; sibling bones whose fitted capsules mutually coincide are merged into a single body. Joint friction scales down with each bone's mass so light extremities relax instead of freezing, and anatomical caps tighten clavicle and ankle cones that animation envelopes overstate.
+		Generated profiles store a per-bone [code]joint_frame[/code] whose origin is the anatomical connection at the bone origin and whose local X axis follows the anatomical bone axis; rotation tracks are converted to deltas from the rest pose and decomposed in that same frame before the runtime remaps spherical twist to Box3D's local Z axis. When animations are sampled, the union of every animation in the library is taken, the joint's neutral pose is re-centered on the mean sampled pose (stored as the entry's [code]rest_delta[/code]) so limit ranges always contain the neutral, and revolute bones re-aim their hinge axis at the dominant sampled rotation axis when the name-based guess does not match the rig.
+		The editor exposes this API through [b]Generate Profile...[/b] in a [Box3DRagdoll] inspector. That workflow previews diagnostics before saving and assigning the external profile resource.
 	</description>
 	<methods>
 		<method name="analyze_profile" qualifiers="const">
@@ -61,6 +63,9 @@
 		</member>
 		<member name="maximum_adjacent_mass_ratio" type="float" setter="set_maximum_adjacent_mass_ratio" getter="get_maximum_adjacent_mass_ratio" default="10.0">
 			Maximum allowed mass ratio between generated parent and child capsules. The generator raises density scale on the lighter side when needed.
+		</member>
+		<member name="maximum_swing_limit" type="float" setter="set_maximum_swing_limit" getter="get_maximum_swing_limit" default="1.39626">
+			Upper bound in radians for animation-derived swing cones. The union of a whole animation library (aiming, sprinting, death poses) can span nearly the full sphere, which would leave the joint effectively unlimited.
 		</member>
 		<member name="minimum_bone_length" type="float" setter="set_minimum_bone_length" getter="get_minimum_bone_length" default="0.08">
 			Minimum generated capsule axis length.
