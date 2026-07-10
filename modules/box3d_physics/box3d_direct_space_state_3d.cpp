@@ -874,6 +874,14 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 
 	const real_t margin = MAX((real_t)0.0001, p_parameters.margin);
 	const real_t min_contact_depth = margin * (real_t)0.05;
+	// Recovery acts on at most this much of a contact's reported depth per pass. Concave
+	// one-sided triangle manifolds can report depth measured through the shape body for a
+	// tangential graze against a buried coplanar seam face (two stacked map brushes): a
+	// sub-millimeter graze reads as a large push along the face normal, which would drive
+	// the body into the floor (and previously catapult it back out). Bounding the step keeps
+	// recovery convergent for real penetrations while capping the damage a lying contact can
+	// do to roughly the margin scale per call.
+	const real_t max_recovery_depth = MAX(margin * (real_t)4.0, (real_t)0.01);
 	const int max_collisions = MIN(p_parameters.max_collisions, PS3DT::MotionResult::MAX_COLLISIONS);
 
 	HashSet<RID> excluded_bodies;
@@ -944,7 +952,12 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 
 		Vector3 pass_recovery;
 		for (const Box3DQueryContact &contact : contacts) {
-			const real_t depth = MAX((real_t)0.0, -contact.separation);
+			// Measure the depth still unresolved after the recovery already accumulated in
+			// this pass. Coincident contacts are common (concave meshes report one manifold
+			// per triangle, so a body resting on a flat floor gets dozens of identical
+			// contacts); adding each one's full depth catapults the body many times the
+			// actual penetration.
+			const real_t depth = MIN(-contact.separation - contact.normal.dot(pass_recovery), max_recovery_depth);
 			if (depth <= min_contact_depth) {
 				continue;
 			}
@@ -1065,6 +1078,18 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 				if (min_zero_radius_extent < 1e19 && motion_length > CMP_EPSILON) {
 					step_fraction = (min_zero_radius_extent * (real_t)0.45) / motion_length;
 				}
+				// Also bound the step in absolute length so samples only ever probe
+				// SHALLOW penetrations. Manifolds for a hull deeply overlapping a
+				// one-sided triangle are unreliable near triangle boundaries (SAT can
+				// emit a positive-separation manifold on a sideways axis for a pose
+				// half a shape deep into a floor while straddling its edge), which made
+				// long downward casts — e.g. CharacterBody3D::apply_floor_snap's
+				// floor_snap_length probe — sail through the floor and flicker the
+				// on-floor state every other tick.
+				const real_t max_march_step_length = 0.06;
+				if (motion_length > CMP_EPSILON) {
+					step_fraction = MIN(step_fraction, max_march_step_length / motion_length);
+				}
 				// Cap the sample count; a shape tiny relative to the sweep can in
 				// principle still tunnel past this cap.
 				const int max_march_samples = 64;
@@ -1129,8 +1154,13 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			}
 		}
 	}
+	// Keep contacts within half the margin of touching, not only strictly penetrating
+	// ones. The marched-cast refine converges the unsafe pose onto the contact boundary,
+	// where a strict separation<0 filter is a coin flip against requery float noise —
+	// every contact of a real hit could be dropped, reading as collided=false with full
+	// travel (CharacterBody3D::apply_floor_snap misses; on-floor flicker at rest poses).
 	for (int i = (int)collision_contacts.size() - 1; i >= 0; i--) {
-		if (-collision_contacts[i].separation <= 0.0) {
+		if (collision_contacts[i].separation > margin * (real_t)0.5) {
 			collision_contacts.remove_at(i);
 		}
 	}
