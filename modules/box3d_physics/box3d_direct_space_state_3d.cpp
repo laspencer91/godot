@@ -963,6 +963,7 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 	real_t unsafe_fraction = 1.0;
 	bool hit = false;
 	bool has_zero_radius_cast_shape = false;
+	real_t min_zero_radius_extent = 1e20;
 
 	if (!p_parameters.motion.is_zero_approx()) {
 		const b3Vec3 translation = to_box3d(p_parameters.motion);
@@ -983,6 +984,18 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 
 			if (query_shape.proxy.radius <= 0.0f) {
 				has_zero_radius_cast_shape = true;
+				// Track the shape's support extent along the motion; it bounds the
+				// sampling step the fallback below may take without tunneling.
+				real_t min_proj = 1e20;
+				real_t max_proj = -1e20;
+				for (int j = 0; j < query_shape.proxy.count; j++) {
+					const real_t proj = motion_direction.dot(to_godot(query_shape.proxy.points[j]));
+					min_proj = MIN(min_proj, proj);
+					max_proj = MAX(max_proj, proj);
+				}
+				if (max_proj > min_proj) {
+					min_zero_radius_extent = MIN(min_zero_radius_extent, max_proj - min_proj);
+				}
 				continue;
 			}
 
@@ -1037,19 +1050,58 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			if (has_blocking_contact(0.0)) {
 				hit = true;
 				unsafe_fraction = 0.0;
-			} else if (unsafe_fraction > CMP_EPSILON && has_blocking_contact(unsafe_fraction)) {
-				hit = true;
-				real_t low = 0.0;
-				real_t high = unsafe_fraction;
-				for (int i = 0; i < 12; i++) {
-					const real_t mid = (low + high) * (real_t)0.5;
-					if (has_blocking_contact(mid)) {
-						high = mid;
-					} else {
-						low = mid;
-					}
+			} else if (unsafe_fraction > CMP_EPSILON) {
+				// March intermediate fractions so consecutive samples overlap along
+				// the motion. Sampling only the endpoints lets a sweep longer than
+				// the shape's own extent pass entirely through a thin obstacle
+				// (e.g. a trimesh wall, which has no interior for the end pose to
+				// touch) without either endpoint reporting a contact. The step is
+				// 0.45x (not ~1x) the shape's extent because one-sided triangle
+				// collision culls the contact once the shape's center crosses the
+				// face plane — only the front half of the extent can detect, so a
+				// sample must land inside that half-extent window.
+				const real_t motion_length = p_parameters.motion.length();
+				real_t step_fraction = unsafe_fraction;
+				if (min_zero_radius_extent < 1e19 && motion_length > CMP_EPSILON) {
+					step_fraction = (min_zero_radius_extent * (real_t)0.45) / motion_length;
 				}
-				unsafe_fraction = MIN(unsafe_fraction, high);
+				// Cap the sample count; a shape tiny relative to the sweep can in
+				// principle still tunnel past this cap.
+				const int max_march_samples = 64;
+				step_fraction = MAX(step_fraction, unsafe_fraction / (real_t)max_march_samples);
+
+				real_t low = 0.0;
+				real_t first_blocked = -1.0;
+				real_t f = step_fraction;
+				while (true) {
+					const bool last = f >= unsafe_fraction;
+					if (last) {
+						f = unsafe_fraction;
+					}
+					if (has_blocking_contact(f)) {
+						first_blocked = f;
+						break;
+					}
+					low = f;
+					if (last) {
+						break;
+					}
+					f += step_fraction;
+				}
+
+				if (first_blocked >= 0.0) {
+					hit = true;
+					real_t high = first_blocked;
+					for (int i = 0; i < 12; i++) {
+						const real_t mid = (low + high) * (real_t)0.5;
+						if (has_blocking_contact(mid)) {
+							high = mid;
+						} else {
+							low = mid;
+						}
+					}
+					unsafe_fraction = MIN(unsafe_fraction, high);
+				}
 			}
 		}
 
