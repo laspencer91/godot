@@ -8,6 +8,7 @@
 #include "horde_fsm_config.h"
 #include "horde_nav_grid.h"
 
+#include "core/math/aabb.h"
 #include "core/object/ref_counted.h"
 #include "core/templates/local_vector.h"
 #include "core/variant/type_info.h"
@@ -156,8 +157,14 @@ private:
 
 	uint64_t tick_counter = 0;
 
+	// Reused output buffer for the GDScript-facing pack_interest_snapshot()
+	// (returning wrapper). Grows to the largest snapshot seen; the native
+	// pack_snapshot_into() core takes a caller-owned buffer instead (zero-alloc).
+	PackedByteArray pack_scratch;
+
 	// --- Metrics (last tick) ---
 	uint64_t tick_usec = 0;
+	uint64_t pack_usec = 0; // Last pack_snapshot_into() walk (R8.1).
 	uint64_t tier_usec[TIER_MAX] = { 0, 0, 0 };
 	int tier_count[TIER_MAX] = { 0, 0, 0 };
 
@@ -278,6 +285,27 @@ public:
 	PackedFloat32Array get_yaws() const;
 	PackedByteArray get_states() const;
 	PackedByteArray get_tiers() const;
+
+	// --- T3 wire pack (NET R3.5-R3.7, P2.1) ---
+	// One SoA walk per client per send. Classifies every live agent by its
+	// distance to THIS client (per-client relevance, R3.7 -- computed here, never
+	// from the sim tier / nearest_any_dist_sq), and emits an R3.5 record for each
+	// agent whose relevance tier is due this tick (p_rate_mask, a HordeWireScheduler
+	// SendBit mask). Records are quantized to p_bounds (the nav-grid AABB) and
+	// batched into MTU-bounded packets, each prefixed with [server_tick u32][count
+	// u16] (R3.6). Positions are absolute-quantized (R3.8 absolute-first MVP).
+	//
+	// pack_snapshot_into: native core, writes into a caller-owned reused buffer
+	// (zero per-call heap on the steady state), returns the packet count. Not
+	// bound to script -- a reference out-param does not round-trip through Variant.
+	int pack_snapshot_into(uint32_t p_server_tick, const Vector3 &p_client_pos, const AABB &p_bounds,
+			float p_hot_radius, float p_mid_radius, int p_rate_mask, PackedByteArray &r_out);
+	// GDScript-facing wrapper: packs into the reused member buffer and returns it
+	// (the bytes GDScript hands straight to the transport; it never touches
+	// per-agent data). Multiple concatenated packets when the set exceeds one MTU.
+	PackedByteArray pack_interest_snapshot(uint32_t p_server_tick, const Vector3 &p_client_pos, const AABB &p_bounds,
+			float p_hot_radius, float p_mid_radius, int p_rate_mask);
+	uint64_t get_pack_time_usec() const { return pack_usec; }
 
 	// --- Metrics (R8.1) ---
 	uint64_t get_tick_time_usec() const { return tick_usec; }

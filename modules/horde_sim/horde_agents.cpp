@@ -4,6 +4,9 @@
 
 #include "horde_agents.h"
 
+#include "horde_wire.h"
+
+#include "core/io/marshalls.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
 #include "core/templates/hashfuncs.h"
@@ -834,6 +837,97 @@ PackedByteArray HordeAgents::get_tiers() const {
 	return out;
 }
 
+// --- T3 wire pack (NET R3.5-R3.7) -------------------------------------------
+
+int HordeAgents::pack_snapshot_into(uint32_t p_server_tick, const Vector3 &p_client_pos, const AABB &p_bounds,
+		float p_hot_radius, float p_mid_radius, int p_rate_mask, PackedByteArray &r_out) {
+	const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
+
+	const float hot_sq = p_hot_radius * p_hot_radius;
+	const float mid_sq = p_mid_radius * p_mid_radius;
+	const bool send_hot = (p_rate_mask & HordeWireScheduler::SEND_HOT) != 0;
+	const bool send_mid = (p_rate_mask & HordeWireScheduler::SEND_MID) != 0;
+	const bool send_far = (p_rate_mask & HordeWireScheduler::SEND_FAR) != 0;
+
+	// Per-client relevance (R3.7): distance to THIS client, computed here. The
+	// sim tier / nearest_any_dist_sq are nearest-to-ANY-player sim-LOD and are
+	// deliberately not consulted (ticket structural decision 2).
+	const float cx = p_client_pos.x;
+	const float cz = p_client_pos.z;
+
+	// Pass 1: count due records so the output is sized in a single resize.
+	int due = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0) {
+			continue;
+		}
+		const float dx = pos_x[i] - cx;
+		const float dz = pos_z[i] - cz;
+		const float d2 = dx * dx + dz * dz;
+		const bool emit = d2 < hot_sq ? send_hot : (d2 < mid_sq ? send_mid : send_far);
+		if (emit) {
+			due++;
+		}
+	}
+
+	if (due == 0) {
+		r_out.resize(0);
+		pack_usec = OS::get_singleton()->get_ticks_usec() - t0;
+		return 0;
+	}
+
+	using namespace HordeWireFormat;
+	const int packets = (due + MAX_RECORDS_PER_PACKET - 1) / MAX_RECORDS_PER_PACKET;
+	const int total = due * RECORD_BYTES + packets * HEADER_BYTES;
+	if (r_out.size() != total) {
+		r_out.resize(total);
+	}
+	uint8_t *w = r_out.ptrw();
+
+	// Pass 2: emit in ascending slot order (deterministic), opening a new
+	// MTU-bounded packet whenever the current one fills. Counts are known up
+	// front (full packets hold MAX_RECORDS_PER_PACKET, the last holds the
+	// remainder), so each header is written complete -- no backpatching.
+	int cursor = 0;
+	int emitted = 0;
+	int packet_remaining = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0) {
+			continue;
+		}
+		const float dx = pos_x[i] - cx;
+		const float dz = pos_z[i] - cz;
+		const float d2 = dx * dx + dz * dz;
+		const bool emit = d2 < hot_sq ? send_hot : (d2 < mid_sq ? send_mid : send_far);
+		if (!emit) {
+			continue;
+		}
+		if (packet_remaining == 0) {
+			const int this_count = MIN(MAX_RECORDS_PER_PACKET, due - emitted);
+			encode_uint32(p_server_tick, w + cursor);
+			cursor += 4;
+			encode_uint16((uint16_t)this_count, w + cursor);
+			cursor += 2;
+			packet_remaining = this_count;
+		}
+		const uint64_t rec = encode_record(_make_id(i),
+				Vector3(pos_x[i], pos_y[i], pos_z[i]), yaw[i], state[i], p_bounds);
+		encode_uint64(rec, w + cursor);
+		cursor += RECORD_BYTES;
+		emitted++;
+		packet_remaining--;
+	}
+
+	pack_usec = OS::get_singleton()->get_ticks_usec() - t0;
+	return packets;
+}
+
+PackedByteArray HordeAgents::pack_interest_snapshot(uint32_t p_server_tick, const Vector3 &p_client_pos, const AABB &p_bounds,
+		float p_hot_radius, float p_mid_radius, int p_rate_mask) {
+	pack_snapshot_into(p_server_tick, p_client_pos, p_bounds, p_hot_radius, p_mid_radius, p_rate_mask, pack_scratch);
+	return pack_scratch;
+}
+
 uint64_t HordeAgents::get_tier_time_usec(int p_tier) const {
 	ERR_FAIL_INDEX_V(p_tier, TIER_MAX, 0);
 	return tier_usec[p_tier];
@@ -905,6 +999,10 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_yaws"), &HordeAgents::get_yaws);
 	ClassDB::bind_method(D_METHOD("get_states"), &HordeAgents::get_states);
 	ClassDB::bind_method(D_METHOD("get_tiers"), &HordeAgents::get_tiers);
+
+	// T3 wire pack.
+	ClassDB::bind_method(D_METHOD("pack_interest_snapshot", "server_tick", "client_pos", "bounds", "hot_radius", "mid_radius", "rate_mask"), &HordeAgents::pack_interest_snapshot);
+	ClassDB::bind_method(D_METHOD("get_pack_time_usec"), &HordeAgents::get_pack_time_usec);
 
 	// Metrics.
 	ClassDB::bind_method(D_METHOD("get_tick_time_usec"), &HordeAgents::get_tick_time_usec);
