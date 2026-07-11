@@ -11,6 +11,7 @@
 #include "core/math/aabb.h"
 #include "core/object/ref_counted.h"
 #include "core/templates/local_vector.h"
+#include "core/variant/dictionary.h"
 #include "core/variant/type_info.h"
 
 // Struct-of-arrays horde agent simulation (DES G6.9, A2.x, R3.1-R3.4).
@@ -70,6 +71,13 @@ public:
 		// arm this: Cold advances without a mover sweep (board-attack contact
 		// only matters at Hot/Warm range).
 		REASON_BLOCKED,
+		// apply_damage() drove this agent to 0 HP. Unlike every other reason the
+		// DEAD transition is already applied natively (HP authority is native);
+		// the quad is the death NOTIFICATION. Script acks it like any transition
+		// (apply_transition(id, STATE_DEAD)) and reads get_death_info() to fill
+		// the R3.9 death event. Persists across ticks until acked (at-least-once,
+		// same as every armed reason).
+		REASON_DIED,
 	};
 
 	// Id space (NET R3.5): 10-bit slot + a reuse-epoch parity bit. A packed id
@@ -112,7 +120,26 @@ private:
 	// per-client send rates must compute their own player-relative distances
 	// (P2.1); do not repurpose this field for that.
 	LocalVector<float> nearest_any_dist_sq;
-	LocalVector<int32_t> hp;
+	// Float HP (damage amounts are float; falloff yields fractional hits).
+	// Spawn base comes from the archetype CombatRule (or the spawn() override).
+	LocalVector<float> hp;
+	// Remaining blunt-knockback displacement (m, planar) and its decay ticks
+	// (P2.4, COMBAT_FEEL section 4). Consumed by _move_agent through the same
+	// CastMover + skin path as locomotion, so a shove never crosses a wall.
+	LocalVector<float> kb_x;
+	LocalVector<float> kb_z;
+	LocalVector<uint16_t> kb_ticks;
+	// Native damage-stagger countdown (apply_damage): while > 0 the agent sits
+	// in STATE_STAGGER with exits suppressed, then prev_state resumes. 0 for
+	// script-applied STAGGER, which keeps the normal timer/exit machinery.
+	LocalVector<uint16_t> stagger_ticks_left;
+	LocalVector<uint8_t> prev_state; // State a native stagger resumes into.
+	// Last hit recorded by apply_damage() -- on a kill, by definition the
+	// killing hit. Feeds the R3.9 death event payload via get_death_info().
+	LocalVector<int32_t> hit_killer;
+	LocalVector<float> hit_impulse_x;
+	LocalVector<float> hit_impulse_y;
+	LocalVector<float> hit_impulse_z;
 	LocalVector<uint16_t> epoch; // Reuse epoch per slot (low bit is the wire parity).
 	LocalVector<uint16_t> wander; // PATROL re-roll counter; bumps on every applied transition.
 	LocalVector<uint8_t> state;
@@ -177,7 +204,12 @@ private:
 	bool _resolve(int p_id, int &r_slot) const;
 
 	void _rebuild_storage();
-	void _init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, int p_hp);
+	void _init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp);
+	// State entry bookkeeping shared by apply_transition() and the native
+	// combat transitions (death, stagger enter/exit).
+	void _enter_state(int p_slot, int p_new_state);
+	// Archetype combat row from the config, or HordeFSMConfig::DEFAULT_COMBAT.
+	const HordeFSMConfig::CombatRule &_combat_rule(int p_archetype) const;
 
 	// Per-tick stages.
 	void _assign_tiers();
@@ -236,7 +268,8 @@ public:
 	void set_collision_world_packed(uint32_t p_packed);
 
 	// --- Spawn / despawn / recycle (NET R3.4-R3.5) ---
-	int spawn(int p_archetype, const Vector3 &p_position, int p_state = STATE_DORMANT, int p_hp = 100);
+	// p_hp < 0 spawns at the archetype's CombatRule max_hp (the default path).
+	int spawn(int p_archetype, const Vector3 &p_position, int p_state = STATE_DORMANT, float p_hp = -1.0f);
 	bool despawn(int p_id);
 	bool is_alive(int p_id) const;
 	int get_active_count() const { return active_count; }
@@ -259,15 +292,41 @@ public:
 	bool apply_transition(int p_id, int p_new_state);
 	void apply_transitions(const PackedInt32Array &p_pairs);
 
+	// --- Combat ingress (P2.4, COMBAT_FEEL sections 3-4) ---
+	// Nearest live agent along a weapon ray, segment-vs-capsule against the
+	// mover capsule of every live slot: {id, hit_pos, height_frac}, empty
+	// Dictionary on a miss. height_frac is 0 at the feet, 1 at the crown --
+	// head classification stays game-side (the module does not know about
+	// heads). DEAD/despawned agents never hit, and the returned id carries the
+	// current epoch parity so it cannot go stale before use. Per-shot query,
+	// not per-tick; budget-tested <= 50 us against 250 agents.
+	Dictionary raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist) const;
+
+	// Damage ingress; returns the resulting state (-1 on a stale id). The game
+	// sends FINAL damage -- headshot multipliers are game-side. At <= 0 HP the
+	// DEAD transition applies natively and is reported once as a REASON_DIED
+	// quad (see TransitionReason). A surviving hit at >= stagger_damage_frac of
+	// the archetype max HP enters STAGGER for stagger_duration_ticks, then the
+	// prior state (and its movement mode) resumes natively. p_knockback > 0
+	// requests a horizontal stumble along p_impulse_dir: distance capped by
+	// knockback_distance_cap, decaying over knockback_duration_ticks, moved
+	// through the CastMover + skin path (never through walls). Deterministic:
+	// pure function of arguments + SoA state, no RNG (L6).
+	int apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint, float p_knockback = 0.0f);
+
+	// Last hit recorded by apply_damage(): {killer_hint, impulse_dir}. For a
+	// dead agent this is the killing hit -- the R3.9 death event payload.
+	Dictionary get_death_info(int p_id) const;
+
 	// --- Agent access (script + presentation, read-mostly) ---
 	int get_agent_state(int p_id) const;
 	int get_agent_tier(int p_id) const;
 	int get_agent_archetype(int p_id) const;
 	Vector3 get_agent_position(int p_id) const;
 	float get_agent_yaw(int p_id) const;
-	int get_agent_hp(int p_id) const;
+	float get_agent_hp(int p_id) const;
 	float get_nearest_player_distance(int p_id) const;
-	void set_agent_hp(int p_id, int p_hp);
+	void set_agent_hp(int p_id, float p_hp);
 	void set_agent_target(int p_id, const Vector3 &p_target);
 
 	// Bulk snapshots for MultiMesh presentation (P1.B3). All aligned to
