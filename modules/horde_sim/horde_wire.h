@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/io/marshalls.h"
 #include "core/math/aabb.h"
 #include "core/math/math_funcs.h"
 #include "core/math/vector3.h"
@@ -82,8 +83,7 @@ _FORCE_INLINE_ float dequantize_unorm(uint32_t p_q, float p_min, float p_size, u
 // Circular 8-bit heading. Any angle maps into [0, 256); 256 wraps to 0 so the
 // seam at +/-PI is continuous.
 _FORCE_INLINE_ uint32_t quantize_yaw(float p_yaw) {
-	float t = p_yaw / (float)Math::TAU + 0.5f; // [-PI, PI] -> [0, 1].
-	t -= Math::floor(t); // Wrap into [0, 1).
+	const float t = Math::fract(p_yaw / (float)Math::TAU + 0.5f); // [-PI, PI] -> [0, 1).
 	const int q = (int)(t * (float)YAW_MAX + 0.5f);
 	return (uint32_t)(q & 0xFF);
 }
@@ -118,17 +118,39 @@ _FORCE_INLINE_ void decode_record(uint64_t p_rec, const AABB &p_bounds, int &r_i
 	r_state = (int)st;
 }
 
+// R3.6 packet header: [server_tick u32][count u16], HEADER_BYTES total. Shared
+// by the pack pass (encoder) and HordeWireCodec (decoder) like the record above.
+_FORCE_INLINE_ void encode_header(uint32_t p_server_tick, uint16_t p_count, uint8_t *p_dst) {
+	encode_uint32(p_server_tick, p_dst);
+	encode_uint16(p_count, p_dst + 4);
+}
+
+_FORCE_INLINE_ void decode_header(const uint8_t *p_src, uint32_t &r_server_tick, uint16_t &r_count) {
+	r_server_tick = decode_uint32(p_src);
+	r_count = decode_uint16(p_src + 4);
+}
+
+// R3.9 reliable lifecycle event layout (spawn/death/despawn). Positions and
+// directions ride full float32 -- rare reliable one-shots, not per-tick
+// bandwidth, and R4.3 wants the death impulse direction to stay precise (the
+// ragdoll hero-clip moment).
+constexpr int SPAWN_BYTES = 2 + 1 + 12; // id u16, archetype u8, pos 3xf32.
+constexpr int DEATH_BYTES = 2 + 2 + 12; // id u16, killer u16, impulse 3xf32.
+constexpr int DESPAWN_BYTES = 2; // id u16.
+constexpr uint16_t KILLER_NONE = 0xFFFF; // Sentinel for "no killer hint".
+
 } // namespace HordeWireFormat
 
 // Per-client tiered send-rate scheduler (NET R3.7).
 //
 // One small helper object per client (state owned by the caller, per the ticket).
 // due_mask(server_tick) reports which relevance tiers are due to send this tick.
-// Periods are in 128 Hz ticks: hot ~20 Hz, mid ~10 Hz, far 4 Hz. The offsets are
-// chosen so hot (even ticks) and far (odd ticks) are parity-disjoint: all three
-// tiers never fall due on the same tick, so a client never bursts a full hot+mid+
-// far send. client_phase staggers different clients off each other so their
-// packets spread across ticks (host send-load smoothing) rather than co-firing.
+// Periods are in 128 Hz ticks: hot ~20 Hz, mid ~10 Hz, far 4 Hz. The tier
+// offsets are fixed constants, not knobs: they are chosen so hot (even ticks)
+// and far (odd ticks) are parity-disjoint -- all three tiers never fall due on
+// the same tick, so a client never bursts a full hot+mid+far send. client_phase
+// staggers different clients off each other so their packets spread across
+// ticks (host send-load smoothing) rather than co-firing.
 class HordeWireScheduler : public RefCounted {
 	GDCLASS(HordeWireScheduler, RefCounted);
 
@@ -141,19 +163,18 @@ public:
 	};
 
 private:
+	// Fixed tier offsets (the parity-disjoint invariant above). Each must stay
+	// within [0, period) for its default period.
+	static constexpr int HOT_OFFSET = 0; // Even ticks (period 6).
+	static constexpr int MID_OFFSET = 3;
+	static constexpr int FAR_OFFSET = 5; // Odd ticks (period 32) -> disjoint from hot.
+
 	int hot_period = 6; // 128/6 ~= 21.3 Hz (~20 Hz hot, R3.7).
 	int mid_period = 13; // 128/13 ~= 9.8 Hz (~10 Hz mid).
 	int far_period = 32; // 128/32 = 4 Hz far.
-	int hot_offset = 0; // Even ticks.
-	int mid_offset = 3;
-	int far_offset = 5; // Odd ticks -> parity-disjoint from hot.
 	int client_phase = 0;
 
 	static void _bind_methods();
-
-	_FORCE_INLINE_ static int _clamp_offset(int p_offset, int p_period) {
-		return p_period > 0 ? (((p_offset % p_period) + p_period) % p_period) : 0;
-	}
 
 public:
 	void set_hot_period(int p_ticks) { hot_period = p_ticks; }
@@ -162,12 +183,6 @@ public:
 	int get_mid_period() const { return mid_period; }
 	void set_far_period(int p_ticks) { far_period = p_ticks; }
 	int get_far_period() const { return far_period; }
-	void set_hot_offset(int p_off) { hot_offset = p_off; }
-	int get_hot_offset() const { return hot_offset; }
-	void set_mid_offset(int p_off) { mid_offset = p_off; }
-	int get_mid_offset() const { return mid_offset; }
-	void set_far_offset(int p_off) { far_offset = p_off; }
-	int get_far_offset() const { return far_offset; }
 	void set_client_phase(int p_phase) { client_phase = p_phase; }
 	int get_client_phase() const { return client_phase; }
 

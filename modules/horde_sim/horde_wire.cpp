@@ -11,16 +11,17 @@
 
 int HordeWireScheduler::due_mask(int64_t p_server_tick) const {
 	// client_phase staggers this client's send ticks off the others. Ticks are
-	// non-negative and offsets are folded into range, so the raw modulo is safe.
+	// non-negative and the fixed offsets are folded (% period) so a shortened
+	// period still fires, so the raw modulo is safe.
 	const int64_t t = p_server_tick + client_phase;
 	int m = SEND_NONE;
-	if (hot_period > 0 && (int)(t % hot_period) == _clamp_offset(hot_offset, hot_period)) {
+	if (hot_period > 0 && (int)(t % hot_period) == HOT_OFFSET % hot_period) {
 		m |= SEND_HOT;
 	}
-	if (mid_period > 0 && (int)(t % mid_period) == _clamp_offset(mid_offset, mid_period)) {
+	if (mid_period > 0 && (int)(t % mid_period) == MID_OFFSET % mid_period) {
 		m |= SEND_MID;
 	}
-	if (far_period > 0 && (int)(t % far_period) == _clamp_offset(far_offset, far_period)) {
+	if (far_period > 0 && (int)(t % far_period) == FAR_OFFSET % far_period) {
 		m |= SEND_FAR;
 	}
 	return m;
@@ -33,12 +34,6 @@ void HordeWireScheduler::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_mid_period"), &HordeWireScheduler::get_mid_period);
 	ClassDB::bind_method(D_METHOD("set_far_period", "ticks"), &HordeWireScheduler::set_far_period);
 	ClassDB::bind_method(D_METHOD("get_far_period"), &HordeWireScheduler::get_far_period);
-	ClassDB::bind_method(D_METHOD("set_hot_offset", "offset"), &HordeWireScheduler::set_hot_offset);
-	ClassDB::bind_method(D_METHOD("get_hot_offset"), &HordeWireScheduler::get_hot_offset);
-	ClassDB::bind_method(D_METHOD("set_mid_offset", "offset"), &HordeWireScheduler::set_mid_offset);
-	ClassDB::bind_method(D_METHOD("get_mid_offset"), &HordeWireScheduler::get_mid_offset);
-	ClassDB::bind_method(D_METHOD("set_far_offset", "offset"), &HordeWireScheduler::set_far_offset);
-	ClassDB::bind_method(D_METHOD("get_far_offset"), &HordeWireScheduler::get_far_offset);
 	ClassDB::bind_method(D_METHOD("set_client_phase", "phase"), &HordeWireScheduler::set_client_phase);
 	ClassDB::bind_method(D_METHOD("get_client_phase"), &HordeWireScheduler::get_client_phase);
 
@@ -78,19 +73,15 @@ Dictionary HordeWireCodec::decode_record(const PackedByteArray &p_bytes, int p_o
 Dictionary HordeWireCodec::decode_header(const PackedByteArray &p_bytes, int p_offset) const {
 	Dictionary d;
 	ERR_FAIL_COND_V_MSG(p_offset < 0 || p_offset + HEADER_BYTES > p_bytes.size(), d, "decode_header: buffer too short for a packet header at this offset.");
-	const uint8_t *p = p_bytes.ptr() + p_offset;
-	d["tick"] = (int64_t)decode_uint32(p);
-	d["count"] = (int)decode_uint16(p + 4);
+	uint32_t tick;
+	uint16_t count;
+	HordeWireFormat::decode_header(p_bytes.ptr() + p_offset, tick, count);
+	d["tick"] = (int64_t)tick;
+	d["count"] = (int)count;
 	return d;
 }
 
-// Reliable lifecycle events (R3.9). Positions/directions ride full float32 --
-// these are rare reliable one-shots, not per-tick bandwidth, and R4.3 wants the
-// death impulse direction to stay precise (the ragdoll hero-clip moment).
-static constexpr int SPAWN_BYTES = 2 + 1 + 12; // id u16, archetype u8, pos 3xf32.
-static constexpr int DEATH_BYTES = 2 + 2 + 12; // id u16, killer u16, impulse 3xf32.
-static constexpr int DESPAWN_BYTES = 2; // id u16.
-static constexpr uint16_t KILLER_NONE = 0xFFFF; // Sentinel for "no killer hint".
+// Reliable lifecycle events (R3.9); layout constants live in HordeWireFormat.
 
 PackedByteArray HordeWireCodec::encode_spawn(int p_id, int p_archetype, const Vector3 &p_pos) const {
 	PackedByteArray out;

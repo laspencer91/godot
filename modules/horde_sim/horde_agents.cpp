@@ -851,21 +851,21 @@ int HordeAgents::pack_snapshot_into(uint32_t p_server_tick, const Vector3 &p_cli
 
 	// Per-client relevance (R3.7): distance to THIS client, computed here. The
 	// sim tier / nearest_any_dist_sq are nearest-to-ANY-player sim-LOD and are
-	// deliberately not consulted (ticket structural decision 2).
+	// deliberately not consulted (ticket structural decision 2). One predicate
+	// shared by both passes so the count can never drift from what gets emitted.
 	const float cx = p_client_pos.x;
 	const float cz = p_client_pos.z;
+	auto is_due = [&](int i) -> bool {
+		const float dx = pos_x[i] - cx;
+		const float dz = pos_z[i] - cz;
+		const float d2 = dx * dx + dz * dz;
+		return d2 < hot_sq ? send_hot : (d2 < mid_sq ? send_mid : send_far);
+	};
 
 	// Pass 1: count due records so the output is sized in a single resize.
 	int due = 0;
 	for (int i = 0; i < capacity; i++) {
-		if (active[i] == 0) {
-			continue;
-		}
-		const float dx = pos_x[i] - cx;
-		const float dz = pos_z[i] - cz;
-		const float d2 = dx * dx + dz * dz;
-		const bool emit = d2 < hot_sq ? send_hot : (d2 < mid_sq ? send_mid : send_far);
-		if (emit) {
+		if (active[i] != 0 && is_due(i)) {
 			due++;
 		}
 	}
@@ -892,22 +892,13 @@ int HordeAgents::pack_snapshot_into(uint32_t p_server_tick, const Vector3 &p_cli
 	int emitted = 0;
 	int packet_remaining = 0;
 	for (int i = 0; i < capacity; i++) {
-		if (active[i] == 0) {
-			continue;
-		}
-		const float dx = pos_x[i] - cx;
-		const float dz = pos_z[i] - cz;
-		const float d2 = dx * dx + dz * dz;
-		const bool emit = d2 < hot_sq ? send_hot : (d2 < mid_sq ? send_mid : send_far);
-		if (!emit) {
+		if (active[i] == 0 || !is_due(i)) {
 			continue;
 		}
 		if (packet_remaining == 0) {
 			const int this_count = MIN(MAX_RECORDS_PER_PACKET, due - emitted);
-			encode_uint32(p_server_tick, w + cursor);
-			cursor += 4;
-			encode_uint16((uint16_t)this_count, w + cursor);
-			cursor += 2;
+			encode_header(p_server_tick, (uint16_t)this_count, w + cursor);
+			cursor += HEADER_BYTES;
 			packet_remaining = this_count;
 		}
 		const uint64_t rec = encode_record(_make_id(i),

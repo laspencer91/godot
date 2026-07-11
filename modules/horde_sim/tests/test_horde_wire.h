@@ -18,18 +18,6 @@
 
 namespace TestHordeSim {
 
-// Smallest signed angular difference, wrap-aware.
-static float wire_angle_diff(float a, float b) {
-	float d = a - b;
-	while (d > (float)(Math::TAU * 0.5)) {
-		d -= (float)Math::TAU;
-	}
-	while (d < -(float)(Math::TAU * 0.5)) {
-		d += (float)Math::TAU;
-	}
-	return Math::abs(d);
-}
-
 // Walk a packed snapshot buffer (one or more concatenated packets) and return
 // every decoded record id, ascending. Mirrors what the P2.1b client does.
 static PackedInt32Array wire_collect_ids(const Ref<HordeWireCodec> &codec, const PackedByteArray &buf, const AABB &bounds) {
@@ -90,7 +78,7 @@ TEST_CASE("[HordeSim][Wire] Quantized record round-trips within <= 1 cm at 650 m
 	for (float y : yaws) {
 		PackedByteArray rec = codec->encode_record(7, Vector3(10, 1, 10), y, 2, bounds);
 		Dictionary d = codec->decode_record(rec, 0, bounds);
-		CHECK(wire_angle_diff((float)d["yaw"], y) <= 0.0246f);
+		CHECK(Math::abs(Math::angle_difference((float)d["yaw"], y)) <= 0.0246f);
 	}
 
 	// state: every FSM ordinal (<= 16, 4 bits) round-trips.
