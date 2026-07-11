@@ -460,9 +460,17 @@ void Box3DPhysicsServer3D::body_clear_shapes(RID p_body) {
 }
 
 void Box3DPhysicsServer3D::body_attach_object_instance_id(RID p_body, ObjectID p_id) {
-	Box3DBody3D *body = body_owner.get_or_null(p_body);
-	ERR_FAIL_NULL(body);
-	body->set_instance_id(p_id);
+	if (Box3DBody3D *body = body_owner.get_or_null(p_body)) {
+		body->set_instance_id(p_id);
+		return;
+	}
+
+	if (Box3DSoftBodyPlaceholder *soft_body = soft_body_owner.get_or_null(p_body)) {
+		soft_body->set_instance_id(p_id);
+		return;
+	}
+
+	ERR_FAIL_MSG("Box3D: attempted to attach an instance id to an invalid RID.");
 }
 
 ObjectID Box3DPhysicsServer3D::body_get_object_instance_id(RID p_body) const {
@@ -1006,6 +1014,24 @@ Vector3 Box3DPhysicsServer3D::joint_get_box3d_motor_velocity(RID p_joint) const 
 	return joint->get_box3d_motor_velocity();
 }
 
+// --- Soft bodies ---
+
+RID Box3DPhysicsServer3D::soft_body_create() {
+	Box3DSoftBodyPlaceholder *soft_body = memnew(Box3DSoftBodyPlaceholder);
+	RID rid = soft_body_owner.make_rid(soft_body);
+	soft_body->set_rid(rid);
+	return rid;
+}
+
+void Box3DPhysicsServer3D::soft_body_set_space(RID p_body, RID p_space) {
+	Box3DSoftBodyPlaceholder *soft_body = soft_body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(soft_body);
+
+	if (p_space.is_valid()) {
+		WARN_PRINT_ONCE("Box3D: SoftBody3D simulation is not implemented; soft bodies will not move or deform.");
+	}
+}
+
 // --- Lifecycle ---
 
 void Box3DPhysicsServer3D::free_rid(RID p_rid) {
@@ -1030,6 +1056,9 @@ void Box3DPhysicsServer3D::free_rid(RID p_rid) {
 		body->set_space(nullptr);
 		body_owner.free(p_rid);
 		memdelete(body);
+	} else if (Box3DSoftBodyPlaceholder *soft_body = soft_body_owner.get_or_null(p_rid)) {
+		soft_body_owner.free(p_rid);
+		memdelete(soft_body);
 	} else if (Box3DJoint3D *joint = joint_owner.get_or_null(p_rid)) {
 		joint_owner.free(p_rid);
 		memdelete(joint);
