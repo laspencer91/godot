@@ -9,6 +9,7 @@
 #include "../horde_fsm_config.h"
 #include "../horde_nav_grid.h"
 
+#include "core/os/os.h"
 #include "core/os/thread.h"
 #include "core/string/print_string.h"
 
@@ -308,6 +309,74 @@ TEST_CASE("[HordeSim][FlowField] Readers never observe a torn or incomplete fiel
 	CHECK_FALSE(torn.load());
 	CHECK(samples.load() > 0);
 	print_line(vformat("[HordeSim] coherence reader samples: %d", (int64_t)samples.load()));
+}
+
+// ---------------------------------------------------------------------------
+// 7b. Deterministic straddle: a sample paused inside the race window while a
+// publish lands AND a second recompute rewrites the snapshotted buffer. The
+// interleaved test seam runs the same seqlock protocol as the production
+// accessors, so this catches the torn-read class deterministically (the
+// threaded case above only hits the nanosecond window under load).
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][FlowField] A sample straddling two recomputes never tears") {
+	// 256x256 keeps a recompute in the multi-ms range so the hooked sample's
+	// pending data read reliably lands while the worker is mid-write.
+	Ref<HordeNavGrid> grid = make_grid(256, 256);
+	Ref<HordeFlowField> field;
+	field.instantiate();
+	field->set_grid(grid);
+	field->add_goal(0, 0, 0);
+	field->recompute_sync();
+
+	// Probe the far corner: with goals near the opposite corner it is settled
+	// last by Dijkstra and written last by the direction pass, so mid-compute
+	// the buffer still holds the 0xFF clear pattern there (COST_UNREACHABLE /
+	// OCTANT_NONE) -- exactly the torn value the seqlock must never return.
+	const int probe = grid->cell_index(255, 255, 0);
+
+	struct HookCtx {
+		HordeFlowField *field = nullptr;
+		bool fired = false;
+	};
+	auto hook = [](void *p_userdata) {
+		HookCtx &ctx = *static_cast<HookCtx *>(p_userdata);
+		if (ctx.fired) {
+			return; // Widen the window once; retries must converge unhindered.
+		}
+		ctx.fired = true;
+		// Publish #1: the caller's snapshotted front becomes the back buffer.
+		ctx.field->clear_goals();
+		ctx.field->add_goal(10, 10, 0);
+		ctx.field->recompute_sync();
+		// Recompute #2 in flight: the worker starts clearing/rewriting the
+		// snapshotted buffer while the caller's data read is still pending.
+		ctx.field->clear_goals();
+		ctx.field->add_goal(20, 20, 0);
+		ctx.field->request_recompute();
+		// Land the pending read mid-write (the clear pattern goes down first;
+		// the probe cell's real value arrives near the end of the compute).
+		OS::get_singleton()->delay_usec(1500);
+	};
+
+	for (int iter = 0; iter < 20; iter++) {
+		HookCtx ctx;
+		ctx.field = field.ptr();
+		if (iter & 1) {
+			const int oct = field->octant_at_index_interleaved(probe, hook, &ctx);
+			CHECK(oct != HordeFlowField::OCTANT_NONE); // Open grid: never unreachable.
+		} else {
+			const int cost = field->cost_at_index_interleaved(probe, hook, &ctx);
+			CHECK(cost >= 0); // Open grid: every published field reaches every cell.
+		}
+		CHECK(ctx.fired);
+		// Drain the in-flight recompute, then restore the baseline field.
+		while (field->is_recomputing()) {
+			field->poll();
+		}
+		field->clear_goals();
+		field->add_goal(0, 0, 0);
+		field->recompute_sync();
+	}
 }
 
 // ---------------------------------------------------------------------------
