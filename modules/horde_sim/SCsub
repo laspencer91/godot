@@ -6,6 +6,11 @@ Import("env_modules")
 
 env_horde = env_modules.Clone()
 
+# The agent sim resolves the physics space to the underlying b3World and calls
+# Box3D's kinematic mover sweep natively (D-009), so it needs the Box3D public
+# headers on the include path (sibling box3d_physics module already links them).
+env_horde.Prepend(CPPPATH=["#thirdparty/box3d/include"])
+
 # dev_build compiles /Od on MSVC, which implies /Ob0 and ignores __forceinline.
 # The flow-field inner loops lean on _FORCE_INLINE_ helpers, so allow explicitly
 # marked inlines to expand; /Ob1 keeps full /Od debugging semantics otherwise.
