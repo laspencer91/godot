@@ -20,6 +20,22 @@
 #include "box3d_space_3d.h"
 #include "joints/box3d_joint_3d.h"
 
+// Box3D does not simulate soft bodies (see WARN_PRINT_ONCE in soft_body_set_space()).
+// This placeholder exists only so soft_body_create() can hand out a real, owned RID —
+// like every other Box3D RID — instead of the PhysicsServer3DDummy stub's bare RID(),
+// which body_attach_object_instance_id() and free_rid() would otherwise reject as
+// invalid. Mirrors GodotPhysicsServer3D's soft_body_owner minus simulation state.
+class Box3DSoftBodyPlaceholder {
+	RID rid;
+	ObjectID instance_id;
+
+public:
+	void set_rid(const RID &p_rid) { rid = p_rid; }
+	RID get_rid() const { return rid; }
+	void set_instance_id(const ObjectID &p_id) { instance_id = p_id; }
+	ObjectID get_instance_id() const { return instance_id; }
+};
+
 class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	GDCLASS(Box3DPhysicsServer3D, PhysicsServer3DDummy);
 
@@ -30,6 +46,7 @@ class Box3DPhysicsServer3D : public PhysicsServer3DDummy {
 	mutable RID_PtrOwner<Box3DBody3D> body_owner;
 	mutable RID_PtrOwner<Box3DShape3D> shape_owner;
 	mutable RID_PtrOwner<Box3DJoint3D> joint_owner;
+	mutable RID_PtrOwner<Box3DSoftBodyPlaceholder> soft_body_owner;
 
 	HashSet<Box3DSpace3D *> active_spaces;
 
@@ -213,6 +230,10 @@ public:
 	Quaternion joint_get_box3d_target_rotation(RID p_joint) const;
 	void joint_set_box3d_motor_velocity(RID p_joint, const Vector3 &p_velocity);
 	Vector3 joint_get_box3d_motor_velocity(RID p_joint) const;
+
+	// Soft bodies. Not simulated; see Box3DSoftBodyPlaceholder above.
+	virtual RID soft_body_create() override;
+	virtual void soft_body_set_space(RID p_body, RID p_space) override;
 
 	// Lifecycle.
 	virtual void free_rid(RID p_rid) override;
