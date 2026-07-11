@@ -502,10 +502,11 @@ TEST_CASE("[HordeSim][Agents] FSM config drives exit conditions; batched transit
 		agents->tick(0.1);
 	}
 	PackedInt32Array pending = agents->query_transitions();
-	REQUIRE(pending.size() == 3); // One agent: [id, state, reason].
+	REQUIRE(pending.size() == 4); // One agent: [id, archetype, state, reason].
 	CHECK(pending[0] == id);
-	CHECK(pending[1] == HordeAgents::STATE_WAKE);
-	CHECK(pending[2] == HordeAgents::REASON_TIMER);
+	CHECK(pending[1] == 0); // Shambler archetype rides the quad.
+	CHECK(pending[2] == HordeAgents::STATE_WAKE);
+	CHECK(pending[3] == HordeAgents::REASON_TIMER);
 
 	// Script decides: WAKE -> ADVANCE. Apply through the batched API.
 	PackedInt32Array apply;
@@ -566,47 +567,47 @@ TEST_CASE("[HordeSim][Agents] Reynolds separation acts on Hot tier only") {
 		return best;
 	};
 
-	// Hot cluster: player adjacent so all agents are Hot; they all chase the same
-	// far target, so only lateral separation pushes them apart.
-	Ref<HordeAgents> hot = make_agents(16);
-	Vector<int> hot_ids;
-	for (int i = 0; i < 6; i++) {
-		const int id = hot->spawn(0, Vector3(0.05f * i, 0, 0), HordeAgents::STATE_CHASE);
-		// Target straight ahead (own x) so only separation moves agents laterally.
-		hot->set_agent_target(id, Vector3(0.05f * i, 0, 50));
-		hot_ids.push_back(id);
-	}
-	PackedVector3Array ph;
-	ph.push_back(Vector3(0, 0, 0));
-	hot->set_player_positions(ph);
-	const float hot_before = min_pair_dist(hot.ptr(), hot_ids);
-	for (int t = 0; t < 200; t++) {
-		hot->tick(1.0 / 128.0);
-	}
-	const float hot_after = min_pair_dist(hot.ptr(), hot_ids);
-	CHECK(hot->get_agent_tier(hot_ids[0]) == HordeAgents::TIER_HOT);
-	CHECK(hot_after > hot_before);
-	CHECK(hot_after > hot->get_separation_radius() * 0.5f);
+	// A tight cluster of chasers whose targets sit straight ahead (own x), so
+	// only separation can move them laterally. The player position sets the tier.
+	struct ClusterRun {
+		int tier = -1;
+		float before = 0.0f;
+		float after = 0.0f;
+		float separation_radius = 0.0f;
+	};
+	auto run_cluster = [&min_pair_dist](const Vector3 &p_player) {
+		Ref<HordeAgents> a = make_agents(16);
+		Vector<int> ids;
+		for (int i = 0; i < 6; i++) {
+			const int id = a->spawn(0, Vector3(0.05f * i, 0, 0), HordeAgents::STATE_CHASE);
+			a->set_agent_target(id, Vector3(0.05f * i, 0, 50));
+			ids.push_back(id);
+		}
+		PackedVector3Array players;
+		players.push_back(p_player);
+		a->set_player_positions(players);
+		ClusterRun r;
+		r.before = min_pair_dist(a.ptr(), ids);
+		for (int t = 0; t < 200; t++) {
+			a->tick(1.0 / 128.0);
+		}
+		r.after = min_pair_dist(a.ptr(), ids);
+		r.tier = a->get_agent_tier(ids[0]);
+		r.separation_radius = a->get_separation_radius();
+		return r;
+	};
 
-	// Cold cluster: player far, same setup. No agent-vs-agent separation, so the
-	// clustered agents stay clustered (they all translate identically).
-	Ref<HordeAgents> cold = make_agents(16);
-	Vector<int> cold_ids;
-	for (int i = 0; i < 6; i++) {
-		const int id = cold->spawn(0, Vector3(0.05f * i, 0, 0), HordeAgents::STATE_CHASE);
-		cold->set_agent_target(id, Vector3(0.05f * i, 0, 50));
-		cold_ids.push_back(id);
-	}
-	PackedVector3Array pc;
-	pc.push_back(Vector3(1000, 0, 0));
-	cold->set_player_positions(pc);
-	const float cold_before = min_pair_dist(cold.ptr(), cold_ids);
-	for (int t = 0; t < 200; t++) {
-		cold->tick(1.0 / 128.0);
-	}
-	const float cold_after = min_pair_dist(cold.ptr(), cold_ids);
-	CHECK(cold->get_agent_tier(cold_ids[0]) == HordeAgents::TIER_COLD);
-	CHECK(cold_after == doctest::Approx(cold_before)); // Unchanged: overlap allowed.
+	// Hot cluster (player adjacent): separation pushes the agents apart.
+	const ClusterRun hot = run_cluster(Vector3(0, 0, 0));
+	CHECK(hot.tier == HordeAgents::TIER_HOT);
+	CHECK(hot.after > hot.before);
+	CHECK(hot.after > hot.separation_radius * 0.5f);
+
+	// Cold cluster (player far): no agent-vs-agent separation, so the clustered
+	// agents stay clustered (they all translate identically).
+	const ClusterRun cold = run_cluster(Vector3(1000, 0, 0));
+	CHECK(cold.tier == HordeAgents::TIER_COLD);
+	CHECK(cold.after == doctest::Approx(cold.before)); // Unchanged: overlap allowed.
 }
 
 // ---------------------------------------------------------------------------
@@ -633,32 +634,28 @@ TEST_CASE("[HordeSim][Agents] Box3D mover sweep stops an agent at a static wall"
 		CHECK(frac < 1.0f);
 	}
 
-	// Agent chases a target on the far side of the wall.
-	Ref<HordeAgents> agents = make_agents(4);
-	agents->set_collision_world_packed(tw.packed());
-	const int id = agents->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
-	agents->set_agent_target(id, Vector3(6, 0, 0));
-	PackedVector3Array players;
-	players.push_back(Vector3(0, 0, 0)); // Keep the agent Hot (wall queries run).
-	agents->set_player_positions(players);
+	// A Hot chaser walking +X at a target on the far side of the wall; returns
+	// its final x. Pass 0 to run without a collision world.
+	auto run_to_wall = [](uint32_t p_world_packed) {
+		Ref<HordeAgents> a = make_agents(4);
+		if (p_world_packed != 0) {
+			a->set_collision_world_packed(p_world_packed);
+		}
+		const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+		a->set_agent_target(id, Vector3(6, 0, 0));
+		PackedVector3Array players;
+		players.push_back(Vector3(0, 0, 0)); // Keeps the agent Hot (wall queries run).
+		a->set_player_positions(players);
+		for (int t = 0; t < 400; t++) {
+			a->tick(1.0 / 128.0);
+		}
+		return a->get_agent_position(id).x;
+	};
 
-	for (int t = 0; t < 400; t++) {
-		agents->set_player_positions(players); // Player rides with the agent-ish; stays Hot.
-		agents->tick(1.0 / 128.0);
-	}
-	const float x_blocked = agents->get_agent_position(id).x;
 	// Stopped in front of the wall face (x = 2 - half_extent 0.2 - radius).
-	CHECK(x_blocked < 1.9f);
-
+	CHECK(run_to_wall(tw.packed()) < 1.9f);
 	// Control: no collision world -> the agent sails through to its target.
-	Ref<HordeAgents> free_agents = make_agents(4);
-	const int fid = free_agents->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
-	free_agents->set_agent_target(fid, Vector3(6, 0, 0));
-	free_agents->set_player_positions(players);
-	for (int t = 0; t < 400; t++) {
-		free_agents->tick(1.0 / 128.0);
-	}
-	CHECK(free_agents->get_agent_position(fid).x > 2.5f);
+	CHECK(run_to_wall(0) > 2.5f);
 }
 
 // ---------------------------------------------------------------------------
@@ -732,17 +729,18 @@ TEST_CASE("[HordeSim][Agents] Identical inputs produce bit-identical agent state
 		b->tick(1.0 / 128.0);
 
 		// A fixed scripted transition policy: any armed agent advances its state
-		// ring by one (deterministic, identical for both instances).
+		// ring by one (deterministic, identical for both instances). Quads:
+		// [id, archetype, state, reason].
 		PackedInt32Array pa = a->query_transitions();
 		PackedInt32Array pb = b->query_transitions();
 		PackedInt32Array apply_a, apply_b;
-		for (int k = 0; k + 2 < pa.size(); k += 3) {
+		for (int k = 0; k + 3 < pa.size(); k += 4) {
 			apply_a.push_back(pa[k]);
-			apply_a.push_back((pa[k + 1] + 1) % HordeAgents::STATE_MAX);
+			apply_a.push_back((pa[k + 2] + 1) % HordeAgents::STATE_MAX);
 		}
-		for (int k = 0; k + 2 < pb.size(); k += 3) {
+		for (int k = 0; k + 3 < pb.size(); k += 4) {
 			apply_b.push_back(pb[k]);
-			apply_b.push_back((pb[k + 1] + 1) % HordeAgents::STATE_MAX);
+			apply_b.push_back((pb[k + 2] + 1) % HordeAgents::STATE_MAX);
 		}
 		a->apply_transitions(apply_a);
 		b->apply_transitions(apply_b);

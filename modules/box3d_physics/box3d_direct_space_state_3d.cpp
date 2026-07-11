@@ -84,7 +84,7 @@ Object *Box3DDirectSpaceState3D::_get_instance(ObjectID p_id) {
 	return p_id.is_valid() ? ObjectDB::get_instance(p_id) : nullptr;
 }
 
-b3QueryFilter Box3DDirectSpaceState3D::_make_filter(uint32_t p_collision_mask) {
+b3QueryFilter Box3DDirectSpaceState3D::make_query_filter(uint32_t p_collision_mask) {
 	b3QueryFilter filter = b3DefaultQueryFilter();
 	filter.categoryBits = BOX3D_QUERY_FILTER_BIT;
 	filter.maskBits = (uint64_t)p_collision_mask;
@@ -244,7 +244,7 @@ bool Box3DDirectSpaceState3D::_intersect_ray_internal(const PS3DT::RayParameters
 	ctx.result = &r_result;
 	ctx.user_material_id = r_user_material_id;
 
-	b3World_CastRay(space->get_world(), to_box3d(p_parameters.from), to_box3d(p_parameters.to - p_parameters.from), _make_filter(p_parameters.collision_mask), _ray_callback, &ctx);
+	b3World_CastRay(space->get_world(), to_box3d(p_parameters.from), to_box3d(p_parameters.to - p_parameters.from), make_query_filter(p_parameters.collision_mask), _ray_callback, &ctx);
 	return ctx.hit;
 }
 
@@ -309,7 +309,7 @@ int Box3DDirectSpaceState3D::intersect_point(const PS3DT::PointParameters &p_par
 	ctx.collide_with_bodies = p_parameters.collide_with_bodies;
 	ctx.collide_with_areas = p_parameters.collide_with_areas;
 
-	b3World_OverlapShape(space->get_world(), to_box3d(p_parameters.position), &proxy, _make_filter(p_parameters.collision_mask), _overlap_callback, &ctx);
+	b3World_OverlapShape(space->get_world(), to_box3d(p_parameters.position), &proxy, make_query_filter(p_parameters.collision_mask), _overlap_callback, &ctx);
 	return ctx.result_count;
 }
 
@@ -332,7 +332,7 @@ int Box3DDirectSpaceState3D::intersect_shape(const PS3DT::ShapeParameters &p_par
 	ctx.collide_with_bodies = p_parameters.collide_with_bodies;
 	ctx.collide_with_areas = p_parameters.collide_with_areas;
 
-	b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, _make_filter(p_parameters.collision_mask), _overlap_callback, &ctx);
+	b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, make_query_filter(p_parameters.collision_mask), _overlap_callback, &ctx);
 	return ctx.result_count;
 }
 
@@ -390,7 +390,7 @@ bool Box3DDirectSpaceState3D::cast_motion(const PS3DT::ShapeParameters &p_parame
 	ctx.parameters = &p_parameters;
 	ctx.rest_info = r_info;
 
-	b3World_CastShape(space->get_world(), query_shape.origin, &query_shape.proxy, to_box3d(p_parameters.motion), _make_filter(p_parameters.collision_mask), _shape_cast_callback, &ctx);
+	b3World_CastShape(space->get_world(), query_shape.origin, &query_shape.proxy, to_box3d(p_parameters.motion), make_query_filter(p_parameters.collision_mask), _shape_cast_callback, &ctx);
 
 	if (ctx.hit) {
 		const real_t motion_length = p_parameters.motion.length();
@@ -764,7 +764,7 @@ bool Box3DDirectSpaceState3D::collide_shape(const PS3DT::ShapeParameters &p_para
 	ctx.query_shape = &query_shape;
 	ctx.result_max = p_result_max;
 
-	b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, _make_filter(p_parameters.collision_mask), _contact_callback, &ctx);
+	b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, make_query_filter(p_parameters.collision_mask), _contact_callback, &ctx);
 	if (ctx.contacts.is_empty()) {
 		return false;
 	}
@@ -793,7 +793,7 @@ bool Box3DDirectSpaceState3D::rest_info(const PS3DT::ShapeParameters &p_paramete
 	ctx.query_shape = &query_shape;
 	ctx.collect_all = true;
 
-	b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, _make_filter(p_parameters.collision_mask), _contact_callback, &ctx);
+	b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, make_query_filter(p_parameters.collision_mask), _contact_callback, &ctx);
 	if (ctx.contacts.is_empty()) {
 		return false;
 	}
@@ -932,7 +932,7 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			ctx.local_shape = (int)i;
 			ctx.contact_margin = p_contact_margin;
 
-			b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, _make_filter(shape_parameters.collision_mask), _contact_callback, &ctx);
+			b3World_OverlapShape(space->get_world(), query_shape.origin, &query_shape.proxy, make_query_filter(shape_parameters.collision_mask), _contact_callback, &ctx);
 			for (const Box3DQueryContact &contact : ctx.contacts) {
 				r_contacts.push_back(contact);
 			}
@@ -1029,14 +1029,14 @@ bool Box3DDirectSpaceState3D::body_test_motion(const Box3DBody3D &p_body, const 
 			candidate_ctx.body = &p_body;
 			candidate_ctx.excluded_bodies = &excluded_bodies;
 			candidate_ctx.excluded_objects = &p_parameters.exclude_objects;
-			b3World_OverlapShape(space->get_world(), query_shape.origin, &swept_proxy, _make_filter(p_body.get_collision_mask()), _motion_candidate_callback, &candidate_ctx);
+			b3World_OverlapShape(space->get_world(), query_shape.origin, &swept_proxy, make_query_filter(p_body.get_collision_mask()), _motion_candidate_callback, &candidate_ctx);
 
 			for (Box3DBody3D *candidate : candidate_ctx.candidate_bodies) {
 				if (candidate == nullptr || !candidate->in_space()) {
 					continue;
 				}
 				const bool can_encroach = query_shape.proxy.radius > 0.0f;
-				b3BodyCastResult cast = b3Body_CastShape(candidate->get_body_id(), query_shape.origin, &query_shape.proxy, translation, _make_filter(p_body.get_collision_mask()), (float)unsafe_fraction, can_encroach, b3Body_GetTransform(candidate->get_body_id()));
+				b3BodyCastResult cast = b3Body_CastShape(candidate->get_body_id(), query_shape.origin, &query_shape.proxy, translation, make_query_filter(p_body.get_collision_mask()), (float)unsafe_fraction, can_encroach, b3Body_GetTransform(candidate->get_body_id()));
 				if (!cast.hit || !_motion_can_hit_shape(p_body, cast.shapeId, excluded_bodies, p_parameters.exclude_objects)) {
 					continue;
 				}

@@ -9,7 +9,6 @@
 #include "horde_nav_grid.h"
 
 #include "core/object/ref_counted.h"
-#include "core/templates/hash_map.h"
 #include "core/templates/local_vector.h"
 #include "core/variant/type_info.h"
 
@@ -91,26 +90,30 @@ private:
 	// Box3D world handle, packed via b3StoreWorldId (kept box3d-free in this
 	// header). 0 == no collision world (movement then skips wall queries).
 	uint32_t collision_world_id = 0;
-	bool has_collision_world = false;
 
 	// --- SoA storage (all sized `capacity`) ---
 	LocalVector<float> pos_x;
 	LocalVector<float> pos_y;
 	LocalVector<float> pos_z;
-	LocalVector<float> vel_x; // Last applied planar velocity (for presentation/metrics).
-	LocalVector<float> vel_z;
 	LocalVector<float> yaw;
 	LocalVector<float> target_x; // Chase target (script-set).
 	LocalVector<float> target_z;
 	LocalVector<float> state_timer;
-	LocalVector<float> nearest_dist; // Cached planar distance to nearest player.
+	LocalVector<float> nearest_dist_sq; // Squared planar distance to nearest player; sqrt lazily at consumers.
 	LocalVector<int32_t> hp;
 	LocalVector<uint16_t> epoch; // Reuse epoch per slot (low bit is the wire parity).
+	LocalVector<uint16_t> wander; // PATROL re-roll counter; bumps on every applied transition.
 	LocalVector<uint8_t> state;
 	LocalVector<uint8_t> tier;
 	LocalVector<uint8_t> archetype;
 	LocalVector<uint8_t> active; // 1 if slot holds a live agent.
 	LocalVector<uint8_t> pending_reason; // TransitionReason armed this tick.
+	// Flow octant sampled at the agent's last movement step (OCTANT_NONE when the
+	// state isn't flow-driven). Exit evaluation reads this instead of re-sampling
+	// world_to_cell + octant. Staleness: a stagger-gated Warm/Cold agent keeps its
+	// previous sample for up to 4 ticks -- acceptable for AT_GOAL arming. Ticked
+	// state, seeded identically on spawn/transition, so determinism holds.
+	LocalVector<uint8_t> flow_octant;
 
 	LocalVector<int32_t> free_slots; // Stack of available slots.
 	int active_count = 0;
@@ -119,9 +122,16 @@ private:
 	LocalVector<float> player_x;
 	LocalVector<float> player_z;
 
-	// Hot-tier spatial hash: cell key -> chain head, plus per-slot next link.
-	// Reused across ticks (cleared, never freed).
-	HashMap<int64_t, int32_t> spatial_head;
+	// Hot-tier spatial hash: open-addressed flat table (cell key -> chain head)
+	// over reused LocalVectors, plus the per-slot next link. Entries invalidate
+	// by comparing a per-bucket generation stamp against the tick's generation,
+	// so a rebuild is a counter bump -- zero per-tick heap traffic (the old
+	// HashMap memnew'd/memdelete'd one node per hot agent per tick).
+	LocalVector<int64_t> hash_key;
+	LocalVector<int32_t> hash_head;
+	LocalVector<uint32_t> hash_gen;
+	uint32_t hash_generation = 0;
+	uint32_t hash_mask = 0; // Table size (power of two) minus one.
 	LocalVector<int32_t> spatial_next;
 
 	uint64_t tick_counter = 0;
@@ -152,7 +162,12 @@ private:
 	// Movement helpers (hot path).
 	Vector2 _separation_offset(int p_slot) const;
 	float _state_speed(int p_archetype, int p_state) const;
+	int _movement_mode(int p_archetype, int p_state) const;
+	float _wander_angle(int p_slot) const;
 	float _sweep_fraction(int p_slot, const Vector2 &p_disp) const;
+	// Grid of the published flow field, or null when no field is available.
+	HordeNavGrid *_resolve_field() const;
+	int32_t _hash_lookup(int64_t p_key) const;
 
 	_FORCE_INLINE_ int _tier_divisor(int p_tier) const {
 		return p_tier == TIER_HOT ? 1 : (p_tier == TIER_WARM ? 2 : 4);
@@ -187,7 +202,7 @@ public:
 	// active physics server is not Box3D. Call once after the space exists.
 	void set_physics_space(RID p_space);
 	void clear_physics_space();
-	bool has_physics_space() const { return has_collision_world; }
+	bool has_physics_space() const { return collision_world_id != 0; }
 
 	// Native-only injection of a raw b3World handle (packed via b3StoreWorldId).
 	// Used by headless tests that build their own b3World; not bound to script.
@@ -209,12 +224,12 @@ public:
 	void tick(double p_delta);
 
 	// --- Batched FSM transition API (G6.2) ---
-	// Flat triples [id, current_state, reason, ...] for every agent whose exit
+	// Flat quads [id, archetype, state, reason, ...] for every agent whose exit
 	// condition armed this tick. Script maps (archetype, state, reason) -> next
-	// state, then applies via apply_transitions().
+	// state directly from the quad (no per-agent archetype lookup), then applies
+	// via apply_transitions() with flat pairs [id, new_state, ...].
 	PackedInt32Array query_transitions() const;
 	bool apply_transition(int p_id, int p_new_state);
-	// Flat pairs [id, new_state, ...].
 	void apply_transitions(const PackedInt32Array &p_pairs);
 
 	// --- Agent access (script + presentation, read-mostly) ---
@@ -229,7 +244,15 @@ public:
 	void set_agent_target(int p_id, const Vector3 &p_target);
 
 	// Bulk snapshots for MultiMesh presentation (P1.B3). All aligned to
-	// get_active_ids() order.
+	// get_active_ids() order. The fill_* variants write into a caller-owned
+	// buffer, resizing only when the active count changed, so the per-frame
+	// render path allocates nothing; they are native-only (reference out-params
+	// don't round-trip through Variant). Script uses the returning variants.
+	void fill_active_ids(PackedInt32Array &r_out) const;
+	void fill_positions(PackedVector3Array &r_out) const;
+	void fill_yaws(PackedFloat32Array &r_out) const;
+	void fill_states(PackedByteArray &r_out) const;
+	void fill_tiers(PackedByteArray &r_out) const;
 	PackedInt32Array get_active_ids() const;
 	PackedVector3Array get_positions() const;
 	PackedFloat32Array get_yaws() const;

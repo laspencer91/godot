@@ -49,8 +49,15 @@ public:
 	static Box3DCollisionObject3D *_get_object(b3ShapeId p_shape_id);
 	static Box3DBody3D *_get_body(b3ShapeId p_shape_id);
 	static Object *_get_instance(ObjectID p_id);
-	static b3QueryFilter _make_filter(uint32_t p_collision_mask);
 	static void _warn_ignored_shape_margin(real_t p_margin);
+
+	// Builds the b3QueryFilter every engine-side Box3D scene query uses (the
+	// reserved query category bit + the caller's collision mask). Single source
+	// of truth for the query category: sibling modules issuing native Box3D
+	// queries (horde_sim's agent mover sweeps) must build their filters here so
+	// a change to the category bit can never silently stop their queries from
+	// matching map shapes.
+	static b3QueryFilter make_query_filter(uint32_t p_collision_mask);
 
 	bool _can_query_shape(b3ShapeId p_shape_id, const HashSet<RID> &p_exclude, bool p_collide_with_bodies, bool p_collide_with_areas) const;
 	void _fill_shape_result(b3ShapeId p_shape_id, PS3DT::ShapeResult &r_result) const;

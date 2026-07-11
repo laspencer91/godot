@@ -6,6 +6,7 @@
 
 #include "core/io/resource.h"
 #include "core/templates/local_vector.h"
+#include "core/variant/type_info.h"
 
 // Data-driven FSM tuning table for the horde agent sim (DES A2.1-A2.2, G6.11).
 //
@@ -29,6 +30,17 @@ public:
 	// Kept in lockstep with HordeAgents::State (checked in horde_agents.cpp).
 	static constexpr int STATE_COUNT = 11;
 
+	// How an agent moves while in a state. Data-driven per (archetype, state) so
+	// e.g. the screamer's Advance patrols off the flow field (DES A4.1) while
+	// the shambler's Advance rides it -- table data, not a code change.
+	enum MovementMode {
+		MOVE_STATIONARY, // No positional advance.
+		MOVE_FLOW, // Flow-field octant advance (+ link step-through).
+		MOVE_SEEK_TARGET, // Steer straight toward the script-set target.
+		MOVE_PATROL, // Seeded wander; direction re-rolls when the state timer re-arms.
+		MOVE_MODE_MAX,
+	};
+
 	struct Rule {
 		// Within-state movement speed (m/s). 0 means "stationary in this state".
 		float move_speed = 0.0f;
@@ -39,7 +51,14 @@ public:
 		float max_time = 0.0f;
 		// Range trigger (m) to nearest player; 0 disables the range exit.
 		float exit_range = 0.0f;
+		// MovementMode while in this state; configure() seeds per-state defaults.
+		uint8_t movement_mode = MOVE_STATIONARY;
 	};
+
+	// The state's default MovementMode (Advance/Crawl flow, Chase seeks, rest
+	// stationary). configure() seeds every archetype row from this, and
+	// HordeAgents falls back to it when no config Resource is assigned.
+	static MovementMode default_movement_mode(int p_state);
 
 private:
 	int archetype_count = 0;
@@ -56,11 +75,13 @@ public:
 	int get_archetype_count() const { return archetype_count; }
 
 	void set_rule(int p_archetype, int p_state, float p_move_speed, float p_min_time, float p_max_time, float p_exit_range);
+	void set_movement_mode(int p_archetype, int p_state, MovementMode p_mode);
 
 	float get_move_speed(int p_archetype, int p_state) const;
 	float get_min_time(int p_archetype, int p_state) const;
 	float get_max_time(int p_archetype, int p_state) const;
 	float get_exit_range(int p_archetype, int p_state) const;
+	MovementMode get_movement_mode(int p_archetype, int p_state) const;
 
 	// Native fast path: rule by reference, no Variant marshaling. Caller must
 	// pass in-range indices (HordeAgents clamps before calling).
@@ -75,3 +96,5 @@ public:
 
 	HordeFSMConfig() {}
 };
+
+VARIANT_ENUM_CAST(HordeFSMConfig::MovementMode);

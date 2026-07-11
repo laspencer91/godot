@@ -6,6 +6,7 @@
 
 #include "core/object/class_db.h"
 #include "core/os/os.h"
+#include "core/templates/hashfuncs.h"
 
 // Engine-internal Box3D access (D-009): resolve the physics space RID to the
 // underlying b3World and call Box3D's kinematic mover sweep natively.
@@ -22,11 +23,6 @@
 // keep the two enums in lockstep.
 static_assert(HordeAgents::STATE_MAX == HordeFSMConfig::STATE_COUNT,
 		"HordeAgents::State and HordeFSMConfig must declare the same number of states.");
-
-// The query filter mirrors Box3DDirectSpaceState3D::_make_filter: a dedicated
-// high category bit so map bodies accept the query, masked to the layers walls
-// live on. Keeps the native sweep consistent with the engine's own queries.
-static constexpr uint64_t HORDE_QUERY_CATEGORY = UINT64_C(1) << 63;
 
 // Skin (m) kept between a blocked agent and the wall it swept into, so the next
 // tick's mover cast starts outside overlap (the cast ignores initial overlap).
@@ -48,14 +44,6 @@ static const float DEFAULT_STATE_SPEED[HordeAgents::STATE_MAX] = {
 	0.0f, // DEAD
 };
 
-_FORCE_INLINE_ static bool _state_uses_flow(int p_state) {
-	return p_state == HordeAgents::STATE_ADVANCE || p_state == HordeAgents::STATE_CRAWL;
-}
-
-_FORCE_INLINE_ static bool _state_seeks_target(int p_state) {
-	return p_state == HordeAgents::STATE_CHASE;
-}
-
 HordeAgents::HordeAgents() {
 	_rebuild_storage();
 }
@@ -65,26 +53,41 @@ void HordeAgents::_rebuild_storage() {
 	pos_x.resize(cap);
 	pos_y.resize(cap);
 	pos_z.resize(cap);
-	vel_x.resize(cap);
-	vel_z.resize(cap);
 	yaw.resize(cap);
 	target_x.resize(cap);
 	target_z.resize(cap);
 	state_timer.resize(cap);
-	nearest_dist.resize(cap);
+	nearest_dist_sq.resize(cap);
 	hp.resize(cap);
 	epoch.resize(cap);
+	wander.resize(cap);
 	state.resize(cap);
 	tier.resize(cap);
 	archetype.resize(cap);
 	active.resize(cap);
 	pending_reason.resize(cap);
+	flow_octant.resize(cap);
 	spatial_next.resize(cap);
 
 	for (uint32_t i = 0; i < cap; i++) {
 		active[i] = 0;
 		epoch[i] = 0;
 	}
+
+	// Open-addressed spatial hash table: power of two, load factor <= 0.5 even
+	// with every agent Hot.
+	uint32_t table = 16;
+	while (table < cap * 2) {
+		table <<= 1;
+	}
+	hash_mask = table - 1;
+	hash_key.resize(table);
+	hash_head.resize(table);
+	hash_gen.resize(table);
+	for (uint32_t b = 0; b < table; b++) {
+		hash_gen[b] = 0;
+	}
+	hash_generation = 0;
 
 	free_slots.clear();
 	free_slots.reserve(cap);
@@ -132,17 +135,14 @@ void HordeAgents::set_physics_space(RID p_space) {
 		return;
 	}
 	collision_world_id = b3StoreWorldId(box_state->space->get_world());
-	has_collision_world = true;
 }
 
 void HordeAgents::clear_physics_space() {
 	collision_world_id = 0;
-	has_collision_world = false;
 }
 
 void HordeAgents::set_collision_world_packed(uint32_t p_packed) {
 	collision_world_id = p_packed;
-	has_collision_world = p_packed != 0;
 }
 
 // --- Spawn / despawn / recycle ----------------------------------------------
@@ -163,19 +163,19 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	pos_x[p_slot] = p_pos.x;
 	pos_y[p_slot] = p_pos.y;
 	pos_z[p_slot] = p_pos.z;
-	vel_x[p_slot] = 0.0f;
-	vel_z[p_slot] = 0.0f;
 	yaw[p_slot] = 0.0f;
 	target_x[p_slot] = p_pos.x;
 	target_z[p_slot] = p_pos.z;
 	state_timer[p_slot] = 0.0f;
-	nearest_dist[p_slot] = 1e20f;
+	nearest_dist_sq[p_slot] = 1e30f;
 	hp[p_slot] = (int32_t)p_hp;
+	wander[p_slot] = 0;
 	state[p_slot] = (uint8_t)p_state;
 	tier[p_slot] = (uint8_t)TIER_COLD;
 	archetype[p_slot] = (uint8_t)p_archetype;
 	active[p_slot] = 1;
 	pending_reason[p_slot] = (uint8_t)REASON_NONE;
+	flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
 }
 
 int HordeAgents::spawn(int p_archetype, const Vector3 &p_position, int p_state, int p_hp) {
@@ -212,14 +212,15 @@ PackedInt32Array HordeAgents::recycle_candidates(int p_max) const {
 	if (p_max <= 0) {
 		return out;
 	}
-	// Collect live Cold agents with their distance, then rank furthest-first.
-	// Small N (<= capacity); a simple selection over a scratch list is fine.
+	// Collect live Cold agents with their (squared) distance, then rank
+	// furthest-first -- squared ranks identically to linear. Small N
+	// (<= capacity); a simple selection over a scratch list is fine.
 	LocalVector<int32_t> slots;
 	LocalVector<float> dists;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0 && tier[i] == (uint8_t)TIER_COLD) {
 			slots.push_back(i);
-			dists.push_back(nearest_dist[i]);
+			dists.push_back(nearest_dist_sq[i]);
 		}
 	}
 	const int take = MIN(p_max, (int)slots.size());
@@ -283,7 +284,7 @@ void HordeAgents::_assign_tiers() {
 				best_sq = d2;
 			}
 		}
-		nearest_dist[i] = Math::sqrt(best_sq);
+		nearest_dist_sq[i] = best_sq; // Squared; consumers sqrt lazily if needed.
 		uint8_t t;
 		if (best_sq < hot_sq) {
 			t = (uint8_t)TIER_HOT;
@@ -302,7 +303,15 @@ _FORCE_INLINE_ static int64_t _hash_cell(int32_t p_cx, int32_t p_cz) {
 }
 
 void HordeAgents::_build_hot_spatial_hash() {
-	spatial_head.clear();
+	// Rebuild = bump the generation; stale buckets self-invalidate on compare.
+	if (unlikely(++hash_generation == 0)) {
+		// Stamp wraparound (once per ~2^32 rebuilds): reset all stamps.
+		for (uint32_t b = 0; b <= hash_mask; b++) {
+			hash_gen[b] = 0;
+		}
+		hash_generation = 1;
+	}
+	const uint32_t gen = hash_generation;
 	const float inv = 1.0f / separation_radius;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] == 0 || tier[i] != (uint8_t)TIER_HOT) {
@@ -311,15 +320,31 @@ void HordeAgents::_build_hot_spatial_hash() {
 		const int32_t cx = (int32_t)Math::floor(pos_x[i] * inv);
 		const int32_t cz = (int32_t)Math::floor(pos_z[i] * inv);
 		const int64_t key = _hash_cell(cx, cz);
-		int32_t *head = spatial_head.getptr(key);
-		if (head == nullptr) {
+		uint32_t b = (uint32_t)hash_one_uint64((uint64_t)key) & hash_mask;
+		while (hash_gen[b] == gen && hash_key[b] != key) {
+			b = (b + 1) & hash_mask; // Linear probe; load <= 0.5 by sizing.
+		}
+		if (hash_gen[b] != gen) {
+			hash_gen[b] = gen;
+			hash_key[b] = key;
 			spatial_next[i] = -1;
-			spatial_head.insert(key, i);
+			hash_head[b] = i;
 		} else {
-			spatial_next[i] = *head;
-			*head = i;
+			spatial_next[i] = hash_head[b];
+			hash_head[b] = i;
 		}
 	}
+}
+
+int32_t HordeAgents::_hash_lookup(int64_t p_key) const {
+	uint32_t b = (uint32_t)hash_one_uint64((uint64_t)p_key) & hash_mask;
+	while (hash_gen[b] == hash_generation) {
+		if (hash_key[b] == p_key) {
+			return hash_head[b];
+		}
+		b = (b + 1) & hash_mask;
+	}
+	return -1;
 }
 
 Vector2 HordeAgents::_separation_offset(int p_slot) const {
@@ -334,11 +359,7 @@ Vector2 HordeAgents::_separation_offset(int p_slot) const {
 	Vector2 push;
 	for (int32_t oz = -1; oz <= 1; oz++) {
 		for (int32_t ox = -1; ox <= 1; ox++) {
-			const int32_t *head = spatial_head.getptr(_hash_cell(cx + ox, cz + oz));
-			if (head == nullptr) {
-				continue;
-			}
-			for (int32_t j = *head; j != -1; j = spatial_next[j]) {
+			for (int32_t j = _hash_lookup(_hash_cell(cx + ox, cz + oz)); j != -1; j = spatial_next[j]) {
 				if (j == p_slot) {
 					continue;
 				}
@@ -369,8 +390,26 @@ float HordeAgents::_state_speed(int p_archetype, int p_state) const {
 	return DEFAULT_STATE_SPEED[p_state];
 }
 
+int HordeAgents::_movement_mode(int p_archetype, int p_state) const {
+	if (fsm_config.is_valid() && p_archetype < fsm_config->get_archetype_count()) {
+		return fsm_config->rule(p_archetype, p_state).movement_mode;
+	}
+	return HordeFSMConfig::default_movement_mode(p_state);
+}
+
+float HordeAgents::_wander_angle(int p_slot) const {
+	// Seeded per-agent wander direction (PATROL): pure integer hash of the
+	// slot, its reuse epoch, and the wander re-roll counter -- deterministic,
+	// re-rolls on every applied transition (state timer re-arm), no RNG state.
+	uint32_t h = (uint32_t)p_slot * 0x9E3779B9u;
+	h ^= (uint32_t)epoch[p_slot] * 0x85EBCA6Bu;
+	h ^= (uint32_t)wander[p_slot] * 0xC2B2AE35u;
+	h = hash_fmix32(h);
+	return (float)((double)h * (Math::TAU / 4294967296.0));
+}
+
 float HordeAgents::_sweep_fraction(int p_slot, const Vector2 &p_disp) const {
-	if (!has_collision_world) {
+	if (collision_world_id == 0) {
 		return 1.0f;
 	}
 	const b3WorldId world = b3LoadWorldId(collision_world_id);
@@ -385,9 +424,10 @@ float HordeAgents::_sweep_fraction(int p_slot, const Vector2 &p_disp) const {
 	const b3Pos origin = to_box3d(Vector3(pos_x[p_slot], pos_y[p_slot], pos_z[p_slot]));
 	const b3Vec3 translation = to_box3d(Vector3(p_disp.x, 0.0f, p_disp.y));
 
-	b3QueryFilter filter = b3DefaultQueryFilter();
-	filter.categoryBits = HORDE_QUERY_CATEGORY;
-	filter.maskBits = (uint64_t)collision_mask;
+	// Filter built by box3d_physics (single source of truth for the query
+	// category bit) so this sweep can never silently diverge from the engine's
+	// own scene queries.
+	const b3QueryFilter filter = Box3DDirectSpaceState3D::make_query_filter(collision_mask);
 
 	// b3World_CastMover: Box3D's kinematic capsule sweep (slide + anti-clip),
 	// returns the translation fraction. No per-call shape build or Variant
@@ -395,17 +435,18 @@ float HordeAgents::_sweep_fraction(int p_slot, const Vector2 &p_disp) const {
 	return b3World_CastMover(world, origin, &cap, translation, filter, nullptr, nullptr);
 }
 
-void HordeAgents::_step_movement(double p_delta) {
-	// The flow field is only needed by flow-driven states; seek/idle states run
-	// without it, so a null field disables only the flow branch (not the tick).
-	Ref<HordeNavGrid> grid;
-	bool have_field = false;
-	if (flow_field.is_valid()) {
-		grid = flow_field->get_grid();
-		have_field = flow_field->has_field() && grid.is_valid();
+HordeNavGrid *HordeAgents::_resolve_field() const {
+	// The flow field is only needed by flow-driven states; a null result
+	// disables only the flow branch of movement, never the tick.
+	if (flow_field.is_null() || !flow_field->has_field()) {
+		return nullptr;
 	}
+	return flow_field->get_grid().ptr();
+}
 
-	HordeNavGrid *g = grid.ptr();
+void HordeAgents::_step_movement(double p_delta) {
+	HordeNavGrid *g = _resolve_field();
+	const bool have_field = g != nullptr;
 
 	// One pass per tier so per-tier time is a single bracket (not two clock reads
 	// per agent, which would both waste hot-loop cycles and inflate the metric).
@@ -436,14 +477,19 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 
 	const int st = state[i];
 	const float speed = _state_speed(archetype[i], st);
+	const int mode = _movement_mode(archetype[i], st);
 	Vector2 disp; // Planar displacement this step.
 	bool moved_link = false;
 
-	if (speed > 0.0f && have_field && _state_uses_flow(st)) {
+	// Refreshed below when the state is flow-driven; exit evaluation reads it.
+	flow_octant[i] = (uint8_t)HordeFlowField::OCTANT_NONE;
+
+	if (speed > 0.0f && have_field && mode == HordeFSMConfig::MOVE_FLOW) {
 		const Vector3 wp(pos_x[i], pos_y[i], pos_z[i]);
 		const Vector3i cell = grid->world_to_cell(wp);
 		const int32_t idx = grid->cell_index(cell.x, cell.y, cell.z);
 		const int oct = flow_field->octant_at_index(idx);
+		flow_octant[i] = (uint8_t)oct;
 		if (oct == HordeFlowField::OCTANT_LINK) {
 			// Step through an inter-floor link (OCTANT_LINK vocabulary): move
 			// toward the target cell in 3D, snapping (changing floor) on arrival.
@@ -493,28 +539,28 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 			}
 		}
 		// OCTANT_NONE: no advance (locally stuck / unreachable).
-	} else if (speed > 0.0f && _state_seeks_target(st)) {
+	} else if (speed > 0.0f && mode == HordeFSMConfig::MOVE_SEEK_TARGET) {
 		Vector2 to(target_x[i] - pos_x[i], target_z[i] - pos_z[i]);
 		const float dist = to.length();
 		if (dist > 1e-5f) {
 			disp = to / dist * MIN(speed * eff_dt, dist);
 		}
+	} else if (speed > 0.0f && mode == HordeFSMConfig::MOVE_PATROL) {
+		// Seeded wander off the flow field (screamer patrol, DES A4.1).
+		const float ang = _wander_angle(i);
+		disp = Vector2(Math::sin(ang), Math::cos(ang)) * (speed * eff_dt);
 	}
 
 	if (moved_link) {
-		vel_x[i] = 0.0f;
-		vel_z[i] = 0.0f;
 		return;
 	}
 
 	// Reynolds separation, Hot tier only (R3.3 / A2.3).
-	if (t == TIER_HOT && (disp != Vector2() || _state_uses_flow(st) || _state_seeks_target(st))) {
+	if (t == TIER_HOT && (disp != Vector2() || mode != HordeFSMConfig::MOVE_STATIONARY)) {
 		disp += _separation_offset(i) * (separation_strength * eff_dt);
 	}
 
 	if (disp == Vector2()) {
-		vel_x[i] = 0.0f;
-		vel_z[i] = 0.0f;
 		return;
 	}
 
@@ -529,14 +575,10 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 			const float len = disp.length();
 			const float safe = MAX(0.0f, frac * len - CONTACT_SKIN);
 			disp = len > 1e-6f ? disp * (safe / len) : Vector2();
-		} else {
-			disp *= frac;
 		}
 	}
 	pos_x[i] += disp.x;
 	pos_z[i] += disp.y;
-	vel_x[i] = disp.x / MAX(eff_dt, 1e-6f);
-	vel_z[i] = disp.y / MAX(eff_dt, 1e-6f);
 	if (disp.length_squared() > 1e-8f) {
 		yaw[i] = Math::atan2(disp.x, disp.y);
 	}
@@ -545,8 +587,6 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 void HordeAgents::_evaluate_exits() {
 	const bool have_cfg = fsm_config.is_valid();
 	const int arch_count = have_cfg ? fsm_config->get_archetype_count() : 0;
-	Ref<HordeNavGrid> grid = flow_field.is_valid() ? flow_field->get_grid() : Ref<HordeNavGrid>();
-	const bool have_field = flow_field.is_valid() && flow_field->has_field() && grid.is_valid();
 
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] == 0) {
@@ -565,16 +605,17 @@ void HordeAgents::_evaluate_exits() {
 		}
 
 		// Priority: range trigger > timer deadline > flow-field goal arrival.
-		if (exit_range > 0.0f && state_timer[i] >= min_time && nearest_dist[i] <= exit_range) {
+		// Range compares squared against squared (no sqrt in this loop).
+		if (exit_range > 0.0f && state_timer[i] >= min_time && nearest_dist_sq[i] <= exit_range * exit_range) {
 			pending_reason[i] = (uint8_t)REASON_IN_RANGE;
 		} else if (max_time > 0.0f && state_timer[i] >= max_time) {
 			pending_reason[i] = (uint8_t)REASON_TIMER;
-		} else if (have_field && _state_uses_flow(st)) {
-			const Vector3i cell = grid->world_to_cell(Vector3(pos_x[i], pos_y[i], pos_z[i]));
-			const int oct = flow_field->octant_at_index(grid->cell_index(cell.x, cell.y, cell.z));
-			if (oct == HordeFlowField::OCTANT_GOAL) {
-				pending_reason[i] = (uint8_t)REASON_AT_GOAL;
-			}
+		} else if (flow_octant[i] == (uint8_t)HordeFlowField::OCTANT_GOAL) {
+			// Read from the movement step's sample instead of re-sampling
+			// world_to_cell + octant. For stagger-gated Warm/Cold agents the
+			// sample is up to 4 ticks stale -- acceptable for AT_GOAL arming
+			// (the agent hasn't moved since it was taken).
+			pending_reason[i] = (uint8_t)REASON_AT_GOAL;
 		}
 	}
 }
@@ -600,6 +641,7 @@ PackedInt32Array HordeAgents::query_transitions() const {
 			continue;
 		}
 		out.push_back(_make_id(i));
+		out.push_back((int)archetype[i]);
 		out.push_back((int)state[i]);
 		out.push_back((int)pending_reason[i]);
 	}
@@ -615,6 +657,8 @@ bool HordeAgents::apply_transition(int p_id, int p_new_state) {
 	state[slot] = (uint8_t)p_new_state;
 	state_timer[slot] = 0.0f;
 	pending_reason[slot] = (uint8_t)REASON_NONE;
+	flow_octant[slot] = (uint8_t)HordeFlowField::OCTANT_NONE; // Old sample is for the old state.
+	wander[slot]++; // Re-roll the PATROL direction on every timer re-arm.
 	return true;
 }
 
@@ -663,7 +707,7 @@ int HordeAgents::get_agent_hp(int p_id) const {
 
 float HordeAgents::get_nearest_player_distance(int p_id) const {
 	int slot;
-	return _resolve(p_id, slot) ? nearest_dist[slot] : -1.0f;
+	return _resolve(p_id, slot) ? Math::sqrt(nearest_dist_sq[slot]) : -1.0f;
 }
 
 void HordeAgents::set_agent_hp(int p_id, int p_hp) {
@@ -681,68 +725,98 @@ void HordeAgents::set_agent_target(int p_id, const Vector3 &p_target) {
 	}
 }
 
-PackedInt32Array HordeAgents::get_active_ids() const {
-	PackedInt32Array out;
-	out.resize(active_count);
-	int *w = out.ptrw();
+void HordeAgents::fill_active_ids(PackedInt32Array &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	int *w = r_out.ptrw();
 	int n = 0;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0) {
 			w[n++] = _make_id(i);
 		}
 	}
-	return out;
 }
 
-PackedVector3Array HordeAgents::get_positions() const {
-	PackedVector3Array out;
-	out.resize(active_count);
-	Vector3 *w = out.ptrw();
+void HordeAgents::fill_positions(PackedVector3Array &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	Vector3 *w = r_out.ptrw();
 	int n = 0;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0) {
 			w[n++] = Vector3(pos_x[i], pos_y[i], pos_z[i]);
 		}
 	}
-	return out;
 }
 
-PackedFloat32Array HordeAgents::get_yaws() const {
-	PackedFloat32Array out;
-	out.resize(active_count);
-	float *w = out.ptrw();
+void HordeAgents::fill_yaws(PackedFloat32Array &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	float *w = r_out.ptrw();
 	int n = 0;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0) {
 			w[n++] = yaw[i];
 		}
 	}
-	return out;
 }
 
-PackedByteArray HordeAgents::get_states() const {
-	PackedByteArray out;
-	out.resize(active_count);
-	uint8_t *w = out.ptrw();
+void HordeAgents::fill_states(PackedByteArray &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	uint8_t *w = r_out.ptrw();
 	int n = 0;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0) {
 			w[n++] = state[i];
 		}
 	}
-	return out;
 }
 
-PackedByteArray HordeAgents::get_tiers() const {
-	PackedByteArray out;
-	out.resize(active_count);
-	uint8_t *w = out.ptrw();
+void HordeAgents::fill_tiers(PackedByteArray &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	uint8_t *w = r_out.ptrw();
 	int n = 0;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0) {
 			w[n++] = tier[i];
 		}
 	}
+}
+
+PackedInt32Array HordeAgents::get_active_ids() const {
+	PackedInt32Array out;
+	fill_active_ids(out);
+	return out;
+}
+
+PackedVector3Array HordeAgents::get_positions() const {
+	PackedVector3Array out;
+	fill_positions(out);
+	return out;
+}
+
+PackedFloat32Array HordeAgents::get_yaws() const {
+	PackedFloat32Array out;
+	fill_yaws(out);
+	return out;
+}
+
+PackedByteArray HordeAgents::get_states() const {
+	PackedByteArray out;
+	fill_states(out);
+	return out;
+}
+
+PackedByteArray HordeAgents::get_tiers() const {
+	PackedByteArray out;
+	fill_tiers(out);
 	return out;
 }
 

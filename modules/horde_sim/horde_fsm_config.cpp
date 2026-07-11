@@ -6,6 +6,25 @@
 
 #include "core/object/class_db.h"
 
+HordeFSMConfig::MovementMode HordeFSMConfig::default_movement_mode(int p_state) {
+	// Indices mirror HordeAgents::State (lockstep asserted in horde_agents.cpp).
+	static const MovementMode DEFAULTS[STATE_COUNT] = {
+		MOVE_STATIONARY, // Dormant
+		MOVE_STATIONARY, // Wake
+		MOVE_FLOW, // Advance
+		MOVE_SEEK_TARGET, // Chase
+		MOVE_STATIONARY, // AttackPlayer
+		MOVE_STATIONARY, // Grab
+		MOVE_STATIONARY, // AttackObstacle
+		MOVE_STATIONARY, // Stagger
+		MOVE_STATIONARY, // Scream
+		MOVE_FLOW, // Crawl
+		MOVE_STATIONARY, // Dead
+	};
+	ERR_FAIL_INDEX_V(p_state, STATE_COUNT, MOVE_STATIONARY);
+	return DEFAULTS[p_state];
+}
+
 void HordeFSMConfig::configure(int p_archetype_count) {
 	ERR_FAIL_COND(p_archetype_count < 0);
 	archetype_count = p_archetype_count;
@@ -13,7 +32,23 @@ void HordeFSMConfig::configure(int p_archetype_count) {
 	rules.resize((uint32_t)(archetype_count * STATE_COUNT));
 	for (uint32_t i = 0; i < rules.size(); i++) {
 		rules[i] = Rule();
+		// Seed the state's default mode so a table that only tunes numbers keeps
+		// sane movement; archetypes that deviate override per (archetype, state).
+		rules[i].movement_mode = (uint8_t)default_movement_mode((int)(i % STATE_COUNT));
 	}
+}
+
+void HordeFSMConfig::set_movement_mode(int p_archetype, int p_state, MovementMode p_mode) {
+	ERR_FAIL_INDEX(p_archetype, archetype_count);
+	ERR_FAIL_INDEX(p_state, STATE_COUNT);
+	ERR_FAIL_INDEX(p_mode, MOVE_MODE_MAX);
+	rules[_rule_index(p_archetype, p_state)].movement_mode = (uint8_t)p_mode;
+}
+
+HordeFSMConfig::MovementMode HordeFSMConfig::get_movement_mode(int p_archetype, int p_state) const {
+	ERR_FAIL_INDEX_V(p_archetype, archetype_count, MOVE_STATIONARY);
+	ERR_FAIL_INDEX_V(p_state, STATE_COUNT, MOVE_STATIONARY);
+	return (MovementMode)rules[_rule_index(p_archetype, p_state)].movement_mode;
 }
 
 void HordeFSMConfig::set_rule(int p_archetype, int p_state, float p_move_speed, float p_min_time, float p_max_time, float p_exit_range) {
@@ -86,6 +121,8 @@ void HordeFSMConfig::load_defaults() {
 	set_rule(1, S_DORMANT, 0.0f, 0.0f, 0.0f, 12.0f); // Detects at longer range.
 	set_rule(1, S_WAKE, 0.0f, 0.3f, 0.5f, 0.0f);
 	set_rule(1, S_ADVANCE, 1.0f, 0.0f, 0.0f, 20.0f); // Wanders/patrols; screams within 20 m.
+	// Screamers patrol OFF the flow field -- unpredictability is the point (A4.1).
+	set_movement_mode(1, S_ADVANCE, MOVE_PATROL);
 	set_rule(1, S_CHASE, 1.4f, 0.0f, 0.0f, 6.0f);
 	set_rule(1, S_ATTACK_PLAYER, 0.0f, 0.0f, 0.8f, 0.0f);
 	set_rule(1, S_GRAB, 0.0f, 1.5f, 1.5f, 0.0f);
@@ -104,5 +141,12 @@ void HordeFSMConfig::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_min_time", "archetype", "state"), &HordeFSMConfig::get_min_time);
 	ClassDB::bind_method(D_METHOD("get_max_time", "archetype", "state"), &HordeFSMConfig::get_max_time);
 	ClassDB::bind_method(D_METHOD("get_exit_range", "archetype", "state"), &HordeFSMConfig::get_exit_range);
+	ClassDB::bind_method(D_METHOD("set_movement_mode", "archetype", "state", "mode"), &HordeFSMConfig::set_movement_mode);
+	ClassDB::bind_method(D_METHOD("get_movement_mode", "archetype", "state"), &HordeFSMConfig::get_movement_mode);
 	ClassDB::bind_method(D_METHOD("load_defaults"), &HordeFSMConfig::load_defaults);
+
+	BIND_ENUM_CONSTANT(MOVE_STATIONARY);
+	BIND_ENUM_CONSTANT(MOVE_FLOW);
+	BIND_ENUM_CONSTANT(MOVE_SEEK_TARGET);
+	BIND_ENUM_CONSTANT(MOVE_PATROL);
 }
