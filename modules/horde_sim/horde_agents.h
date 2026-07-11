@@ -63,6 +63,12 @@ public:
 		REASON_TIMER, // Hit the state's max_time deadline.
 		REASON_IN_RANGE, // Nearest player entered the state's exit_range.
 		REASON_AT_GOAL, // Advancing agent reached its flow-field goal cell.
+		// The most recent movement sweep (Hot/Warm only) was clamped by an
+		// obstacle contact (fraction < 0.999, see _sweep_fraction/_move_agent).
+		// Gated by the state's min_time like REASON_IN_RANGE. Cold agents never
+		// arm this: Cold advances without a mover sweep (board-attack contact
+		// only matters at Hot/Warm range).
+		REASON_BLOCKED,
 	};
 
 	// Id space (NET R3.5): 10-bit slot + a reuse-epoch parity bit. A packed id
@@ -99,15 +105,29 @@ private:
 	LocalVector<float> target_x; // Chase target (script-set).
 	LocalVector<float> target_z;
 	LocalVector<float> state_timer;
-	LocalVector<float> nearest_dist_sq; // Squared planar distance to nearest player; sqrt lazily at consumers.
+	// Squared planar distance to the NEAREST-OF-ANY player; sqrt lazily at
+	// consumers. SIM-LOD TIERING ONLY (drives _assign_tiers()/tier below and
+	// the IN_RANGE exit check) -- this is NOT per-client wire relevance. R3.7
+	// per-client send rates must compute their own player-relative distances
+	// (P2.1); do not repurpose this field for that.
+	LocalVector<float> nearest_any_dist_sq;
 	LocalVector<int32_t> hp;
 	LocalVector<uint16_t> epoch; // Reuse epoch per slot (low bit is the wire parity).
 	LocalVector<uint16_t> wander; // PATROL re-roll counter; bumps on every applied transition.
 	LocalVector<uint8_t> state;
+	// LOD brain tier (Hot/Warm/Cold), assigned from nearest_any_dist_sq. SIM-LOD
+	// TIERING ONLY -- NOT per-client wire relevance. R3.7 send rates are
+	// per-client and must compute their own distances (P2.1); never gate wire
+	// send decisions on this field.
 	LocalVector<uint8_t> tier;
 	LocalVector<uint8_t> archetype;
 	LocalVector<uint8_t> active; // 1 if slot holds a live agent.
 	LocalVector<uint8_t> pending_reason; // TransitionReason armed this tick.
+	// 1 if this slot's most recent movement sweep (Hot/Warm only) was clamped
+	// by an obstacle; refreshed every time _move_agent() runs the slot (same
+	// staggered-LOD cadence as flow_octant below), consumed by
+	// _evaluate_exits() to arm REASON_BLOCKED. Always 0 for Cold (never swept).
+	LocalVector<uint8_t> blocked_contact;
 	// Flow octant sampled at the agent's last movement step (OCTANT_NONE when the
 	// state isn't flow-driven). Exit evaluation reads this instead of re-sampling
 	// world_to_cell + octant. Staleness: a stagger-gated Warm/Cold agent keeps its

@@ -57,7 +57,7 @@ void HordeAgents::_rebuild_storage() {
 	target_x.resize(cap);
 	target_z.resize(cap);
 	state_timer.resize(cap);
-	nearest_dist_sq.resize(cap);
+	nearest_any_dist_sq.resize(cap);
 	hp.resize(cap);
 	epoch.resize(cap);
 	wander.resize(cap);
@@ -66,6 +66,7 @@ void HordeAgents::_rebuild_storage() {
 	archetype.resize(cap);
 	active.resize(cap);
 	pending_reason.resize(cap);
+	blocked_contact.resize(cap);
 	flow_octant.resize(cap);
 	spatial_next.resize(cap);
 
@@ -167,7 +168,7 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	target_x[p_slot] = p_pos.x;
 	target_z[p_slot] = p_pos.z;
 	state_timer[p_slot] = 0.0f;
-	nearest_dist_sq[p_slot] = 1e30f;
+	nearest_any_dist_sq[p_slot] = 1e30f;
 	hp[p_slot] = (int32_t)p_hp;
 	wander[p_slot] = 0;
 	state[p_slot] = (uint8_t)p_state;
@@ -175,6 +176,7 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	archetype[p_slot] = (uint8_t)p_archetype;
 	active[p_slot] = 1;
 	pending_reason[p_slot] = (uint8_t)REASON_NONE;
+	blocked_contact[p_slot] = 0;
 	flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
 }
 
@@ -220,7 +222,7 @@ PackedInt32Array HordeAgents::recycle_candidates(int p_max) const {
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] != 0 && tier[i] == (uint8_t)TIER_COLD) {
 			slots.push_back(i);
-			dists.push_back(nearest_dist_sq[i]);
+			dists.push_back(nearest_any_dist_sq[i]);
 		}
 	}
 	const int take = MIN(p_max, (int)slots.size());
@@ -284,7 +286,7 @@ void HordeAgents::_assign_tiers() {
 				best_sq = d2;
 			}
 		}
-		nearest_dist_sq[i] = best_sq; // Squared; consumers sqrt lazily if needed.
+		nearest_any_dist_sq[i] = best_sq; // Squared; consumers sqrt lazily if needed.
 		uint8_t t;
 		if (best_sq < hot_sq) {
 			t = (uint8_t)TIER_HOT;
@@ -483,6 +485,10 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 
 	// Refreshed below when the state is flow-driven; exit evaluation reads it.
 	flow_octant[i] = (uint8_t)HordeFlowField::OCTANT_NONE;
+	// Refreshed below by the wall-contact sweep (Hot/Warm only, further down);
+	// exit evaluation reads it to arm REASON_BLOCKED. Cold never runs the
+	// sweep branch, so this stays 0 for Cold agents every tick.
+	blocked_contact[i] = 0;
 
 	if (speed > 0.0f && have_field && mode == HordeFSMConfig::MOVE_FLOW) {
 		const Vector3 wp(pos_x[i], pos_y[i], pos_z[i]);
@@ -575,6 +581,9 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 			const float len = disp.length();
 			const float safe = MAX(0.0f, frac * len - CONTACT_SKIN);
 			disp = len > 1e-6f ? disp * (safe / len) : Vector2();
+			// Deterministic (the sweep fraction is deterministic): record the
+			// contact so _evaluate_exits() can arm REASON_BLOCKED for this slot.
+			blocked_contact[i] = 1;
 		}
 	}
 	pos_x[i] += disp.x;
@@ -604,10 +613,14 @@ void HordeAgents::_evaluate_exits() {
 			exit_range = r.exit_range;
 		}
 
-		// Priority: range trigger > timer deadline > flow-field goal arrival.
-		// Range compares squared against squared (no sqrt in this loop).
-		if (exit_range > 0.0f && state_timer[i] >= min_time && nearest_dist_sq[i] <= exit_range * exit_range) {
+		// Priority: range trigger > obstacle contact > timer deadline > flow-field
+		// goal arrival. Range compares squared against squared (no sqrt in this
+		// loop). REASON_BLOCKED is gated by min_time like REASON_IN_RANGE so a
+		// freshly-entered state can't re-arm instantly off a stale sweep.
+		if (exit_range > 0.0f && state_timer[i] >= min_time && nearest_any_dist_sq[i] <= exit_range * exit_range) {
 			pending_reason[i] = (uint8_t)REASON_IN_RANGE;
+		} else if (blocked_contact[i] != 0 && state_timer[i] >= min_time) {
+			pending_reason[i] = (uint8_t)REASON_BLOCKED;
 		} else if (max_time > 0.0f && state_timer[i] >= max_time) {
 			pending_reason[i] = (uint8_t)REASON_TIMER;
 		} else if (flow_octant[i] == (uint8_t)HordeFlowField::OCTANT_GOAL) {
@@ -657,6 +670,7 @@ bool HordeAgents::apply_transition(int p_id, int p_new_state) {
 	state[slot] = (uint8_t)p_new_state;
 	state_timer[slot] = 0.0f;
 	pending_reason[slot] = (uint8_t)REASON_NONE;
+	blocked_contact[slot] = 0; // Old sample is for the old state.
 	flow_octant[slot] = (uint8_t)HordeFlowField::OCTANT_NONE; // Old sample is for the old state.
 	wander[slot]++; // Re-roll the PATROL direction on every timer re-arm.
 	return true;
@@ -707,7 +721,7 @@ int HordeAgents::get_agent_hp(int p_id) const {
 
 float HordeAgents::get_nearest_player_distance(int p_id) const {
 	int slot;
-	return _resolve(p_id, slot) ? Math::sqrt(nearest_dist_sq[slot]) : -1.0f;
+	return _resolve(p_id, slot) ? Math::sqrt(nearest_any_dist_sq[slot]) : -1.0f;
 }
 
 void HordeAgents::set_agent_hp(int p_id, int p_hp) {
@@ -919,4 +933,5 @@ void HordeAgents::_bind_methods() {
 	BIND_ENUM_CONSTANT(REASON_TIMER);
 	BIND_ENUM_CONSTANT(REASON_IN_RANGE);
 	BIND_ENUM_CONSTANT(REASON_AT_GOAL);
+	BIND_ENUM_CONSTANT(REASON_BLOCKED);
 }
