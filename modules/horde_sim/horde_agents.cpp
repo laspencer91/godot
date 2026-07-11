@@ -62,6 +62,15 @@ void HordeAgents::_rebuild_storage() {
 	state_timer.resize(cap);
 	nearest_any_dist_sq.resize(cap);
 	hp.resize(cap);
+	kb_x.resize(cap);
+	kb_z.resize(cap);
+	kb_ticks.resize(cap);
+	stagger_ticks_left.resize(cap);
+	prev_state.resize(cap);
+	hit_killer.resize(cap);
+	hit_impulse_x.resize(cap);
+	hit_impulse_y.resize(cap);
+	hit_impulse_z.resize(cap);
 	epoch.resize(cap);
 	wander.resize(cap);
 	state.resize(cap);
@@ -163,7 +172,7 @@ bool HordeAgents::_resolve(int p_id, int &r_slot) const {
 	return true;
 }
 
-void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, int p_hp) {
+void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp) {
 	pos_x[p_slot] = p_pos.x;
 	pos_y[p_slot] = p_pos.y;
 	pos_z[p_slot] = p_pos.z;
@@ -172,7 +181,16 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	target_z[p_slot] = p_pos.z;
 	state_timer[p_slot] = 0.0f;
 	nearest_any_dist_sq[p_slot] = 1e30f;
-	hp[p_slot] = (int32_t)p_hp;
+	hp[p_slot] = p_hp;
+	kb_x[p_slot] = 0.0f;
+	kb_z[p_slot] = 0.0f;
+	kb_ticks[p_slot] = 0;
+	stagger_ticks_left[p_slot] = 0;
+	prev_state[p_slot] = (uint8_t)p_state;
+	hit_killer[p_slot] = -1;
+	hit_impulse_x[p_slot] = 0.0f;
+	hit_impulse_y[p_slot] = 0.0f;
+	hit_impulse_z[p_slot] = 0.0f;
 	wander[p_slot] = 0;
 	state[p_slot] = (uint8_t)p_state;
 	tier[p_slot] = (uint8_t)TIER_COLD;
@@ -183,14 +201,15 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
 }
 
-int HordeAgents::spawn(int p_archetype, const Vector3 &p_position, int p_state, int p_hp) {
+int HordeAgents::spawn(int p_archetype, const Vector3 &p_position, int p_state, float p_hp) {
 	ERR_FAIL_INDEX_V(p_state, STATE_MAX, -1);
 	if (free_slots.is_empty()) {
 		return -1; // At the alive cap (R3.4).
 	}
 	const int slot = free_slots[free_slots.size() - 1];
 	free_slots.remove_at(free_slots.size() - 1);
-	_init_slot(slot, p_archetype, p_position, p_state, p_hp);
+	const float base_hp = p_hp >= 0.0f ? p_hp : _combat_rule(p_archetype).max_hp;
+	_init_slot(slot, p_archetype, p_position, p_state, base_hp);
 	active_count++;
 	return _make_id(slot);
 }
@@ -402,6 +421,13 @@ int HordeAgents::_movement_mode(int p_archetype, int p_state) const {
 	return HordeFSMConfig::default_movement_mode(p_state);
 }
 
+const HordeFSMConfig::CombatRule &HordeAgents::_combat_rule(int p_archetype) const {
+	if (fsm_config.is_valid() && p_archetype < fsm_config->get_archetype_count()) {
+		return fsm_config->combat_rule(p_archetype);
+	}
+	return HordeFSMConfig::DEFAULT_COMBAT;
+}
+
 float HordeAgents::_wander_angle(int p_slot) const {
 	// Seeded per-agent wander direction (PATROL): pure integer hash of the
 	// slot, its reuse epoch, and the wander re-roll counter -- deterministic,
@@ -477,8 +503,23 @@ void HordeAgents::_step_movement(double p_delta) {
 
 void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool have_field) {
 	const int t = tier[i];
-	const float eff_dt = (float)p_delta * (float)_tier_divisor(t);
+	const int divisor = _tier_divisor(t);
+	const float eff_dt = (float)p_delta * (float)divisor;
 	state_timer[i] += eff_dt;
+
+	// Native damage-stagger countdown (apply_damage): the halt lasts
+	// stagger_duration_ticks of wall ticks (consumed at this slot's LOD
+	// cadence), then the pre-stagger state -- and its movement mode -- resumes
+	// without a script round-trip. Script-applied STAGGER (ticks_left == 0)
+	// keeps the normal timer/exit machinery instead.
+	if (state[i] == (uint8_t)STATE_STAGGER && stagger_ticks_left[i] > 0) {
+		if ((int)stagger_ticks_left[i] > divisor) {
+			stagger_ticks_left[i] -= (uint16_t)divisor;
+		} else {
+			stagger_ticks_left[i] = 0;
+			_enter_state(i, prev_state[i]); // Movement resumes this step.
+		}
+	}
 
 	const int st = state[i];
 	const float speed = _state_speed(archetype[i], st);
@@ -569,6 +610,25 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 		disp += _separation_offset(i) * (separation_strength * eff_dt);
 	}
 
+	// Blunt-knockback stumble (P2.4): consume up to `divisor` decay ticks this
+	// step. Per-tick steps decay linearly and telescope to exactly the applied
+	// displacement (step = remaining * 2 / (ticks + 1)). Added after the
+	// separation block on purpose -- a shove is a forced displacement, not
+	// steering -- and it rides the wall sweep below like any other movement.
+	// Corpses never slide: the death event impulse drives the ragdoll instead.
+	const bool steered = disp != Vector2(); // A pure shove must not turn the agent.
+	if (kb_ticks[i] > 0 && st != STATE_DEAD) {
+		const int steps = MIN((int)kb_ticks[i], divisor);
+		for (int s = 0; s < steps; s++) {
+			const float f = 2.0f / (float)(kb_ticks[i] + 1);
+			disp.x += kb_x[i] * f;
+			disp.y += kb_z[i] * f;
+			kb_x[i] -= kb_x[i] * f;
+			kb_z[i] -= kb_z[i] * f;
+			kb_ticks[i]--;
+		}
+	}
+
 	if (disp == Vector2()) {
 		return;
 	}
@@ -591,7 +651,7 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 	pos_x[i] += disp.x;
 	pos_z[i] += disp.y;
-	if (disp.length_squared() > 1e-8f) {
+	if (steered && disp.length_squared() > 1e-8f) {
 		yaw[i] = Math::atan2(disp.x, disp.y);
 	}
 }
@@ -604,8 +664,16 @@ void HordeAgents::_evaluate_exits() {
 		if (active[i] == 0) {
 			continue;
 		}
-		pending_reason[i] = (uint8_t)REASON_NONE;
 		const int st = state[i];
+		if (st == STATE_DEAD) {
+			// DEAD has no exits, and an unacked REASON_DIED must persist across
+			// ticks until script applies the ack transition (at-least-once).
+			continue;
+		}
+		pending_reason[i] = (uint8_t)REASON_NONE;
+		if (st == STATE_STAGGER && stagger_ticks_left[i] > 0) {
+			continue; // Native damage-stagger recovers by countdown, not by exit.
+		}
 		const int arch = archetype[i];
 
 		float min_time = 0.0f, max_time = 0.0f, exit_range = 0.0f;
@@ -664,18 +732,23 @@ PackedInt32Array HordeAgents::query_transitions() const {
 	return out;
 }
 
+void HordeAgents::_enter_state(int p_slot, int p_new_state) {
+	state[p_slot] = (uint8_t)p_new_state;
+	state_timer[p_slot] = 0.0f;
+	pending_reason[p_slot] = (uint8_t)REASON_NONE;
+	blocked_contact[p_slot] = 0; // Old sample is for the old state.
+	flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE; // Old sample is for the old state.
+	stagger_ticks_left[p_slot] = 0; // Any transition cancels a native stagger.
+	wander[p_slot]++; // Re-roll the PATROL direction on every timer re-arm.
+}
+
 bool HordeAgents::apply_transition(int p_id, int p_new_state) {
 	ERR_FAIL_INDEX_V(p_new_state, STATE_MAX, false);
 	int slot;
 	if (!_resolve(p_id, slot)) {
 		return false;
 	}
-	state[slot] = (uint8_t)p_new_state;
-	state_timer[slot] = 0.0f;
-	pending_reason[slot] = (uint8_t)REASON_NONE;
-	blocked_contact[slot] = 0; // Old sample is for the old state.
-	flow_octant[slot] = (uint8_t)HordeFlowField::OCTANT_NONE; // Old sample is for the old state.
-	wander[slot]++; // Re-roll the PATROL direction on every timer re-arm.
+	_enter_state(slot, p_new_state);
 	return true;
 }
 
@@ -685,6 +758,189 @@ void HordeAgents::apply_transitions(const PackedInt32Array &p_pairs) {
 	for (int i = 0; i + 1 < n; i += 2) {
 		apply_transition(p_pairs[i], p_pairs[i + 1]);
 	}
+}
+
+// --- Combat ingress (P2.4) ----------------------------------------------------
+
+// Smallest t >= 0 at which a normalized ray hits a sphere (p_rel = center -
+// origin). An origin inside the sphere counts as t = 0.
+_FORCE_INLINE_ static bool _ray_sphere_t(const Vector3 &p_rel, const Vector3 &p_dir, float p_radius_sq, float &r_t) {
+	const float b = p_rel.dot(p_dir);
+	const float c = p_rel.length_squared() - p_radius_sq;
+	if (c <= 0.0f) {
+		r_t = 0.0f; // Origin inside the sphere.
+		return true;
+	}
+	if (b <= 0.0f) {
+		return false; // Sphere behind the origin.
+	}
+	const float disc = b * b - c;
+	if (disc < 0.0f) {
+		return false;
+	}
+	r_t = b - Math::sqrt(disc);
+	return true;
+}
+
+// Smallest t >= 0 at which a normalized ray hits a VERTICAL capsule whose axis
+// runs from p_axis_a straight up to y = p_axis_y1, radius p_radius. An origin
+// inside the capsule counts as t = 0 (melee arc probes may start inside a
+// body). Union of cylinder band + two cap spheres; a planar miss of the
+// axis-aligned cylinder clears the caps too, so it rejects everything early.
+_FORCE_INLINE_ static bool _ray_capsule_t(const Vector3 &p_from, const Vector3 &p_dir,
+		const Vector3 &p_axis_a, float p_axis_y1, float p_radius, float &r_t) {
+	const float rr = p_radius * p_radius;
+	const float ox = p_from.x - p_axis_a.x;
+	const float oz = p_from.z - p_axis_a.z;
+	const float a = p_dir.x * p_dir.x + p_dir.z * p_dir.z;
+	const float c = ox * ox + oz * oz - rr;
+	if (a > 1e-12f) {
+		const float b = ox * p_dir.x + oz * p_dir.z;
+		const float disc = b * b - a * c;
+		if (disc < 0.0f) {
+			return false; // Planar miss: clears the cylinder AND both caps.
+		}
+		const float t = (-b - Math::sqrt(disc)) / a; // Entry into the infinite cylinder.
+		const float y = p_from.y + p_dir.y * t;
+		if (t >= 0.0f && y >= p_axis_a.y && y <= p_axis_y1) {
+			r_t = t; // Side hit within the axis band.
+			return true;
+		}
+	} else if (c > 0.0f) {
+		return false; // Vertical ray outside the cylinder radius.
+	}
+	if (c <= 0.0f && p_from.y >= p_axis_a.y && p_from.y <= p_axis_y1) {
+		r_t = 0.0f; // Origin inside the capsule body.
+		return true;
+	}
+	// Cap spheres pick up entries above/below the cylinder band (a band-crossing
+	// ray whose cylinder entry lies outside the band always clips a cap first).
+	float t_cap;
+	bool any = false;
+	if (_ray_sphere_t(p_axis_a - p_from, p_dir, rr, t_cap)) {
+		r_t = t_cap;
+		any = true;
+	}
+	if (_ray_sphere_t(Vector3(p_axis_a.x, p_axis_y1, p_axis_a.z) - p_from, p_dir, rr, t_cap) && (!any || t_cap < r_t)) {
+		r_t = t_cap;
+		any = true;
+	}
+	return any;
+}
+
+Dictionary HordeAgents::raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist) const {
+	Dictionary hit;
+	const float dir_len = p_dir.length();
+	if (dir_len < 1e-6f || p_max_dist <= 0.0f) {
+		return hit;
+	}
+	const Vector3 dir = p_dir / dir_len;
+	const float r = agent_radius;
+	const float axis_top = MAX(r, agent_height - r); // Same capsule as the mover sweep.
+	const float reach = agent_height + r; // Bounding radius around the feet.
+
+	// Flat SoA scan, nearest-first pruning via best_t. Ascending slot order and
+	// a strict '<' keep ties deterministic (L6). NOTE: deliberately NOT the hot
+	// spatial hash -- it only indexes Hot-tier agents, and a rifle out-ranges
+	// the Hot radius (a Warm agent must still be hittable); 250 capsule tests
+	// with the cheap reject below sit far under the 50 us budget anyway.
+	float best_t = p_max_dist;
+	int best_slot = -1;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0 || state[i] == (uint8_t)STATE_DEAD) {
+			continue; // Corpses never hit; freed slots can't resurface (epoch).
+		}
+		// Bounding-sphere reject (feet-centered, radius `reach`) before the
+		// exact capsule test: behind the origin, past the current best, or
+		// farther from the ray line than the whole agent could span.
+		const Vector3 to(pos_x[i] - p_from.x, pos_y[i] - p_from.y, pos_z[i] - p_from.z);
+		const float proj = to.dot(dir);
+		if (proj < -reach || proj > best_t + reach) {
+			continue;
+		}
+		if (to.length_squared() - proj * proj > reach * reach) {
+			continue;
+		}
+		float t;
+		if (_ray_capsule_t(p_from, dir, Vector3(pos_x[i], pos_y[i] + r, pos_z[i]), pos_y[i] + axis_top, r, t) && t < best_t) {
+			best_t = t;
+			best_slot = i;
+		}
+	}
+	if (best_slot < 0) {
+		return hit;
+	}
+	const Vector3 hit_pos = p_from + dir * best_t;
+	hit["id"] = _make_id(best_slot);
+	hit["hit_pos"] = hit_pos;
+	hit["height_frac"] = CLAMP((hit_pos.y - pos_y[best_slot]) / agent_height, 0.0f, 1.0f);
+	return hit;
+}
+
+int HordeAgents::apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint, float p_knockback) {
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return -1;
+	}
+	if (state[slot] == (uint8_t)STATE_DEAD) {
+		return STATE_DEAD; // Corpses absorb nothing; death info stays the killing hit's.
+	}
+	// Record the hit so the R3.9 death event path can carry killer/impulse
+	// (get_death_info); on a kill this is by definition the killing hit.
+	hit_killer[slot] = p_killer_hint;
+	hit_impulse_x[slot] = p_impulse_dir.x;
+	hit_impulse_y[slot] = p_impulse_dir.y;
+	hit_impulse_z[slot] = p_impulse_dir.z;
+
+	hp[slot] -= p_amount;
+	if (hp[slot] <= 0.0f) {
+		hp[slot] = 0.0f;
+		_enter_state(slot, STATE_DEAD);
+		// The DEAD transition is already applied (HP authority is native); the
+		// quad is the death notification script acks, then emits R3.9.
+		pending_reason[slot] = (uint8_t)REASON_DIED;
+		return STATE_DEAD;
+	}
+
+	const HordeFSMConfig::CombatRule &cr = _combat_rule(archetype[slot]);
+
+	// Blunt knockback (COMBAT_FEEL section 4): a horizontal stumble along the
+	// impulse, config-capped, decaying over the config window. _move_agent
+	// applies it through the CastMover + skin path -- never through walls.
+	if (p_knockback > 0.0f && cr.knockback_duration_ticks > 0) {
+		Vector2 kb_dir(p_impulse_dir.x, p_impulse_dir.z);
+		const float len = kb_dir.length();
+		if (len > 1e-5f) {
+			const float d = MIN(p_knockback, cr.knockback_distance_cap);
+			kb_dir /= len;
+			kb_x[slot] = kb_dir.x * d;
+			kb_z[slot] = kb_dir.y * d;
+			kb_ticks[slot] = (uint16_t)MIN(cr.knockback_duration_ticks, 0xFFFF);
+		}
+	}
+
+	// Server-confirmed stagger (COMBAT_FEEL section 3 tier B): one hit at
+	// >= stagger_damage_frac of max HP halts the agent for the config window,
+	// then the prior state resumes natively (see _move_agent).
+	if (p_amount >= cr.stagger_damage_frac * cr.max_hp && cr.stagger_duration_ticks > 0) {
+		if (state[slot] != (uint8_t)STATE_STAGGER) {
+			prev_state[slot] = state[slot]; // A re-stagger keeps the original resume state.
+		}
+		_enter_state(slot, STATE_STAGGER);
+		stagger_ticks_left[slot] = (uint16_t)MIN(cr.stagger_duration_ticks, 0xFFFF);
+	}
+	return (int)state[slot];
+}
+
+Dictionary HordeAgents::get_death_info(int p_id) const {
+	Dictionary d;
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return d;
+	}
+	d["killer_hint"] = hit_killer[slot];
+	d["impulse_dir"] = Vector3(hit_impulse_x[slot], hit_impulse_y[slot], hit_impulse_z[slot]);
+	return d;
 }
 
 // --- Agent access -----------------------------------------------------------
@@ -717,9 +973,9 @@ float HordeAgents::get_agent_yaw(int p_id) const {
 	return _resolve(p_id, slot) ? yaw[slot] : 0.0f;
 }
 
-int HordeAgents::get_agent_hp(int p_id) const {
+float HordeAgents::get_agent_hp(int p_id) const {
 	int slot;
-	return _resolve(p_id, slot) ? (int)hp[slot] : 0;
+	return _resolve(p_id, slot) ? hp[slot] : 0.0f;
 }
 
 float HordeAgents::get_nearest_player_distance(int p_id) const {
@@ -727,10 +983,10 @@ float HordeAgents::get_nearest_player_distance(int p_id) const {
 	return _resolve(p_id, slot) ? Math::sqrt(nearest_any_dist_sq[slot]) : -1.0f;
 }
 
-void HordeAgents::set_agent_hp(int p_id, int p_hp) {
+void HordeAgents::set_agent_hp(int p_id, float p_hp) {
 	int slot;
 	if (_resolve(p_id, slot)) {
-		hp[slot] = (int32_t)p_hp;
+		hp[slot] = p_hp;
 	}
 }
 
@@ -958,7 +1214,7 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("has_physics_space"), &HordeAgents::has_physics_space);
 
 	// Spawn / despawn / recycle.
-	ClassDB::bind_method(D_METHOD("spawn", "archetype", "position", "state", "hp"), &HordeAgents::spawn, DEFVAL(STATE_DORMANT), DEFVAL(100));
+	ClassDB::bind_method(D_METHOD("spawn", "archetype", "position", "state", "hp"), &HordeAgents::spawn, DEFVAL(STATE_DORMANT), DEFVAL(-1.0));
 	ClassDB::bind_method(D_METHOD("despawn", "id"), &HordeAgents::despawn);
 	ClassDB::bind_method(D_METHOD("is_alive", "id"), &HordeAgents::is_alive);
 	ClassDB::bind_method(D_METHOD("get_active_count"), &HordeAgents::get_active_count);
@@ -973,6 +1229,11 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("query_transitions"), &HordeAgents::query_transitions);
 	ClassDB::bind_method(D_METHOD("apply_transition", "id", "new_state"), &HordeAgents::apply_transition);
 	ClassDB::bind_method(D_METHOD("apply_transitions", "pairs"), &HordeAgents::apply_transitions);
+
+	// Combat ingress (P2.4).
+	ClassDB::bind_method(D_METHOD("raycast_agents", "from", "dir", "max_dist"), &HordeAgents::raycast_agents);
+	ClassDB::bind_method(D_METHOD("apply_damage", "id", "amount", "impulse_dir", "killer_hint", "knockback"), &HordeAgents::apply_damage, DEFVAL(0.0));
+	ClassDB::bind_method(D_METHOD("get_death_info", "id"), &HordeAgents::get_death_info);
 
 	// Agent access.
 	ClassDB::bind_method(D_METHOD("get_agent_state", "id"), &HordeAgents::get_agent_state);
@@ -1023,4 +1284,5 @@ void HordeAgents::_bind_methods() {
 	BIND_ENUM_CONSTANT(REASON_IN_RANGE);
 	BIND_ENUM_CONSTANT(REASON_AT_GOAL);
 	BIND_ENUM_CONSTANT(REASON_BLOCKED);
+	BIND_ENUM_CONSTANT(REASON_DIED);
 }

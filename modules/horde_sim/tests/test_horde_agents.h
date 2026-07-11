@@ -6,8 +6,11 @@
 
 #include "horde_test_helpers.h"
 
+#include "../horde_wire.h"
+
 // ===========================================================================
 // HordeAgents (P1.B2) — SoA agent sim, FSM framework, LOD, kinematic movement.
+// Combat ingress (P2.4) — weapon ray, damage/stagger/death, blunt knockback.
 // ===========================================================================
 
 namespace TestHordeSim {
@@ -263,36 +266,38 @@ TEST_CASE("[HordeSim][Agents] Agent steps up an inter-floor link toward an upsta
 	CHECK(agents->get_agent_position(id).y == doctest::Approx((float)grid->get_floor_height()));
 }
 
+// Deterministic 40-agent scene (64x64 flow field toward one corner + default
+// FSM config) shared by the run-twice determinism cases (16 and 32).
+static Ref<HordeAgents> make_determinism_scene() {
+	Ref<HordeNavGrid> grid = make_grid(64, 64);
+	Ref<HordeFlowField> field;
+	field.instantiate();
+	field->set_grid(grid);
+	field->add_goal(0, 0, 0);
+	field->recompute_sync();
+
+	Ref<HordeFSMConfig> cfg;
+	cfg.instantiate();
+	cfg->load_defaults();
+
+	Ref<HordeAgents> a = make_agents(64);
+	a->set_flow_field(field);
+	a->set_fsm_config(cfg);
+	// Deterministic spread of agents across the grid.
+	for (int i = 0; i < 40; i++) {
+		const float fx = 2.0f + (float)((i * 7) % 28);
+		const float fz = 2.0f + (float)((i * 5) % 28);
+		a->spawn(i & 1, Vector3(fx, 0, fz), HordeAgents::STATE_ADVANCE);
+	}
+	return a;
+}
+
 // ---------------------------------------------------------------------------
 // 16. Determinism: same seed/inputs -> identical agent state after N ticks.
 // ---------------------------------------------------------------------------
 TEST_CASE("[HordeSim][Agents] Identical inputs produce bit-identical agent state after N ticks") {
-	auto build = []() -> Ref<HordeAgents> {
-		Ref<HordeNavGrid> grid = make_grid(64, 64);
-		Ref<HordeFlowField> field;
-		field.instantiate();
-		field->set_grid(grid);
-		field->add_goal(0, 0, 0);
-		field->recompute_sync();
-
-		Ref<HordeFSMConfig> cfg;
-		cfg.instantiate();
-		cfg->load_defaults();
-
-		Ref<HordeAgents> a = make_agents(64);
-		a->set_flow_field(field);
-		a->set_fsm_config(cfg);
-		// Deterministic spread of agents across the grid.
-		for (int i = 0; i < 40; i++) {
-			const float fx = 2.0f + (float)((i * 7) % 28);
-			const float fz = 2.0f + (float)((i * 5) % 28);
-			a->spawn(i & 1, Vector3(fx, 0, fz), HordeAgents::STATE_ADVANCE);
-		}
-		return a;
-	};
-
-	Ref<HordeAgents> a = build();
-	Ref<HordeAgents> b = build();
+	Ref<HordeAgents> a = make_determinism_scene();
+	Ref<HordeAgents> b = make_determinism_scene();
 
 	for (int t = 0; t < 120; t++) {
 		PackedVector3Array players;
@@ -451,6 +456,381 @@ TEST_CASE("[HordeSim][Agents] Agent walking into the test wall arms REASON_BLOCK
 	// next tick sweeps nothing and nothing re-arms.
 	a->tick(1.0 / 128.0);
 	CHECK(a->query_transitions().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 26. Weapon ray vs the agent capsule: authored hit/miss/height_frac (P2.4).
+// Default capsule: radius 0.35, height 1.8 -> axis band y in [0.35, 1.45],
+// surface spans y in [0, 1.8].
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] raycast_agents hits the capsule with authored precision") {
+	Ref<HordeAgents> a = make_agents(8);
+	const int id = a->spawn(0, Vector3(10, 0, 0));
+
+	// Body shot: horizontal ray at mid height -> cylinder side at x = 10 - r.
+	Dictionary hit = a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	CHECK((int)hit["id"] == id);
+	Vector3 hit_p = hit["hit_pos"];
+	CHECK(hit_p.x == doctest::Approx(9.65f));
+	CHECK(hit_p.y == doctest::Approx(0.9f));
+	CHECK((float)hit["height_frac"] == doctest::Approx(0.5f));
+
+	// Head-height ray clips the top cap sphere (center y 1.45, r 0.35):
+	// x = 10 - sqrt(0.35^2 - 0.25^2), height_frac = 1.7 / 1.8.
+	hit = a->raycast_agents(Vector3(0, 1.7f, 0), Vector3(1, 0, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	hit_p = hit["hit_pos"];
+	CHECK(hit_p.x == doctest::Approx(9.75505f));
+	CHECK((float)hit["height_frac"] == doctest::Approx(0.94444f));
+
+	// Straight down onto the crown: hit at y = 1.8, height_frac 1.
+	hit = a->raycast_agents(Vector3(10, 5, 0), Vector3(0, -1, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	hit_p = hit["hit_pos"];
+	CHECK(hit_p.y == doctest::Approx(1.8f));
+	CHECK((float)hit["height_frac"] == doctest::Approx(1.0f));
+
+	// Unnormalized direction is normalized internally (same body shot).
+	hit = a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(3, 0, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	CHECK(((Vector3)hit["hit_pos"]).x == doctest::Approx(9.65f));
+
+	// Misses: over the crown, wide of the radius, out of range.
+	CHECK(a->raycast_agents(Vector3(0, 1.9f, 0), Vector3(1, 0, 0), 50.0f).is_empty());
+	CHECK(a->raycast_agents(Vector3(0, 0.9f, 0.4f), Vector3(1, 0, 0), 50.0f).is_empty());
+	CHECK(a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0), 9.0f).is_empty());
+
+	// Nearest-of-two: an agent in front shadows the one behind.
+	const int near_id = a->spawn(0, Vector3(5, 0, 0));
+	hit = a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	CHECK((int)hit["id"] == near_id);
+	CHECK(((Vector3)hit["hit_pos"]).x == doctest::Approx(4.65f));
+}
+
+// ---------------------------------------------------------------------------
+// 27. Damage ingress rejects stale ids; corpses are excluded from the ray.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] Stale ids are rejected; corpses never raycast") {
+	Ref<HordeAgents> a = make_agents(4);
+	// No config assigned: DEFAULT_COMBAT applies (100 HP base).
+	const int id = a->spawn(0, Vector3(5, 0, 0));
+	CHECK(a->get_agent_hp(id) == 100.0f);
+	CHECK(a->apply_damage(id, 10.0f, Vector3(1, 0, 0), 0) == HordeAgents::STATE_DORMANT);
+	CHECK(a->get_agent_hp(id) == doctest::Approx(90.0f));
+
+	// Free the slot, respawn into it: the old id must fail everywhere.
+	a->despawn(id);
+	CHECK(a->apply_damage(id, 50.0f, Vector3(1, 0, 0), 0) == -1);
+	CHECK(a->get_death_info(id).is_empty());
+	const int reused = a->spawn(1, Vector3(5, 0, 0));
+	CHECK((reused & HordeAgents::ID_SLOT_MASK) == (id & HordeAgents::ID_SLOT_MASK)); // Same slot.
+	CHECK(reused != id); // Epoch flipped.
+	CHECK(a->apply_damage(id, 50.0f, Vector3(1, 0, 0), 0) == -1); // Stale id still dead.
+	CHECK(a->get_agent_hp(reused) == 100.0f); // The new tenant is untouched.
+
+	// The ray reports the CURRENT epoch's id.
+	Dictionary hit = a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	CHECK((int)hit["id"] == reused);
+
+	// Kill it: the corpse stops raycasting the same call sequence that hit it.
+	CHECK(a->apply_damage(reused, 200.0f, Vector3(1, 0, 0), 1) == HordeAgents::STATE_DEAD);
+	CHECK(a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0), 50.0f).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 28. Damage -> stagger -> recover: the config threshold gates the stagger,
+// the agent halts for stagger_duration_ticks, then the prior movement mode
+// resumes natively (P2.4, COMBAT_FEEL section 3 tier B / A3.6).
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] Threshold hit staggers, halts, then resumes the prior state") {
+	Ref<HordeFSMConfig> cfg;
+	cfg.instantiate();
+	cfg->load_defaults(); // Combat row: 100 HP, frac 0.35, 90 ticks.
+
+	Ref<HordeAgents> a = make_agents(8);
+	a->set_fsm_config(cfg);
+	const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+	a->set_agent_target(id, Vector3(0, 0, 40));
+	PackedVector3Array players;
+	players.push_back(Vector3(10, 0, 0)); // Hot tier (full-rate cadence), out of exit_range.
+	a->set_player_positions(players);
+
+	// Chasing: the agent advances toward its target.
+	for (int t = 0; t < 10; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	CHECK(a->get_agent_position(id).z > 0.1f);
+
+	// Sub-threshold hit (pistol-class 34 < 35): HP drops, no stagger.
+	CHECK(a->apply_damage(id, 34.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_CHASE);
+	CHECK(a->get_agent_hp(id) == doctest::Approx(66.0f));
+
+	// Threshold hit (rifle-class 40 >= 35): STAGGER, and the agent halts.
+	CHECK(a->apply_damage(id, 40.0f, Vector3(0, 0, -1), 1) == HordeAgents::STATE_STAGGER);
+	const Vector3 held = a->get_agent_position(id);
+	for (int t = 0; t < 89; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_STAGGER);
+	CHECK(a->get_agent_position(id) == held); // Bit-identical: fully halted.
+	CHECK(a->query_transitions().is_empty()); // Native stagger arms no exits.
+
+	// Tick 90 expires the window: prior state resumes and movement restarts.
+	a->tick(1.0 / 128.0);
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_CHASE);
+	a->tick(1.0 / 128.0);
+	CHECK(a->get_agent_position(id).z > held.z);
+
+	// Config plumbing: a retuned row (frac 0.10, 30 ticks) staggers a 12-damage
+	// hit, and a re-stagger mid-window refreshes it but still resumes CHASE.
+	cfg->set_combat_rule(0, 100.0f, 0.10f, 30, 0.6f, 16);
+	CHECK(a->apply_damage(id, 12.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_STAGGER);
+	for (int t = 0; t < 10; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	CHECK(a->apply_damage(id, 12.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_STAGGER); // Refresh.
+	for (int t = 0; t < 29; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_STAGGER);
+	a->tick(1.0 / 128.0);
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_CHASE); // Original prior state, not STAGGER.
+}
+
+// ---------------------------------------------------------------------------
+// 29. Damage -> death: the native DEAD transition emits a REASON_DIED quad,
+// and killer_hint/impulse_dir carry through to the R3.9 death event payload.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] Lethal damage emits the death quad and carries the killing hit") {
+	Ref<HordeFSMConfig> cfg;
+	cfg.instantiate();
+	cfg->load_defaults();
+
+	Ref<HordeAgents> a = make_agents(8);
+	a->set_fsm_config(cfg);
+	const int id = a->spawn(0, Vector3(5, 0, 0), HordeAgents::STATE_CHASE);
+
+	// First hit staggers (55 >= 35); the second kills through the stagger.
+	CHECK(a->apply_damage(id, 55.0f, Vector3(1, 0, 0), 7) == HordeAgents::STATE_STAGGER);
+	CHECK(a->apply_damage(id, 60.0f, Vector3(0.6f, 0.2f, 0.3f), 2) == HordeAgents::STATE_DEAD);
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_DEAD);
+	CHECK(a->get_agent_hp(id) == 0.0f); // Clamped, never negative.
+	CHECK(a->is_alive(id)); // Active (and id-valid) until script despawns it.
+
+	// The standard quad, reason REASON_DIED, state already DEAD.
+	PackedInt32Array q = a->query_transitions();
+	REQUIRE(q.size() == 4);
+	CHECK(q[0] == id);
+	CHECK(q[1] == 0);
+	CHECK(q[2] == HordeAgents::STATE_DEAD);
+	CHECK(q[3] == HordeAgents::REASON_DIED);
+
+	// Unacked, it persists across ticks (reliable at-least-once).
+	a->tick(1.0 / 128.0);
+	CHECK(a->query_transitions() == q);
+
+	// The killing hit feeds the R3.9 death event payload, end to end.
+	Dictionary info = a->get_death_info(id);
+	REQUIRE(!info.is_empty());
+	CHECK((int)info["killer_hint"] == 2);
+	CHECK((Vector3)info["impulse_dir"] == Vector3(0.6f, 0.2f, 0.3f));
+	Ref<HordeWireCodec> codec;
+	codec.instantiate();
+	Dictionary evt = codec->decode_death(codec->encode_death(q[0], (int)info["killer_hint"], (Vector3)info["impulse_dir"]));
+	CHECK((int)evt["id"] == id);
+	CHECK((int)evt["killer_hint"] == 2);
+	CHECK((Vector3)evt["impulse_dir"] == Vector3(0.6f, 0.2f, 0.3f));
+
+	// Script acks like any transition; nothing re-arms.
+	CHECK(a->apply_transition(id, HordeAgents::STATE_DEAD));
+	a->tick(1.0 / 128.0);
+	CHECK(a->query_transitions().is_empty());
+
+	// Corpses absorb nothing and keep the killing hit's info.
+	CHECK(a->apply_damage(id, 50.0f, Vector3(1, 0, 0), 3) == HordeAgents::STATE_DEAD);
+	CHECK((int)((Dictionary)a->get_death_info(id))["killer_hint"] == 2);
+	CHECK(a->get_agent_hp(id) == 0.0f);
+
+	// The corpse no longer shadows agents behind it on the weapon ray.
+	const int behind = a->spawn(0, Vector3(10, 0, 0));
+	Dictionary hit = a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0), 50.0f);
+	REQUIRE(!hit.is_empty());
+	CHECK((int)hit["id"] == behind);
+}
+
+// ---------------------------------------------------------------------------
+// 30. Blunt knockback: config-capped displacement decaying over the config
+// window, moved through the CastMover + skin path -- never through walls.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] Knockback is capped, decays to rest, and stops at walls") {
+	TestWorld tw;
+	// Same wall geometry as the mover-sweep test: face plane at x = 1.8.
+	tw.add_wall(2.0f, 1.0f, 0.0f, 0.2f, 2.0f, 5.0f);
+	tw.finalize();
+
+	Ref<HordeAgents> a = make_agents(4);
+	a->set_collision_world_packed(tw.packed());
+	PackedVector3Array players;
+	players.push_back(Vector3(0, 0, 0)); // Hot: the wall sweep runs.
+	a->set_player_positions(players);
+
+	// Open field along +Z: a 5 m request is capped to the 0.6 m default, the
+	// stumble decays inside the 16-tick window, then the agent is fully at rest.
+	const int id = a->spawn(0, Vector3(0, 0, 0)); // DORMANT: no locomotion of its own.
+	CHECK(a->apply_damage(id, 10.0f, Vector3(0, 0, 1), 0, 5.0f) == HordeAgents::STATE_DORMANT);
+	for (int t = 0; t < 24; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	const Vector3 rest = a->get_agent_position(id);
+	CHECK(rest.z == doctest::Approx(0.6f).epsilon(0.01));
+	CHECK(rest.x == doctest::Approx(0.0f));
+	CHECK(a->get_agent_yaw(id) == 0.0f); // A pure shove never turns the agent.
+	for (int t = 0; t < 24; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	CHECK(a->get_agent_position(id) == rest); // Bit-identical: knockback exhausted.
+
+	// Into the wall: the same 0.6 m shove stops at the face (1.8 - radius 0.35,
+	// less the 2 cm skin), never inside or beyond it.
+	const int id2 = a->spawn(0, Vector3(1.2f, 0, 0));
+	CHECK(a->apply_damage(id2, 10.0f, Vector3(1, 0, 0), 0, 0.6f) == HordeAgents::STATE_DORMANT);
+	for (int t = 0; t < 24; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	const float x = a->get_agent_position(id2).x;
+	CHECK(x > 1.35f); // It did move...
+	CHECK(x < 1.46f); // ...but the wall clamped it (unblocked it would reach 1.8).
+}
+
+// ---------------------------------------------------------------------------
+// 31. Budget: raycast_agents against 250 live agents (measured + printed;
+// runs per shot, not per tick, but melee arcs may probe a few times).
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] 250-agent raycast stays within the per-shot budget") {
+	Ref<HordeAgents> agents = make_agents(250);
+	// The wire-budget spread: a full map's worth of candidates along the ray.
+	for (int i = 0; i < 250; i++) {
+		const float wx = (float)((i * 13) % 640) + 1.0f;
+		const float wz = (float)((i * 29) % 640) + 1.0f;
+		agents->spawn(i & 1, Vector3(wx, 0, wz), HordeAgents::STATE_ADVANCE);
+	}
+	CHECK(agents->get_active_count() == 250);
+
+	// A long diagonal shot across the crowd (aimed at agent i=137's slot).
+	const Vector3 from(0, 0.9f, 0);
+	const Vector3 dir = Vector3(502, 0, 134).normalized();
+	Dictionary hit = agents->raycast_agents(from, dir, 900.0f);
+	REQUIRE(!hit.is_empty()); // The budget ray does real work.
+
+	// Same call twice -> identical result (const query, deterministic).
+	Dictionary again = agents->raycast_agents(from, dir, 900.0f);
+	CHECK((int)again["id"] == (int)hit["id"]);
+	CHECK((Vector3)again["hit_pos"] == (Vector3)hit["hit_pos"]);
+
+	// Warm up, then min-of-N batches (32 calls each): per-call cost without
+	// test-box scheduling noise (D-016 discipline).
+	for (int w = 0; w < 8; w++) {
+		agents->raycast_agents(from, dir, 900.0f);
+	}
+	uint64_t best_batch = UINT64_MAX;
+	for (int trial = 0; trial < 16; trial++) {
+		const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
+		for (int k = 0; k < 32; k++) {
+			agents->raycast_agents(from, dir, 900.0f);
+		}
+		best_batch = MIN(best_batch, OS::get_singleton()->get_ticks_usec() - t0);
+	}
+	const double per_call = (double)best_batch / 32.0;
+	print_line(vformat("[HordeSim] raycast vs 250 agents: %.2f us/call (min-of-16 x32 batch)", per_call));
+
+	// Dev-build (/Od-class) gate for the <= 50 us per-shot target.
+	CHECK(per_call < 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// 32. Determinism: an identical tick + damage + knockback + despawn sequence
+// produces bit-identical state, run twice (L6 -- no RNG anywhere in ingress).
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] Identical damage sequences produce bit-identical state, run twice") {
+	Ref<HordeAgents> a = make_determinism_scene();
+	Ref<HordeAgents> b = make_determinism_scene();
+	const PackedInt32Array ids = a->get_active_ids(); // Identical for b (deterministic spawn).
+
+	// One fixed script for both instances: scripted damage (mixed lethal /
+	// stagger / knockback hits, some landing on stale ids after despawns --
+	// no-ops on both sides), plus the ring transition policy from case 16 with
+	// deaths despawned. Raycast runs against `a` only: a const query must not
+	// perturb state, or the two instances diverge.
+	for (int t = 0; t < 150; t++) {
+		PackedVector3Array players;
+		players.push_back(Vector3(10.0f + 0.05f * t, 0, 12.0f));
+		a->set_player_positions(players);
+		b->set_player_positions(players);
+		a->tick(1.0 / 128.0);
+		b->tick(1.0 / 128.0);
+
+		// Cycle fire across the first 8 spawns so most take the ~3 hits that
+		// kill (later hits land on despawned stale ids: identical no-ops).
+		if (t % 5 == 2) {
+			const int target = ids[(t * 3) % 8];
+			const float amount = 40.0f + (float)(t % 7);
+			const Vector3 imp(0.6f, 0.1f, -0.8f);
+			const float kb = (t % 2 == 0) ? 0.4f : 0.0f;
+			a->apply_damage(target, amount, imp, t % 4, kb);
+			b->apply_damage(target, amount, imp, t % 4, kb);
+		}
+		a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0.4f), 100.0f);
+
+		// Ring policy from case 16, plus deaths despawn (the R3.9 path's shape).
+		auto step_policy = [](const Ref<HordeAgents> &h) {
+			const PackedInt32Array pending = h->query_transitions();
+			PackedInt32Array apply;
+			for (int k = 0; k + 3 < pending.size(); k += 4) {
+				if (pending[k + 3] == HordeAgents::REASON_DIED) {
+					h->despawn(pending[k]);
+				} else {
+					apply.push_back(pending[k]);
+					apply.push_back((pending[k + 2] + 1) % HordeAgents::STATE_MAX);
+				}
+			}
+			h->apply_transitions(apply);
+		};
+		step_policy(a);
+		step_policy(b);
+	}
+
+	// Bit-identical survivors: ids, positions, states, yaws, HP.
+	const PackedInt32Array ids_a = a->get_active_ids();
+	const PackedInt32Array ids_b = b->get_active_ids();
+	REQUIRE(ids_a == ids_b);
+	CHECK(ids_a.size() < ids.size()); // The lethal hits actually culled some.
+	const PackedVector3Array pos_a = a->get_positions();
+	const PackedVector3Array pos_b = b->get_positions();
+	bool identical = a->get_states() == b->get_states() && a->get_yaws() == b->get_yaws();
+	for (int i = 0; i < pos_a.size() && identical; i++) {
+		if (pos_a[i].x != pos_b[i].x || pos_a[i].y != pos_b[i].y || pos_a[i].z != pos_b[i].z) {
+			identical = false;
+		}
+	}
+	for (int i = 0; i < ids_a.size() && identical; i++) {
+		if (a->get_agent_hp(ids_a[i]) != b->get_agent_hp(ids_a[i])) {
+			identical = false;
+		}
+	}
+	CHECK(identical);
+
+	// And the weapon ray agrees between the twins, exactly.
+	Dictionary ra = a->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0.4f), 100.0f);
+	Dictionary rb = b->raycast_agents(Vector3(0, 0.9f, 0), Vector3(1, 0, 0.4f), 100.0f);
+	REQUIRE(ra.is_empty() == rb.is_empty());
+	if (!ra.is_empty()) {
+		CHECK((int)ra["id"] == (int)rb["id"]);
+		CHECK((Vector3)ra["hit_pos"] == (Vector3)rb["hit_pos"]);
+		CHECK((float)ra["height_frac"] == (float)rb["height_frac"]);
+	}
 }
 
 } // namespace TestHordeSim
