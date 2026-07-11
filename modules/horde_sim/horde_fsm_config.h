@@ -55,6 +55,24 @@ public:
 		uint8_t movement_mode = MOVE_STATIONARY;
 	};
 
+	// Per-archetype combat-ingress numbers (P2.4, COMBAT_FEEL sections 3-4).
+	// One row per archetype, alongside the per-(archetype, state) rules; the
+	// member initializers are the working placeholders (Logan owns the finals,
+	// D5.9 hot-reload applies). HordeAgents falls back to DEFAULT_COMBAT when
+	// no config Resource is assigned.
+	struct CombatRule {
+		float max_hp = 100.0f; // Spawn HP when spawn() is not given an override.
+		// A single hit at >= this fraction of max_hp staggers a survivor. 0.35
+		// encodes "not every hit staggers" (COMBAT_FEEL section 3): the rifle
+		// (55) and melee (100) stagger a 100 HP shambler, the pistol (34) not.
+		float stagger_damage_frac = 0.35f;
+		int stagger_duration_ticks = 90; // ~0.7 s at 128 Hz (A3.6).
+		float knockback_distance_cap = 0.6f; // Blunt-knockback displacement ceiling (m).
+		int knockback_duration_ticks = 16; // Knockback decay window (~0.125 s at 128 Hz).
+	};
+
+	static const CombatRule DEFAULT_COMBAT;
+
 	// The state's default MovementMode (Advance/Crawl flow, Chase seeks, rest
 	// stationary). configure() seeds every archetype row from this, and
 	// HordeAgents falls back to it when no config Resource is assigned.
@@ -63,6 +81,7 @@ public:
 private:
 	int archetype_count = 0;
 	LocalVector<Rule> rules; // archetype_count * STATE_COUNT, row-major by archetype.
+	LocalVector<CombatRule> combat_rules; // One per archetype.
 
 	static void _bind_methods();
 
@@ -76,6 +95,7 @@ public:
 
 	void set_rule(int p_archetype, int p_state, float p_move_speed, float p_min_time, float p_max_time, float p_exit_range);
 	void set_movement_mode(int p_archetype, int p_state, MovementMode p_mode);
+	void set_combat_rule(int p_archetype, float p_max_hp, float p_stagger_damage_frac, int p_stagger_duration_ticks, float p_knockback_distance_cap, int p_knockback_duration_ticks);
 
 	float get_move_speed(int p_archetype, int p_state) const;
 	float get_min_time(int p_archetype, int p_state) const;
@@ -83,10 +103,19 @@ public:
 	float get_exit_range(int p_archetype, int p_state) const;
 	MovementMode get_movement_mode(int p_archetype, int p_state) const;
 
+	float get_max_hp(int p_archetype) const;
+	float get_stagger_damage_frac(int p_archetype) const;
+	int get_stagger_duration_ticks(int p_archetype) const;
+	float get_knockback_distance_cap(int p_archetype) const;
+	int get_knockback_duration_ticks(int p_archetype) const;
+
 	// Native fast path: rule by reference, no Variant marshaling. Caller must
 	// pass in-range indices (HordeAgents clamps before calling).
 	_FORCE_INLINE_ const Rule &rule(int p_archetype, int p_state) const {
 		return rules[_rule_index(p_archetype, p_state)];
+	}
+	_FORCE_INLINE_ const CombatRule &combat_rule(int p_archetype) const {
+		return combat_rules[p_archetype];
 	}
 
 	// Fill placeholder shambler (0) + screamer (1) tables from the design ranges
