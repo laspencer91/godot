@@ -10,6 +10,7 @@
 #include "core/object/worker_thread_pool.h"
 #include "core/templates/local_vector.h"
 #include "core/templates/safe_refcount.h"
+#include "core/variant/type_info.h"
 
 // Multi-goal integration + direction field over a HordeNavGrid (DES G6.3).
 //
@@ -44,8 +45,8 @@ class HordeFlowField : public RefCounted {
 	GDCLASS(HordeFlowField, RefCounted);
 
 public:
-	// Packed direction octant values stored per cell.
-	enum : uint8_t {
+	// Packed direction octant values stored per cell (fits a uint8_t).
+	enum Octant {
 		OCTANT_E = 0,
 		OCTANT_NE = 1,
 		OCTANT_N = 2,
@@ -63,10 +64,6 @@ public:
 	static constexpr uint16_t GOAL_NONE = 0xFFFFu;
 
 private:
-	// Per-move cost multipliers (integer, deterministic). Diagonal ~= sqrt(2).
-	static constexpr uint32_t STEP_ORTHO = 10;
-	static constexpr uint32_t STEP_DIAG = 14;
-
 	struct FieldBuffer {
 		LocalVector<uint32_t> integration;
 		LocalVector<uint8_t> dir_octant;
@@ -99,6 +96,7 @@ private:
 		LocalVector<uint32_t> cost; // Per-cell traversal cost; 0 == impassable.
 		LocalVector<int32_t> goals;
 		LinkCSR links;
+		LocalVector<int32_t> link_cursor; // CSR-build scratch.
 		// Reused scratch for the Dial's bucket queue (flat arrays, no per-cell
 		// heap objects): circular bucket heads + append-only node pool.
 		LocalVector<int32_t> bucket_head;
@@ -117,7 +115,6 @@ private:
 	WorkerThreadPool::TaskID task_id = WorkerThreadPool::INVALID_TASK_ID;
 	SafeFlag in_flight;
 	bool dirty = false; // A recompute is pending (debounced).
-	uint32_t dispatched_version = 0;
 
 	uint64_t last_compute_usec = 0;
 
@@ -126,6 +123,7 @@ private:
 	static void _bind_methods();
 
 	void _dispatch();
+	void _finish(); // Retire the completed worker task and mark the field published.
 	void _snapshot_grid(); // Main thread: fill job.cost + job.links from grid.
 	static void _worker_entry(void *p_userdata);
 	void _compute(); // Runs on the worker: Dijkstra + direction pass into back.
@@ -168,3 +166,5 @@ public:
 	HordeFlowField() {}
 	~HordeFlowField();
 };
+
+VARIANT_ENUM_CAST(HordeFlowField::Octant);

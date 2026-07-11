@@ -21,9 +21,11 @@
 // (X, Z); `floor` maps to world Y. Cell index is flat:
 //   index = (floor * height + y) * width + x
 //
-// Dynamic edits bump a version counter that flow fields watch to debounce
-// recomputes. Grid geometry (dimensions/cell_size) must be fixed via resize()
-// before any field samples it; per-cell walkability/cost may change at runtime.
+// Dynamic edits bump a version counter so callers can cheaply detect that the
+// grid changed since they last consumed it (flow-field recompute debouncing
+// itself is request/poll-based on HordeFlowField). Grid geometry
+// (dimensions/cell_size) must be fixed via resize() before any field samples
+// it; per-cell walkability/cost may change at runtime.
 class HordeFlowField;
 
 class HordeNavGrid : public RefCounted {
@@ -66,6 +68,10 @@ private:
 	uint32_t version = 1; // Bumped on any cell/link mutation.
 
 	_FORCE_INLINE_ void _touch() { version++; }
+
+	// Shared clamp + fill behind the set_*_rect methods.
+	template <typename T>
+	void _fill_rect(LocalVector<T> &r_layer, int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, T p_value);
 
 	static void _bind_methods();
 

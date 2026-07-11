@@ -115,64 +115,35 @@ bool HordeNavGrid::is_passable(int32_t p_x, int32_t p_y, int32_t p_floor) const 
 	return walkable[i] != 0 && blocked[i] == 0;
 }
 
-void HordeNavGrid::set_walkable_rect(int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, bool p_walkable) {
+template <typename T>
+void HordeNavGrid::_fill_rect(LocalVector<T> &r_layer, int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, T p_value) {
 	ERR_FAIL_INDEX(p_floor, floors);
 	const int32_t x0 = MAX(0, MIN(p_x0, p_x1));
 	const int32_t x1 = MIN(width - 1, MAX(p_x0, p_x1));
 	const int32_t y0 = MAX(0, MIN(p_y0, p_y1));
 	const int32_t y1 = MIN(height - 1, MAX(p_y0, p_y1));
-	const uint8_t v = p_walkable ? 1 : 0;
 	for (int32_t y = y0; y <= y1; y++) {
 		for (int32_t x = x0; x <= x1; x++) {
-			walkable[cell_index(x, y, p_floor)] = v;
+			r_layer[cell_index(x, y, p_floor)] = p_value;
 		}
 	}
 	_touch();
+}
+
+void HordeNavGrid::set_walkable_rect(int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, bool p_walkable) {
+	_fill_rect(walkable, p_x0, p_y0, p_x1, p_y1, p_floor, (uint8_t)(p_walkable ? 1 : 0));
 }
 
 void HordeNavGrid::set_base_cost_rect(int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, int32_t p_cost) {
-	ERR_FAIL_INDEX(p_floor, floors);
-	const int32_t x0 = MAX(0, MIN(p_x0, p_x1));
-	const int32_t x1 = MIN(width - 1, MAX(p_x0, p_x1));
-	const int32_t y0 = MAX(0, MIN(p_y0, p_y1));
-	const int32_t y1 = MIN(height - 1, MAX(p_y0, p_y1));
-	const uint16_t v = (uint16_t)CLAMP(p_cost, 0, 65535);
-	for (int32_t y = y0; y <= y1; y++) {
-		for (int32_t x = x0; x <= x1; x++) {
-			base_cost[cell_index(x, y, p_floor)] = v;
-		}
-	}
-	_touch();
+	_fill_rect(base_cost, p_x0, p_y0, p_x1, p_y1, p_floor, (uint16_t)CLAMP(p_cost, 0, 65535));
 }
 
 void HordeNavGrid::set_blocked_rect(int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, bool p_blocked) {
-	ERR_FAIL_INDEX(p_floor, floors);
-	const int32_t x0 = MAX(0, MIN(p_x0, p_x1));
-	const int32_t x1 = MIN(width - 1, MAX(p_x0, p_x1));
-	const int32_t y0 = MAX(0, MIN(p_y0, p_y1));
-	const int32_t y1 = MIN(height - 1, MAX(p_y0, p_y1));
-	const uint8_t v = p_blocked ? 1 : 0;
-	for (int32_t y = y0; y <= y1; y++) {
-		for (int32_t x = x0; x <= x1; x++) {
-			blocked[cell_index(x, y, p_floor)] = v;
-		}
-	}
-	_touch();
+	_fill_rect(blocked, p_x0, p_y0, p_x1, p_y1, p_floor, (uint8_t)(p_blocked ? 1 : 0));
 }
 
 void HordeNavGrid::set_dynamic_cost_rect(int32_t p_x0, int32_t p_y0, int32_t p_x1, int32_t p_y1, int32_t p_floor, int32_t p_cost) {
-	ERR_FAIL_INDEX(p_floor, floors);
-	const int32_t x0 = MAX(0, MIN(p_x0, p_x1));
-	const int32_t x1 = MIN(width - 1, MAX(p_x0, p_x1));
-	const int32_t y0 = MAX(0, MIN(p_y0, p_y1));
-	const int32_t y1 = MIN(height - 1, MAX(p_y0, p_y1));
-	const uint16_t v = (uint16_t)CLAMP(p_cost, 0, 65535);
-	for (int32_t y = y0; y <= y1; y++) {
-		for (int32_t x = x0; x <= x1; x++) {
-			dynamic_cost[cell_index(x, y, p_floor)] = v;
-		}
-	}
-	_touch();
+	_fill_rect(dynamic_cost, p_x0, p_y0, p_x1, p_y1, p_floor, (uint16_t)CLAMP(p_cost, 0, 65535));
 }
 
 void HordeNavGrid::link_cells(const Vector3i &p_a, const Vector3i &p_b, int32_t p_cost) {

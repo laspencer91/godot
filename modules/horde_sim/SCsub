@@ -6,6 +6,13 @@ Import("env_modules")
 
 env_horde = env_modules.Clone()
 
+# dev_build compiles /Od on MSVC, which implies /Ob0 and ignores __forceinline.
+# The flow-field inner loops lean on _FORCE_INLINE_ helpers, so allow explicitly
+# marked inlines to expand; /Ob1 keeps full /Od debugging semantics otherwise.
+# (GCC/Clang honor always_inline at -O0 already.)
+if env.msvc and env.dev_build:
+    env_horde.Append(CCFLAGS=["/Ob1"])
+
 module_obj = []
 env_horde.add_source_files(module_obj, "*.cpp")
 env.modules_sources += module_obj
