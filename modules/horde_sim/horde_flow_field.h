@@ -12,6 +12,8 @@
 #include "core/templates/safe_refcount.h"
 #include "core/variant/type_info.h"
 
+#include <atomic>
+
 // Multi-goal integration + direction field over a HordeNavGrid (DES G6.3).
 //
 // Dijkstra from all goals at once (8-connected, cost-aware, no corner cutting)
@@ -31,9 +33,21 @@
 // buffer is visible -- so a reader never observes a partially-computed field.
 //
 // At most one recompute is in flight (single writer). The front buffer is never
-// mutated while it is the front, so per-cell scalar samples (the agent access
-// pattern: one index load + one array load) are always coherent. request/poll
-// debounce many cost-layer edits in a tick into one recompute.
+// mutated while it is the front. request/poll debounce many cost-layer edits in
+// a tick into one recompute.
+//
+// The release/acquire pair alone leaves one window: a reader that loaded
+// `front_index` and is still reading that buffer when a SUBSEQUENT recompute
+// reclaims it as the back buffer and starts clearing it observes torn data. A
+// per-buffer seqlock closes it completely: the worker makes the back buffer's
+// sequence odd before its first write and even again before publishing;
+// readers snapshot (front_index, sequence), read, and recheck the sequence,
+// retrying on any change. A validated sample is proof the buffer was stable
+// for the whole read, no matter how slow the reader. Hot-path cost per sample:
+// two extra acquire loads + a predictable branch (the fence is free on
+// x86/TSO); no RMW, no lock, no allocation. Retries need a full publish DURING
+// the nanosecond-scale sample, so they are vanishingly rare and re-converge on
+// the freshly published front immediately.
 //
 // Callers must drive the lifecycle from the sim thread: request_recompute() to
 // schedule, poll() each tick to publish a finished field and re-dispatch if the
@@ -109,6 +123,9 @@ private:
 
 	FieldBuffer buffers[2];
 	SafeNumeric<int32_t> front_index{ 0 };
+	// Per-buffer seqlock (see the threading contract above): odd while the
+	// worker is writing that buffer, even while it is stable.
+	SafeNumeric<uint32_t> buffer_seq[2];
 	bool published = false; // A completed field exists in front buffer.
 
 	Job job; // Owns worker-visible snapshot + scratch; reused across recomputes.
@@ -128,7 +145,29 @@ private:
 	static void _worker_entry(void *p_userdata);
 	void _compute(); // Runs on the worker: Dijkstra + direction pass into back.
 
-	_FORCE_INLINE_ const FieldBuffer &_front() const { return buffers[front_index.get()]; }
+	// Coherent single-cell sample (seqlock reader). `p_sample` receives the
+	// snapshotted buffer; `p_hook` runs between the snapshot and the data read
+	// so tests can widen the nanosecond race window deterministically --
+	// production callers pass an empty lambda, which inlines away.
+	template <typename Sample, typename Hook>
+	_FORCE_INLINE_ auto _coherent_sample(Sample &&p_sample, Hook &&p_hook) const {
+		while (true) {
+			const int32_t idx = front_index.get(); // Acquire.
+			const uint32_t s1 = buffer_seq[idx].get(); // Acquire.
+			if (unlikely((s1 & 1u) != 0u)) {
+				continue; // Snapshot raced a writer claiming this buffer; reload.
+			}
+			p_hook();
+			const auto value = p_sample(buffers[idx]);
+			// Order the data read before the recheck (no-op fence on x86/TSO).
+			std::atomic_thread_fence(std::memory_order_acquire);
+			if (likely(buffer_seq[idx].get() == s1)) {
+				return value;
+			}
+			// A recompute published and a second one began rewriting the
+			// snapshotted buffer mid-read; retry against the new front.
+		}
+	}
 
 public:
 	void set_grid(const Ref<HordeNavGrid> &p_grid);
@@ -157,6 +196,14 @@ public:
 	bool is_reachable(int32_t p_x, int32_t p_y, int32_t p_floor) const;
 	int32_t goal_at(int32_t p_x, int32_t p_y, int32_t p_floor) const; // Nearest goal id, -1 unreachable.
 	int32_t link_target_at_index(int32_t p_index) const;
+
+	// TEST SEAM (native-only, not bound): identical to cost_at_index /
+	// octant_at_index but runs p_hook between the coherence snapshot and the
+	// data read, letting a test force publishes + a back-buffer rewrite inside
+	// the race window. Goes through the same _coherent_sample protocol as the
+	// production accessors, so a protocol regression fails the straddle test.
+	int32_t cost_at_index_interleaved(int32_t p_index, void (*p_hook)(void *), void *p_hook_userdata) const;
+	int32_t octant_at_index_interleaved(int32_t p_index, void (*p_hook)(void *), void *p_hook_userdata) const;
 
 	uint64_t get_last_compute_usec() const { return last_compute_usec; }
 

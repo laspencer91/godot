@@ -1,0 +1,922 @@
+/**************************************************************************/
+/*  horde_agents.cpp                                                        */
+/**************************************************************************/
+
+#include "horde_agents.h"
+
+#include "core/object/class_db.h"
+#include "core/os/os.h"
+#include "core/templates/hashfuncs.h"
+
+// Engine-internal Box3D access (D-009): resolve the physics space RID to the
+// underlying b3World and call Box3D's kinematic mover sweep natively.
+#include "modules/box3d_physics/box3d_conversions.h"
+#include "modules/box3d_physics/box3d_direct_space_state_3d.h"
+#include "modules/box3d_physics/box3d_space_3d.h"
+
+#include "servers/physics_3d/physics_server_3d.h"
+
+#include "box3d/box3d.h"
+#include "box3d/id.h"
+
+// The FSM state set is shared between the sim and its data-driven tuning table;
+// keep the two enums in lockstep.
+static_assert(HordeAgents::STATE_MAX == HordeFSMConfig::STATE_COUNT,
+		"HordeAgents::State and HordeFSMConfig must declare the same number of states.");
+
+// Skin (m) kept between a blocked agent and the wall it swept into, so the next
+// tick's mover cast starts outside overlap (the cast ignores initial overlap).
+static constexpr float CONTACT_SKIN = 0.02f;
+
+// Fallback within-state speeds (m/s) when the FSM config leaves move_speed at 0
+// (or no config is assigned). Indexed by HordeAgents::State.
+static const float DEFAULT_STATE_SPEED[HordeAgents::STATE_MAX] = {
+	0.0f, // DORMANT
+	0.0f, // WAKE
+	1.2f, // ADVANCE
+	2.4f, // CHASE
+	0.0f, // ATTACK_PLAYER
+	0.0f, // GRAB
+	0.0f, // ATTACK_OBSTACLE
+	0.0f, // STAGGER
+	0.0f, // SCREAM
+	0.6f, // CRAWL
+	0.0f, // DEAD
+};
+
+HordeAgents::HordeAgents() {
+	_rebuild_storage();
+}
+
+void HordeAgents::_rebuild_storage() {
+	const uint32_t cap = (uint32_t)capacity;
+	pos_x.resize(cap);
+	pos_y.resize(cap);
+	pos_z.resize(cap);
+	yaw.resize(cap);
+	target_x.resize(cap);
+	target_z.resize(cap);
+	state_timer.resize(cap);
+	nearest_dist_sq.resize(cap);
+	hp.resize(cap);
+	epoch.resize(cap);
+	wander.resize(cap);
+	state.resize(cap);
+	tier.resize(cap);
+	archetype.resize(cap);
+	active.resize(cap);
+	pending_reason.resize(cap);
+	flow_octant.resize(cap);
+	spatial_next.resize(cap);
+
+	for (uint32_t i = 0; i < cap; i++) {
+		active[i] = 0;
+		epoch[i] = 0;
+	}
+
+	// Open-addressed spatial hash table: power of two, load factor <= 0.5 even
+	// with every agent Hot.
+	uint32_t table = 16;
+	while (table < cap * 2) {
+		table <<= 1;
+	}
+	hash_mask = table - 1;
+	hash_key.resize(table);
+	hash_head.resize(table);
+	hash_gen.resize(table);
+	for (uint32_t b = 0; b < table; b++) {
+		hash_gen[b] = 0;
+	}
+	hash_generation = 0;
+
+	free_slots.clear();
+	free_slots.reserve(cap);
+	// Push high slots first so the first spawns get low, contiguous ids.
+	for (int i = capacity - 1; i >= 0; i--) {
+		free_slots.push_back(i);
+	}
+	active_count = 0;
+}
+
+void HordeAgents::set_capacity(int p_capacity) {
+	ERR_FAIL_COND_MSG(p_capacity <= 0 || p_capacity > HARD_CAP, "capacity must be in 1..1024 (10-bit id space).");
+	capacity = p_capacity;
+	_rebuild_storage();
+}
+
+void HordeAgents::clear() {
+	for (int i = 0; i < capacity; i++) {
+		active[i] = 0;
+	}
+	free_slots.clear();
+	free_slots.reserve((uint32_t)capacity);
+	for (int i = capacity - 1; i >= 0; i--) {
+		free_slots.push_back(i);
+	}
+	active_count = 0;
+	tick_counter = 0;
+}
+
+// --- Physics space resolution -----------------------------------------------
+
+void HordeAgents::set_physics_space(RID p_space) {
+	clear_physics_space();
+	if (!p_space.is_valid()) {
+		return;
+	}
+	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+	if (ps == nullptr) {
+		return;
+	}
+	PhysicsDirectSpaceState3D *dss = ps->space_get_direct_state(p_space);
+	Box3DDirectSpaceState3D *box_state = Object::cast_to<Box3DDirectSpaceState3D>(dss);
+	if (box_state == nullptr || box_state->space == nullptr) {
+		WARN_PRINT_ONCE("HordeAgents: active physics space is not Box3D; native wall queries disabled.");
+		return;
+	}
+	collision_world_id = b3StoreWorldId(box_state->space->get_world());
+}
+
+void HordeAgents::clear_physics_space() {
+	collision_world_id = 0;
+}
+
+void HordeAgents::set_collision_world_packed(uint32_t p_packed) {
+	collision_world_id = p_packed;
+}
+
+// --- Spawn / despawn / recycle ----------------------------------------------
+
+bool HordeAgents::_resolve(int p_id, int &r_slot) const {
+	const int slot = p_id & ID_SLOT_MASK;
+	if (slot < 0 || slot >= capacity || active[slot] == 0) {
+		return false;
+	}
+	if (((int)(epoch[slot] & 1) << ID_SLOT_BITS) != (p_id & ID_EPOCH_BIT)) {
+		return false; // Stale id: slot was recycled since this id was issued.
+	}
+	r_slot = slot;
+	return true;
+}
+
+void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, int p_hp) {
+	pos_x[p_slot] = p_pos.x;
+	pos_y[p_slot] = p_pos.y;
+	pos_z[p_slot] = p_pos.z;
+	yaw[p_slot] = 0.0f;
+	target_x[p_slot] = p_pos.x;
+	target_z[p_slot] = p_pos.z;
+	state_timer[p_slot] = 0.0f;
+	nearest_dist_sq[p_slot] = 1e30f;
+	hp[p_slot] = (int32_t)p_hp;
+	wander[p_slot] = 0;
+	state[p_slot] = (uint8_t)p_state;
+	tier[p_slot] = (uint8_t)TIER_COLD;
+	archetype[p_slot] = (uint8_t)p_archetype;
+	active[p_slot] = 1;
+	pending_reason[p_slot] = (uint8_t)REASON_NONE;
+	flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
+}
+
+int HordeAgents::spawn(int p_archetype, const Vector3 &p_position, int p_state, int p_hp) {
+	ERR_FAIL_INDEX_V(p_state, STATE_MAX, -1);
+	if (free_slots.is_empty()) {
+		return -1; // At the alive cap (R3.4).
+	}
+	const int slot = free_slots[free_slots.size() - 1];
+	free_slots.remove_at(free_slots.size() - 1);
+	_init_slot(slot, p_archetype, p_position, p_state, p_hp);
+	active_count++;
+	return _make_id(slot);
+}
+
+bool HordeAgents::despawn(int p_id) {
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return false;
+	}
+	active[slot] = 0;
+	epoch[slot]++; // Flip the reuse-epoch parity so stale ids fail validation.
+	free_slots.push_back(slot);
+	active_count--;
+	return true;
+}
+
+bool HordeAgents::is_alive(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot);
+}
+
+PackedInt32Array HordeAgents::recycle_candidates(int p_max) const {
+	PackedInt32Array out;
+	if (p_max <= 0) {
+		return out;
+	}
+	// Collect live Cold agents with their (squared) distance, then rank
+	// furthest-first -- squared ranks identically to linear. Small N
+	// (<= capacity); a simple selection over a scratch list is fine.
+	LocalVector<int32_t> slots;
+	LocalVector<float> dists;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0 && tier[i] == (uint8_t)TIER_COLD) {
+			slots.push_back(i);
+			dists.push_back(nearest_dist_sq[i]);
+		}
+	}
+	const int take = MIN(p_max, (int)slots.size());
+	for (int n = 0; n < take; n++) {
+		int best = -1;
+		float best_d = -1.0f;
+		for (uint32_t j = 0; j < slots.size(); j++) {
+			if (slots[j] < 0) {
+				continue;
+			}
+			if (dists[j] > best_d) {
+				best_d = dists[j];
+				best = (int)j;
+			}
+		}
+		if (best < 0) {
+			break;
+		}
+		out.push_back(_make_id(slots[best]));
+		slots[best] = -1; // Mark consumed.
+	}
+	return out;
+}
+
+// --- Per-tick ---------------------------------------------------------------
+
+void HordeAgents::set_player_positions(const PackedVector3Array &p_positions) {
+	const int n = p_positions.size();
+	player_x.resize((uint32_t)n);
+	player_z.resize((uint32_t)n);
+	for (int i = 0; i < n; i++) {
+		const Vector3 p = p_positions[i];
+		player_x[i] = p.x;
+		player_z[i] = p.z;
+	}
+}
+
+void HordeAgents::_assign_tiers() {
+	const float hot_sq = hot_distance * hot_distance;
+	const float warm_sq = warm_distance * warm_distance;
+	const int pc = (int)player_x.size();
+	const float *px = player_x.ptr();
+	const float *pz = player_z.ptr();
+
+	tier_count[TIER_HOT] = 0;
+	tier_count[TIER_WARM] = 0;
+	tier_count[TIER_COLD] = 0;
+
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0) {
+			continue;
+		}
+		float best_sq = 1e30f;
+		const float ax = pos_x[i];
+		const float az = pos_z[i];
+		for (int p = 0; p < pc; p++) {
+			const float dx = ax - px[p];
+			const float dz = az - pz[p];
+			const float d2 = dx * dx + dz * dz;
+			if (d2 < best_sq) {
+				best_sq = d2;
+			}
+		}
+		nearest_dist_sq[i] = best_sq; // Squared; consumers sqrt lazily if needed.
+		uint8_t t;
+		if (best_sq < hot_sq) {
+			t = (uint8_t)TIER_HOT;
+		} else if (best_sq < warm_sq) {
+			t = (uint8_t)TIER_WARM;
+		} else {
+			t = (uint8_t)TIER_COLD;
+		}
+		tier[i] = t;
+		tier_count[t]++;
+	}
+}
+
+_FORCE_INLINE_ static int64_t _hash_cell(int32_t p_cx, int32_t p_cz) {
+	return ((int64_t)p_cx << 32) ^ (uint32_t)p_cz;
+}
+
+void HordeAgents::_build_hot_spatial_hash() {
+	// Rebuild = bump the generation; stale buckets self-invalidate on compare.
+	if (unlikely(++hash_generation == 0)) {
+		// Stamp wraparound (once per ~2^32 rebuilds): reset all stamps.
+		for (uint32_t b = 0; b <= hash_mask; b++) {
+			hash_gen[b] = 0;
+		}
+		hash_generation = 1;
+	}
+	const uint32_t gen = hash_generation;
+	const float inv = 1.0f / separation_radius;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0 || tier[i] != (uint8_t)TIER_HOT) {
+			continue;
+		}
+		const int32_t cx = (int32_t)Math::floor(pos_x[i] * inv);
+		const int32_t cz = (int32_t)Math::floor(pos_z[i] * inv);
+		const int64_t key = _hash_cell(cx, cz);
+		uint32_t b = (uint32_t)hash_one_uint64((uint64_t)key) & hash_mask;
+		while (hash_gen[b] == gen && hash_key[b] != key) {
+			b = (b + 1) & hash_mask; // Linear probe; load <= 0.5 by sizing.
+		}
+		if (hash_gen[b] != gen) {
+			hash_gen[b] = gen;
+			hash_key[b] = key;
+			spatial_next[i] = -1;
+			hash_head[b] = i;
+		} else {
+			spatial_next[i] = hash_head[b];
+			hash_head[b] = i;
+		}
+	}
+}
+
+int32_t HordeAgents::_hash_lookup(int64_t p_key) const {
+	uint32_t b = (uint32_t)hash_one_uint64((uint64_t)p_key) & hash_mask;
+	while (hash_gen[b] == hash_generation) {
+		if (hash_key[b] == p_key) {
+			return hash_head[b];
+		}
+		b = (b + 1) & hash_mask;
+	}
+	return -1;
+}
+
+Vector2 HordeAgents::_separation_offset(int p_slot) const {
+	// Reynolds separation over the 3x3 hash neighborhood (Hot tier only, R3.3).
+	const float inv = 1.0f / separation_radius;
+	const float ax = pos_x[p_slot];
+	const float az = pos_z[p_slot];
+	const int32_t cx = (int32_t)Math::floor(ax * inv);
+	const int32_t cz = (int32_t)Math::floor(az * inv);
+	const float radius_sq = separation_radius * separation_radius;
+
+	Vector2 push;
+	for (int32_t oz = -1; oz <= 1; oz++) {
+		for (int32_t ox = -1; ox <= 1; ox++) {
+			for (int32_t j = _hash_lookup(_hash_cell(cx + ox, cz + oz)); j != -1; j = spatial_next[j]) {
+				if (j == p_slot) {
+					continue;
+				}
+				const float dx = ax - pos_x[j];
+				const float dz = az - pos_z[j];
+				const float d2 = dx * dx + dz * dz;
+				if (d2 >= radius_sq || d2 <= 1e-8f) {
+					continue;
+				}
+				const float d = Math::sqrt(d2);
+				// Weight rises as agents overlap; normalize the away-vector.
+				const float w = (separation_radius - d) / d;
+				push.x += dx * w;
+				push.y += dz * w;
+			}
+		}
+	}
+	return push;
+}
+
+float HordeAgents::_state_speed(int p_archetype, int p_state) const {
+	if (fsm_config.is_valid() && p_archetype < fsm_config->get_archetype_count()) {
+		const float s = fsm_config->rule(p_archetype, p_state).move_speed;
+		if (s > 0.0f) {
+			return s;
+		}
+	}
+	return DEFAULT_STATE_SPEED[p_state];
+}
+
+int HordeAgents::_movement_mode(int p_archetype, int p_state) const {
+	if (fsm_config.is_valid() && p_archetype < fsm_config->get_archetype_count()) {
+		return fsm_config->rule(p_archetype, p_state).movement_mode;
+	}
+	return HordeFSMConfig::default_movement_mode(p_state);
+}
+
+float HordeAgents::_wander_angle(int p_slot) const {
+	// Seeded per-agent wander direction (PATROL): pure integer hash of the
+	// slot, its reuse epoch, and the wander re-roll counter -- deterministic,
+	// re-rolls on every applied transition (state timer re-arm), no RNG state.
+	uint32_t h = (uint32_t)p_slot * 0x9E3779B9u;
+	h ^= (uint32_t)epoch[p_slot] * 0x85EBCA6Bu;
+	h ^= (uint32_t)wander[p_slot] * 0xC2B2AE35u;
+	h = hash_fmix32(h);
+	return (float)((double)h * (Math::TAU / 4294967296.0));
+}
+
+float HordeAgents::_sweep_fraction(int p_slot, const Vector2 &p_disp) const {
+	if (collision_world_id == 0) {
+		return 1.0f;
+	}
+	const b3WorldId world = b3LoadWorldId(collision_world_id);
+	// Capsule mover is relative to the origin (agent feet). Spans radius..height-
+	// radius above the feet so it clears low sills but stops at walls.
+	const float r = agent_radius;
+	const float top = MAX(r, agent_height - r);
+	b3Capsule cap;
+	cap.center1 = b3Vec3{ 0.0f, r, 0.0f };
+	cap.center2 = b3Vec3{ 0.0f, top, 0.0f };
+	cap.radius = r;
+	const b3Pos origin = to_box3d(Vector3(pos_x[p_slot], pos_y[p_slot], pos_z[p_slot]));
+	const b3Vec3 translation = to_box3d(Vector3(p_disp.x, 0.0f, p_disp.y));
+
+	// Filter built by box3d_physics (single source of truth for the query
+	// category bit) so this sweep can never silently diverge from the engine's
+	// own scene queries.
+	const b3QueryFilter filter = Box3DDirectSpaceState3D::make_query_filter(collision_mask);
+
+	// b3World_CastMover: Box3D's kinematic capsule sweep (slide + anti-clip),
+	// returns the translation fraction. No per-call shape build or Variant
+	// marshaling -- the cheapest correct wall-contact entry point.
+	return b3World_CastMover(world, origin, &cap, translation, filter, nullptr, nullptr);
+}
+
+HordeNavGrid *HordeAgents::_resolve_field() const {
+	// The flow field is only needed by flow-driven states; a null result
+	// disables only the flow branch of movement, never the tick.
+	if (flow_field.is_null() || !flow_field->has_field()) {
+		return nullptr;
+	}
+	return flow_field->get_grid().ptr();
+}
+
+void HordeAgents::_step_movement(double p_delta) {
+	HordeNavGrid *g = _resolve_field();
+	const bool have_field = g != nullptr;
+
+	// One pass per tier so per-tier time is a single bracket (not two clock reads
+	// per agent, which would both waste hot-loop cycles and inflate the metric).
+	// Iteration stays ascending-slot within each tier, so determinism holds and
+	// Hot-tier separation still reads the full Hot set from the spatial hash.
+	for (int pass = 0; pass < TIER_MAX; pass++) {
+		const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
+		for (int i = 0; i < capacity; i++) {
+			if (active[i] == 0 || tier[i] != pass) {
+				continue;
+			}
+			// Staggered LOD gate (R3.3): each agent runs on its slot's phase so
+			// warm/cold updates spread across ticks instead of spiking one tick.
+			const int divisor = _tier_divisor(pass);
+			if (((tick_counter + (uint64_t)i) % (uint64_t)divisor) != 0) {
+				continue;
+			}
+			_move_agent(i, p_delta, g, have_field);
+		}
+		tier_usec[pass] = OS::get_singleton()->get_ticks_usec() - t0;
+	}
+}
+
+void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool have_field) {
+	const int t = tier[i];
+	const float eff_dt = (float)p_delta * (float)_tier_divisor(t);
+	state_timer[i] += eff_dt;
+
+	const int st = state[i];
+	const float speed = _state_speed(archetype[i], st);
+	const int mode = _movement_mode(archetype[i], st);
+	Vector2 disp; // Planar displacement this step.
+	bool moved_link = false;
+
+	// Refreshed below when the state is flow-driven; exit evaluation reads it.
+	flow_octant[i] = (uint8_t)HordeFlowField::OCTANT_NONE;
+
+	if (speed > 0.0f && have_field && mode == HordeFSMConfig::MOVE_FLOW) {
+		const Vector3 wp(pos_x[i], pos_y[i], pos_z[i]);
+		const Vector3i cell = grid->world_to_cell(wp);
+		const int32_t idx = grid->cell_index(cell.x, cell.y, cell.z);
+		const int oct = flow_field->octant_at_index(idx);
+		flow_octant[i] = (uint8_t)oct;
+		if (oct == HordeFlowField::OCTANT_LINK) {
+			// Step through an inter-floor link (OCTANT_LINK vocabulary): move
+			// toward the target cell in 3D, snapping (changing floor) on arrival.
+			const int32_t tgt = flow_field->link_target_at_index(idx);
+			if (tgt >= 0) {
+				const Vector3i tcell = grid->index_to_cell(tgt);
+				const Vector3 twp = grid->cell_to_world(tcell.x, tcell.y, tcell.z);
+				const Vector3 to = twp - wp;
+				const float dist = to.length();
+				const float step = speed * eff_dt;
+				if (dist <= step || dist <= 1e-5f) {
+					pos_x[i] = twp.x;
+					pos_y[i] = twp.y;
+					pos_z[i] = twp.z;
+				} else {
+					const Vector3 d = to / dist * step;
+					pos_x[i] += d.x;
+					pos_y[i] += d.y;
+					pos_z[i] += d.z;
+				}
+				moved_link = true;
+			}
+		} else if (oct >= HordeFlowField::OCTANT_E && oct <= HordeFlowField::OCTANT_SE) {
+			const Vector2 dir = HordeFlowField::octant_to_vector(oct);
+			disp = dir * (speed * eff_dt);
+		} else if (oct == HordeFlowField::OCTANT_GOAL) {
+			// Settle onto the goal cell center in 3D. This also finishes a link
+			// ascent: crossing into the (coincident) upstairs goal cell mid-climb
+			// hands off from the LINK branch to here, which walks the agent up to
+			// the cell-center floor height instead of freezing it in mid-air.
+			const Vector3 center = grid->cell_to_world(cell.x, cell.y, cell.z);
+			const Vector3 to = center - wp;
+			const float dist = to.length();
+			if (dist > 1e-4f) {
+				const float step = speed * eff_dt;
+				if (dist <= step) {
+					pos_x[i] = center.x;
+					pos_y[i] = center.y;
+					pos_z[i] = center.z;
+				} else {
+					const Vector3 d = to / dist * step;
+					pos_x[i] += d.x;
+					pos_y[i] += d.y;
+					pos_z[i] += d.z;
+				}
+				moved_link = true;
+			}
+		}
+		// OCTANT_NONE: no advance (locally stuck / unreachable).
+	} else if (speed > 0.0f && mode == HordeFSMConfig::MOVE_SEEK_TARGET) {
+		Vector2 to(target_x[i] - pos_x[i], target_z[i] - pos_z[i]);
+		const float dist = to.length();
+		if (dist > 1e-5f) {
+			disp = to / dist * MIN(speed * eff_dt, dist);
+		}
+	} else if (speed > 0.0f && mode == HordeFSMConfig::MOVE_PATROL) {
+		// Seeded wander off the flow field (screamer patrol, DES A4.1).
+		const float ang = _wander_angle(i);
+		disp = Vector2(Math::sin(ang), Math::cos(ang)) * (speed * eff_dt);
+	}
+
+	if (moved_link) {
+		return;
+	}
+
+	// Reynolds separation, Hot tier only (R3.3 / A2.3).
+	if (t == TIER_HOT && (disp != Vector2() || mode != HordeFSMConfig::MOVE_STATIONARY)) {
+		disp += _separation_offset(i) * (separation_strength * eff_dt);
+	}
+
+	if (disp == Vector2()) {
+		return;
+	}
+
+	// Wall/static contact via Box3D (Hot + Warm; Cold advances freely).
+	if (t != TIER_COLD) {
+		const float frac = _sweep_fraction(i, disp);
+		if (frac < 0.999f) {
+			// On contact, stop a small skin short of the surface. The mover cast
+			// ignores initial overlap, so landing exactly on (or a hair inside) the
+			// wall would let the next tick tunnel through; the skin keeps every cast
+			// starting clear.
+			const float len = disp.length();
+			const float safe = MAX(0.0f, frac * len - CONTACT_SKIN);
+			disp = len > 1e-6f ? disp * (safe / len) : Vector2();
+		}
+	}
+	pos_x[i] += disp.x;
+	pos_z[i] += disp.y;
+	if (disp.length_squared() > 1e-8f) {
+		yaw[i] = Math::atan2(disp.x, disp.y);
+	}
+}
+
+void HordeAgents::_evaluate_exits() {
+	const bool have_cfg = fsm_config.is_valid();
+	const int arch_count = have_cfg ? fsm_config->get_archetype_count() : 0;
+
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0) {
+			continue;
+		}
+		pending_reason[i] = (uint8_t)REASON_NONE;
+		const int st = state[i];
+		const int arch = archetype[i];
+
+		float min_time = 0.0f, max_time = 0.0f, exit_range = 0.0f;
+		if (have_cfg && arch < arch_count) {
+			const HordeFSMConfig::Rule &r = fsm_config->rule(arch, st);
+			min_time = r.min_time;
+			max_time = r.max_time;
+			exit_range = r.exit_range;
+		}
+
+		// Priority: range trigger > timer deadline > flow-field goal arrival.
+		// Range compares squared against squared (no sqrt in this loop).
+		if (exit_range > 0.0f && state_timer[i] >= min_time && nearest_dist_sq[i] <= exit_range * exit_range) {
+			pending_reason[i] = (uint8_t)REASON_IN_RANGE;
+		} else if (max_time > 0.0f && state_timer[i] >= max_time) {
+			pending_reason[i] = (uint8_t)REASON_TIMER;
+		} else if (flow_octant[i] == (uint8_t)HordeFlowField::OCTANT_GOAL) {
+			// Read from the movement step's sample instead of re-sampling
+			// world_to_cell + octant. For stagger-gated Warm/Cold agents the
+			// sample is up to 4 ticks stale -- acceptable for AT_GOAL arming
+			// (the agent hasn't moved since it was taken).
+			pending_reason[i] = (uint8_t)REASON_AT_GOAL;
+		}
+	}
+}
+
+void HordeAgents::tick(double p_delta) {
+	const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
+	tick_counter++;
+
+	_assign_tiers();
+	_build_hot_spatial_hash();
+	_step_movement(p_delta);
+	_evaluate_exits();
+
+	tick_usec = OS::get_singleton()->get_ticks_usec() - t0;
+}
+
+// --- Batched FSM transition API ---------------------------------------------
+
+PackedInt32Array HordeAgents::query_transitions() const {
+	PackedInt32Array out;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0 || pending_reason[i] == (uint8_t)REASON_NONE) {
+			continue;
+		}
+		out.push_back(_make_id(i));
+		out.push_back((int)archetype[i]);
+		out.push_back((int)state[i]);
+		out.push_back((int)pending_reason[i]);
+	}
+	return out;
+}
+
+bool HordeAgents::apply_transition(int p_id, int p_new_state) {
+	ERR_FAIL_INDEX_V(p_new_state, STATE_MAX, false);
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return false;
+	}
+	state[slot] = (uint8_t)p_new_state;
+	state_timer[slot] = 0.0f;
+	pending_reason[slot] = (uint8_t)REASON_NONE;
+	flow_octant[slot] = (uint8_t)HordeFlowField::OCTANT_NONE; // Old sample is for the old state.
+	wander[slot]++; // Re-roll the PATROL direction on every timer re-arm.
+	return true;
+}
+
+void HordeAgents::apply_transitions(const PackedInt32Array &p_pairs) {
+	const int n = p_pairs.size();
+	ERR_FAIL_COND_MSG((n & 1) != 0, "apply_transitions expects flat [id, new_state, ...] pairs.");
+	for (int i = 0; i + 1 < n; i += 2) {
+		apply_transition(p_pairs[i], p_pairs[i + 1]);
+	}
+}
+
+// --- Agent access -----------------------------------------------------------
+
+int HordeAgents::get_agent_state(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? (int)state[slot] : -1;
+}
+
+int HordeAgents::get_agent_tier(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? (int)tier[slot] : -1;
+}
+
+int HordeAgents::get_agent_archetype(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? (int)archetype[slot] : -1;
+}
+
+Vector3 HordeAgents::get_agent_position(int p_id) const {
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return Vector3();
+	}
+	return Vector3(pos_x[slot], pos_y[slot], pos_z[slot]);
+}
+
+float HordeAgents::get_agent_yaw(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? yaw[slot] : 0.0f;
+}
+
+int HordeAgents::get_agent_hp(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? (int)hp[slot] : 0;
+}
+
+float HordeAgents::get_nearest_player_distance(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? Math::sqrt(nearest_dist_sq[slot]) : -1.0f;
+}
+
+void HordeAgents::set_agent_hp(int p_id, int p_hp) {
+	int slot;
+	if (_resolve(p_id, slot)) {
+		hp[slot] = (int32_t)p_hp;
+	}
+}
+
+void HordeAgents::set_agent_target(int p_id, const Vector3 &p_target) {
+	int slot;
+	if (_resolve(p_id, slot)) {
+		target_x[slot] = p_target.x;
+		target_z[slot] = p_target.z;
+	}
+}
+
+void HordeAgents::fill_active_ids(PackedInt32Array &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	int *w = r_out.ptrw();
+	int n = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0) {
+			w[n++] = _make_id(i);
+		}
+	}
+}
+
+void HordeAgents::fill_positions(PackedVector3Array &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	Vector3 *w = r_out.ptrw();
+	int n = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0) {
+			w[n++] = Vector3(pos_x[i], pos_y[i], pos_z[i]);
+		}
+	}
+}
+
+void HordeAgents::fill_yaws(PackedFloat32Array &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	float *w = r_out.ptrw();
+	int n = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0) {
+			w[n++] = yaw[i];
+		}
+	}
+}
+
+void HordeAgents::fill_states(PackedByteArray &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	uint8_t *w = r_out.ptrw();
+	int n = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0) {
+			w[n++] = state[i];
+		}
+	}
+}
+
+void HordeAgents::fill_tiers(PackedByteArray &r_out) const {
+	if (r_out.size() != active_count) {
+		r_out.resize(active_count);
+	}
+	uint8_t *w = r_out.ptrw();
+	int n = 0;
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0) {
+			w[n++] = tier[i];
+		}
+	}
+}
+
+PackedInt32Array HordeAgents::get_active_ids() const {
+	PackedInt32Array out;
+	fill_active_ids(out);
+	return out;
+}
+
+PackedVector3Array HordeAgents::get_positions() const {
+	PackedVector3Array out;
+	fill_positions(out);
+	return out;
+}
+
+PackedFloat32Array HordeAgents::get_yaws() const {
+	PackedFloat32Array out;
+	fill_yaws(out);
+	return out;
+}
+
+PackedByteArray HordeAgents::get_states() const {
+	PackedByteArray out;
+	fill_states(out);
+	return out;
+}
+
+PackedByteArray HordeAgents::get_tiers() const {
+	PackedByteArray out;
+	fill_tiers(out);
+	return out;
+}
+
+uint64_t HordeAgents::get_tier_time_usec(int p_tier) const {
+	ERR_FAIL_INDEX_V(p_tier, TIER_MAX, 0);
+	return tier_usec[p_tier];
+}
+
+int HordeAgents::get_tier_count(int p_tier) const {
+	ERR_FAIL_INDEX_V(p_tier, TIER_MAX, 0);
+	return tier_count[p_tier];
+}
+
+void HordeAgents::_bind_methods() {
+	// Config.
+	ClassDB::bind_method(D_METHOD("set_capacity", "capacity"), &HordeAgents::set_capacity);
+	ClassDB::bind_method(D_METHOD("get_capacity"), &HordeAgents::get_capacity);
+	ClassDB::bind_method(D_METHOD("set_hot_distance", "distance"), &HordeAgents::set_hot_distance);
+	ClassDB::bind_method(D_METHOD("get_hot_distance"), &HordeAgents::get_hot_distance);
+	ClassDB::bind_method(D_METHOD("set_warm_distance", "distance"), &HordeAgents::set_warm_distance);
+	ClassDB::bind_method(D_METHOD("get_warm_distance"), &HordeAgents::get_warm_distance);
+	ClassDB::bind_method(D_METHOD("set_agent_radius", "radius"), &HordeAgents::set_agent_radius);
+	ClassDB::bind_method(D_METHOD("get_agent_radius"), &HordeAgents::get_agent_radius);
+	ClassDB::bind_method(D_METHOD("set_agent_height", "height"), &HordeAgents::set_agent_height);
+	ClassDB::bind_method(D_METHOD("get_agent_height"), &HordeAgents::get_agent_height);
+	ClassDB::bind_method(D_METHOD("set_separation_radius", "radius"), &HordeAgents::set_separation_radius);
+	ClassDB::bind_method(D_METHOD("get_separation_radius"), &HordeAgents::get_separation_radius);
+	ClassDB::bind_method(D_METHOD("set_separation_strength", "strength"), &HordeAgents::set_separation_strength);
+	ClassDB::bind_method(D_METHOD("get_separation_strength"), &HordeAgents::get_separation_strength);
+	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &HordeAgents::set_collision_mask);
+	ClassDB::bind_method(D_METHOD("get_collision_mask"), &HordeAgents::get_collision_mask);
+
+	ClassDB::bind_method(D_METHOD("set_flow_field", "flow_field"), &HordeAgents::set_flow_field);
+	ClassDB::bind_method(D_METHOD("get_flow_field"), &HordeAgents::get_flow_field);
+	ClassDB::bind_method(D_METHOD("set_fsm_config", "config"), &HordeAgents::set_fsm_config);
+	ClassDB::bind_method(D_METHOD("get_fsm_config"), &HordeAgents::get_fsm_config);
+
+	ClassDB::bind_method(D_METHOD("set_physics_space", "space"), &HordeAgents::set_physics_space);
+	ClassDB::bind_method(D_METHOD("clear_physics_space"), &HordeAgents::clear_physics_space);
+	ClassDB::bind_method(D_METHOD("has_physics_space"), &HordeAgents::has_physics_space);
+
+	// Spawn / despawn / recycle.
+	ClassDB::bind_method(D_METHOD("spawn", "archetype", "position", "state", "hp"), &HordeAgents::spawn, DEFVAL(STATE_DORMANT), DEFVAL(100));
+	ClassDB::bind_method(D_METHOD("despawn", "id"), &HordeAgents::despawn);
+	ClassDB::bind_method(D_METHOD("is_alive", "id"), &HordeAgents::is_alive);
+	ClassDB::bind_method(D_METHOD("get_active_count"), &HordeAgents::get_active_count);
+	ClassDB::bind_method(D_METHOD("clear"), &HordeAgents::clear);
+	ClassDB::bind_method(D_METHOD("recycle_candidates", "max"), &HordeAgents::recycle_candidates);
+
+	// Per-tick.
+	ClassDB::bind_method(D_METHOD("set_player_positions", "positions"), &HordeAgents::set_player_positions);
+	ClassDB::bind_method(D_METHOD("tick", "delta"), &HordeAgents::tick);
+
+	// Batched FSM transition API.
+	ClassDB::bind_method(D_METHOD("query_transitions"), &HordeAgents::query_transitions);
+	ClassDB::bind_method(D_METHOD("apply_transition", "id", "new_state"), &HordeAgents::apply_transition);
+	ClassDB::bind_method(D_METHOD("apply_transitions", "pairs"), &HordeAgents::apply_transitions);
+
+	// Agent access.
+	ClassDB::bind_method(D_METHOD("get_agent_state", "id"), &HordeAgents::get_agent_state);
+	ClassDB::bind_method(D_METHOD("get_agent_tier", "id"), &HordeAgents::get_agent_tier);
+	ClassDB::bind_method(D_METHOD("get_agent_archetype", "id"), &HordeAgents::get_agent_archetype);
+	ClassDB::bind_method(D_METHOD("get_agent_position", "id"), &HordeAgents::get_agent_position);
+	ClassDB::bind_method(D_METHOD("get_agent_yaw", "id"), &HordeAgents::get_agent_yaw);
+	ClassDB::bind_method(D_METHOD("get_agent_hp", "id"), &HordeAgents::get_agent_hp);
+	ClassDB::bind_method(D_METHOD("get_nearest_player_distance", "id"), &HordeAgents::get_nearest_player_distance);
+	ClassDB::bind_method(D_METHOD("set_agent_hp", "id", "hp"), &HordeAgents::set_agent_hp);
+	ClassDB::bind_method(D_METHOD("set_agent_target", "id", "target"), &HordeAgents::set_agent_target);
+
+	ClassDB::bind_method(D_METHOD("get_active_ids"), &HordeAgents::get_active_ids);
+	ClassDB::bind_method(D_METHOD("get_positions"), &HordeAgents::get_positions);
+	ClassDB::bind_method(D_METHOD("get_yaws"), &HordeAgents::get_yaws);
+	ClassDB::bind_method(D_METHOD("get_states"), &HordeAgents::get_states);
+	ClassDB::bind_method(D_METHOD("get_tiers"), &HordeAgents::get_tiers);
+
+	// Metrics.
+	ClassDB::bind_method(D_METHOD("get_tick_time_usec"), &HordeAgents::get_tick_time_usec);
+	ClassDB::bind_method(D_METHOD("get_tier_time_usec", "tier"), &HordeAgents::get_tier_time_usec);
+	ClassDB::bind_method(D_METHOD("get_tier_count", "tier"), &HordeAgents::get_tier_count);
+
+	BIND_ENUM_CONSTANT(STATE_DORMANT);
+	BIND_ENUM_CONSTANT(STATE_WAKE);
+	BIND_ENUM_CONSTANT(STATE_ADVANCE);
+	BIND_ENUM_CONSTANT(STATE_CHASE);
+	BIND_ENUM_CONSTANT(STATE_ATTACK_PLAYER);
+	BIND_ENUM_CONSTANT(STATE_GRAB);
+	BIND_ENUM_CONSTANT(STATE_ATTACK_OBSTACLE);
+	BIND_ENUM_CONSTANT(STATE_STAGGER);
+	BIND_ENUM_CONSTANT(STATE_SCREAM);
+	BIND_ENUM_CONSTANT(STATE_CRAWL);
+	BIND_ENUM_CONSTANT(STATE_DEAD);
+	BIND_ENUM_CONSTANT(STATE_MAX);
+
+	BIND_ENUM_CONSTANT(TIER_HOT);
+	BIND_ENUM_CONSTANT(TIER_WARM);
+	BIND_ENUM_CONSTANT(TIER_COLD);
+	BIND_ENUM_CONSTANT(TIER_MAX);
+
+	BIND_ENUM_CONSTANT(REASON_NONE);
+	BIND_ENUM_CONSTANT(REASON_TIMER);
+	BIND_ENUM_CONSTANT(REASON_IN_RANGE);
+	BIND_ENUM_CONSTANT(REASON_AT_GOAL);
+}

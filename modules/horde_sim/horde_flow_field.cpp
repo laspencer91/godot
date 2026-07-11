@@ -106,6 +106,7 @@ void HordeFlowField::set_grid(const Ref<HordeNavGrid> &p_grid) {
 			memset(fb.goal_id.ptr(), 0xFF, (size_t)cell_count * sizeof(uint16_t));
 			memset(fb.link_step.ptr(), 0xFF, (size_t)cell_count * sizeof(int32_t));
 		}
+		buffer_seq[b].set(0); // Stable (even); no recompute is in flight here.
 	}
 	front_index.set(0);
 }
@@ -222,6 +223,13 @@ void HordeFlowField::_compute() {
 	uint8_t *dir = out.dir_octant.ptr();
 	uint16_t *gid = out.goal_id.ptr();
 	int32_t *lstep = out.link_step.ptr();
+
+	// Seqlock write bracket, part 1: mark the back buffer write-in-progress
+	// (odd) BEFORE its first byte changes. A lagging reader that snapshotted
+	// this buffer while it was still the front sees the sequence change on its
+	// recheck and retries instead of returning torn data. The acq_rel RMW keeps
+	// the writes below from being reordered above it.
+	buffer_seq[job.back].increment();
 
 	// All four reset patterns are 0xFF bytes (COST_UNREACHABLE, GOAL_NONE,
 	// OCTANT_NONE, -1), so plain memsets clear the whole back buffer.
@@ -433,6 +441,10 @@ void HordeFlowField::_compute() {
 
 	last_compute_usec = OS::get_singleton()->get_ticks_usec() - t0;
 
+	// Seqlock write bracket, part 2: back buffer stable again (even). The
+	// acq_rel RMW keeps the writes above from being reordered below it.
+	buffer_seq[job.back].increment();
+
 	// Publish: single atomic release-store. Readers acquire-load front_index
 	// before reading, so they never observe this half-written buffer.
 	front_index.set(job.back);
@@ -497,11 +509,14 @@ Vector2 HordeFlowField::octant_to_vector(int32_t p_octant) {
 	return DIR_LUT[p_octant];
 }
 
+// Empty interleave hook for the production sampling paths (inlines away).
+static _FORCE_INLINE_ void _no_hook() {}
+
 Vector2 HordeFlowField::direction_at_index(int32_t p_index) const {
 	if (!published || p_index < 0 || p_index >= cell_count) {
 		return Vector2(0, 0);
 	}
-	return octant_to_vector(_front().dir_octant[p_index]);
+	return octant_to_vector(_coherent_sample([p_index](const FieldBuffer &b) { return b.dir_octant[p_index]; }, _no_hook));
 }
 
 Vector2 HordeFlowField::direction_at(int32_t p_x, int32_t p_y, int32_t p_floor) const {
@@ -516,15 +531,34 @@ int32_t HordeFlowField::octant_at_index(int32_t p_index) const {
 	if (!published || p_index < 0 || p_index >= cell_count) {
 		return OCTANT_NONE;
 	}
-	return _front().dir_octant[p_index];
+	return _coherent_sample([p_index](const FieldBuffer &b) { return (int32_t)b.dir_octant[p_index]; }, _no_hook);
 }
 
 int32_t HordeFlowField::cost_at_index(int32_t p_index) const {
 	if (!published || p_index < 0 || p_index >= cell_count) {
 		return -1;
 	}
-	const uint32_t c = _front().integration[p_index];
+	const uint32_t c = _coherent_sample([p_index](const FieldBuffer &b) { return b.integration[p_index]; }, _no_hook);
 	return (c == COST_UNREACHABLE) ? -1 : (int32_t)c;
+}
+
+int32_t HordeFlowField::cost_at_index_interleaved(int32_t p_index, void (*p_hook)(void *), void *p_hook_userdata) const {
+	if (!published || p_index < 0 || p_index >= cell_count) {
+		return -1;
+	}
+	const uint32_t c = _coherent_sample(
+			[p_index](const FieldBuffer &b) { return b.integration[p_index]; },
+			[p_hook, p_hook_userdata] { p_hook(p_hook_userdata); });
+	return (c == COST_UNREACHABLE) ? -1 : (int32_t)c;
+}
+
+int32_t HordeFlowField::octant_at_index_interleaved(int32_t p_index, void (*p_hook)(void *), void *p_hook_userdata) const {
+	if (!published || p_index < 0 || p_index >= cell_count) {
+		return OCTANT_NONE;
+	}
+	return _coherent_sample(
+			[p_index](const FieldBuffer &b) { return (int32_t)b.dir_octant[p_index]; },
+			[p_hook, p_hook_userdata] { p_hook(p_hook_userdata); });
 }
 
 int32_t HordeFlowField::cost_at(int32_t p_x, int32_t p_y, int32_t p_floor) const {
@@ -544,7 +578,8 @@ int32_t HordeFlowField::goal_at(int32_t p_x, int32_t p_y, int32_t p_floor) const
 	if (!published || !grid->in_bounds(p_x, p_y, p_floor)) {
 		return -1;
 	}
-	const uint16_t g = _front().goal_id[grid->cell_index(p_x, p_y, p_floor)];
+	const int32_t idx = grid->cell_index(p_x, p_y, p_floor);
+	const uint16_t g = _coherent_sample([idx](const FieldBuffer &b) { return b.goal_id[idx]; }, _no_hook);
 	return (g == GOAL_NONE) ? -1 : (int32_t)g;
 }
 
@@ -552,7 +587,7 @@ int32_t HordeFlowField::link_target_at_index(int32_t p_index) const {
 	if (!published || p_index < 0 || p_index >= cell_count) {
 		return -1;
 	}
-	return _front().link_step[p_index];
+	return _coherent_sample([p_index](const FieldBuffer &b) { return b.link_step[p_index]; }, _no_hook);
 }
 
 void HordeFlowField::_bind_methods() {
