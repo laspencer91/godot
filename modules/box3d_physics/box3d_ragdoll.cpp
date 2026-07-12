@@ -35,8 +35,14 @@ static bool _dict_bool(const Dictionary &p_dict, const StringName &p_key, bool p
 }
 
 static bool _bone_name_uses_hinge_joint(const String &p_lower_name) {
+	// Knees/elbows are 1-DOF hinges (a cone lets them hyperextend/invert). Mixamo names the elbow
+	// "...ForeArm" (matched below) but the knee is a bare "...Leg" while the thigh is "...UpLeg" — so a
+	// naive "leg" test would wrongly hinge the hip. Match "leg" only when it is NOT the upper leg.
+	const bool is_knee = p_lower_name.contains("leg") &&
+			!p_lower_name.contains("upleg") && !p_lower_name.contains("upperleg") && !p_lower_name.contains("thigh");
 	return p_lower_name.contains("lowerarm") || p_lower_name.contains("forearm") || p_lower_name.contains("elbow") ||
-			p_lower_name.contains("lowerleg") || p_lower_name.contains("shin") || p_lower_name.contains("calf") || p_lower_name.contains("knee");
+			p_lower_name.contains("lowerleg") || p_lower_name.contains("shin") || p_lower_name.contains("calf") ||
+			p_lower_name.contains("knee") || is_knee;
 }
 
 static Transform3D _dict_transform(const Dictionary &p_dict, const StringName &p_key, const Transform3D &p_default) {
