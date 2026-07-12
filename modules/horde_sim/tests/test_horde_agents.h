@@ -833,4 +833,67 @@ TEST_CASE("[HordeSim][Combat] Identical damage sequences produce bit-identical s
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 33. Dense-clump yaw stability: facing slews toward the desired (pre-separation)
+//     heading at a capped rate, so a crowd never snaps its heading tick-to-tick.
+//     Regression for the flicker where yaw = atan2(disp) rode the tick-to-tick
+//     flipping Reynolds separation push in a tight clump (max_turn_rate fix).
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Agents] Dense clump slews facing at capped turn rate (no flicker)") {
+	Ref<HordeAgents> a = make_agents(32);
+
+	// 16 chasers packed inside a single separation radius (0.9 m): a 4x4 grid at
+	// 0.12 m spacing (diag ~0.51 m) so every pair separates hard and the push
+	// direction churns every tick -- exactly the condition that snapped the raw
+	// atan2(disp) heading.
+	Vector<int> ids;
+	for (int gz = 0; gz < 4; gz++) {
+		for (int gx = 0; gx < 4; gx++) {
+			const int id = a->spawn(0, Vector3(0.12f * gx, 0, 0.12f * gz), HordeAgents::STATE_CHASE);
+			// One shared, distant target -> a stable desired heading (~PI/4) for all.
+			a->set_agent_target(id, Vector3(60, 0, 60));
+			ids.push_back(id);
+		}
+	}
+	// Player on the clump -> every agent is Hot, so separation is live.
+	PackedVector3Array players;
+	players.push_back(Vector3(0.18f, 0, 0.18f));
+	a->set_player_positions(players);
+
+	const double dt = 1.0 / 128.0;
+	const float cap = a->get_max_turn_rate() * (float)dt; // Hot tier: eff_dt == dt.
+	const float eps = 1e-3f;
+
+	auto wrap_pi = [](float x) {
+		return Math::fposmod(x + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+	};
+
+	// The per-tick guard the bug violated: shortest-arc |Δyaw| never exceeds the
+	// configured turn-rate cap for any agent on any tick.
+	float max_step_seen = 0.0f;
+	for (int t = 0; t < 120; t++) {
+		Vector<float> before;
+		for (int k = 0; k < ids.size(); k++) {
+			before.push_back(a->get_agent_yaw(ids[k]));
+		}
+		a->tick(dt);
+		for (int k = 0; k < ids.size(); k++) {
+			const float dy = Math::abs(wrap_pi(a->get_agent_yaw(ids[k]) - before[k]));
+			CHECK(dy <= cap + eps);
+			max_step_seen = MAX(max_step_seen, dy);
+		}
+	}
+	// Non-vacuous: agents really did turn (from yaw 0 toward ~PI/4), at the cap.
+	CHECK(max_step_seen > 0.0f);
+	CHECK(max_step_seen == doctest::Approx(cap).epsilon(0.05));
+
+	// Converged onto the DESIRED heading (toward the shared target), proving the
+	// facing tracks the stable steering dir and not the flipping separation push.
+	for (int k = 0; k < ids.size(); k++) {
+		const Vector3 p = a->get_agent_position(ids[k]);
+		const float want = Math::atan2(60.0f - p.x, 60.0f - p.z);
+		CHECK(Math::abs(wrap_pi(a->get_agent_yaw(ids[k]) - want)) <= 2.0f * cap);
+	}
+}
+
 } // namespace TestHordeSim

@@ -605,6 +605,15 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 		return;
 	}
 
+	// Desired facing source: the pure steering direction toward the shared flow
+	// goal / seek target / patrol heading, captured BEFORE Reynolds separation and
+	// knockback perturb `disp`. Facing is slewed toward THIS stable direction (see
+	// the yaw block at the end of the step), NOT the post-separation displacement:
+	// in a dense clump the separation push flips direction every tick and driving
+	// atan2 off it snapped the heading around (the flicker bug). Zero when the
+	// agent isn't steering this step (pure shove / idle), which holds its facing.
+	const Vector2 desired_dir = disp;
+
 	// Reynolds separation, Hot tier only (R3.3 / A2.3).
 	if (t == TIER_HOT && (disp != Vector2() || mode != HordeFSMConfig::MOVE_STATIONARY)) {
 		disp += _separation_offset(i) * (separation_strength * eff_dt);
@@ -616,7 +625,6 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	// separation block on purpose -- a shove is a forced displacement, not
 	// steering -- and it rides the wall sweep below like any other movement.
 	// Corpses never slide: the death event impulse drives the ragdoll instead.
-	const bool steered = disp != Vector2(); // A pure shove must not turn the agent.
 	if (kb_ticks[i] > 0 && st != STATE_DEAD) {
 		const int steps = MIN((int)kb_ticks[i], divisor);
 		for (int s = 0; s < steps; s++) {
@@ -651,8 +659,21 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 	pos_x[i] += disp.x;
 	pos_z[i] += disp.y;
-	if (steered && disp.length_squared() > 1e-8f) {
-		yaw[i] = Math::atan2(disp.x, disp.y);
+	// Facing: slew yaw toward the DESIRED heading (the pre-separation steering
+	// direction) at a capped turn rate, shortest-arc. Aiming at desired_dir rather
+	// than the separation/knockback-perturbed `disp` removes the dense-clump
+	// flicker; max_turn_rate bounds |Δyaw| per tick so the approach is smooth. A
+	// non-steering step (desired_dir == 0: pure shove or idle) holds the last
+	// facing. yaw stays a per-slot ticked value wrapped to [-PI, PI] (matches
+	// atan2's range and the wire codec's assumption), so replays/keyframes stay
+	// bit-identical -- no unbounded accumulation for a continuously circling agent.
+	if (desired_dir.length_squared() > 1e-8f) {
+		const float target_yaw = Math::atan2(desired_dir.x, desired_dir.y);
+		// Shortest-arc signed delta in [-PI, PI], then clamp to this tick's cap.
+		float d = Math::fposmod(target_yaw - yaw[i] + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+		const float max_step = max_turn_rate * eff_dt;
+		d = CLAMP(d, -max_step, max_step);
+		yaw[i] = Math::fposmod(yaw[i] + d + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
 	}
 }
 
@@ -1201,6 +1222,8 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_separation_radius"), &HordeAgents::get_separation_radius);
 	ClassDB::bind_method(D_METHOD("set_separation_strength", "strength"), &HordeAgents::set_separation_strength);
 	ClassDB::bind_method(D_METHOD("get_separation_strength"), &HordeAgents::get_separation_strength);
+	ClassDB::bind_method(D_METHOD("set_max_turn_rate", "rate"), &HordeAgents::set_max_turn_rate);
+	ClassDB::bind_method(D_METHOD("get_max_turn_rate"), &HordeAgents::get_max_turn_rate);
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &HordeAgents::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &HordeAgents::get_collision_mask);
 

@@ -97,6 +97,10 @@ private:
 	float agent_height = 1.8f;
 	float separation_radius = 0.9f; // Reynolds neighborhood (Hot only).
 	float separation_strength = 1.6f;
+	// Max facing turn rate (rad/s). _move_agent slews yaw toward the desired
+	// (pre-separation) heading at most this fast per tick, killing the dense-clump
+	// heading flicker that raw atan2(disp) produced. Logan-tunable in the inspector.
+	float max_turn_rate = 9.0f;
 	uint32_t collision_mask = 0xFFFFFFFF; // Static layers the mover sweep tests.
 
 	Ref<HordeFlowField> flow_field;
@@ -248,6 +252,8 @@ public:
 	float get_separation_radius() const { return separation_radius; }
 	void set_separation_strength(float p_s) { separation_strength = p_s; }
 	float get_separation_strength() const { return separation_strength; }
+	void set_max_turn_rate(float p_r) { max_turn_rate = p_r; }
+	float get_max_turn_rate() const { return max_turn_rate; }
 	void set_collision_mask(int p_mask) { collision_mask = (uint32_t)p_mask; }
 	int get_collision_mask() const { return (int)collision_mask; }
 
