@@ -118,6 +118,11 @@ class Box3DRagdoll : public SkeletonModifier3D {
 	GDCLASS(Box3DRagdoll, SkeletonModifier3D);
 
 	Ref<Box3DRagdollProfile> profile;
+	// Uniform size multiplier for the built ragdoll: capsule dimensions, mass, body positions, and joint
+	// anchors are all scaled by this at build(). 1.0 reproduces the profile exactly; a per-instance value
+	// (e.g. a deterministic per-zombie variation) makes bigger/smaller corpses from ONE profile. The
+	// skeleton->mesh sync propagates the scaled bone poses to the skin, so this also drives visible size.
+	real_t build_scale = 1.0;
 
 	struct BoneRuntime {
 		StringName name;
@@ -203,6 +208,8 @@ protected:
 public:
 	void set_profile(const Ref<Box3DRagdollProfile> &p_profile);
 	Ref<Box3DRagdollProfile> get_profile() const { return profile; }
+	void set_build_scale(real_t p_scale);
+	real_t get_build_scale() const { return build_scale; }
 
 	bool build();
 	void teardown();

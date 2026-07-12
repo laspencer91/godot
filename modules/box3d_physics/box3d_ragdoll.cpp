@@ -235,6 +235,8 @@ real_t Box3DRagdollProfile::estimate_total_mass() const {
 void Box3DRagdoll::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_profile", "profile"), &Box3DRagdoll::set_profile);
 	ClassDB::bind_method(D_METHOD("get_profile"), &Box3DRagdoll::get_profile);
+	ClassDB::bind_method(D_METHOD("set_build_scale", "scale"), &Box3DRagdoll::set_build_scale);
+	ClassDB::bind_method(D_METHOD("get_build_scale"), &Box3DRagdoll::get_build_scale);
 	ClassDB::bind_method(D_METHOD("build"), &Box3DRagdoll::build);
 	ClassDB::bind_method(D_METHOD("teardown"), &Box3DRagdoll::teardown);
 	ClassDB::bind_method(D_METHOD("die", "impulse", "hit_bone", "ramp_time"), &Box3DRagdoll::die, DEFVAL(Vector3()), DEFVAL(StringName()), DEFVAL(0.0));
@@ -255,10 +257,16 @@ void Box3DRagdoll::_bind_methods() {
 #endif
 
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "profile", PROPERTY_HINT_RESOURCE_TYPE, "Box3DRagdollProfile"), "set_profile", "get_profile");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "build_scale", PROPERTY_HINT_RANGE, "0.05,4.0,0.001,or_greater"), "set_build_scale", "get_build_scale");
 #ifdef TOOLS_ENABLED
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "simulate_in_editor", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR), "set_simulate_in_editor", "is_simulating_in_editor");
 #endif
 	ADD_SIGNAL(MethodInfo("ragdoll_asleep"));
+}
+
+void Box3DRagdoll::set_build_scale(real_t p_scale) {
+	// Applied at build() time; a running ragdoll keeps its current bodies until the next build/teardown.
+	build_scale = MAX((real_t)0.001, p_scale);
 }
 
 void Box3DRagdoll::set_profile(const Ref<Box3DRagdollProfile> &p_profile) {
@@ -318,7 +326,11 @@ void Box3DRagdoll::_load_runtime_from_profile(BoneRuntime &r_bone, const Diction
 }
 
 Transform3D Box3DRagdoll::_bone_world_pose(Skeleton3D *p_skeleton, const BoneRuntime &p_bone) const {
-	return p_skeleton->get_global_transform() * p_skeleton->get_bone_global_pose(p_bone.bone) * p_bone.offset;
+	// Scale the body position about the skeleton root by build_scale so the capsule chain spreads to
+	// match the scaled sizes (origin only — the basis is rotation). build_scale 1.0 is a no-op.
+	Transform3D local = p_skeleton->get_bone_global_pose(p_bone.bone) * p_bone.offset;
+	local.origin *= build_scale;
+	return p_skeleton->get_global_transform() * local;
 }
 
 void Box3DRagdoll::_set_body_transform(Box3DPhysicsServer3D *p_server, BoneRuntime &r_bone, const Transform3D &p_transform) {
@@ -384,6 +396,10 @@ void Box3DRagdoll::_create_joint_for_bone(Box3DPhysicsServer3D *p_server, Skelet
 	const Transform3D child_capsule_rest = p_skeleton->get_bone_global_rest(r_bone.bone) * r_bone.offset;
 	Transform3D child_frame = r_bone.has_joint_frame ? r_bone.joint_frame : Transform3D();
 	Transform3D parent_frame = parent_capsule_rest.affine_inverse() * child_capsule_rest * child_frame * Transform3D(Basis(r_bone.rest_delta), Vector3());
+	// Scale the anchor offsets by build_scale so the joints stay coincident with the scaled bodies (the
+	// frames' bases are rotations — scale-invariant — so only the origins move). build_scale 1.0 is a no-op.
+	parent_frame.origin *= build_scale;
+	child_frame.origin *= build_scale;
 
 	if (r_bone.joint_type == Box3DRagdollProfile::JOINT_TYPE_REVOLUTE) {
 		b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
@@ -529,6 +545,16 @@ bool Box3DRagdoll::_build_in_space(RID p_space) {
 		}
 	}
 	_attach_disconnected_components(skeleton);
+	// Fold build_scale into every bone's SIZE (capsule radius/height) before bodies/joints are built:
+	// _create_body_for_bone and _bone_mass both read these, so scaling here covers shapes, mass, and the
+	// editor ground in one place. Positions (_bone_world_pose) and joint anchors scale at their own sites.
+	// build_scale 1.0 leaves the profile untouched (byte-identical to the pre-build_scale behavior).
+	if (!Math::is_equal_approx(build_scale, (real_t)1.0)) {
+		for (uint32_t i = 0; i < bones.size(); i++) {
+			bones[i].radius *= build_scale;
+			bones[i].height *= build_scale;
+		}
+	}
 	for (uint32_t i = 0; i < bones.size(); i++) {
 		ERR_FAIL_COND_V(!_create_body_for_bone(server, skeleton, bones[i]), false);
 	}
