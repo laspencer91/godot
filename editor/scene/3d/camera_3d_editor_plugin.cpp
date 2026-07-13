@@ -39,6 +39,7 @@
 #include "scene/gui/foldable_container.h"
 #include "scene/gui/subviewport_container.h"
 #include "scene/main/viewport.h"
+#include "scene/resources/3d/world_3d.h"
 #include "servers/rendering/rendering_server.h"
 
 void Camera3DEditor::_node_removed(Node *p_node) {
@@ -118,6 +119,16 @@ Camera3DPreview::Camera3DPreview(Camera3D *p_camera) {
 	sub_viewport_container->add_child(sub_viewport);
 
 	RenderingServer::get_singleton()->viewport_attach_camera(sub_viewport->get_viewport_rid(), camera->get_camera());
+
+	// In the multi-document editor each open scene renders into its own isolated
+	// World3D. viewport_attach_camera() only sets the camera transform/projection;
+	// the geometry the preview sees comes from the SubViewport's own world. Without
+	// this bind the preview inherits the (empty) editor root-window world and shows
+	// only sky/ground, so point it at the camera's actual document scenario.
+	Ref<World3D> camera_world = camera->get_world_3d();
+	if (camera_world.is_valid()) {
+		sub_viewport->set_world_3d(camera_world);
+	}
 
 	EditorNode::get_singleton()->register_hdr_viewport(sub_viewport);
 

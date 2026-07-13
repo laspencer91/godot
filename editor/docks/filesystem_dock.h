@@ -137,6 +137,9 @@ private:
 		FILE_MENU_NEW_SCRIPT,
 		FILE_MENU_NEW_SCENE,
 		FILE_MENU_RUN_SCRIPT,
+		FILE_MENU_COPY,
+		FILE_MENU_CUT,
+		FILE_MENU_PASTE,
 		FILE_MENU_MAX,
 		// Extra shortcuts that don't exist in the menu.
 		EXTRA_FOCUS_PATH,
@@ -255,6 +258,12 @@ private:
 	String to_move_path;
 	bool to_move_or_copy = false;
 
+	// File clipboard for Copy/Cut/Paste. A cut is realized as a move on paste, and the clipboard
+	// is cleared once that move actually completes (clipboard_clear_after_move).
+	Vector<FileOrFolder> file_clipboard;
+	bool file_clipboard_is_cut = false;
+	bool clipboard_clear_after_move = false;
+
 	Vector<String> to_convert;
 	int selected_conversion_id = 0;
 
@@ -271,6 +280,8 @@ private:
 	FileSystemTree *tree = nullptr;
 	FileSystemList *files = nullptr;
 	bool import_dock_needs_update = false;
+	bool details_update_waiting_for_mouse_release = false;
+	bool filesystem_drag_preserves_details = false;
 	TreeItem *resources_item = nullptr;
 	TreeItem *favorites_item = nullptr;
 	Control *had_focus = nullptr;

@@ -31,6 +31,10 @@ static_assert(HordeAgents::STATE_MAX == HordeFSMConfig::STATE_COUNT,
 // tick's mover cast starts outside overlap (the cast ignores initial overlap).
 static constexpr float CONTACT_SKIN = 0.02f;
 
+void HordeAgents::set_attack_seek_radius(float p_r) {
+	attack_seek_radius = Math::is_finite(p_r) ? MAX(p_r, 0.0f) : 0.0f;
+}
+
 // Fallback within-state speeds (m/s) when the FSM config leaves move_speed at 0
 // (or no config is assigned). Indexed by HordeAgents::State.
 static const float DEFAULT_STATE_SPEED[HordeAgents::STATE_MAX] = {
@@ -534,7 +538,45 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	// sweep branch, so this stays 0 for Cold agents every tick.
 	blocked_contact[i] = 0;
 
-	if (speed > 0.0f && have_field && mode == HordeFSMConfig::MOVE_FLOW) {
+	// Close-range attack seek (COMBAT_FEEL): an attacking agent within
+	// attack_seek_radius of a player steers/faces the player's real position
+	// directly, pre-empting the flow field. This fixes the two failure modes the
+	// shared field can't: the goal-cell gradient collapses to zero (OCTANT_GOAL),
+	// which left CHASE agents drifting onto the cell center, and ATTACK_PLAYER has
+	// speed 0 so it never steered at all -- packed onto a player, the separation
+	// ring spun them to face outward and they swung at the air. seek_dir also
+	// drives the facing slew below (even at speed 0), so an attacking agent always
+	// faces its victim. player_x/player_z and nearest_any_dist_sq are refreshed by
+	// set_player_positions/_assign_tiers each retarget.
+	bool close_seek = false;
+	Vector2 seek_dir;
+	if ((st == STATE_WAKE || st == STATE_CHASE || st == STATE_ATTACK_PLAYER) && attack_seek_radius > 0.0f &&
+			nearest_any_dist_sq[i] <= attack_seek_radius * attack_seek_radius) {
+		const int pc = (int)player_x.size();
+		const float ax = pos_x[i];
+		const float az = pos_z[i];
+		float best_sq = 1e30f;
+		int best_p = -1;
+		for (int p = 0; p < pc; p++) {
+			const float dx = player_x[p] - ax;
+			const float dz = player_z[p] - az;
+			const float d2 = dx * dx + dz * dz;
+			if (d2 < best_sq) {
+				best_sq = d2;
+				best_p = p;
+			}
+		}
+		if (best_p >= 0 && best_sq > 1e-6f) {
+			close_seek = true;
+			seek_dir = Vector2(player_x[best_p] - ax, player_z[best_p] - az) / Math::sqrt(best_sq);
+		}
+	}
+
+	if (close_seek) {
+		// speed is 0 in ATTACK_PLAYER -> zero disp (holds position), facing still
+		// driven by seek_dir; CHASE closes the final gap onto the player.
+		disp = seek_dir * (speed * eff_dt);
+	} else if (speed > 0.0f && have_field && mode == HordeFSMConfig::MOVE_FLOW) {
 		const Vector3 wp(pos_x[i], pos_y[i], pos_z[i]);
 		const Vector3i cell = grid->world_to_cell(wp);
 		const int32_t idx = grid->cell_index(cell.x, cell.y, cell.z);
@@ -606,13 +648,31 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 
 	// Desired facing source: the pure steering direction toward the shared flow
-	// goal / seek target / patrol heading, captured BEFORE Reynolds separation and
-	// knockback perturb `disp`. Facing is slewed toward THIS stable direction (see
-	// the yaw block at the end of the step), NOT the post-separation displacement:
-	// in a dense clump the separation push flips direction every tick and driving
-	// atan2 off it snapped the heading around (the flicker bug). Zero when the
-	// agent isn't steering this step (pure shove / idle), which holds its facing.
-	const Vector2 desired_dir = disp;
+	// goal / seek target / patrol heading (or the close-range player seek),
+	// captured BEFORE Reynolds separation and knockback perturb `disp`. Facing is
+	// slewed toward THIS stable direction, NOT the post-separation displacement: in
+	// a dense clump the separation push flips direction every tick and driving
+	// atan2 off it snapped the heading around (the flicker bug). A close-range
+	// attacker faces its victim via seek_dir even at speed 0 (disp is then zero but
+	// the heading still tracks the player). Zero when the agent isn't steering this
+	// step (pure shove / idle), which holds its facing.
+	const Vector2 desired_dir = close_seek ? seek_dir : disp;
+
+	// Slew yaw toward desired_dir at a capped turn rate, shortest-arc. Hoisted
+	// ABOVE the zero-displacement early return so a stationary ATTACK_PLAYER
+	// (disp == 0) still turns to face its victim. max_turn_rate bounds |dyaw| per
+	// tick so the approach is smooth; yaw stays a per-slot ticked value wrapped to
+	// [-PI, PI] (matches atan2's range and the wire codec's assumption), so
+	// replays/keyframes stay bit-identical -- no unbounded accumulation for a
+	// continuously circling agent.
+	if (desired_dir.length_squared() > 1e-8f) {
+		const float target_yaw = Math::atan2(desired_dir.x, desired_dir.y);
+		// Shortest-arc signed delta in [-PI, PI], then clamp to this tick's cap.
+		float d = Math::fposmod(target_yaw - yaw[i] + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+		const float max_step = max_turn_rate * eff_dt;
+		d = CLAMP(d, -max_step, max_step);
+		yaw[i] = Math::fposmod(yaw[i] + d + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+	}
 
 	// Reynolds separation, Hot tier only (R3.3 / A2.3).
 	if (t == TIER_HOT && (disp != Vector2() || mode != HordeFSMConfig::MOVE_STATIONARY)) {
@@ -659,22 +719,6 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 	pos_x[i] += disp.x;
 	pos_z[i] += disp.y;
-	// Facing: slew yaw toward the DESIRED heading (the pre-separation steering
-	// direction) at a capped turn rate, shortest-arc. Aiming at desired_dir rather
-	// than the separation/knockback-perturbed `disp` removes the dense-clump
-	// flicker; max_turn_rate bounds |Δyaw| per tick so the approach is smooth. A
-	// non-steering step (desired_dir == 0: pure shove or idle) holds the last
-	// facing. yaw stays a per-slot ticked value wrapped to [-PI, PI] (matches
-	// atan2's range and the wire codec's assumption), so replays/keyframes stay
-	// bit-identical -- no unbounded accumulation for a continuously circling agent.
-	if (desired_dir.length_squared() > 1e-8f) {
-		const float target_yaw = Math::atan2(desired_dir.x, desired_dir.y);
-		// Shortest-arc signed delta in [-PI, PI], then clamp to this tick's cap.
-		float d = Math::fposmod(target_yaw - yaw[i] + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
-		const float max_step = max_turn_rate * eff_dt;
-		d = CLAMP(d, -max_step, max_step);
-		yaw[i] = Math::fposmod(yaw[i] + d + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
-	}
 }
 
 void HordeAgents::_evaluate_exits() {
@@ -898,6 +942,72 @@ Dictionary HordeAgents::raycast_agents(const Vector3 &p_from, const Vector3 &p_d
 	return hit;
 }
 
+Array HordeAgents::overlap_agents(const Vector3 &p_center, float p_radius, int p_max_candidates) const {
+	Array result;
+	if (!p_center.is_finite() || !Math::is_finite(p_radius) || p_radius < 0.0f || p_max_candidates <= 0) {
+		return result;
+	}
+
+	struct Candidate {
+		int id = -1;
+		Vector3 hit_pos;
+		float height_frac = 0.0f;
+		float contact_dist_sq = 0.0f;
+	};
+	struct CandidateSort {
+		_FORCE_INLINE_ bool operator()(const Candidate &p_a, const Candidate &p_b) const {
+			return p_a.contact_dist_sq < p_b.contact_dist_sq ||
+					(p_a.contact_dist_sq == p_b.contact_dist_sq && p_a.id < p_b.id);
+		}
+	};
+	LocalVector<Candidate> candidates;
+	const float capsule_radius = agent_radius;
+	const float axis_top = MAX(capsule_radius, agent_height - capsule_radius);
+	const float combined_radius = p_radius + capsule_radius;
+	const float combined_radius_sq = combined_radius * combined_radius;
+
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] == 0 || state[i] == (uint8_t)STATE_DEAD) {
+			continue;
+		}
+		const float axis_y = CLAMP(p_center.y, pos_y[i] + capsule_radius, pos_y[i] + axis_top);
+		const Vector3 axis_point(pos_x[i], axis_y, pos_z[i]);
+		const Vector3 from_axis = p_center - axis_point;
+		const float axis_dist_sq = from_axis.length_squared();
+		if (axis_dist_sq > combined_radius_sq) {
+			continue;
+		}
+
+		Candidate candidate;
+		candidate.id = _make_id(i);
+		const float axis_dist = Math::sqrt(axis_dist_sq);
+		if (axis_dist <= capsule_radius || axis_dist <= CMP_EPSILON) {
+			// The query center is already inside the solid capsule, so it is the
+			// closest point in that volume and contact distance is zero.
+			candidate.hit_pos = p_center;
+			candidate.contact_dist_sq = 0.0f;
+		} else {
+			candidate.hit_pos = axis_point + from_axis * (capsule_radius / axis_dist);
+			candidate.contact_dist_sq = p_center.distance_squared_to(candidate.hit_pos);
+		}
+		candidate.height_frac = CLAMP((candidate.hit_pos.y - pos_y[i]) / agent_height, 0.0f, 1.0f);
+		candidates.push_back(candidate);
+	}
+
+	candidates.sort_custom<CandidateSort>();
+
+	const int take = MIN(p_max_candidates, (int)candidates.size());
+	result.resize(take);
+	for (int i = 0; i < take; i++) {
+		Dictionary item;
+		item["id"] = candidates[i].id;
+		item["hit_pos"] = candidates[i].hit_pos;
+		item["height_frac"] = candidates[i].height_frac;
+		result[i] = item;
+	}
+	return result;
+}
+
 int HordeAgents::apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint, float p_knockback) {
 	int slot;
 	if (!_resolve(p_id, slot)) {
@@ -992,6 +1102,15 @@ Vector3 HordeAgents::get_agent_position(int p_id) const {
 float HordeAgents::get_agent_yaw(int p_id) const {
 	int slot;
 	return _resolve(p_id, slot) ? yaw[slot] : 0.0f;
+}
+
+bool HordeAgents::set_agent_yaw(int p_id, float p_yaw) {
+	int slot;
+	if (!_resolve(p_id, slot) || !Math::is_finite(p_yaw)) {
+		return false;
+	}
+	yaw[slot] = Math::fposmod(p_yaw + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+	return true;
 }
 
 float HordeAgents::get_agent_hp(int p_id) const {
@@ -1224,6 +1343,8 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_separation_strength"), &HordeAgents::get_separation_strength);
 	ClassDB::bind_method(D_METHOD("set_max_turn_rate", "rate"), &HordeAgents::set_max_turn_rate);
 	ClassDB::bind_method(D_METHOD("get_max_turn_rate"), &HordeAgents::get_max_turn_rate);
+	ClassDB::bind_method(D_METHOD("set_attack_seek_radius", "radius"), &HordeAgents::set_attack_seek_radius);
+	ClassDB::bind_method(D_METHOD("get_attack_seek_radius"), &HordeAgents::get_attack_seek_radius);
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &HordeAgents::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &HordeAgents::get_collision_mask);
 
@@ -1255,6 +1376,7 @@ void HordeAgents::_bind_methods() {
 
 	// Combat ingress (P2.4).
 	ClassDB::bind_method(D_METHOD("raycast_agents", "from", "dir", "max_dist"), &HordeAgents::raycast_agents);
+	ClassDB::bind_method(D_METHOD("overlap_agents", "center", "radius", "max_candidates"), &HordeAgents::overlap_agents);
 	ClassDB::bind_method(D_METHOD("apply_damage", "id", "amount", "impulse_dir", "killer_hint", "knockback"), &HordeAgents::apply_damage, DEFVAL(0.0));
 	ClassDB::bind_method(D_METHOD("get_death_info", "id"), &HordeAgents::get_death_info);
 
@@ -1264,6 +1386,7 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_agent_archetype", "id"), &HordeAgents::get_agent_archetype);
 	ClassDB::bind_method(D_METHOD("get_agent_position", "id"), &HordeAgents::get_agent_position);
 	ClassDB::bind_method(D_METHOD("get_agent_yaw", "id"), &HordeAgents::get_agent_yaw);
+	ClassDB::bind_method(D_METHOD("set_agent_yaw", "id", "yaw"), &HordeAgents::set_agent_yaw);
 	ClassDB::bind_method(D_METHOD("get_agent_hp", "id"), &HordeAgents::get_agent_hp);
 	ClassDB::bind_method(D_METHOD("get_nearest_player_distance", "id"), &HordeAgents::get_nearest_player_distance);
 	ClassDB::bind_method(D_METHOD("set_agent_hp", "id", "hp"), &HordeAgents::set_agent_hp);

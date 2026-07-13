@@ -70,8 +70,7 @@ class DocumentView : public MarginContainer {
 	// bound to this document. Null for non-scene (script/help/resource) views. bound_scene_document
 	// is kept only to refresh the tree's root once the view is in-tree (root may load late).
 	SceneTreeDock *scene_tree_dock = nullptr;
-	// G2 D7b: per-pane Inspector, bound to this document; driven from the doc selection via
-	// _bound_selection_changed so it shows this pane's selection independently of the global one.
+	// Per-pane Inspector. Scene views drive it from selection; resource views use it as their body.
 	InspectorDock *inspector_dock = nullptr;
 	// G2 G3: per-pane Signals (ConnectionsDock) + Groups docks, also driven from the doc selection.
 	SignalsDock *signals_dock = nullptr;
@@ -80,6 +79,7 @@ class DocumentView : public MarginContainer {
 	// G2 M7.2a: the slot above this scene pane's viewport where the shared 2D/3D toolbar mounts while
 	// this pane is focused. Null for non-scene views.
 	Control *toolbar_host = nullptr;
+	bool context_active = false;
 
 	void _bound_selection_changed();
 
@@ -108,6 +108,7 @@ public:
 
 	// G2 M7.2a: the header slot above the viewport where the focused pane's 2D/3D toolbar mounts.
 	Control *get_toolbar_host() const { return toolbar_host; }
+	void set_context_active(bool p_active);
 
 	DocumentView(EditorDocument *p_document);
 	~DocumentView();

@@ -1,0 +1,11 @@
+; Variant used by the pane SceneTree-to-Inspector drag-selection smoke case.
+config_version=5
+
+[application]
+
+config/name="scene-tree-drag-smoke"
+config/features=PackedStringArray("4.8")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/scene_tree_drag_smoke/plugin.cfg")

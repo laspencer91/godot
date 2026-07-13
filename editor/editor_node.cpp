@@ -63,6 +63,7 @@
 #include "editor/docks/history_dock.h"
 #include "editor/docks/import_dock.h"
 #include "editor/docks/inspector_dock.h"
+#include "editor/docks/resource_inspector_dock.h"
 #include "editor/docks/scene_tree_dock.h"
 #include "editor/docks/signals_dock.h"
 #include "editor/editor_data.h"
@@ -418,11 +419,21 @@ void EditorNode::shortcut_input(const Ref<InputEvent> &p_event) {
 	Ref<InputEventKey> k = p_event;
 	if ((k.is_valid() && k->is_pressed() && !k->is_echo()) || Object::cast_to<InputEventShortcut>(*p_event)) {
 		bool is_handled = true;
-		if (ED_IS_SHORTCUT("editor/filter_files", p_event)) {
-			if (workspace_file_drawer) { // G4: the FileSystem dock is only visible while the drawer is open.
-				workspace_file_drawer->set_open(true);
+		if (ED_IS_SHORTCUT("docks/open_filesystem", p_event)) {
+			// The stock FileSystem shortcut now toggles its drawer. Keyboard opening is search-first;
+			// programmatic reveals such as "Show in FileSystem" deliberately do not focus search.
+			const bool opening = workspace_file_drawer && !workspace_file_drawer->is_open();
+			if (workspace_file_drawer) {
+				workspace_file_drawer->set_open(opening);
 			}
-			FileSystemDock::get_singleton()->focus_on_filter();
+			if (opening && workspace_file_drawer && workspace_file_drawer->is_open() && FileSystemDock::get_singleton()) {
+				FileSystemDock::get_singleton()->focus_on_filter();
+			}
+		} else if (ED_IS_SHORTCUT("editor/filter_files", p_event)) {
+			open_file_drawer(); // G4: the FileSystem dock is only visible while the drawer is open.
+			if (workspace_file_drawer && workspace_file_drawer->is_open() && FileSystemDock::get_singleton()) {
+				FileSystemDock::get_singleton()->focus_on_filter();
+			}
 		} else if (ED_IS_SHORTCUT("editor/editor_2d", p_event)) {
 			editor_main_screen->select(EditorMainScreen::EDITOR_2D);
 		} else if (ED_IS_SHORTCUT("editor/editor_3d", p_event)) {
@@ -1773,7 +1784,7 @@ Error EditorNode::load_resource(const String &p_resource, bool p_ignore_broken_d
 		return ERR_FILE_MISSING_DEPENDENCIES;
 	}
 
-	InspectorDock::get_singleton()->edit_resource(res);
+	edit_resource(res);
 	return OK;
 }
 
@@ -1792,7 +1803,19 @@ void EditorNode::edit_node(Node *p_node) {
 }
 
 void EditorNode::edit_resource(const Ref<Resource> &p_resource) {
-	InspectorDock::get_singleton()->edit_resource(p_resource);
+	ERR_FAIL_COND(p_resource.is_null());
+
+	EditorDocument *document = nullptr;
+	if (p_resource->is_class("Shader") || p_resource->is_class("ShaderInclude")) {
+		document = editor_data.get_or_create_shader_document(p_resource);
+	} else if (p_resource->is_class("Script") || p_resource->is_class("TextFile")) {
+		document = editor_data.get_or_create_script_document(p_resource);
+	} else {
+		document = editor_data.get_or_create_resource_document(p_resource);
+	}
+	if (editor_main_screen && document) {
+		editor_main_screen->reveal(document);
+	}
 }
 
 void EditorNode::save_resource_in_path(const Ref<Resource> &p_resource, const String &p_path) {
@@ -4662,6 +4685,12 @@ void EditorNode::register_document_context(EditorDocument *p_doc) {
 	}
 }
 
+void EditorNode::open_file_drawer() {
+	if (workspace_file_drawer) {
+		workspace_file_drawer->set_open(true);
+	}
+}
+
 SubViewport *EditorNode::get_scene_root() {
 	// G1: the active document owns the live SubViewport that its scene renders into.
 	// Before any document exists (early editor startup), fall back to the placeholder.
@@ -4967,6 +4996,20 @@ void EditorNode::_set_current_scene_nocheck(int p_idx, bool p_ignore_state) {
 	// G1: no reparenting under the shared scene_root (upstream re-parents here) — rebind the
 	// 2D/3D editors to the active document's world instead.
 	_activate_scene_views();
+
+	// G2: force-build this now-current scene's 3D gizmos. The disk-load paths (session restore on
+	// restart, reload_scene, and interactive open_scene) all reach the current scene through here,
+	// NOT through EditorNode::set_edited_scene_root — so the scene's Node3Ds entered their document
+	// world before becoming the edited scene, their ENTER_WORLD gizmo request was skipped, and the
+	// gizmo BVH stays empty. That leaves viewport click-selection with nothing to hit until a node
+	// is perturbed (freshly-added nodes are unaffected). Force-build directly, mirroring the hook in
+	// set_edited_scene_root; deferred so the scene is fully in-tree/in-world when it runs. Non-Node3D
+	// scenes are skipped inside build_scene_gizmos, so 2D/mixed documents are unaffected.
+	if (new_scene) {
+		if (Node3DEditor *spatial_editor = Node3DEditor::get_singleton()) {
+			callable_mp(spatial_editor, &Node3DEditor::build_edited_scene_gizmos).call_deferred();
+		}
+	}
 
 	if (editor_data.check_and_update_scene(p_idx)) {
 		if (!editor_data.get_scene_path(p_idx).is_empty()) {
@@ -5594,7 +5637,7 @@ bool EditorNode::has_previous_closed_scenes() const {
 
 void EditorNode::edit_foreign_resource(Ref<Resource> p_resource) {
 	open_scene(p_resource->get_path().get_slice("::", 0));
-	callable_mp(InspectorDock::get_singleton(), &InspectorDock::edit_resource).call_deferred(p_resource);
+	callable_mp(this, &EditorNode::edit_resource).call_deferred(p_resource);
 }
 
 bool EditorNode::is_resource_read_only(Ref<Resource> p_resource, bool p_foreign_resources_are_writable) {
@@ -6597,6 +6640,11 @@ void EditorNode::_load_editor_layout() {
 		// from _load_central_editor_layout_from_config once the scenes exist.
 		if (EditorMainScreen *ms = get_editor_main_screen()) {
 			ms->begin_workspace_restore(config, EDITOR_NODE_CONFIG_SECTION);
+			if (ms->is_workspace_restore_pending()) {
+				// The saved per-pane current document owns startup focus. Otherwise the one-shot boot
+				// scene reveal below would replace a restored script/resource tab with its scene tab.
+				boot_scene_focus_pending = false;
+			}
 		}
 
 		ep.step(TTR("Reopening scenes..."), 2, true);
@@ -6607,8 +6655,9 @@ void EditorNode::_load_editor_layout() {
 
 		// G2 M6.2: the workspace restore stood the scene auto-reveal down while it ran (is_workspace_restore_pending),
 		// and the progress-bar pump can consume the queued _ensure_active_scene_tab calls during that window.
-		// Re-trigger it now that restore is done so the active scene still lands in a pane (idempotent: it just
-		// focuses the tab if the session already placed it). Deferred to run after the restore's own deferreds.
+		// Re-trigger it now that restore is done so the active scene still lands in a pane. A restored
+		// workspace has already consumed the boot-focus decision above, so this only ensures the tab exists
+		// and cannot replace the saved current document. Deferred to run after the restore's own deferreds.
 		callable_mp(this, &EditorNode::_ensure_active_scene_tab).call_deferred();
 
 		ep.step(TTR("Loading plugin window layout..."), 4, true);
@@ -9300,7 +9349,8 @@ EditorNode::EditorNode() {
 	ED_SHORTCUT_AND_COMMAND("editor/distraction_free_mode", TTRC("Distraction Free Mode"), KeyModifierMask::CTRL | KeyModifierMask::SHIFT | Key::F11);
 	ED_SHORTCUT_OVERRIDE("editor/distraction_free_mode", "macos", KeyModifierMask::META | KeyModifierMask::SHIFT | Key::D);
 	ED_SHORTCUT_AND_COMMAND("editor/toggle_last_opened_bottom_panel", TTRC("Toggle Last Opened Bottom Panel"), KeyModifierMask::CMD_OR_CTRL | Key::J);
-	ED_SHORTCUT_AND_COMMAND("editor/toggle_file_drawer", TTRC("Toggle FileSystem Drawer")); // G4: no default accelerator to avoid clashes.
+	// Preserve Godot's familiar FileSystem action/key while routing it to the workspace drawer.
+	ED_SHORTCUT_AND_COMMAND("docks/open_filesystem", TTRC("Toggle FileSystem Drawer"), KeyModifierMask::ALT | Key::F);
 	distraction_free->set_shortcut(ED_GET_SHORTCUT("editor/distraction_free_mode"));
 	distraction_free->set_tooltip_text(TTRC("Toggle distraction-free mode."));
 	distraction_free->set_toggle_mode(true);
@@ -9669,6 +9719,13 @@ EditorNode::EditorNode() {
 	EditorDockManager::mark_dock_retired(InspectorDock::get_singleton()); // G2 D8 (see above).
 	editor_dock_manager->set_dock_enabled(InspectorDock::get_singleton(), false);
 
+	// File-backed resource properties belong to the FileSystem selection, not to a scene pane. Build
+	// this after the retired global Inspector singleton so shared inspector plugins remain initialized,
+	// then host it beside Import in the drawer's detail tabs.
+	memnew(ResourceInspectorDock);
+	workspace_file_drawer->set_resource_inspector_panel(ResourceInspectorDock::get_singleton());
+	ResourceInspectorDock::get_singleton()->connect("edit_target_changed", callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::on_resource_inspector_target_changed));
+
 	memnew(SignalsDock);
 	editor_dock_manager->add_dock(SignalsDock::get_singleton());
 	EditorDockManager::mark_dock_retired(SignalsDock::get_singleton()); // G2 D8 (see above).
@@ -9743,7 +9800,8 @@ EditorNode::EditorNode() {
 	// G4: unified bottom-bar toggle for the FileSystem drawer. Seated at the far left of the bar
 	// (ahead of the Output/Debugger/Audio dock tabs) so it reads as its own leading entry. The button
 	// drives the overlay; the drawer reports back so the two stay in sync.
-	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), ED_GET_SHORTCUT("editor/toggle_file_drawer"), true);
+	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), Ref<Shortcut>(), true);
+	filesystem_drawer_button->set_tooltip_text(vformat("%s (%s)", TTR("Toggle FileSystem Drawer"), ED_GET_SHORTCUT("docks/open_filesystem")->get_as_text()));
 	filesystem_drawer_button->connect(SceneStringName(toggled), callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::set_open).bind(true));
 	workspace_file_drawer->connect("open_toggled", callable_mp(static_cast<BaseButton *>(filesystem_drawer_button), &BaseButton::set_pressed_no_signal));
 

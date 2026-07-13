@@ -264,7 +264,7 @@ void InspectorDock::_resource_file_selected(const String &p_file) {
 		return;
 	};
 
-	EditorNode::get_singleton()->push_item(res.operator->());
+	_push_bound_item(res.operator->());
 }
 
 void InspectorDock::_save_resource(bool save_as) {
@@ -282,7 +282,11 @@ void InspectorDock::_unref_resource() {
 	Ref<Resource> current_res = _get_current_resource();
 	ERR_FAIL_COND(current_res.is_null());
 	current_res->set_path("");
-	EditorNode::get_singleton()->edit_current();
+	if (bound_document) {
+		_edit_bound_history_current();
+	} else {
+		EditorNode::get_singleton()->edit_current();
+	}
 }
 
 void InspectorDock::_copy_resource() {
@@ -294,7 +298,7 @@ void InspectorDock::_copy_resource() {
 void InspectorDock::_paste_resource() {
 	Ref<Resource> r = EditorSettings::get_singleton()->get_resource_clipboard();
 	if (r.is_valid()) {
-		EditorNode::get_singleton()->push_item(EditorSettings::get_singleton()->get_resource_clipboard().ptr(), String());
+		_push_bound_item(r.ptr());
 	}
 }
 
@@ -370,7 +374,7 @@ void InspectorDock::_select_history(int p_idx) {
 	if (!obj) {
 		return;
 	}
-	EditorNode::get_singleton()->push_item(obj);
+	_push_bound_item(obj);
 
 	if (const EditorDebuggerRemoteObjects *robjs = Object::cast_to<EditorDebuggerRemoteObjects>(obj)) {
 		EditorDebuggerNode::get_singleton()->set_remote_selection(robjs->remote_object_ids.duplicate());
@@ -384,7 +388,7 @@ void InspectorDock::_resource_created() {
 	Resource *r = Object::cast_to<Resource>(c);
 	ERR_FAIL_NULL(r);
 
-	EditorNode::get_singleton()->push_item(r);
+	_push_bound_item(r);
 }
 
 void InspectorDock::_resource_selected(const Ref<Resource> &p_res, const String &p_property) {
@@ -393,7 +397,7 @@ void InspectorDock::_resource_selected(const Ref<Resource> &p_res, const String 
 	}
 
 	Ref<Resource> r = p_res;
-	EditorNode::get_singleton()->push_item(r.operator->(), p_property);
+	_push_bound_item(r.operator->(), p_property);
 }
 
 void InspectorDock::_files_moved(const String &p_old_file, const String &p_new_file) {
@@ -413,7 +417,11 @@ void InspectorDock::_files_moved(const String &p_old_file, const String &p_new_f
 
 void InspectorDock::_edit_forward() {
 	if (_doc_history()->next()) {
-		EditorNode::get_singleton()->edit_current();
+		if (bound_document) {
+			_edit_bound_history_current();
+		} else {
+			EditorNode::get_singleton()->edit_current();
+		}
 
 		if (const EditorDebuggerRemoteObjects *robjs = Object::cast_to<EditorDebuggerRemoteObjects>(current)) {
 			EditorDebuggerNode::get_singleton()->set_remote_selection(robjs->remote_object_ids.duplicate());
@@ -424,7 +432,11 @@ void InspectorDock::_edit_forward() {
 void InspectorDock::_edit_back() {
 	EditorSelectionHistory *editor_history = _doc_history();
 	if ((current && editor_history->previous()) || editor_history->get_path_size() == 1) {
-		EditorNode::get_singleton()->edit_current();
+		if (bound_document) {
+			_edit_bound_history_current();
+		} else {
+			EditorNode::get_singleton()->edit_current();
+		}
 
 		if (const EditorDebuggerRemoteObjects *robjs = Object::cast_to<EditorDebuggerRemoteObjects>(current)) {
 			EditorDebuggerNode::get_singleton()->set_remote_selection(robjs->remote_object_ids.duplicate());
@@ -564,7 +576,16 @@ void InspectorDock::update(Object *p_object) {
 
 	object_menu->set_disabled(!is_object || is_text_file);
 	search->set_editable(is_object && !is_text_file);
-	resource_save_button->set_disabled(!is_resource || is_text_file);
+	bool can_save_resource = is_resource && !is_text_file;
+	if (can_save_resource && bound_document && bound_document->get_type() == EditorDocument::TYPE_RESOURCE) {
+		Resource *resource = Object::cast_to<Resource>(p_object);
+		// A pathless built-in belongs to an unsaved scene. Saving it as a standalone .tres would
+		// silently detach the user's intent; save the owning scene through the normal Ctrl+S flow.
+		if (resource && resource->get_path().is_empty() && bound_document->get_scene_context_document()) {
+			can_save_resource = false;
+		}
+	}
+	resource_save_button->set_disabled(!can_save_resource);
 	open_docs_button->set_disabled(is_text_file || (!is_resource && !is_node));
 
 	PopupMenu *resource_extra_popup = resource_extra_button->get_popup();
@@ -712,6 +733,37 @@ void InspectorDock::shortcut_input(const Ref<InputEvent> &p_event) {
 	}
 }
 
+void InspectorDock::_edit_bound_history_current() {
+	ERR_FAIL_NULL(bound_document);
+	EditorSelectionHistory *history = _doc_history();
+	const ObjectID current_id = history->get_current();
+	Object *object = current_id.is_valid() ? ObjectDB::get_instance(current_id) : nullptr;
+
+	inspector->edit(object);
+	update(object);
+	if (object) {
+		EditorNode::get_singleton()->edit_item(object, this);
+	} else {
+		EditorNode::get_singleton()->hide_unused_editors(this);
+	}
+}
+
+void InspectorDock::_push_bound_item(Object *p_object, const String &p_property) {
+	if (!bound_document) {
+		EditorNode::get_singleton()->push_item(p_object, p_property);
+		return;
+	}
+	if (!p_object) {
+		inspector->edit(nullptr);
+		update(nullptr);
+		EditorNode::get_singleton()->hide_unused_editors(this);
+		return;
+	}
+
+	_doc_history()->add_object(p_object->get_instance_id(), p_property);
+	_edit_bound_history_current();
+}
+
 // G2 D6: history resolver. Global dock (bound_document == nullptr) => today's global history.
 EditorSelectionHistory *InspectorDock::_doc_history() const {
 	EditorSelectionHistory *doc_history = bound_document ? bound_document->get_selection_history() : nullptr;
@@ -720,6 +772,9 @@ EditorSelectionHistory *InspectorDock::_doc_history() const {
 
 void InspectorDock::set_bound_document(EditorDocument *p_document) {
 	bound_document = p_document;
+	if (object_selector) {
+		object_selector->set_history(_doc_history());
+	}
 }
 
 void InspectorDock::edit_bound(Object *p_object) {
@@ -727,6 +782,37 @@ void InspectorDock::edit_bound(Object *p_object) {
 	// half, but for a per-pane instance sourced from its document's selection).
 	inspector->edit(p_object);
 	update(p_object);
+}
+
+void InspectorDock::push_bound_item(Object *p_object, const String &p_property) {
+	_push_bound_item(p_object, p_property);
+}
+
+void InspectorDock::edit_resource_document(const Ref<Resource> &p_resource) {
+	ERR_FAIL_NULL(bound_document);
+	ERR_FAIL_COND(p_resource.is_null());
+	EditorSelectionHistory *history = _doc_history();
+	history->clear();
+	history->add_object(p_resource->get_instance_id());
+	inspector->edit(p_resource.ptr());
+	update(p_resource.ptr());
+}
+
+void InspectorDock::set_context_active(bool p_active) {
+	if (p_active) {
+		active_instance = this;
+		Object *object = inspector->get_edited_object();
+		if (object) {
+			EditorNode::get_singleton()->edit_item(object, this);
+		}
+	} else {
+		if (active_instance == this) {
+			active_instance = nullptr;
+		}
+		if (bound_document && bound_document->get_type() == EditorDocument::TYPE_RESOURCE) {
+			EditorNode::get_singleton()->hide_unused_editors(this);
+		}
+	}
 }
 
 InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
@@ -831,7 +917,11 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	open_docs_button->connect(SceneStringName(pressed), callable_mp(this, &InspectorDock::_menu_option).bind(OBJECT_REQUEST_HELP));
 
 	new_resource_dialog = memnew(CreateDialog);
-	EditorNode::get_singleton()->get_gui_base()->add_child(new_resource_dialog);
+	Node *dialog_parent = this;
+	if (p_is_global) {
+		dialog_parent = EditorNode::get_singleton()->get_gui_base();
+	}
+	dialog_parent->add_child(new_resource_dialog);
 	new_resource_dialog->set_base_type("Resource");
 	new_resource_dialog->connect("create", callable_mp(this, &InspectorDock::_resource_created));
 
@@ -881,7 +971,7 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 
 	info_dialog = memnew(AcceptDialog);
 	info_dialog->set_flag(Window::FLAG_RESIZE_DISABLED, true);
-	EditorNode::get_singleton()->get_gui_base()->add_child(info_dialog);
+	dialog_parent->add_child(info_dialog);
 
 	load_resource_dialog = memnew(EditorFileDialog);
 	main_vb->add_child(load_resource_dialog);
@@ -903,6 +993,9 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 }
 
 InspectorDock::~InspectorDock() {
+	if (active_instance == this) {
+		active_instance = nullptr;
+	}
 	// G2 D7b: only clear the singleton if we own it (a bound per-pane instance never claimed it).
 	if (singleton == this) {
 		singleton = nullptr;

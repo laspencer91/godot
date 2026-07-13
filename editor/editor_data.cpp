@@ -689,6 +689,20 @@ int EditorData::add_edited_scene(int p_at_pos) {
 void EditorData::remove_scene(int p_idx) {
 	ERR_FAIL_INDEX(p_idx, edited_scene.size());
 
+	// Embedded resource documents borrow their scene context and must close before that scene dies.
+	EditorDocument *closing_document = edited_scene[p_idx].document;
+	for (int i = aux_documents.size() - 1; i >= 0; i--) {
+		EditorDocument *aux = aux_documents[i];
+		if (aux->get_type() != EditorDocument::TYPE_RESOURCE || aux->get_scene_context_document() != closing_document) {
+			continue;
+		}
+		if (EditorNode::get_singleton()) {
+			EditorNode::get_singleton()->drop_workspace_tabs_for_document(aux);
+		}
+		aux_documents.remove_at(i);
+		memdelete(aux);
+	}
+
 	// G2: drop any workspace tab/view showing this document FIRST — DocumentViews hold raw
 	// pointers to the document and its scene root, so they must die while both are alive.
 	if (edited_scene[p_idx].document && EditorNode::get_singleton()) {
@@ -983,6 +997,45 @@ ShaderDocument *EditorData::get_or_create_shader_document(const Ref<Resource> &p
 	return sd;
 }
 
+ResourceDocument *EditorData::get_or_create_resource_document(const Ref<Resource> &p_resource, EditorDocument *p_scene_context) {
+	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
+
+	EditorDocument *scene_context = p_scene_context;
+	const String path = p_resource->get_path();
+	if (!scene_context && p_resource->is_built_in()) {
+		const int subresource_separator = path.find("::");
+		if (subresource_separator >= 0) {
+			const int scene_idx = get_edited_scene_from_path(path.left(subresource_separator));
+			if (scene_idx >= 0) {
+				scene_context = get_document(scene_idx);
+			}
+		} else if (path.is_empty()) {
+			// Match EditorUndoRedoManager's rule for pathless built-ins: the currently edited
+			// scene owns their undo history. Capturing it keeps that ownership stable in a tab.
+			scene_context = get_active_document();
+		}
+	}
+
+	for (EditorDocument *doc : aux_documents) {
+		if (doc->get_type() != EditorDocument::TYPE_RESOURCE) {
+			continue;
+		}
+		ResourceDocument *rd = static_cast<ResourceDocument *>(doc);
+		if (rd->get_resource() == p_resource || (!path.is_empty() && rd->get_path() == path)) {
+			if (scene_context) {
+				rd->set_scene_context_document(scene_context);
+			}
+			return rd;
+		}
+	}
+
+	ResourceDocument *rd = memnew(ResourceDocument);
+	rd->set_resource(p_resource);
+	rd->set_scene_context_document(scene_context);
+	aux_documents.push_back(rd);
+	return rd;
+}
+
 HelpDocument *EditorData::get_or_create_help_document(const String &p_class) {
 	// G2 S3: one HelpDocument per class; path == "help://<class>" is the dedup key.
 	const String path = "help://" + p_class;
@@ -1023,22 +1076,28 @@ EditorDocument *EditorData::get_or_create_document_for_path(const String &p_path
 	if (p_path.begins_with("help://")) {
 		return get_or_create_help_document(p_path.trim_prefix("help://"));
 	}
-	// Script/text: an existing aux document, else load the resource and mint one. Missing file -> skip.
+	// Auxiliary document: reuse an existing document, else load and classify the resource.
 	if (EditorDocument *aux = find_aux_document_by_path(p_path)) {
 		return aux;
 	}
-	if (!FileAccess::exists(p_path)) {
+	// ResourceLoader::exists also recognizes a cached scene subresource path ("scene.tscn::id").
+	// Workspace phase 2 runs after scenes are restored, so embedded resource tabs resolve here.
+	if (!ResourceLoader::exists(p_path)) {
 		return nullptr;
 	}
 	Ref<Resource> res = ResourceLoader::load(p_path);
 	if (res.is_null()) {
 		return nullptr;
 	}
-	// G-Shader: shaders open as their own tab kind; everything else text-like is a script document.
+	// Specialized text/shader resources keep their existing view factories. Everything else uses a
+	// generic Inspector-backed resource document.
 	if (Object::cast_to<Shader>(res.ptr()) || Object::cast_to<ShaderInclude>(res.ptr())) {
 		return get_or_create_shader_document(res);
 	}
-	return get_or_create_script_document(res);
+	if (res->is_class("Script") || res->is_class("TextFile")) {
+		return get_or_create_script_document(res);
+	}
+	return get_or_create_resource_document(res);
 }
 
 void EditorData::close_aux_document(EditorDocument *p_document) {

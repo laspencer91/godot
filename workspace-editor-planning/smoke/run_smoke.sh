@@ -17,6 +17,7 @@
 #
 # Usage:
 #   run_smoke.sh [path-to-godot-editor-binary]
+#   SMOKE_HEADLESS=1 run_smoke.sh [path-to-godot-editor-binary]
 # Binary resolution order: $1  ->  $GODOT_BIN  ->  repo bin/godot.*console.exe
 #
 # Exit status: 0 = all cases pass; non-zero = at least one case failed.
@@ -64,6 +65,11 @@ host_path() {
 # tightens uniformly.
 ERR_RE='ERROR|WARNING|material.*null|leaked|Camera is not|Condition.*is true|Parameter .* is null'
 
+RUN_ARGS=()
+if [[ "${SMOKE_HEADLESS:-0}" == "1" ]]; then
+	RUN_ARGS+=(--headless)
+fi
+
 QUIT_AFTER="${QUIT_AFTER:-200}"
 if [[ "$BIN" == *.exe && -n "${WSL_DISTRO_NAME:-}" ]]; then
 	# Windows editor binaries cannot open WSL-private /tmp paths. Keep the throwaway
@@ -81,13 +87,16 @@ HOST_WORK="$(host_path "$WORK")"
 cp "$SMOKE_DIR"/*.tscn "$SMOKE_DIR/project.godot" "$WORK"/
 # G-Shader: the shader fixture (+ its .uid) for the shader-tab restore case below.
 cp "$SMOKE_DIR"/*.gdshader "$SMOKE_DIR"/*.gdshader.uid "$WORK"/ 2>/dev/null || true
+# Generic resource-tab fixtures, including the editor plugin that invokes the public API.
+cp "$SMOKE_DIR"/*.tres "$WORK"/ 2>/dev/null || true
+cp -R "$SMOKE_DIR/addons" "$WORK"/ 2>/dev/null || true
 
 fail=0
 
 run_case() {
 	local name="$1"; shift
 	local log="$WORK/$name.log"
-	"$BIN" --path "$HOST_WORK" "$@" --quit-after "$QUIT_AFTER" >"$log" 2>&1
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_WORK" "$@" --quit-after "$QUIT_AFTER" >"$log" 2>&1
 	local code=$?
 	local errs
 	errs=$(grep -cE "$ERR_RE" "$log")
@@ -104,6 +113,7 @@ echo "Workspace-editor smoke test"
 echo "  binary : $BIN"
 echo "  project: $WORK (copy of $SMOKE_DIR)"
 echo "  frames : $QUIT_AFTER per case"
+echo "  display: $([[ ${#RUN_ARGS[@]} -gt 0 ]] && echo headless || echo default)"
 echo
 
 run_case "open_3d" -e "res://test_3d.tscn"
@@ -129,6 +139,44 @@ run_case "restore_workspace" -e
 cp "$SMOKE_DIR/restore_shader.cfg" "$WORK/.godot/editor/editor_layout.cfg"
 run_case "restore_shader" -e
 
+# Generic embedded resource tab: the owning scene loads first, then its cached BoxMesh subresource
+# resolves to a ResourceDocument whose full-pane Inspector retains the scene as its undo context.
+cp "$SMOKE_DIR/restore_resource.cfg" "$WORK/.godot/editor/editor_layout.cfg"
+run_case "restore_resource" -e
+
+# Exact public route used by Terrain3D's pencil button. The temporary project enables a tiny editor
+# plugin which calls EditorInterface.edit_resource(test_resource.tres) after startup. Besides a clean
+# run, require the saved workspace to name that resource as the current tab; this proves the call did
+# not fall back to the retired global Inspector or merely load the Resource without revealing it.
+cp "$SMOKE_DIR/api_project.godot" "$WORK/project.godot"
+run_case "edit_resource_api" -e
+if grep -q '"cur".*res://test_resource.tres' "$WORK/.godot/editor/editor_layout.cfg"; then
+	echo "  PASS  edit_resource_api_layout (resource persisted as current workspace tab)"
+else
+	echo "  FAIL  edit_resource_api_layout (resource was not the saved current workspace tab)"
+	fail=1
+fi
+
+# Cross-document + drawer routing: retain a gizmo for a background document while another scene owns
+# global focus, then exercise the Inspector's Show-in-FileSystem route and the Alt+F keyboard toggle.
+# The plugin asserts the target selection and search-focus distinction; the shared error matcher catches
+# the old is_editable_instance/focus_dock failures directly.
+cp "$SMOKE_DIR/context_routes_project.godot" "$WORK/project.godot"
+cp "$SMOKE_DIR/restore_workspace.cfg" "$WORK/.godot/editor/editor_layout.cfg"
+run_case "context_routes" -e
+
+# Pane SceneTree selection timing: a click must commit its node to the paired Inspector on release,
+# while the same press becoming a drag must preserve the previously inspected object as the property
+# drop target. The marker makes sure the synthetic GUI sequence ran to completion.
+cp "$SMOKE_DIR/scene_tree_drag_project.godot" "$WORK/project.godot"
+run_case "scene_tree_drag" -e "res://test_3d.tscn"
+if grep -q 'SCENE_TREE_DRAG_SELECTION_OK' "$WORK/scene_tree_drag.log"; then
+	echo "  PASS  scene_tree_drag_assertions (press/release/drag states verified)"
+else
+	echo "  FAIL  scene_tree_drag_assertions (GUI sequence did not reach its success marker)"
+	fail=1
+fi
+
 # Save-capture round-trip (M6.2): the restore_workspace fixture hand-authors the tab paths, so it
 # never exercises the SAVE side. This case does: restore open scenes (the active one is revealed into
 # a pane by M7.1), quit (which must WRITE that scene into the workspace tabs), then restore again. It
@@ -140,10 +188,10 @@ mkdir -p "$RT/.godot/editor"
 cp "$SMOKE_DIR"/*.tscn "$SMOKE_DIR/project.godot" "$RT"/
 printf '[EditorNode]\n\nopen_scenes=PackedStringArray("res://test_3d.tscn")\ncurrent_scene="res://test_3d.tscn"\n' > "$RT/.godot/editor/editor_layout.cfg"
 HOST_RT="$(host_path "$RT")"
-"$BIN" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/save.log" 2>&1
+"$BIN" "${RUN_ARGS[@]}" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/save.log" 2>&1
 # The scene must appear in a pane's "docs" list (not just open_scenes) after the save.
 if grep -q '"docs".*res://test_3d.tscn' "$RT/.godot/editor/editor_layout.cfg"; then
-	"$BIN" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/restore.log" 2>&1
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/restore.log" 2>&1
 	rt_code=$?
 	rt_errs=$(grep -cE "$ERR_RE" "$RT/restore.log")
 	if [[ $rt_code -eq 0 && $rt_errs -eq 0 ]]; then

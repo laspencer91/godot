@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  editor_object_selector.h                                              */
+/*  resource_inspector_dock.h                                             */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including    */
+/* "Software"), to deal in the Software without restriction, including  */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,40 +30,50 @@
 
 #pragma once
 
-#include "scene/gui/button.h"
-#include "scene/gui/label.h"
-#include "scene/gui/popup_menu.h"
-#include "scene/gui/texture_rect.h"
+#include "core/io/resource.h"
+#include "editor/docks/editor_dock.h"
 
-class EditorSelectionHistory;
+class Button;
+class EditorInspector;
+class Label;
+class LineEdit;
+class VBoxContainer;
 
-class EditorObjectSelector : public Button {
-	GDCLASS(EditorObjectSelector, Button);
+// File-backed resource detail view for the workspace FileSystem drawer. This is
+// deliberately separate from InspectorDock: scene inspectors are pane/document
+// bound, while a selected .tres/.res is a project asset with global resource undo.
+class ResourceInspectorDock : public EditorDock {
+	GDCLASS(ResourceInspectorDock, EditorDock);
 
-	EditorSelectionHistory *history = nullptr;
+	static ResourceInspectorDock *singleton;
 
-	TextureRect *current_object_icon = nullptr;
-	Label *current_object_label = nullptr;
-	TextureRect *sub_objects_icon = nullptr;
-	PopupMenu *sub_objects_menu = nullptr;
+	Ref<Resource> edited_resource;
+	String edited_path;
+	bool dirty = false;
 
-	Vector<ObjectID> objects;
+	VBoxContainer *content = nullptr;
+	Label *resource_name = nullptr;
+	Button *save_button = nullptr;
+	LineEdit *filter = nullptr;
+	EditorInspector *inspector = nullptr;
+	Label *select_a_resource = nullptr;
 
-	void _show_popup();
-	void _id_pressed(int p_idx);
-	void _about_to_show();
-	void _add_children_to_popup(Object *p_obj, int p_depth = 0);
+	void _set_dirty(bool p_dirty);
+	void _save_pressed();
+	void _property_edited(const StringName &p_property);
+	void _property_deleted(const StringName &p_property);
+	void _update_theme();
 
 protected:
+	static void _bind_methods();
 	void _notification(int p_what);
 
 public:
-	virtual Size2 get_minimum_size() const override;
+	static ResourceInspectorDock *get_singleton() { return singleton; }
 
-	void update_path();
-	void clear_path();
-	void enable_path();
-	void set_history(EditorSelectionHistory *p_history) { history = p_history; }
+	void set_edit_path(const String &p_path);
+	void clear();
 
-	EditorObjectSelector(EditorSelectionHistory *p_history);
+	ResourceInspectorDock();
+	~ResourceInspectorDock();
 };

@@ -3136,6 +3136,31 @@ Error GLTFDocument::_parse_materials(Ref<GLTFState> p_state) {
 			}
 		}
 
+		if (material_extensions.has("KHR_materials_specular")) {
+			// glTF's KHR_materials_specular scales the dielectric specular reflection.
+			// Godot has no specular color channel, so the color factor is folded in as
+			// luminance. Godot's `specular` maps to reflectance via F0 = 0.16 * specular^2,
+			// and the glTF factor scales the reference dielectric F0 (0.04). Solving
+			// 0.16 * specular^2 = 0.04 * factor gives specular = 0.5 * sqrt(factor), so a
+			// factor of 1.0 reproduces Godot's default 0.5 and a factor of 0.0 disables it.
+			const Dictionary &specular_ext = material_extensions["KHR_materials_specular"];
+			double specular_factor = 1.0;
+			if (specular_ext.has("specularFactor")) {
+				specular_factor = specular_ext["specularFactor"];
+			}
+			double specular_color_scale = 1.0;
+			if (specular_ext.has("specularColorFactor")) {
+				const Array &arr = specular_ext["specularColorFactor"];
+				ERR_FAIL_COND_V(arr.size() != 3, ERR_PARSE_ERROR);
+				specular_color_scale = Color(arr[0], arr[1], arr[2]).get_luminance();
+			}
+			const double f0_scale = CLAMP(specular_factor * specular_color_scale, 0.0, 1.0);
+			material->set_specular(0.5 * Math::sqrt(f0_scale));
+			if (specular_ext.has("specularTexture") || specular_ext.has("specularColorTexture")) {
+				WARN_PRINT("glTF: KHR_materials_specular specular/specularColor textures are not supported by Godot's StandardMaterial3D; only the scalar factors were imported.");
+			}
+		}
+
 		if (material_dict.has("normalTexture")) {
 			const Dictionary &normal_tex_dict = material_dict["normalTexture"];
 			if (normal_tex_dict.has("index")) {
@@ -7010,6 +7035,7 @@ HashSet<String> GLTFDocument::get_supported_gltf_extensions_hashset() {
 	supported_extensions.insert("KHR_lights_punctual");
 	supported_extensions.insert("KHR_materials_emissive_strength");
 	supported_extensions.insert("KHR_materials_pbrSpecularGlossiness");
+	supported_extensions.insert("KHR_materials_specular");
 	supported_extensions.insert("KHR_materials_unlit");
 	supported_extensions.insert("KHR_node_visibility");
 	supported_extensions.insert("KHR_texture_transform");

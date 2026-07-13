@@ -64,8 +64,13 @@
 #include "scene/3d/physics/collision_object_3d.h"
 #include "scene/3d/physics/collision_shape_3d.h"
 #include "scene/3d/sprite_3d.h"
+#include "scene/gui/aspect_ratio_container.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/button.h"
 #include "scene/gui/color_picker.h"
+#include "scene/gui/label.h"
+#include "scene/gui/option_button.h"
+#include "scene/gui/panel_container.h"
 #include "scene/gui/rich_text_label.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/subviewport_container.h"
@@ -509,6 +514,238 @@ void ViewportRotationControl::_update_focus() {
 
 void ViewportRotationControl::set_viewport(Node3DEditorViewport *p_viewport) {
 	viewport = p_viewport;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// FloatingCameraPreview: draggable picture-in-picture of a scene camera.
+//////////////////////////////////////////////////////////////////////////////
+
+void FloatingCameraPreview::_collect_cameras(Node *p_node, Vector<Camera3D *> &r_cameras) const {
+	if (!p_node) {
+		return;
+	}
+	Camera3D *cam = Object::cast_to<Camera3D>(p_node);
+	if (cam) {
+		r_cameras.push_back(cam);
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		_collect_cameras(p_node->get_child(i), r_cameras);
+	}
+}
+
+Camera3D *FloatingCameraPreview::_pick_default_camera(const Vector<Camera3D *> &p_cameras) const {
+	// Prefer whichever camera is flagged "current" (what the running scene would use).
+	for (Camera3D *cam : p_cameras) {
+		if (cam->is_current()) {
+			return cam;
+		}
+	}
+	return p_cameras.is_empty() ? nullptr : p_cameras[0];
+}
+
+void FloatingCameraPreview::_refresh_camera_list() {
+	Vector<Camera3D *> cameras;
+	Node *scene_root = SceneTreeDock::get_singleton()->get_editor_data()->get_edited_scene_root();
+	_collect_cameras(scene_root, cameras);
+
+	camera_picker->clear();
+	listed_cameras.clear();
+
+	if (cameras.is_empty()) {
+		camera_picker->add_item(TTR("No Cameras in Scene"));
+		camera_picker->set_item_disabled(0, true);
+		_attach_camera(nullptr);
+		return;
+	}
+
+	Camera3D *current_preview = Object::cast_to<Camera3D>(ObjectDB::get_instance(previewing_id));
+	int select_index = -1;
+	for (int i = 0; i < cameras.size(); i++) {
+		Camera3D *cam = cameras[i];
+		camera_picker->add_item(cam->get_name());
+		listed_cameras.push_back(cam->get_instance_id());
+		if (cam == current_preview) {
+			select_index = i;
+		}
+	}
+
+	Camera3D *target = nullptr;
+	if (select_index >= 0) {
+		// Keep previewing the same camera across refreshes.
+		camera_picker->select(select_index);
+		target = current_preview;
+	} else {
+		target = _pick_default_camera(cameras);
+		int idx = cameras.find(target);
+		camera_picker->select(idx < 0 ? 0 : idx);
+	}
+	_attach_camera(target);
+}
+
+void FloatingCameraPreview::_camera_picker_selected(int p_index) {
+	if (p_index < 0 || p_index >= listed_cameras.size()) {
+		return;
+	}
+	Camera3D *cam = Object::cast_to<Camera3D>(ObjectDB::get_instance(listed_cameras[p_index]));
+	_attach_camera(cam);
+}
+
+void FloatingCameraPreview::_attach_camera(Camera3D *p_camera) {
+	Camera3D *prev = Object::cast_to<Camera3D>(ObjectDB::get_instance(previewing_id));
+	const Callable exit_cb = callable_mp(this, &FloatingCameraPreview::_previewing_camera_exiting);
+	if (prev && prev != p_camera && prev->is_connected(SceneStringName(tree_exiting), exit_cb)) {
+		prev->disconnect(SceneStringName(tree_exiting), exit_cb);
+	}
+
+	if (!p_camera) {
+		previewing_id = ObjectID();
+		RS::get_singleton()->viewport_attach_camera(sub_viewport->get_viewport_rid(), RID());
+		return;
+	}
+
+	previewing_id = p_camera->get_instance_id();
+	if (!p_camera->is_connected(SceneStringName(tree_exiting), exit_cb)) {
+		p_camera->connect(SceneStringName(tree_exiting), exit_cb);
+	}
+	// viewport_attach_camera only sets the projection; the SubViewport's own world
+	// (bound in set_preview_world) supplies the scenario that is actually rendered.
+	RS::get_singleton()->viewport_attach_camera(sub_viewport->get_viewport_rid(), p_camera->get_camera());
+	_update_aspect(p_camera);
+}
+
+void FloatingCameraPreview::_previewing_camera_exiting() {
+	// The previewed camera left the tree (deleted or reparented); re-pick a default.
+	previewing_id = ObjectID();
+	callable_mp(this, &FloatingCameraPreview::_refresh_camera_list).call_deferred();
+}
+
+void FloatingCameraPreview::_update_aspect(Camera3D *p_camera) {
+	if (!p_camera) {
+		return;
+	}
+	const Size2i vp_size = Node3DEditor::get_camera_viewport_size(p_camera);
+	if (vp_size.x > 0 && vp_size.y > 0) {
+		aspect_container->set_ratio(vp_size.aspect());
+	}
+}
+
+void FloatingCameraPreview::_header_gui_input(const Ref<InputEvent> &p_event) {
+	Ref<InputEventMouseButton> mb = p_event;
+	if (mb.is_valid() && mb->get_button_index() == MouseButton::LEFT) {
+		dragging = mb->is_pressed();
+		accept_event();
+		return;
+	}
+	Ref<InputEventMouseMotion> mm = p_event;
+	if (mm.is_valid() && dragging) {
+		Vector2 new_pos = get_position() + mm->get_relative();
+		Control *parent = Object::cast_to<Control>(get_parent());
+		if (parent) {
+			const Vector2 max_pos = parent->get_size() - get_size();
+			new_pos.x = CLAMP(new_pos.x, 0.0, MAX(0.0, max_pos.x));
+			new_pos.y = CLAMP(new_pos.y, 0.0, MAX(0.0, max_pos.y));
+		}
+		set_position(new_pos);
+		accept_event();
+	}
+}
+
+void FloatingCameraPreview::_close_pressed() {
+	if (closed_callback.is_valid()) {
+		closed_callback.call();
+	}
+}
+
+void FloatingCameraPreview::_place_default_position() {
+	Control *parent = Object::cast_to<Control>(get_parent());
+	if (!parent) {
+		return;
+	}
+	// Bottom-right by default; the viewport rotation gizmo owns the top-right.
+	reset_size(); // Collapse to the content's minimum size so the corner math is correct.
+	const Size2 parent_size = parent->get_size();
+	const Size2 my_size = get_size();
+	const float margin = 8.0 * EDSCALE;
+	Vector2 pos;
+	pos.x = MAX(margin, parent_size.x - my_size.x - margin);
+	pos.y = MAX(margin, parent_size.y - my_size.y - margin);
+	set_position(pos);
+}
+
+void FloatingCameraPreview::set_preview_world(const Ref<World3D> &p_world) {
+	preview_world = p_world;
+	if (sub_viewport) {
+		sub_viewport->set_world_3d(p_world);
+	}
+}
+
+void FloatingCameraPreview::refresh() {
+	_refresh_camera_list();
+}
+
+void FloatingCameraPreview::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_ENTER_TREE:
+		case NOTIFICATION_THEME_CHANGED: {
+			if (close_button) {
+				close_button->set_button_icon(get_theme_icon(SNAME("Close"), EditorStringName(EditorIcons)));
+			}
+		} break;
+		case NOTIFICATION_VISIBILITY_CHANGED: {
+			if (is_visible_in_tree() && !position_initialized) {
+				position_initialized = true;
+				callable_mp(this, &FloatingCameraPreview::_place_default_position).call_deferred();
+			}
+		} break;
+	}
+}
+
+FloatingCameraPreview::FloatingCameraPreview() {
+	set_mouse_filter(MOUSE_FILTER_STOP); // Don't let clicks fall through to the 3D surface.
+	set_clip_contents(true);
+	set_custom_minimum_size(Size2(280, 0) * EDSCALE);
+
+	VBoxContainer *vb = memnew(VBoxContainer);
+	add_child(vb);
+
+	header = memnew(HBoxContainer);
+	header->set_mouse_filter(MOUSE_FILTER_STOP);
+	header->connect(SceneStringName(gui_input), callable_mp(this, &FloatingCameraPreview::_header_gui_input));
+	vb->add_child(header);
+
+	Label *title = memnew(Label);
+	title->set_text(TTRC("Camera Preview"));
+	title->set_h_size_flags(SIZE_EXPAND_FILL);
+	title->set_mouse_filter(MOUSE_FILTER_IGNORE); // Clicks pass to the header so the whole title bar drags.
+	title->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+	header->add_child(title);
+
+	camera_picker = memnew(OptionButton);
+	camera_picker->set_flat(true);
+	camera_picker->set_fit_to_longest_item(false);
+	camera_picker->connect(SceneStringName(item_selected), callable_mp(this, &FloatingCameraPreview::_camera_picker_selected));
+	header->add_child(camera_picker);
+
+	close_button = memnew(Button);
+	close_button->set_flat(true);
+	close_button->set_tooltip_text(TTRC("Close Camera Preview"));
+	close_button->connect(SceneStringName(pressed), callable_mp(this, &FloatingCameraPreview::_close_pressed));
+	header->add_child(close_button);
+
+	aspect_container = memnew(AspectRatioContainer);
+	aspect_container->set_ratio(16.0 / 9.0);
+	aspect_container->set_custom_minimum_size(Size2(0, 158) * EDSCALE);
+	vb->add_child(aspect_container);
+
+	SubViewportContainer *svc = memnew(SubViewportContainer);
+	svc->set_stretch(true);
+	svc->set_texture_filter(TEXTURE_FILTER_NEAREST_WITH_MIPMAPS);
+	aspect_container->add_child(svc);
+
+	sub_viewport = memnew(SubViewport);
+	svc->add_child(sub_viewport);
+
+	EditorNode::get_singleton()->register_hdr_viewport(sub_viewport);
 }
 
 void Node3DEditorViewport::_view_settings_confirmed(real_t p_interp_delta) {
@@ -4603,6 +4840,13 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 				}
 			}
 		} break;
+		case VIEW_FLOATING_CAMERA_PREVIEW: {
+			int idx = view_display_menu->get_popup()->get_item_index(VIEW_FLOATING_CAMERA_PREVIEW);
+			bool current = view_display_menu->get_popup()->is_item_checked(idx);
+			current = !current;
+			view_display_menu->get_popup()->set_item_checked(idx, current);
+			_toggle_floating_camera_preview(current);
+		} break;
 		case VIEW_GIZMOS: {
 			int idx = view_display_menu->get_popup()->get_item_index(VIEW_GIZMOS);
 			bool current = view_display_menu->get_popup()->is_item_checked(idx);
@@ -5038,6 +5282,32 @@ void Node3DEditorViewport::_toggle_cinema_preview(bool p_activate) {
 		}
 		view_display_menu->show();
 		surface->queue_redraw();
+	}
+}
+
+void Node3DEditorViewport::_toggle_floating_camera_preview(bool p_activate) {
+	if (p_activate) {
+		if (!floating_camera_preview) {
+			floating_camera_preview = memnew(FloatingCameraPreview);
+			floating_camera_preview->closed_callback = callable_mp(this, &Node3DEditorViewport::_floating_camera_preview_closed);
+			surface->add_child(floating_camera_preview);
+		}
+		// Render into this viewport's (i.e. this document's) world, then pick a camera.
+		floating_camera_preview->set_preview_world(viewport->find_world_3d());
+		floating_camera_preview->show();
+		floating_camera_preview->refresh();
+	} else if (floating_camera_preview) {
+		floating_camera_preview->hide();
+	}
+}
+
+void Node3DEditorViewport::_floating_camera_preview_closed() {
+	const int idx = view_display_menu->get_popup()->get_item_index(VIEW_FLOATING_CAMERA_PREVIEW);
+	if (idx != -1) {
+		view_display_menu->get_popup()->set_item_checked(idx, false);
+	}
+	if (floating_camera_preview) {
+		floating_camera_preview->hide();
 	}
 }
 
@@ -6968,6 +7238,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 
 	view_display_menu->get_popup()->add_separator();
 	view_display_menu->get_popup()->add_check_shortcut(ED_SHORTCUT("spatial_editor/view_cinematic_preview", TTRC("Cinematic Preview")), VIEW_CINEMATIC_PREVIEW);
+	view_display_menu->get_popup()->add_check_item(TTRC("Floating Camera Preview"), VIEW_FLOATING_CAMERA_PREVIEW);
 
 	view_display_menu->get_popup()->add_separator();
 	view_display_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("spatial_editor/focus_origin"), VIEW_CENTER_TO_ORIGIN);

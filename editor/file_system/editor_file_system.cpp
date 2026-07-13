@@ -3544,8 +3544,9 @@ void EditorFileSystem::reimport_files(const Vector<String> &p_files) {
 	OS::get_singleton()->set_low_processor_usage_mode(old_low_processor_usage_mode);
 	DisplayServer::get_singleton()->window_set_vsync_mode(old_vsync_mode);
 
-	importing = false;
-
+	// Keep the import guard active through the forced post-import redraw and notifications. The redraw
+	// runs an editor iteration, where texture usage auto-detection may otherwise observe an idle file
+	// system and recursively start another "reimport" progress task before this one has ended.
 	ep = memnew(EditorProgress("reimport", TTR("(Re)Importing Assets"), p_files.size()));
 	ep->step(TTR("Executing post-reimport operations..."), 0, true);
 	if (!is_scanning()) {
@@ -3553,6 +3554,8 @@ void EditorFileSystem::reimport_files(const Vector<String> &p_files) {
 	}
 	emit_signal(SNAME("resources_reimported"), reloads);
 	memdelete_notnull(ep);
+
+	importing = false;
 }
 
 Error EditorFileSystem::reimport_append(const String &p_file, const HashMap<StringName, Variant> &p_custom_options, const String &p_custom_importer, Variant p_generator_parameters) {

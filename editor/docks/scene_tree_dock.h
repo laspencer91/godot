@@ -40,6 +40,7 @@ class EditorData;
 class EditorDocument;
 class EditorSelection;
 class EditorSelectionHistory;
+class InspectorDock;
 class MenuButton;
 class PanelContainer;
 class RenameDialog;
@@ -148,8 +149,12 @@ class SceneTreeDock : public EditorDock {
 	// root / selection / history from that document instead of the active-scene globals. Null on the
 	// global dock => resolvers return exactly today's globals, so the change is inert until D7a.
 	EditorDocument *bound_document = nullptr;
+	// The Inspector paired with this embedded SceneTree. Null on the global dock, which preserves the
+	// existing active/global Inspector routing.
+	InspectorDock *bound_inspector = nullptr;
 	Node *_doc_scene_root() const;
 	EditorSelectionHistory *_doc_history() const;
+	InspectorDock *_doc_inspector() const;
 	LocalVector<ObjectID> node_previous_selection;
 	bool update_script_button_queued = false;
 
@@ -190,7 +195,14 @@ class SceneTreeDock : public EditorDock {
 	void _post_do_create(Node *p_child);
 	Node *scene_root = nullptr;
 	Node *edited_scene = nullptr;
-	Node *pending_click_select = nullptr;
+	enum PendingInspectorCommit {
+		PENDING_INSPECTOR_NONE,
+		PENDING_INSPECTOR_NODE,
+		PENDING_INSPECTOR_MULTI,
+		PENDING_INSPECTOR_CLEAR,
+	};
+	PendingInspectorCommit pending_inspector_commit = PENDING_INSPECTOR_NONE;
+	ObjectID pending_click_select;
 	bool tree_clicked = false;
 
 	VBoxContainer *create_root_dialog = nullptr;
@@ -219,6 +231,9 @@ class SceneTreeDock : public EditorDock {
 	void _script_open_request(const Ref<Script> &p_script);
 	void _push_item(Object *p_object);
 	void _handle_select(Node *p_node);
+	bool _routes_selection_to_inspector() const;
+	void _clear_pending_inspector_commit();
+	void _commit_pending_inspector_commit();
 
 	bool _cyclical_dependency_exists(const String &p_target_scene_path, Node *p_desired_node);
 	bool _track_inherit(const String &p_target_scene_path, Node *p_desired_node);
@@ -379,6 +394,7 @@ public:
 	// G2 D4: bind this dock instance to a specific document (D7a). Repoints the selection at the
 	// document's own EditorSelection; scene root / history follow via the resolvers.
 	void set_bound_document(EditorDocument *p_document);
+	void set_bound_inspector(InspectorDock *p_inspector) { bound_inspector = p_inspector; }
 
 	// G2 D5: p_is_global==false constructs a bound instance (D7a per-pane composite) that does NOT
 	// claim the `singleton` — the ~80 SceneTreeDock::get_singleton() callers keep resolving to the

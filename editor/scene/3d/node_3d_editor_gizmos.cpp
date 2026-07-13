@@ -46,19 +46,41 @@
 
 bool EditorNode3DGizmo::is_editable() const {
 	ERR_FAIL_NULL_V(spatial_node, false);
-	Node *edited_root = spatial_node->get_tree()->get_edited_scene_root();
+
+	// Every open scene remains live in its own document world. A gizmo can therefore redraw for a
+	// background pane while SceneTree::edited_scene_root points at the focused document. Resolve the
+	// root which actually owns this node instead of asking one scene about another scene's node.
+	Node *edited_root = nullptr;
+	SceneTree *scene_tree = spatial_node->get_tree();
+	Node *active_root = scene_tree ? scene_tree->get_edited_scene_root() : nullptr;
+	if (active_root && (active_root == spatial_node || active_root->is_ancestor_of(spatial_node))) {
+		edited_root = active_root; // Fast path for the overwhelmingly common focused-document case.
+	}
+	EditorData &editor_data = EditorNode::get_editor_data();
+	if (!edited_root) {
+		for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
+			Node *candidate = editor_data.get_edited_scene_root(i);
+			if (candidate && candidate != active_root && (candidate == spatial_node || candidate->is_ancestor_of(spatial_node))) {
+				edited_root = candidate;
+				break;
+			}
+		}
+	}
+	if (!edited_root) {
+		return false;
+	}
 	if (spatial_node == edited_root) {
 		return true;
 	}
-	if (spatial_node->get_owner() == edited_root) {
+
+	Node *node_owner = spatial_node->get_owner();
+	if (node_owner == edited_root) {
 		return true;
 	}
-
-	if (edited_root->is_editable_instance(spatial_node->get_owner())) {
-		return true;
+	if (!node_owner || !edited_root->is_ancestor_of(node_owner)) {
+		return false;
 	}
-
-	return false;
+	return edited_root->is_editable_instance(node_owner);
 }
 
 void EditorNode3DGizmo::clear() {

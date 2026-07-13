@@ -1652,6 +1652,22 @@ Node *ResourceImporterScene::_post_fix_node(Node *p_node, Node *p_root, HashMap<
 					for (int j = 0; j < post_importer_plugins.size(); j++) {
 						post_importer_plugins.write[j]->internal_process(EditorScenePostImportPlugin::INTERNAL_IMPORT_CATEGORY_MATERIAL, p_root, p_node, mat, matdata);
 					}
+					// Apply non-destructive per-material overrides before any extraction, so both
+					// the in-scene material and an extracted copy pick them up. Runs on every
+					// reimport because the settings live in the material's _subresources entry.
+					if (BaseMaterial3D *bm = Object::cast_to<BaseMaterial3D>(mat.ptr())) {
+						const int filter_override = matdata.has("override/texture_filter") ? int(matdata["override/texture_filter"]) : 0;
+						if (filter_override > 0) {
+							bm->set_texture_filter(BaseMaterial3D::TextureFilter(filter_override - 1));
+						}
+						const int repeat_override = matdata.has("override/texture_repeat") ? int(matdata["override/texture_repeat"]) : 0;
+						if (repeat_override > 0) {
+							bm->set_flag(BaseMaterial3D::FLAG_USE_TEXTURE_REPEAT, repeat_override == 1);
+						}
+						if (matdata.has("override/specular_enabled") && bool(matdata["override/specular_enabled"])) {
+							bm->set_specular(matdata.has("override/specular") ? float(matdata["override/specular"]) : 0.5f);
+						}
+					}
 					if (extract_mat != 0) {
 						// If no file path was specified, generate one based on the material name and the selected format.
 						if (file_path.is_empty()) {
@@ -2317,6 +2333,13 @@ void ResourceImporterScene::get_internal_import_options(InternalImportCategory p
 			r_options->push_back(ImportOption(PropertyInfo(Variant::BOOL, "use_external/enabled", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_UPDATE_ALL_IF_MODIFIED), false));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::STRING, "use_external/path", PROPERTY_HINT_FILE, "*.material,*.res,*.tres"), ""));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::STRING, "use_external/fallback_path", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NO_EDITOR), ""));
+			// Non-destructive per-material overrides. These apply during import (regeneration),
+			// so they persist across reimport without requiring the material to be extracted.
+			// "Keep" leaves whatever the source file / importer produced untouched.
+			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "override/texture_filter", PROPERTY_HINT_ENUM, "Keep,Nearest,Linear,Nearest Mipmap,Linear Mipmap,Nearest Mipmap Anisotropic,Linear Mipmap Anisotropic"), 0));
+			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "override/texture_repeat", PROPERTY_HINT_ENUM, "Keep,Enabled,Disabled"), 0));
+			r_options->push_back(ImportOption(PropertyInfo(Variant::BOOL, "override/specular_enabled", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_UPDATE_ALL_IF_MODIFIED), false));
+			r_options->push_back(ImportOption(PropertyInfo(Variant::FLOAT, "override/specular", PROPERTY_HINT_RANGE, "0,1,0.01"), 0.5));
 		} break;
 		case INTERNAL_IMPORT_CATEGORY_ANIMATION: {
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "settings/loop_mode", PROPERTY_HINT_ENUM, "None,Linear,Pingpong"), 0));
@@ -2472,6 +2495,9 @@ bool ResourceImporterScene::get_internal_option_visibility(InternalImportCategor
 		case INTERNAL_IMPORT_CATEGORY_MATERIAL: {
 			if (p_option == "use_external/path") {
 				return p_options["use_external/enabled"];
+			}
+			if (p_option == "override/specular") {
+				return p_options.has("override/specular_enabled") && bool(p_options["override/specular_enabled"]);
 			}
 		} break;
 		case INTERNAL_IMPORT_CATEGORY_ANIMATION: {

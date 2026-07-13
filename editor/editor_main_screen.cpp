@@ -437,6 +437,8 @@ void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kin
 			if (p_grab_focus) {
 				host->focus_document(p_document);
 				workspace->set_focused_pane(target);
+				host->activate_current_document();
+				host->set_context_active(true);
 			} else {
 				host->ensure_document(p_document); // G2 S6a: background open — tab + hidden view, no focus change.
 			}

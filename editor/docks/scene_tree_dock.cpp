@@ -78,8 +78,9 @@
 #include "servers/display/display_server.h"
 
 void SceneTreeDock::_nodes_drag_begin() {
-	pending_click_select = nullptr;
-	edited_object_at_drag_start = InspectorDock::get_inspector_singleton()->get_edited_object();
+	_clear_pending_inspector_commit();
+	InspectorDock *inspector_dock = _doc_inspector();
+	edited_object_at_drag_start = inspector_dock ? inspector_dock->get_inspector()->get_edited_object() : nullptr;
 	scene_tree_drag_active = true;
 }
 
@@ -117,10 +118,17 @@ void SceneTreeDock::_inspect_hovered_node() {
 
 	EditorSelectionHistory *editor_history = _doc_history();
 	editor_history->add_object(node_hovered_now->get_instance_id());
-	InspectorDock::get_inspector_singleton()->edit(node_hovered_now);
-	InspectorDock::get_inspector_singleton()->propagate_notification(NOTIFICATION_DRAG_BEGIN); // Enable inspector drag preview after it updated.
-	InspectorDock::get_singleton()->update(node_hovered_now);
-	EditorNode::get_singleton()->hide_unused_editors();
+	InspectorDock *inspector_dock = _doc_inspector();
+	ERR_FAIL_NULL(inspector_dock);
+	inspector_dock->get_inspector()->edit(node_hovered_now);
+	inspector_dock->get_inspector()->propagate_notification(NOTIFICATION_DRAG_BEGIN); // Enable inspector drag preview after it updated.
+	inspector_dock->update(node_hovered_now);
+	if (bound_inspector) {
+		EditorNode::get_singleton()->hide_unused_editors(inspector_dock);
+	} else {
+		// Preserve the legacy global dock's sweep behavior.
+		EditorNode::get_singleton()->hide_unused_editors();
+	}
 }
 
 void SceneTreeDock::_handle_hover_to_inspect() {
@@ -159,9 +167,8 @@ void SceneTreeDock::input(const Ref<InputEvent> &p_event) {
 			tree_clicked = false;
 		}
 
-		if (!mb->is_pressed() && pending_click_select) {
-			_push_item(pending_click_select);
-			pending_click_select = nullptr;
+		if (!mb->is_pressed()) {
+			_commit_pending_inspector_commit();
 		}
 	}
 
@@ -183,6 +190,18 @@ void SceneTreeDock::shortcut_input(const Ref<InputEvent> &p_event) {
 	Control *focus_owner = get_viewport()->gui_get_focus_owner();
 	if (focus_owner && focus_owner->is_text_field()) {
 		return;
+	}
+
+	// SceneTreeDock registers its node shortcuts with no shortcut context, so SceneTree runs them as
+	// a global fallback that fires regardless of which dock is focused. The FileSystem dock consumes
+	// its own keys in gui_input, but not Ctrl+C/X/V (it has no file copy/paste) — so those would
+	// otherwise reach here and copy/cut/paste scene nodes while the user is working in the file
+	// explorer. Bail when the focus owner lives inside the FileSystem dock so its keys stay its own.
+	if (focus_owner) {
+		FileSystemDock *fs_dock = FileSystemDock::get_singleton();
+		if (fs_dock && (focus_owner == fs_dock || fs_dock->is_ancestor_of(focus_owner))) {
+			return;
+		}
 	}
 
 	if (!p_event->is_pressed()) {
@@ -1845,24 +1864,25 @@ void SceneTreeDock::_notification(int p_what) {
 			}
 			scene_tree_drag_active = false;
 
-			InspectorDock *inspector_dock = InspectorDock::get_singleton();
+			InspectorDock *inspector_dock = _doc_inspector();
+			ERR_FAIL_NULL(inspector_dock);
 			if (!inspector_dock->get_rect().has_point(inspector_dock->get_local_mouse_position())) {
-				Node *node_edited = Object::cast_to<Node>(InspectorDock::get_inspector_singleton()->get_edited_object());
+				Node *node_edited = Object::cast_to<Node>(inspector_dock->get_inspector()->get_edited_object());
 				if (editor_selection->get_full_selected_node_list().size() == 1 && !editor_selection->is_selected(node_edited)) {
 					Node *node_selected = scene_tree->get_selected();
-					EditorNode::get_singleton()->push_node_item(node_selected);
+					_push_item(node_selected);
 					return;
 				}
 				if (edited_object_at_drag_start) {
 					EditorSelectionHistory *editor_history = _doc_history();
 					editor_history->add_object(edited_object_at_drag_start->get_instance_id());
-					InspectorDock::get_inspector_singleton()->edit(edited_object_at_drag_start);
-					InspectorDock::get_singleton()->update(edited_object_at_drag_start);
+					inspector_dock->get_inspector()->edit(edited_object_at_drag_start);
+					inspector_dock->update(edited_object_at_drag_start);
 				}
 				return;
 			}
 
-			Node *node_edited = Object::cast_to<Node>(InspectorDock::get_inspector_singleton()->get_edited_object());
+			Node *node_edited = Object::cast_to<Node>(inspector_dock->get_inspector()->get_edited_object());
 			if (node_edited) {
 				editor_selection->clear();
 				editor_selection->add_node(node_edited);
@@ -1929,6 +1949,11 @@ void SceneTreeDock::_script_open_request(const Ref<Script> &p_script) {
 }
 
 void SceneTreeDock::_push_item(Object *p_object) {
+	if (bound_inspector) {
+		bound_inspector->push_bound_item(p_object);
+		return;
+	}
+
 	Node *node = Object::cast_to<Node>(p_object);
 	if (node || !p_object) {
 		// Assume that null object is a Node.
@@ -1942,9 +1967,58 @@ void SceneTreeDock::_push_item(Object *p_object) {
 	}
 }
 
+void SceneTreeDock::_clear_pending_inspector_commit() {
+	pending_inspector_commit = PENDING_INSPECTOR_NONE;
+	pending_click_select = ObjectID();
+}
+
+bool SceneTreeDock::_routes_selection_to_inspector() const {
+	if (bound_inspector) {
+		return true;
+	}
+
+	// The stable global EditorSelection proxy relays the active document's signal to the legacy
+	// SceneTreeDock as well as to the document's embedded dock. When a document Inspector is active,
+	// only its paired embedded dock may decide when that Inspector commits the selection; otherwise
+	// this duplicate listener would bypass click deferral because its own Tree was never pressed.
+	InspectorDock *inspector_dock = _doc_inspector();
+	return !inspector_dock || !inspector_dock->get_bound_document();
+}
+
+void SceneTreeDock::_commit_pending_inspector_commit() {
+	PendingInspectorCommit commit = pending_inspector_commit;
+	Node *node = ObjectDB::get_instance<Node>(pending_click_select);
+	_clear_pending_inspector_commit();
+
+	switch (commit) {
+		case PENDING_INSPECTOR_NODE: {
+			if (node) {
+				_push_item(node);
+			}
+		} break;
+		case PENDING_INSPECTOR_MULTI: {
+			_tool_selected(TOOL_MULTI_EDIT);
+		} break;
+		case PENDING_INSPECTOR_CLEAR: {
+			_push_item(nullptr);
+		} break;
+		case PENDING_INSPECTOR_NONE:
+			break;
+	}
+}
+
 void SceneTreeDock::_handle_select(Node *p_node) {
+	if (!_routes_selection_to_inspector()) {
+		return;
+	}
+	// The Tree emits node_selected deferred. A fast motion can therefore begin the drag before that
+	// callback runs; never let the late callback recreate the pending click cleared by drag begin.
+	if (scene_tree_drag_active) {
+		return;
+	}
 	if (tree_clicked) {
-		pending_click_select = p_node;
+		pending_inspector_commit = PENDING_INSPECTOR_NODE;
+		pending_click_select = p_node ? p_node->get_instance_id() : ObjectID();
 	} else {
 		_push_item(p_node);
 	}
@@ -3043,16 +3117,33 @@ void SceneTreeDock::_queue_update_script_button() {
 
 void SceneTreeDock::_selection_changed() {
 	int selection_size = editor_selection->get_selection().size();
-	if (selection_size > 1) {
-		//automatically turn on multi-edit
-		_tool_selected(TOOL_MULTI_EDIT);
+	if (!_routes_selection_to_inspector()) {
+		// A document-bound Inspector is updated by its paired embedded SceneTreeDock. Keep the legacy
+		// dock's script tracking below current, but do not duplicate the Inspector selection route.
+	} else if (scene_tree_drag_active) {
+		// Drag end explicitly resolves whether to restore the original inspected object or commit the
+		// dragged selection. Selection may still update here for payload construction.
+	} else if (selection_size > 1) {
+		// Automatically turn on multi-edit, but do not replace the inspected object until a mouse click
+		// is released. A drag needs the original Inspector target to remain available as a drop target.
+		if (tree_clicked) {
+			pending_inspector_commit = PENDING_INSPECTOR_MULTI;
+			pending_click_select = ObjectID();
+		} else {
+			_tool_selected(TOOL_MULTI_EDIT);
+		}
 	} else if (selection_size == 1) {
 		Node *node = ObjectDB::get_instance<Node>(editor_selection->get_selection().begin()->key);
 		if (node) {
 			_handle_select(node);
 		}
 	} else if (selection_size == 0) {
-		_push_item(nullptr);
+		if (tree_clicked) {
+			pending_inspector_commit = PENDING_INSPECTOR_CLEAR;
+			pending_click_select = ObjectID();
+		} else {
+			_push_item(nullptr);
+		}
 	}
 
 	// Untrack script changes in previously selected nodes.
@@ -5013,6 +5104,10 @@ Node *SceneTreeDock::_doc_scene_root() const {
 EditorSelectionHistory *SceneTreeDock::_doc_history() const {
 	EditorSelectionHistory *doc_history = bound_document ? bound_document->get_selection_history() : nullptr;
 	return doc_history ? doc_history : EditorNode::get_singleton()->get_editor_selection_history();
+}
+
+InspectorDock *SceneTreeDock::_doc_inspector() const {
+	return bound_inspector ? bound_inspector : InspectorDock::get_singleton();
 }
 
 void SceneTreeDock::set_bound_document(EditorDocument *p_document) {

@@ -118,6 +118,7 @@ public:
 
 	// G2 S6a: the current tab's DocumentView (null when no tabs / not yet minted).
 	DocumentView *get_current_view() const;
+	void set_context_active(bool p_active);
 
 	// G4: make this host's current tab the editor's active edited scene (no-op for a non-scene current
 	// tab, since only scene documents have an edited-scene index). Used by pane focus so the global

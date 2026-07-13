@@ -139,15 +139,22 @@ class InspectorDock : public EditorDock {
 	void _menu_expand_revertable();
 	void _select_history(int p_idx);
 	void _prepare_history();
+	void _edit_bound_history_current();
+	void _push_bound_item(Object *p_object, const String &p_property = String());
 
 	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;
 
 private:
 	static inline InspectorDock *singleton = nullptr;
+	static inline InspectorDock *active_instance = nullptr;
 
 public:
-	static InspectorDock *get_singleton() { return singleton; }
-	static EditorInspector *get_inspector_singleton() { return singleton->inspector; }
+	static InspectorDock *get_singleton() { return active_instance ? active_instance : singleton; }
+	static InspectorDock *get_fallback_singleton() { return singleton; }
+	static EditorInspector *get_inspector_singleton() {
+		InspectorDock *dock = get_singleton();
+		return dock ? dock->inspector : nullptr;
+	}
 
 protected:
 	static void _bind_methods();
@@ -174,6 +181,12 @@ public:
 	// G2 D7b: edit p_object in THIS inspector instance (a bound per-pane inspector), mirroring the
 	// global edit_current path but sourced from the pane's own document selection.
 	void edit_bound(Object *p_object);
+	// Commit an object to this inspector's document-local history. Embedded SceneTreeDock instances
+	// use this instead of routing through EditorNode's active/global inspector.
+	void push_bound_item(Object *p_object, const String &p_property = String());
+	void edit_resource_document(const Ref<Resource> &p_resource);
+	void set_context_active(bool p_active);
+	EditorDocument *get_bound_document() const { return bound_document; }
 
 	// G2 D7b: p_is_global==false builds a bound per-pane inspector that does not claim the singleton
 	// or re-register the dock command (which would error as a duplicate).

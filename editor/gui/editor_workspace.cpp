@@ -381,6 +381,11 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 	if (old_focused == p_pane) {
 		return;
 	}
+	if (old_focused) {
+		if (TabbedDocumentHost *old_host = Object::cast_to<TabbedDocumentHost>(old_focused->get_content())) {
+			old_host->set_context_active(false);
+		}
+	}
 
 	focused_pane = p_pane;
 	if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(focused_pane->get_content())) {
@@ -405,6 +410,7 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 		if (EditorNode *en = EditorNode::get_singleton()) {
 			en->update_scene_pane_toolbar(host->get_current_view());
 		}
+		host->set_context_active(true);
 	}
 
 	if (old_focused) {

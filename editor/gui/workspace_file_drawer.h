@@ -58,18 +58,21 @@ class WorkspaceFileDrawer : public PanelContainer {
 	Control *host = nullptr;
 
 	Button *close_button = nullptr;
-	HSplitContainer *split = nullptr; // Left: FileSystem tab host. Right: the collapsible Import panel.
+	HSplitContainer *split = nullptr; // Left: FileSystem tab host. Right: collapsible file details.
 	TabContainer *tab_host = nullptr; // Hosts the drawer's panels (FileSystem in v1).
+	TabContainer *detail_tabs = nullptr; // Import settings and file-backed Resource inspector.
 
-	// G4: the Import dock lives as a collapsible right-hand panel of the FileSystem drawer -- it is a detail
-	// view of the FileSystem selection, not a standalone document. Not owned (the singleton is parked here).
+	// G4: file details live in a collapsible right side of the drawer. These panels are project-file
+	// context, not scene documents, and are therefore intentionally outside EditorDockManager.
 	Control *import_panel = nullptr;
-	Button *import_toggle = nullptr;
-	bool import_open = false;
+	Control *resource_inspector_panel = nullptr;
+	Button *details_toggle = nullptr;
+	bool details_open = false;
 	bool import_enabled = true; // Feature-profile gate for the Import panel specifically.
 
-	void _update_import_visibility();
-	void _on_import_toggled(bool p_pressed);
+	void _update_details_visibility();
+	void _on_details_toggled(bool p_pressed);
+	void _show_detail_panel(Control *p_panel);
 
 	bool drawer_open = false;
 	bool enabled = true; // Feature-profile gate; a disabled drawer force-closes and refuses to open.
@@ -99,14 +102,19 @@ public:
 
 	// G4: install the Import panel into the drawer's collapsible right side (reparents it in).
 	void set_import_panel(Control *p_panel);
-	// Open/close the Import side. Animatable via the header toggle; also driven by on_import_target_changed.
-	void set_import_open(bool p_open);
-	// Feature-profile gate for the Import panel; a disabled panel force-collapses and hides its toggle.
+	// Install the file-backed .tres/.res inspector alongside Import.
+	void set_resource_inspector_panel(Control *p_panel);
+	// Open/close the shared detail side. Also driven by the selected file type.
+	void set_details_open(bool p_open);
+	// Feature-profile gate for Import specifically; Inspector remains available when Import is hidden.
 	void set_import_enabled(bool p_enabled);
 	// Slot for ImportDock::edit_target_changed -- auto-reveals the panel when a reimportable file is picked.
 	void on_import_target_changed(bool p_has_content);
+	// Slot for ResourceInspectorDock::edit_target_changed -- selects Inspector for a .tres/.res file.
+	void on_resource_inspector_target_changed(bool p_has_content);
 
 	void set_open(bool p_open, bool p_animate = true);
+	bool is_open() const { return drawer_open; }
 
 	// Feature-profile gate. A disabled drawer force-closes and refuses to reopen, so no shortcut or
 	// button path can surface a profile-hidden FileSystem dock. Owned here as the single source of truth.

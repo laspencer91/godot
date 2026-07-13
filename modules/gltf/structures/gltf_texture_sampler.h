@@ -81,25 +81,26 @@ public:
 	}
 
 	void set_wrap_t(const int wrap_mode) {
-		wrap_s = (WrapMode)wrap_mode;
+		wrap_t = (WrapMode)wrap_mode;
 	}
 
 	StandardMaterial3D::TextureFilter get_filter_mode() const {
 		using TextureFilter = StandardMaterial3D::TextureFilter;
 
-		switch (min_filter) {
-			case NEAREST:
-				return TextureFilter::TEXTURE_FILTER_NEAREST;
-			case LINEAR:
-				return TextureFilter::TEXTURE_FILTER_LINEAR;
-			case NEAREST_MIPMAP_NEAREST:
-			case NEAREST_MIPMAP_LINEAR:
-				return TextureFilter::TEXTURE_FILTER_NEAREST_WITH_MIPMAPS;
-			case LINEAR_MIPMAP_NEAREST:
-			case LINEAR_MIPMAP_LINEAR:
-			default:
-				return TextureFilter::TEXTURE_FILTER_LINEAR_WITH_MIPMAPS;
+		// Godot exposes a single texture filter per material, so glTF's separate
+		// minification and magnification filters must be collapsed into one. The
+		// magnification filter drives the nearest-vs-linear choice (it governs how a
+		// magnified texel is drawn, e.g. crisp pixel art), while the minification
+		// filter decides whether mipmaps are used. Keying "nearest" off min_filter
+		// alone (as before) silently dropped a nearest magFilter, which is exactly
+		// how a source file requests point filtering.
+		const bool use_mipmaps = (min_filter != NEAREST) && (min_filter != LINEAR);
+		const bool nearest = (mag_filter == NEAREST);
+
+		if (nearest) {
+			return use_mipmaps ? TextureFilter::TEXTURE_FILTER_NEAREST_WITH_MIPMAPS : TextureFilter::TEXTURE_FILTER_NEAREST;
 		}
+		return use_mipmaps ? TextureFilter::TEXTURE_FILTER_LINEAR_WITH_MIPMAPS : TextureFilter::TEXTURE_FILTER_LINEAR;
 	}
 
 	void set_filter_mode(StandardMaterial3D::TextureFilter mode) {

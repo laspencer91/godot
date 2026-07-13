@@ -11,6 +11,7 @@
 #include "core/math/aabb.h"
 #include "core/object/ref_counted.h"
 #include "core/templates/local_vector.h"
+#include "core/variant/array.h"
 #include "core/variant/dictionary.h"
 #include "core/variant/type_info.h"
 
@@ -101,6 +102,15 @@ private:
 	// (pre-separation) heading at most this fast per tick, killing the dense-clump
 	// heading flicker that raw atan2(disp) produced. Logan-tunable in the inspector.
 	float max_turn_rate = 9.0f;
+	// Close-range attack seek (COMBAT_FEEL). Once an aware agent (WAKE / CHASE /
+	// ATTACK_PLAYER) is within this planar radius of a player it steers and FACES
+	// the player's real position directly, bypassing the shared flow field. The
+	// flow octant collapses to a zero gradient at the goal cell, so without this
+	// an agent packed onto a player settled on the cell center holding a stale
+	// heading -- the separation ring then left it facing outward, swinging at the
+	// air. The Box3D wall sweep still bounds the override, so it never tunnels
+	// geometry. 0 disables (pure flow). Logan-tunable in the inspector.
+	float attack_seek_radius = 3.25f;
 	uint32_t collision_mask = 0xFFFFFFFF; // Static layers the mover sweep tests.
 
 	Ref<HordeFlowField> flow_field;
@@ -254,6 +264,8 @@ public:
 	float get_separation_strength() const { return separation_strength; }
 	void set_max_turn_rate(float p_r) { max_turn_rate = p_r; }
 	float get_max_turn_rate() const { return max_turn_rate; }
+	void set_attack_seek_radius(float p_r);
+	float get_attack_seek_radius() const { return attack_seek_radius; }
 	void set_collision_mask(int p_mask) { collision_mask = (uint32_t)p_mask; }
 	int get_collision_mask() const { return (int)collision_mask; }
 
@@ -307,6 +319,12 @@ public:
 	// current epoch parity so it cannot go stale before use. Per-shot query,
 	// not per-tick; budget-tested <= 50 us against 250 agents.
 	Dictionary raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist) const;
+	// Exact query-sphere versus live agent capsules. Each result contains the
+	// packed id, closest point on/in the capsule, and normalized hit height.
+	// Results sort by squared contact distance then packed id; the candidate cap
+	// is applied only after sorting. This is a per-swing broadphase query, not a
+	// per-tick path.
+	Array overlap_agents(const Vector3 &p_center, float p_radius, int p_max_candidates) const;
 
 	// Damage ingress; returns the resulting state (-1 on a stale id). The game
 	// sends FINAL damage -- headshot multipliers are game-side. At <= 0 HP the
@@ -330,6 +348,7 @@ public:
 	int get_agent_archetype(int p_id) const;
 	Vector3 get_agent_position(int p_id) const;
 	float get_agent_yaw(int p_id) const;
+	bool set_agent_yaw(int p_id, float p_yaw);
 	float get_agent_hp(int p_id) const;
 	float get_nearest_player_distance(int p_id) const;
 	void set_agent_hp(int p_id, float p_hp);

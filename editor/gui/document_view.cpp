@@ -161,6 +161,14 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	// ScriptTextEditor/EditorHelp view. Symmetric factory calls per kind.
 	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
 	switch (type) {
+		case EditorDocument::TYPE_RESOURCE: {
+			ResourceDocument *rd = static_cast<ResourceDocument *>(p_document);
+			EditorData &ed = EditorNode::get_editor_data();
+			inspector_dock = memnew(InspectorDock(ed, false));
+			inspector_dock->set_bound_document(p_document);
+			inspector_dock->edit_resource_document(rd->get_resource());
+			editor_surface = inspector_dock;
+		} break;
 		case EditorDocument::TYPE_SCRIPT: {
 			// G2 S4: the per-script VIEW is minted by the ScriptEditor SERVICES singleton, fully wired to
 			// menus / find-in-files / save-all / debugger. The singleton stays; only the view is per-tab.
@@ -238,6 +246,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 
 		inspector_dock = memnew(InspectorDock(ed, false));
 		inspector_dock->set_bound_document(p_document);
+		scene_tree_dock->set_bound_inspector(inspector_dock);
 		_add_accordion_section(dock_column, inspector_dock, TTR("Inspector"), SNAME("Object"), true);
 
 		signals_dock = memnew(SignalsDock(false));
@@ -246,8 +255,11 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		groups_dock = memnew(GroupsDock(false));
 		_add_accordion_section(dock_column, groups_dock, TTR("Groups"), SNAME("Groups"), false);
 
-		// Drive the bound inspector from THIS document's selection (independent of the active pane).
+		// SceneTreeDock owns Inspector selection timing so a pressed node can be dragged into a property
+		// of the previously inspected node. This connection only keeps Signals and Groups synchronized.
 		p_document->get_selection()->connect("selection_changed", callable_mp(this, &DocumentView::_bound_selection_changed));
+		List<Node *> initial_nodes = p_document->get_selection()->get_top_selected_node_list();
+		inspector_dock->edit_bound(initial_nodes.is_empty() ? nullptr : initial_nodes.front()->get());
 		_bound_selection_changed();
 
 		// Left side: [toolbar host | viewport]. M7.2a mounts the focused pane's 2D/3D toolbar into
@@ -282,9 +294,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 }
 
 void DocumentView::_bound_selection_changed() {
-	// G2 D7b: the bound inspector follows THIS document's selection front (mirrors the global
-	// scene-dock -> inspector push, sourced from the per-document selection).
-	if (!inspector_dock || !bound_scene_document) {
+	if (!bound_scene_document) {
 		return;
 	}
 	EditorSelection *selection = bound_scene_document->get_selection();
@@ -293,7 +303,6 @@ void DocumentView::_bound_selection_changed() {
 	}
 	List<Node *> nodes = selection->get_top_selected_node_list();
 	Node *front = nodes.is_empty() ? nullptr : nodes.front()->get();
-	inspector_dock->edit_bound(front);
 	// G3: the per-pane Signals + Groups docks follow the same selection.
 	if (signals_dock) {
 		signals_dock->set_object(front);
@@ -311,6 +320,19 @@ Control *DocumentView::get_chrome_host() const {
 	return content_vbox;
 }
 
+void DocumentView::set_context_active(bool p_active) {
+	if (context_active == p_active) {
+		return;
+	}
+	context_active = p_active;
+	if (doc_view) {
+		doc_view->set_active(p_active);
+	}
+	if (inspector_dock) {
+		inspector_dock->set_context_active(p_active);
+	}
+}
+
 void DocumentView::_notification(int p_what) {
 	if (p_what == NOTIFICATION_READY) {
 		// G2 D7a: re-point the embedded Scene Tree at its document's root now that we're in-tree. The
@@ -323,6 +345,10 @@ void DocumentView::_notification(int p_what) {
 	}
 	if (p_what != NOTIFICATION_PREDELETE) {
 		return;
+	}
+	set_context_active(false);
+	if (scene_tree_dock) {
+		scene_tree_dock->set_bound_inspector(nullptr);
 	}
 	// PREDELETE dispatches derived-first, so this runs BEFORE Node's handler frees the children —
 	// the last moment editor_surface is guaranteed alive (the destructor is too late: children are

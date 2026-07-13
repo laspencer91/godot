@@ -126,6 +126,10 @@ public:
 	virtual EditorSelection *get_selection() const { return nullptr; }
 	virtual EditorSelectionHistory *get_selection_history() { return nullptr; }
 
+	// The scene whose editor context should remain active while this document is focused. Scene
+	// documents return themselves; embedded resource documents return their owning scene.
+	virtual EditorDocument *get_scene_context_document() { return nullptr; }
+
 	EditorDocument() {}
 	virtual ~EditorDocument() {}
 };
@@ -155,6 +159,7 @@ public:
 
 	virtual EditorSelection *get_selection() const override { return selection; }
 	virtual EditorSelectionHistory *get_selection_history() override { return &selection_history; }
+	virtual EditorDocument *get_scene_context_document() override { return this; }
 
 	// G2 M7.1: scenes now open as workspace tabs (pane-hosted DocumentView with its own viewport),
 	// not the single legacy main screen. This is the routing flip that unblocks two-scenes-in-two-panes.
@@ -177,6 +182,29 @@ public:
 
 	SceneDocument();
 	virtual ~SceneDocument();
+};
+
+// A generic Resource edited as a first-class workspace tab. It keeps the exact Ref passed to
+// EditorInterface::edit_resource(), so embedded resources are edited live rather than reloaded.
+class ResourceDocument : public EditorDocument {
+	Ref<Resource> resource;
+	EditorDocument *scene_context_document = nullptr; // Not owned; closed before this document.
+	EditorSelectionHistory selection_history;
+
+public:
+	Ref<Resource> get_resource() const { return resource; }
+	void set_resource(const Ref<Resource> &p_resource) { resource = p_resource; }
+
+	void set_scene_context_document(EditorDocument *p_document) { scene_context_document = p_document; }
+	virtual EditorDocument *get_scene_context_document() override { return scene_context_document; }
+	virtual EditorSelectionHistory *get_selection_history() override { return &selection_history; }
+
+	virtual String get_path() const override;
+	virtual String get_title() const override;
+	virtual bool opens_as_workspace_tab() const override { return true; }
+
+	ResourceDocument() { type = TYPE_RESOURCE; }
+	virtual ~ResourceDocument() {}
 };
 
 // G2 S3: a script (or text) document opened as a workspace tab. No render world — the view

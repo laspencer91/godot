@@ -42,8 +42,8 @@
 #include "core/os/keyboard.h"
 #include "core/os/os.h"
 #include "core/templates/list.h"
-#include "editor/docks/editor_dock_manager.h"
 #include "editor/docks/import_dock.h"
+#include "editor/docks/resource_inspector_dock.h"
 #include "editor/docks/scene_tree_dock.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
@@ -630,16 +630,36 @@ void FileSystemDock::_notification(int p_what) {
 			}
 		} break;
 
+		case NOTIFICATION_INTERNAL_PROCESS: {
+			if (details_update_waiting_for_mouse_release && !filesystem_drag_preserves_details && !Input::get_singleton()->is_mouse_button_pressed(MouseButton::LEFT)) {
+				details_update_waiting_for_mouse_release = false;
+				set_process_internal(false);
+				_update_import_dock();
+			}
+		} break;
+
 		case NOTIFICATION_DRAG_BEGIN: {
 			Dictionary dd = get_viewport()->gui_get_drag_data();
-			if (tree->is_visible_in_tree() && dd.has("type")) {
+			if (dd.has("type")) {
+				const String drag_type = dd["type"];
+				Object *drag_from_object = dd.get("from", Variant());
+				Control *drag_from = Object::cast_to<Control>(drag_from_object);
+				if ((drag_type == "files" || drag_type == "files_and_dirs") && (drag_from == tree || drag_from == files)) {
+					// A FileSystem drag may target a Resource field in the adjacent Inspector. Keep the
+					// pre-drag detail context alive instead of replacing it with the dragged source.
+					filesystem_drag_preserves_details = true;
+				}
+
+				if (!tree->is_visible_in_tree()) {
+					break;
+				}
 				if (dd.has("favorite")) {
 					if ((String(dd["favorite"]) == "all")) {
 						tree->set_drop_mode_flags(Tree::DROP_MODE_INBETWEEN);
 					}
-				} else if ((String(dd["type"]) == "files") || (String(dd["type"]) == "files_and_dirs")) {
+				} else if (drag_type == "files" || drag_type == "files_and_dirs") {
 					tree->set_drop_mode_flags(Tree::DROP_MODE_ON_ITEM | Tree::DROP_MODE_INBETWEEN);
-				} else if ((String(dd["type"]) == "nodes") || (String(dd["type"]) == "resource")) {
+				} else if (drag_type == "nodes" || drag_type == "resource") {
 					holding_branch = true;
 					TreeItem *item = tree->get_next_selected(tree->get_root());
 					while (item) {
@@ -653,6 +673,13 @@ void FileSystemDock::_notification(int p_what) {
 
 		case NOTIFICATION_DRAG_END: {
 			tree->set_drop_mode_flags(0);
+
+			if (filesystem_drag_preserves_details) {
+				filesystem_drag_preserves_details = false;
+				details_update_waiting_for_mouse_release = false;
+				import_dock_needs_update = false;
+				set_process_internal(false);
+			}
 
 			if (holding_branch) {
 				holding_branch = false;
@@ -904,12 +931,16 @@ bool FileSystemDock::_update_filtered_items(TreeItem *p_tree_item) {
 
 void FileSystemDock::navigate_to_path(const String &p_path) {
 	file_list_search_box->clear();
-	// Try to set the FileSystem dock visible.
-	EditorDockManager::get_singleton()->focus_dock(this);
+	// G4: FileSystem is hosted by the workspace drawer and intentionally isn't registered with
+	// EditorDockManager. Asking the manager to focus it reports an "unknown dock" error; reveal its
+	// actual host instead.
+	EditorNode::get_singleton()->open_file_drawer();
 	_navigate_to_path(p_path, false, is_visible_in_tree());
 
 	import_dock_needs_update = true;
-	_update_import_dock();
+	// Programmatic navigation can rebuild the split-mode file list while Tree/ItemList selection
+	// notifications are still settling. Match interactive selection and update its detail panels once.
+	callable_mp(this, &FileSystemDock::_update_import_dock).call_deferred();
 }
 
 void FileSystemDock::_file_list_thumbnail_done(const String &p_path, const Ref<Texture2D> &p_preview, const Ref<Texture2D> &p_small_preview, int p_index, const String &p_filename) {
@@ -1460,7 +1491,7 @@ void FileSystemDock::_fs_changed() {
 		_navigate_to_path(select_after_scan);
 		select_after_scan.clear();
 		import_dock_needs_update = true;
-		_update_import_dock();
+		callable_mp(this, &FileSystemDock::_update_import_dock).call_deferred();
 	}
 
 	set_process(false);
@@ -2136,8 +2167,14 @@ void FileSystemDock::_move_operation_confirm(const String &p_to_path, bool p_cop
 
 			current_path = p_to_path;
 			current_path_line_edit->set_text(current_path);
+
+			// A cut+paste is realized as this move; now that it has landed, drop the clipboard.
+			if (clipboard_clear_after_move) {
+				file_clipboard.clear();
+			}
 		}
 	}
+	clipboard_clear_after_move = false;
 }
 
 void FileSystemDock::_before_move(HashSet<String> &r_file_owners) const {
@@ -2580,6 +2617,7 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 
 		case FILE_MENU_MOVE: {
 			// Move or copy the files to a given location.
+			clipboard_clear_after_move = false; // A manual move is not a cut+paste.
 			to_move.clear();
 			Vector<String> collapsed_paths = _remove_self_included_paths(p_selected);
 			for (int i = collapsed_paths.size() - 1; i >= 0; i--) {
@@ -2664,6 +2702,40 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 						DirectoryCreateDialog::MODE_DIRECTORY, TTR("Duplicating folder:") + " " + name, name);
 			}
 			make_dir_dialog->popup_centered();
+		} break;
+
+		case FILE_MENU_COPY:
+		case FILE_MENU_CUT: {
+			// Stash the selection on the dock's file clipboard for a later Paste. Collapse nested
+			// selections (a selected folder already carries its children) as Move/Delete do.
+			file_clipboard.clear();
+			Vector<String> collapsed_paths = _remove_self_included_paths(p_selected);
+			for (const String &fpath : collapsed_paths) {
+				if (fpath != "res://") {
+					file_clipboard.push_back(FileOrFolder(fpath, !fpath.ends_with("/")));
+				}
+			}
+			file_clipboard_is_cut = (p_option == FILE_MENU_CUT);
+		} break;
+
+		case FILE_MENU_PASTE: {
+			if (file_clipboard.is_empty()) {
+				break;
+			}
+			// Paste into the current folder (or the folder holding the current file).
+			String target_dir = current_path;
+			if (!target_dir.ends_with("/")) {
+				target_dir = target_dir.get_base_dir();
+			}
+			to_move.clear();
+			for (const FileOrFolder &item : file_clipboard) {
+				to_move.push_back(item);
+			}
+			// A cut clears the clipboard only once the move actually completes.
+			clipboard_clear_after_move = file_clipboard_is_cut;
+			// Reuse the move/copy pipeline: collision detection, the overwrite/rename dialog,
+			// .import/UID handling, dependency fixups, rescan, and reveal all come for free.
+			_move_operation_confirm(target_dir, !file_clipboard_is_cut, OVERWRITE_UNDECIDED);
 		} break;
 
 		case FILE_MENU_REIMPORT: {
@@ -2787,6 +2859,12 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 int FileSystemDock::_get_menu_option_from_key(const Ref<InputEventKey> &p_key) {
 	if (ED_IS_SHORTCUT("filesystem_dock/duplicate", p_key)) {
 		return FILE_MENU_DUPLICATE;
+	} else if (ED_IS_SHORTCUT("filesystem_dock/copy", p_key)) {
+		return FILE_MENU_COPY;
+	} else if (ED_IS_SHORTCUT("filesystem_dock/cut", p_key)) {
+		return FILE_MENU_CUT;
+	} else if (ED_IS_SHORTCUT("filesystem_dock/paste", p_key)) {
+		return FILE_MENU_PASTE;
 	} else if (ED_IS_SHORTCUT("filesystem_dock/copy_path", p_key)) {
 		return FILE_MENU_COPY_PATH;
 	} else if (ED_IS_SHORTCUT("filesystem_dock/copy_absolute_path", p_key)) {
@@ -3771,6 +3849,11 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 	// Add the options that are only available when the root path is not selected.
 	if (root_path_not_selected) {
 		p_popup->add_icon_item(get_editor_theme_icon(SNAME("MoveUp")), TTRC("Move/Duplicate To..."), FILE_MENU_MOVE);
+		p_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("ActionCopy")), ED_GET_SHORTCUT("filesystem_dock/copy"), FILE_MENU_COPY);
+		p_popup->add_shortcut(ED_GET_SHORTCUT("filesystem_dock/cut"), FILE_MENU_CUT);
+		if (!file_clipboard.is_empty()) {
+			p_popup->add_shortcut(ED_GET_SHORTCUT("filesystem_dock/paste"), FILE_MENU_PASTE);
+		}
 		p_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("Remove")), ED_GET_SHORTCUT("filesystem_dock/delete"), FILE_MENU_REMOVE);
 	}
 
@@ -3901,6 +3984,9 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 
 		current_path = fpath;
 	} else if (no_paths) {
+		if (!file_clipboard.is_empty()) {
+			p_popup->add_shortcut(ED_GET_SHORTCUT("filesystem_dock/paste"), FILE_MENU_PASTE);
+		}
 #if !defined(ANDROID_ENABLED) && !defined(WEB_ENABLED)
 		tree_popup->add_separator();
 		tree_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("Terminal")), ED_GET_SHORTCUT("filesystem_dock/open_in_terminal"), FILE_MENU_OPEN_IN_TERMINAL);
@@ -4269,6 +4355,20 @@ void FileSystemDock::_update_import_dock() {
 
 	_update_selection_changed();
 
+	// ItemList and Tree change selection on mouse-down, which would replace the adjacent Resource
+	// inspector before the selected file can be dragged into one of its fields. Mouse selection only
+	// commits to the detail panels after release; an actual FileSystem drag discards this pending update.
+	if (filesystem_drag_preserves_details) {
+		return;
+	}
+	if (Input::get_singleton()->is_mouse_button_pressed(MouseButton::LEFT)) {
+		details_update_waiting_for_mouse_release = true;
+		set_process_internal(true);
+		return;
+	}
+	details_update_waiting_for_mouse_release = false;
+	set_process_internal(false);
+
 	// List selected.
 	Vector<String> selected;
 	if (display_mode == DISPLAY_MODE_TREE_ONLY) {
@@ -4283,6 +4383,16 @@ void FileSystemDock::_update_import_dock() {
 			}
 
 			selected.push_back(files->get_item_metadata(i));
+		}
+	}
+
+	// Resource properties follow the same effective FileSystem selection as Import: the tree in
+	// tree-only mode, and the file list in split mode (where the tree still selects the containing folder).
+	if (ResourceInspectorDock::get_singleton()) {
+		if (selected.size() == 1) {
+			ResourceInspectorDock::get_singleton()->set_edit_path(selected[0]);
+		} else {
+			ResourceInspectorDock::get_singleton()->clear();
 		}
 	}
 
@@ -4651,7 +4761,8 @@ FileSystemDock::FileSystemDock() {
 	singleton = this;
 	set_name(TTRC("FileSystem"));
 	set_icon_name("Folder");
-	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("docks/open_filesystem", TTRC("Open FileSystem Dock"), KeyModifierMask::ALT | Key::F));
+	// Registered by EditorNode before this unmanaged drawer-hosted dock is constructed.
+	set_dock_shortcut(ED_GET_SHORTCUT("docks/open_filesystem"));
 	set_default_slot(EditorDock::DOCK_SLOT_LEFT_BR);
 	set_available_layouts(DOCK_LAYOUT_ALL);
 
@@ -4662,6 +4773,12 @@ FileSystemDock::FileSystemDock() {
 	ED_SHORTCUT("filesystem_dock/copy_absolute_path", TTRC("Copy Absolute Path"), KeyModifierMask::CMD_OR_CTRL | KeyModifierMask::ALT | Key::C);
 	ED_SHORTCUT("filesystem_dock/copy_uid", TTRC("Copy UID"), KeyModifierMask::CMD_OR_CTRL | KeyModifierMask::ALT | KeyModifierMask::SHIFT | Key::C);
 	ED_SHORTCUT("filesystem_dock/duplicate", TTRC("Duplicate..."), KeyModifierMask::CMD_OR_CTRL | Key::D);
+	// Plain Ctrl+C/X/V copy/cut/paste files. These only fire while the FileSystem dock's tree/list
+	// is focused (routed through _get_menu_option_from_key in gui_input), and SceneTreeDock now
+	// stands down its own context-less Ctrl+C/X/V while this dock has focus, so there's no clash.
+	ED_SHORTCUT("filesystem_dock/copy", TTRC("Copy"), KeyModifierMask::CMD_OR_CTRL | Key::C);
+	ED_SHORTCUT("filesystem_dock/cut", TTRC("Cut"), KeyModifierMask::CMD_OR_CTRL | Key::X);
+	ED_SHORTCUT("filesystem_dock/paste", TTRC("Paste"), KeyModifierMask::CMD_OR_CTRL | Key::V);
 	ED_SHORTCUT("filesystem_dock/delete", TTRC("Delete"), Key::KEY_DELETE);
 	ED_SHORTCUT("filesystem_dock/new_folder", TTRC("New Folder..."), Key::NONE);
 	ED_SHORTCUT("filesystem_dock/new_scene", TTRC("New Scene..."), Key::NONE);

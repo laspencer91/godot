@@ -75,6 +75,9 @@ static Ref<HordeAgents> make_agents(int capacity = 250) {
 	Ref<HordeAgents> a;
 	a.instantiate();
 	a->set_capacity(capacity);
+	// Keep legacy movement fixtures single-purpose. Tests for the optional
+	// close-range player seek enable its profile value explicitly.
+	a->set_attack_seek_radius(0.0f);
 	return a;
 }
 

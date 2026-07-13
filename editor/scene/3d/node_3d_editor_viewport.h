@@ -35,8 +35,11 @@
 #include "editor/themes/editor_scale.h"
 #include "scene/debugger/view_3d_controller.h"
 #include "scene/gui/margin_container.h"
+#include "scene/gui/panel_container.h" // FloatingCameraPreview derives from PanelContainer.
 
 class AcceptDialog;
+class AspectRatioContainer;
+class Camera3D;
 class CheckBox;
 class EditorSelection;
 class Gradient;
@@ -45,6 +48,7 @@ class MenuButton;
 class MeshInstance3D;
 class Node3DEditor;
 class Node3DEditorViewport;
+class OptionButton;
 class PanelContainer;
 class RichTextLabel;
 class SplitContainer;
@@ -144,6 +148,49 @@ public:
 	void set_viewport(Node3DEditorViewport *p_viewport);
 };
 
+// A draggable, always-on picture-in-picture that renders a chosen scene camera
+// while you keep editing. Unlike the in-viewport "Preview"/cinematic toggles it
+// does not take over the editing viewport and does not require selecting the
+// camera. It renders into the active document's World3D (each open scene has its
+// own isolated world in this editor), and auto-picks a sensible default camera.
+class FloatingCameraPreview : public PanelContainer {
+	GDCLASS(FloatingCameraPreview, PanelContainer);
+
+	SubViewport *sub_viewport = nullptr;
+	AspectRatioContainer *aspect_container = nullptr;
+	OptionButton *camera_picker = nullptr;
+	Control *header = nullptr;
+	Button *close_button = nullptr;
+
+	Ref<World3D> preview_world;
+	ObjectID previewing_id;
+	Vector<ObjectID> listed_cameras;
+
+	bool dragging = false;
+	bool position_initialized = false;
+
+	void _collect_cameras(Node *p_node, Vector<Camera3D *> &r_cameras) const;
+	Camera3D *_pick_default_camera(const Vector<Camera3D *> &p_cameras) const;
+	void _refresh_camera_list();
+	void _camera_picker_selected(int p_index);
+	void _attach_camera(Camera3D *p_camera);
+	void _previewing_camera_exiting();
+	void _update_aspect(Camera3D *p_camera);
+	void _header_gui_input(const Ref<InputEvent> &p_event);
+	void _close_pressed();
+	void _place_default_position();
+
+protected:
+	void _notification(int p_what);
+
+public:
+	void set_preview_world(const Ref<World3D> &p_world);
+	void refresh();
+	Callable closed_callback;
+
+	FloatingCameraPreview();
+};
+
 class Node3DEditorViewport : public Control {
 	GDCLASS(Node3DEditorViewport, Control);
 	friend class Node3DEditor;
@@ -211,6 +258,7 @@ class Node3DEditorViewport : public Control {
 
 		VIEW_LOCK_ROTATION,
 		VIEW_CINEMATIC_PREVIEW,
+		VIEW_FLOATING_CAMERA_PREVIEW,
 		VIEW_AUTO_ORTHOGONAL,
 		VIEW_MAX
 	};
@@ -269,6 +317,7 @@ private:
 	CheckBox *preview_camera = nullptr;
 	CheckBox *pilot_camera = nullptr;
 	SubViewportContainer *subviewport_container = nullptr;
+	FloatingCameraPreview *floating_camera_preview = nullptr;
 
 	MenuButton *view_display_menu = nullptr;
 	PopupMenu *display_submenu = nullptr;
@@ -507,6 +556,8 @@ private:
 	void _toggle_camera_preview(bool);
 	void _toggle_pilot_preview(bool);
 	void _toggle_cinema_preview(bool);
+	void _toggle_floating_camera_preview(bool p_activate);
+	void _floating_camera_preview_closed();
 	void _init_gizmo_instance();
 	void _finish_gizmo_instances();
 	void _selection_result_pressed(int);

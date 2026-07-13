@@ -841,6 +841,11 @@ TEST_CASE("[HordeSim][Combat] Identical damage sequences produce bit-identical s
 // ---------------------------------------------------------------------------
 TEST_CASE("[HordeSim][Agents] Dense clump slews facing at capped turn rate (no flicker)") {
 	Ref<HordeAgents> a = make_agents(32);
+	// Isolate the separation-vs-target facing guard from the close-range player
+	// seek (COMBAT_FEEL, covered by its own case below): the player sits on the
+	// clump here to keep every agent Hot, which would otherwise arm close_seek and
+	// point facing at the player instead of the shared far target.
+	a->set_attack_seek_radius(0.0f);
 
 	// 16 chasers packed inside a single separation radius (0.9 m): a 4x4 grid at
 	// 0.12 m spacing (diag ~0.51 m) so every pair separates hard and the push
@@ -894,6 +899,235 @@ TEST_CASE("[HordeSim][Agents] Dense clump slews facing at capped turn rate (no f
 		const float want = Math::atan2(60.0f - p.x, 60.0f - p.z);
 		CHECK(Math::abs(wrap_pi(a->get_agent_yaw(ids[k]) - want)) <= 2.0f * cap);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 34. Close-range attack seek (COMBAT_FEEL): once an attacking agent is within
+//     attack_seek_radius of a player it steers/faces the player's real position
+//     directly, overriding the flow field / seek target. This fixes "attack the
+//     air" -- ATTACK_PLAYER has speed 0 and previously hit the disp==0 early
+//     return before facing ever updated, so a zombie held whatever heading the
+//     separation ring left it with and swung away from its victim.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Agents] Close-range attack seek faces and closes on the player") {
+	auto wrap_pi = [](float x) {
+		return Math::fposmod(x + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+	};
+	const double dt = 1.0 / 128.0;
+	const float seek_radius = 3.25f;
+
+	// A. ATTACK_PLAYER (speed 0) turns to face its victim even though it never
+	// moves. Spawn facing +Z (yaw 0); the player sits behind-left, 1.5 m away
+// (inside the 3.25 m default radius). The heading must slew to point at it and
+	// the agent must not drift (speed 0 -> position pinned).
+	{
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_attack_seek_radius(seek_radius);
+		const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_ATTACK_PLAYER);
+		const Vector3 player(-1.2f, 0, -0.9f); // |xz| = 1.5 m.
+		PackedVector3Array players;
+		players.push_back(player);
+		a->set_player_positions(players);
+		for (int t = 0; t < 96; t++) {
+			a->set_player_positions(players);
+			a->tick(dt);
+		}
+		const float want = Math::atan2(player.x, player.z);
+		CHECK(Math::abs(wrap_pi(a->get_agent_yaw(id) - want)) <= 0.02f);
+		CHECK(a->get_agent_position(id) == Vector3(0, 0, 0)); // Never moved.
+	}
+
+	// B. A CHASE agent inside the radius bee-lines at the PLAYER, overriding a
+	// seek target pointed the other way (proving close_seek pre-empts the normal
+	// movement mode, not merely augments it).
+	{
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_attack_seek_radius(seek_radius);
+		const int id = a->spawn(0, Vector3(1.5f, 0, 0), HordeAgents::STATE_CHASE);
+		a->set_agent_target(id, Vector3(1.5f, 0, 100.0f)); // Far +Z: the "wrong" way.
+		PackedVector3Array players;
+		players.push_back(Vector3(0, 0, 0)); // 1.5 m away, inside the radius.
+		for (int t = 0; t < 30; t++) {
+			a->set_player_positions(players);
+			a->tick(dt);
+		}
+		const Vector3 p = a->get_agent_position(id);
+		CHECK(p.x < 1.5f); // Closed toward the player at the origin (-X)...
+		CHECK(p.x > 0.5f); // ...without overshooting through it.
+		CHECK(Math::abs(p.z) < 0.05f); // Ignored the +Z seek target entirely.
+		CHECK(Math::abs(wrap_pi(a->get_agent_yaw(id) - Math::atan2(-p.x, 0.0f))) <= 0.1f);
+	}
+
+	// C. Radius gate: the SAME setup at 5 m (outside the 3.25 m radius) leaves the
+	// agent on its normal seek target (+Z), never veering toward the player.
+	{
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_attack_seek_radius(seek_radius);
+		const int id = a->spawn(0, Vector3(5.0f, 0, 0), HordeAgents::STATE_CHASE);
+		a->set_agent_target(id, Vector3(5.0f, 0, 100.0f));
+		PackedVector3Array players;
+		players.push_back(Vector3(0, 0, 0)); // 5 m away: close_seek must NOT arm.
+		for (int t = 0; t < 30; t++) {
+			a->set_player_positions(players);
+			a->tick(dt);
+		}
+		const Vector3 p = a->get_agent_position(id);
+		CHECK(p.z > 0.1f); // Followed the +Z target...
+		CHECK(p.x == doctest::Approx(5.0f).epsilon(0.01)); // ...not pulled toward the origin.
+	}
+
+	// D. WAKE is stationary but visibly turns toward the player.
+	{
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_attack_seek_radius(seek_radius);
+		const int id = a->spawn(0, Vector3(40.0f, 0, 20.0f), HordeAgents::STATE_WAKE);
+		PackedVector3Array players;
+		players.push_back(Vector3(42.0f, 0, 20.0f));
+		for (int t = 0; t < 64; t++) {
+			a->set_player_positions(players);
+			a->tick(dt);
+		}
+		CHECK(a->get_agent_position(id) == Vector3(40.0f, 0, 20.0f));
+		CHECK(Math::abs(wrap_pi(a->get_agent_yaw(id) - (float)Math::PI / 2.0f)) <= 0.02f);
+	}
+
+	// E. The chase-entry boundary closes on a moving player far from origin.
+	{
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_attack_seek_radius(seek_radius);
+		const int id = a->spawn(0, Vector3(100.0f, 0, -70.0f), HordeAgents::STATE_CHASE);
+		a->set_agent_target(id, Vector3(0, 0, 0));
+		Vector3 player(102.95f, 0, -70.0f);
+		for (int t = 0; t < 64; t++) {
+			player.x += 0.002f;
+			PackedVector3Array players;
+			players.push_back(player);
+			a->set_player_positions(players);
+			a->tick(dt);
+		}
+		const Vector3 p = a->get_agent_position(id);
+		CHECK(p.x > 100.5f);
+		CHECK(p.distance_to(player) < 2.95f);
+		CHECK(Math::abs(p.z + 70.0f) < 0.05f);
+	}
+
+	// F. Zero radius disables the override entirely.
+	{
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_attack_seek_radius(0.0f);
+		const int id = a->spawn(0, Vector3(1.5f, 0, 0), HordeAgents::STATE_CHASE);
+		a->set_agent_target(id, Vector3(1.5f, 0, 100.0f));
+		PackedVector3Array players;
+		players.push_back(Vector3(0, 0, 0));
+		for (int t = 0; t < 30; t++) {
+			a->set_player_positions(players);
+			a->tick(dt);
+		}
+		CHECK(a->get_agent_position(id).z > 0.1f);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 35. Authored facing writer validates ids/input, wraps yaw, and dormant
+//     agents retain the authored direction across native ticks.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Agents] Authored yaw validates, normalizes, and persists") {
+	Ref<HordeAgents> a = make_agents(2);
+	const int id = a->spawn(0, Vector3(), HordeAgents::STATE_DORMANT);
+	CHECK(a->set_agent_yaw(id, (float)Math::TAU + 0.75f));
+	CHECK(a->get_agent_yaw(id) == doctest::Approx(0.75f));
+	a->tick(1.0 / 128.0);
+	CHECK(a->get_agent_yaw(id) == doctest::Approx(0.75f));
+
+	CHECK_FALSE(a->set_agent_yaw(id, Math::INF));
+	CHECK(a->get_agent_yaw(id) == doctest::Approx(0.75f));
+	CHECK(a->despawn(id));
+	CHECK_FALSE(a->set_agent_yaw(id, 0.0f));
+}
+
+// ---------------------------------------------------------------------------
+// 36. Melee broadphase is an exact query sphere versus the same capsule used
+//     by movement/raycast, with deterministic contact ordering.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Combat] overlap_agents returns exact sorted capsule contacts") {
+	Ref<HordeAgents> a = make_agents(8);
+	const int eye_id = a->spawn(0, Vector3(2.0f, 0, 0));
+	Array hits = a->overlap_agents(Vector3(0, 1.5f, 0), 1.7f, 8);
+	REQUIRE(hits.size() == 1);
+	Dictionary eye = hits[0];
+	CHECK((int)eye["id"] == eye_id);
+	CHECK(((Vector3)eye["hit_pos"]).x == doctest::Approx(1.65011f).epsilon(0.0001));
+
+	// Top, middle, and bottom use the capsule surface contact, not feet distance.
+	CHECK(a->despawn(eye_id));
+	const int id = a->spawn(0, Vector3());
+	hits = a->overlap_agents(Vector3(0, 1.9f, 0), 0.11f, 8);
+	REQUIRE(hits.size() == 1);
+	CHECK((float)((Dictionary)hits[0])["height_frac"] == doctest::Approx(1.0f));
+	hits = a->overlap_agents(Vector3(0.5f, 0.9f, 0), 0.16f, 8);
+	REQUIRE(hits.size() == 1);
+	CHECK((float)((Dictionary)hits[0])["height_frac"] == doctest::Approx(0.5f));
+	hits = a->overlap_agents(Vector3(0, -0.1f, 0), 0.11f, 8);
+	REQUIRE(hits.size() == 1);
+	CHECK((float)((Dictionary)hits[0])["height_frac"] == doctest::Approx(0.0f));
+	CHECK(a->despawn(id));
+
+	// Nearest sorting precedes the cap; equal contact distances tie by packed id.
+	const int first = a->spawn(0, Vector3(1.0f, 0, 0));
+	const int second = a->spawn(0, Vector3(-1.0f, 0, 0));
+	const int far = a->spawn(0, Vector3(1.5f, 0, 0));
+	hits = a->overlap_agents(Vector3(0, 0.9f, 0), 2.0f, 2);
+	REQUIRE(hits.size() == 2);
+	CHECK((int)((Dictionary)hits[0])["id"] == MIN(first, second));
+	CHECK((int)((Dictionary)hits[1])["id"] == MAX(first, second));
+
+	Array repeated = a->overlap_agents(Vector3(0, 0.9f, 0), 2.0f, 2);
+	REQUIRE(repeated.size() == hits.size());
+	for (int i = 0; i < hits.size(); i++) {
+		const Dictionary lhs = hits[i];
+		const Dictionary rhs = repeated[i];
+		CHECK((int)lhs["id"] == (int)rhs["id"]);
+		CHECK((Vector3)lhs["hit_pos"] == (Vector3)rhs["hit_pos"]);
+		CHECK((float)lhs["height_frac"] == (float)rhs["height_frac"]);
+	}
+
+	CHECK(a->apply_damage(first, 1000.0f, Vector3(), 0) == HordeAgents::STATE_DEAD);
+	hits = a->overlap_agents(Vector3(0, 0.9f, 0), 2.0f, 8);
+	for (int i = 0; i < hits.size(); i++) {
+		CHECK((int)((Dictionary)hits[i])["id"] != first);
+	}
+	CHECK(a->despawn(second));
+	const int reused = a->spawn(0, Vector3(-1.0f, 0, 0));
+	CHECK(reused != second);
+	hits = a->overlap_agents(Vector3(0, 0.9f, 0), 2.0f, 8);
+	for (int i = 0; i < hits.size(); i++) {
+		CHECK((int)((Dictionary)hits[i])["id"] != second);
+	}
+	CHECK(a->is_alive(far));
+}
+
+TEST_CASE("[HordeSim][Combat] 250-agent overlap stays within the per-swing budget") {
+	Ref<HordeAgents> a = make_agents(250);
+	for (int i = 0; i < 250; i++) {
+		a->spawn(i & 1, Vector3((float)(i % 25) * 0.6f, 0, (float)(i / 25) * 0.6f), HordeAgents::STATE_ADVANCE);
+	}
+	for (int warm = 0; warm < 8; warm++) {
+		a->overlap_agents(Vector3(7.2f, 0.9f, 2.7f), 10.0f, 250);
+	}
+	uint64_t best_batch = UINT64_MAX;
+	for (int trial = 0; trial < 16; trial++) {
+		const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
+		for (int k = 0; k < 32; k++) {
+			a->overlap_agents(Vector3(7.2f, 0.9f, 2.7f), 10.0f, 250);
+		}
+		best_batch = MIN(best_batch, OS::get_singleton()->get_ticks_usec() - t0);
+	}
+	const double per_call = (double)best_batch / 32.0;
+	print_line(vformat("[HordeSim] overlap vs 250 agents: %.2f us/call (min-of-16 x32 batch)", per_call));
+	// Dev-build pathological ceiling: all 250 capsules overlap the swing and
+	// therefore materialize result dictionaries. Paid once per melee impact,
+	// never per tick; ordinary daytime encounters return 1-3 candidates.
+	CHECK(per_call < 1000.0);
 }
 
 } // namespace TestHordeSim

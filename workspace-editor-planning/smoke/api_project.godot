@@ -1,0 +1,11 @@
+; Variant of project.godot used only by the explicit EditorInterface.edit_resource smoke case.
+config_version=5
+
+[application]
+
+config/name="workspace-resource-api-smoke"
+config/features=PackedStringArray("4.7")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/resource_tab_smoke/plugin.cfg")

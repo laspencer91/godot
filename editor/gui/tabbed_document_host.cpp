@@ -183,6 +183,9 @@ void TabbedDocumentHost::_show(int p_idx) {
 	if (p_idx < 0 || p_idx >= documents.size()) {
 		return;
 	}
+	if (current >= 0 && current < views.size() && current != p_idx && views[current]) {
+		views[current]->set_context_active(false);
+	}
 	_ensure_view(p_idx);
 	// G2 styling: refresh the tab title — a scene document's name resolves once its root/scene-file is
 	// set, which can be after the (background) tab was first added.
@@ -220,9 +223,17 @@ void TabbedDocumentHost::_activate_document(int p_idx) {
 	if (!en) {
 		return;
 	}
-	const int idx = en->get_editor_data().find_document_index(documents[p_idx]);
+	EditorDocument *scene_context = documents[p_idx]->get_scene_context_document();
+	const int idx = en->get_editor_data().find_document_index(scene_context);
 	if (idx >= 0) {
 		en->set_edited_scene_index(idx);
+	}
+}
+
+void TabbedDocumentHost::set_context_active(bool p_active) {
+	DocumentView *view = get_current_view();
+	if (view) {
+		view->set_context_active(p_active);
 	}
 }
 
@@ -252,6 +263,11 @@ void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	if (is_inside_tree() && !suppress_activation) {
 		_activate_document(p_idx);
 		_sync_current_script_view(p_idx); // G2 S6a
+		WorkspacePane *pane = _owning_pane();
+		EditorWorkspace *workspace = pane ? pane->get_workspace() : nullptr;
+		if (workspace && workspace->get_focused_pane() == pane) {
+			set_context_active(true);
+		}
 	}
 }
 

@@ -101,6 +101,30 @@ String SceneDocument::get_title() const {
 	return EditorDocument::get_title();
 }
 
+String ResourceDocument::get_path() const {
+	return resource.is_valid() ? resource->get_path() : String();
+}
+
+String ResourceDocument::get_title() const {
+	if (resource.is_null()) {
+		return "Resource";
+	}
+	if (resource->has_method(SNAME("_get_editor_name"))) {
+		const String editor_name = resource->call(SNAME("_get_editor_name"));
+		if (!editor_name.is_empty()) {
+			return editor_name;
+		}
+	}
+	if (!resource->get_name().is_empty()) {
+		return resource->get_name();
+	}
+	const String resource_path = resource->get_path();
+	if (resource_path.is_resource_file()) {
+		return resource_path.get_file();
+	}
+	return resource->get_class();
+}
+
 void SceneDocument::activate() {
 	if (scene_root) {
 		// Only the focused document drives the audio listener in v1.
