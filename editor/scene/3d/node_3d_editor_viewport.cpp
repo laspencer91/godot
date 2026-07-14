@@ -77,6 +77,7 @@
 #include "scene/main/scene_tree.h"
 #include "scene/resources/3d/world_3d.h"
 #include "scene/resources/gradient.h"
+#include "scene/resources/style_box_flat.h"
 #include "scene/resources/immediate_mesh.h"
 #include "scene/resources/packed_scene.h"
 #include "servers/physics_3d/physics_server_3d_types.h"
@@ -525,7 +526,10 @@ void FloatingCameraPreview::_collect_cameras(Node *p_node, Vector<Camera3D *> &r
 		return;
 	}
 	Camera3D *cam = Object::cast_to<Camera3D>(p_node);
-	if (cam) {
+	// A deferred refresh can run while the edited scene is draining. The old root may
+	// still be reachable through editor state even though its cameras no longer have a
+	// viewport, so exclude them instead of trying to derive an aspect ratio from them.
+	if (cam && cam->is_inside_tree()) {
 		r_cameras.push_back(cam);
 	}
 	for (int i = 0; i < p_node->get_child_count(); i++) {
@@ -638,14 +642,8 @@ void FloatingCameraPreview::_header_gui_input(const Ref<InputEvent> &p_event) {
 	}
 	Ref<InputEventMouseMotion> mm = p_event;
 	if (mm.is_valid() && dragging) {
-		Vector2 new_pos = get_position() + mm->get_relative();
-		Control *parent = Object::cast_to<Control>(get_parent());
-		if (parent) {
-			const Vector2 max_pos = parent->get_size() - get_size();
-			new_pos.x = CLAMP(new_pos.x, 0.0, MAX(0.0, max_pos.x));
-			new_pos.y = CLAMP(new_pos.y, 0.0, MAX(0.0, max_pos.y));
-		}
-		set_position(new_pos);
+		set_position(get_position() + mm->get_relative());
+		_clamp_within_parent();
 		accept_event();
 	}
 }
@@ -654,6 +652,44 @@ void FloatingCameraPreview::_close_pressed() {
 	if (closed_callback.is_valid()) {
 		closed_callback.call();
 	}
+}
+
+void FloatingCameraPreview::_apply_size() {
+	// 16:9 presets; the aspect container letterboxes other camera ratios inside.
+	static const Size2 SIZES[3] = { Size2(220, 124), Size2(300, 169), Size2(440, 248) };
+	const Size2 s = SIZES[CLAMP(size_index, 0, 2)];
+
+	const Size2 bottom_right = get_position() + get_size(); // Pin the bottom-right corner across resizes.
+
+	set_custom_minimum_size(Size2(s.x, 0) * EDSCALE);
+	aspect_container->set_custom_minimum_size(Size2(0, s.y) * EDSCALE);
+	size_button->set_text(size_index == 0 ? "S" : (size_index == 1 ? "M" : "L"));
+
+	if (position_initialized) {
+		reset_size();
+		set_position(bottom_right - get_size());
+		_clamp_within_parent();
+	}
+}
+
+void FloatingCameraPreview::_cycle_size() {
+	size_index = (size_index + 1) % 3;
+	// Defer: _apply_size() calls reset_size()/set_position(), and mutating our own
+	// layout synchronously from inside the button's "pressed" signal (i.e. mid GUI
+	// input dispatch) can re-enter the layout pass and crash. Run it at idle instead.
+	callable_mp(this, &FloatingCameraPreview::_apply_size).call_deferred();
+}
+
+void FloatingCameraPreview::_clamp_within_parent() {
+	Control *parent = Object::cast_to<Control>(get_parent());
+	if (!parent) {
+		return;
+	}
+	const Vector2 max_pos = parent->get_size() - get_size();
+	Vector2 pos = get_position();
+	pos.x = CLAMP(pos.x, 0.0, MAX(0.0, max_pos.x));
+	pos.y = CLAMP(pos.y, 0.0, MAX(0.0, max_pos.y));
+	set_position(pos);
 }
 
 void FloatingCameraPreview::_place_default_position() {
@@ -683,13 +719,39 @@ void FloatingCameraPreview::refresh() {
 	_refresh_camera_list();
 }
 
+void FloatingCameraPreview::_update_theme() {
+	if (applying_theme) {
+		return;
+	}
+
+	// Adding a theme override emits NOTIFICATION_THEME_CHANGED synchronously.
+	// Guard this update so that notification cannot recursively rebuild the style.
+	applying_theme = true;
+	if (close_button) {
+		close_button->set_button_icon(get_theme_icon(SNAME("Close"), EditorStringName(EditorIcons)));
+	}
+
+	// Opaque, docked-looking background so the preview reads as a panel
+	// over the 3D viewport rather than floating transparent controls.
+	Ref<StyleBoxFlat> sb;
+	sb.instantiate();
+	Color background_color = get_theme_color(SNAME("dark_color_2"), EditorStringName(Editor));
+	background_color.a = 1.0;
+	sb->set_bg_color(background_color);
+	sb->set_border_color(get_theme_color(SNAME("contrast_color_1"), EditorStringName(Editor)));
+	sb->set_border_width_all(Math::round(EDSCALE));
+	sb->set_corner_radius_all(4 * EDSCALE);
+	const int pad = 4 * EDSCALE;
+	sb->set_content_margin_individual(pad, pad, pad, pad);
+	add_theme_style_override(SNAME("panel"), sb);
+	applying_theme = false;
+}
+
 void FloatingCameraPreview::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE:
 		case NOTIFICATION_THEME_CHANGED: {
-			if (close_button) {
-				close_button->set_button_icon(get_theme_icon(SNAME("Close"), EditorStringName(EditorIcons)));
-			}
+			_update_theme();
 		} break;
 		case NOTIFICATION_VISIBILITY_CHANGED: {
 			if (is_visible_in_tree() && !position_initialized) {
@@ -703,6 +765,9 @@ void FloatingCameraPreview::_notification(int p_what) {
 FloatingCameraPreview::FloatingCameraPreview() {
 	set_mouse_filter(MOUSE_FILTER_STOP); // Don't let clicks fall through to the 3D surface.
 	set_clip_contents(true);
+	// Preserve the preview's offset from the viewport's bottom-right corner when
+	// the editor window, pane, or bottom dock resizes the 3D surface.
+	set_anchors_preset(PRESET_BOTTOM_RIGHT);
 	set_custom_minimum_size(Size2(280, 0) * EDSCALE);
 
 	VBoxContainer *vb = memnew(VBoxContainer);
@@ -726,6 +791,12 @@ FloatingCameraPreview::FloatingCameraPreview() {
 	camera_picker->connect(SceneStringName(item_selected), callable_mp(this, &FloatingCameraPreview::_camera_picker_selected));
 	header->add_child(camera_picker);
 
+	size_button = memnew(Button);
+	size_button->set_flat(true);
+	size_button->set_tooltip_text(TTRC("Cycle Preview Size"));
+	size_button->connect(SceneStringName(pressed), callable_mp(this, &FloatingCameraPreview::_cycle_size));
+	header->add_child(size_button);
+
 	close_button = memnew(Button);
 	close_button->set_flat(true);
 	close_button->set_tooltip_text(TTRC("Close Camera Preview"));
@@ -734,7 +805,6 @@ FloatingCameraPreview::FloatingCameraPreview() {
 
 	aspect_container = memnew(AspectRatioContainer);
 	aspect_container->set_ratio(16.0 / 9.0);
-	aspect_container->set_custom_minimum_size(Size2(0, 158) * EDSCALE);
 	vb->add_child(aspect_container);
 
 	SubViewportContainer *svc = memnew(SubViewportContainer);
@@ -746,6 +816,8 @@ FloatingCameraPreview::FloatingCameraPreview() {
 	svc->add_child(sub_viewport);
 
 	EditorNode::get_singleton()->register_hdr_viewport(sub_viewport);
+
+	_apply_size();
 }
 
 void Node3DEditorViewport::_view_settings_confirmed(real_t p_interp_delta) {

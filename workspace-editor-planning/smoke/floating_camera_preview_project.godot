@@ -1,0 +1,11 @@
+; Variant used by the floating camera preview toggle smoke case.
+config_version=5
+
+[application]
+
+config/name="floating-camera-preview-smoke"
+config/features=PackedStringArray("4.8")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/floating_camera_preview_smoke/plugin.cfg")

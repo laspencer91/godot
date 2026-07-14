@@ -7,7 +7,7 @@ Polygon2D / ResourcePreloader / MeshLibrary still follow stock behavior.
 
 Selection-driven bottom editors stay in the **full-width global bottom panel** — they are not
 per-pane and not "traveling chrome." Rationale: the animation timeline (and tilemap palette,
-theme editor, …) need horizontal space; a per-pane drawer gets pane-width minus the ~320px
+theme editor, …) need horizontal space; a per-pane drawer gets pane-width minus the ~400px
 dock accordion, which is unusable in splits. The trade-off (a global surface showing state
 for one specific pane) is solved by hardening the *binding* instead of moving the *host*.
 

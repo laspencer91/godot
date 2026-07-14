@@ -160,12 +160,15 @@ class FloatingCameraPreview : public PanelContainer {
 	AspectRatioContainer *aspect_container = nullptr;
 	OptionButton *camera_picker = nullptr;
 	Control *header = nullptr;
+	Button *size_button = nullptr;
 	Button *close_button = nullptr;
 
 	Ref<World3D> preview_world;
 	ObjectID previewing_id;
 	Vector<ObjectID> listed_cameras;
 
+	int size_index = 1; // 0 = small, 1 = medium, 2 = large.
+	bool applying_theme = false;
 	bool dragging = false;
 	bool position_initialized = false;
 
@@ -178,7 +181,11 @@ class FloatingCameraPreview : public PanelContainer {
 	void _update_aspect(Camera3D *p_camera);
 	void _header_gui_input(const Ref<InputEvent> &p_event);
 	void _close_pressed();
+	void _cycle_size();
+	void _apply_size();
+	void _clamp_within_parent();
 	void _place_default_position();
+	void _update_theme();
 
 protected:
 	void _notification(int p_what);
