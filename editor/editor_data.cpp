@@ -650,7 +650,7 @@ void EditorData::instantiate_object_properties(Object *p_object) {
 	}
 }
 
-int EditorData::add_edited_scene(int p_at_pos) {
+int EditorData::add_edited_scene(int p_at_pos, bool p_as_level_document) {
 	if (p_at_pos < 0) {
 		p_at_pos = edited_scene.size();
 	}
@@ -666,7 +666,13 @@ int EditorData::add_edited_scene(int p_at_pos) {
 	// Each open scene gets its own SceneDocument: an isolated SubViewport with its
 	// own World3D scenario/space + World2D, so multiple scenes can render live at
 	// once. Constructed eagerly; not yet wired into the editor tree (Step B).
-	es.document = memnew(SceneDocument);
+	// G-Level LE0: LevelDocument takes this exact scene slot path so its world,
+	// selection, and undo identity cannot drift from ordinary scene documents.
+	if (p_as_level_document) {
+		es.document = memnew(LevelDocument);
+	} else {
+		es.document = memnew(SceneDocument);
+	}
 	es.document->set_history_id(es.history_id);
 	es.document->set_time_opened(es.time_opened);
 	// Parent the document's scene_root into the live tree so the scene stays alive.
@@ -752,7 +758,11 @@ void EditorData::set_scene_root(int p_idx, Node *p_root) {
 	// right per-pane editor surface (2D vs 3D).
 	if (EditorDocument *doc = scene_info.document) {
 		doc->set_root(p_root);
-		doc->set_type(EditorDocument::classify_scene_type(p_root));
+		// TYPE_LEVEL is the surface-routing discriminator; its scene dimensionality
+		// remains available from the root without overwriting the document kind.
+		if (doc->get_type() != EditorDocument::TYPE_LEVEL) {
+			doc->set_type(EditorDocument::classify_scene_type(p_root));
+		}
 		// G1: a document owns its scene root for the document's lifetime — parent it into
 		// the document's isolated SubViewport as soon as it is assigned. Upstream instead
 		// attaches on tab switch under the shared scene_root, which the workspace model

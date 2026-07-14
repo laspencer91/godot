@@ -460,6 +460,8 @@ private:
 	LocalVector<String> disk_changed_scenes;
 	bool disk_changed_project = false;
 	ConfirmationDialog *disk_changed = nullptr;
+	HashSet<String> same_path_stale_scenes;
+	bool same_path_stale_scenes_pending = false;
 	ConfirmationDialog *project_data_missing = nullptr;
 
 	bool scene_distraction_free = false;
@@ -613,6 +615,7 @@ private:
 
 	void _set_current_scene(int p_idx);
 	void _set_current_scene_nocheck(int p_idx, bool p_ignore_state = false);
+	Error _open_scene_internal(const String &p_scene, bool p_ignore_broken_deps, bool p_set_inherited, bool p_force_open_imported, bool p_as_level_document);
 	// G1: bind the 2D/3D editors to the active document's scene_root + world (no node reparenting).
 	void _activate_scene_views();
 	// G2 M7.1: ensure the active scene has a (background) pane tab. Deferred from the scene switch to
@@ -735,6 +738,8 @@ private:
 
 	void _resources_changed(const Vector<String> &p_resources);
 	void _scan_external_changes();
+	void _process_same_path_stale_scenes();
+	bool _reload_scene_at_index(int p_idx);
 	void _reload_modified_scenes();
 	void _reload_project_settings();
 	void _resave_externally_modified_scenes(String p_str);
@@ -943,8 +948,10 @@ public:
 	void set_preview_locale(const String &p_locale, bool p_pseudolocalization);
 
 	int new_scene();
-	Error load_scene(const String &p_scene, bool p_ignore_broken_deps = false, bool p_set_inherited = false, bool p_force_open_imported = false, bool p_update_tabs = true);
+	Error load_scene(const String &p_scene, bool p_ignore_broken_deps = false, bool p_set_inherited = false, bool p_force_open_imported = false, bool p_update_tabs = true, bool p_as_level_document = false);
 	Error open_scene(const String &p_scene, bool p_ignore_broken_deps = false, bool p_set_inherited = false, bool p_force_open_imported = false);
+	// G-Level LE0: same scene loader/reveal path, with LevelDocument selected for the new slot.
+	Error open_scene_in_level_editor(const String &p_scene);
 	Error load_resource(const String &p_resource, bool p_ignore_broken_deps = false);
 	Error load_scene_or_resource(const String &p_file, bool p_ignore_broken_deps = false, bool p_change_scene_tab_if_already_open = true);
 

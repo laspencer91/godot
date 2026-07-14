@@ -81,6 +81,8 @@ class SceneTreeDock : public EditorDock {
 		TOOL_COPY_NODE_PATH,
 		TOOL_SHOW_IN_FILE_SYSTEM,
 		TOOL_OPEN_DOCUMENTATION,
+		// G-Level LE0: Scene Tree context menu entry that opens the edited scene root as a level document.
+		TOOL_OPEN_IN_LEVEL_EDITOR,
 		TOOL_AUTO_EXPAND,
 		TOOL_SCENE_EDITABLE_CHILDREN,
 		TOOL_SCENE_USE_PLACEHOLDER,

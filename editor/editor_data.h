@@ -217,7 +217,9 @@ public:
 
 	void instantiate_object_properties(Object *p_object);
 
-	int add_edited_scene(int p_at_pos);
+	// G-Level LE0: p_as_level_document changes only the document subclass; loading,
+	// root ownership, history, selection, and scene bookkeeping remain the scene path.
+	int add_edited_scene(int p_at_pos, bool p_as_level_document = false);
 	void remove_scene(int p_idx);
 	void set_scene_root(int p_idx, Node *p_root);
 	void set_edited_scene(int p_idx);

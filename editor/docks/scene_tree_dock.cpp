@@ -66,6 +66,7 @@
 #include "editor/shader/shader_create_dialog.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/2d/node_2d.h"
+#include "scene/3d/node_3d.h"
 #include "scene/animation/animation_tree.h"
 #include "scene/audio/audio_stream_player.h"
 #include "scene/gui/box_container.h"
@@ -161,7 +162,10 @@ void SceneTreeDock::input(const Ref<InputEvent> &p_event) {
 
 	if (mb.is_valid() && (mb->get_button_index() == MouseButton::LEFT || mb->get_button_index() == MouseButton::RIGHT)) {
 		Tree *tree = scene_tree->get_scene_tree();
-		if (mb->is_pressed() && tree->get_rect().has_point(tree->get_local_mouse_position())) {
+		const Vector2 event_local_position = tree->get_global_transform_with_canvas().affine_inverse().xform(mb->get_position());
+		// Use the dispatched event as the source of truth. Re-sampling the OS cursor here can disagree
+		// with a queued/synthetic event and bypass the press-to-release Inspector commit deferral.
+		if (mb->is_pressed() && Rect2(Vector2(), tree->get_size()).has_point(event_local_position)) {
 			tree_clicked = true;
 		} else if (!mb->is_pressed()) {
 			tree_clicked = false;
@@ -1350,6 +1354,14 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 				ScriptEditor::get_singleton()->goto_help("class_name:" + class_name);
 			}
 			EditorNode::get_singleton()->get_editor_main_screen()->focus_editor(SNAME("Script"));
+		} break;
+		case TOOL_OPEN_IN_LEVEL_EDITOR: {
+			if (edited_scene) {
+				const String scene_path = edited_scene->get_scene_file_path();
+				if (!scene_path.is_empty()) {
+					EditorNode::get_singleton()->open_scene_in_level_editor(scene_path);
+				}
+			}
 		} break;
 		case TOOL_AUTO_EXPAND: {
 			scene_tree->set_auto_expand_selected(!EDITOR_GET("docks/scene_tree/auto_expand_to_selected"), true);
@@ -4257,6 +4269,15 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 
 	if (full_selection.size() == 1 && selection.front()->get()->is_instance()) {
 		menu->add_icon_shortcut(get_editor_theme_icon(SNAME("ShowInFileSystem")), ED_GET_SHORTCUT("scene_tree/show_in_file_system"), TOOL_SHOW_IN_FILE_SYSTEM);
+	}
+
+	// G-Level LE0: offer to reopen the edited scene root as a level document, mirroring the
+	// FileSystem dock's "Open in Level Editor" action (see FileSystemDock::_file_option).
+	if (full_selection.size() == 1 && scene_tree->get_selected() == edited_scene) {
+		Node3D *edited_scene_3d = Object::cast_to<Node3D>(edited_scene);
+		if (edited_scene_3d && !edited_scene_3d->get_scene_file_path().is_empty()) {
+			menu->add_icon_item(get_editor_theme_icon(SNAME("Grid")), TTRC("Open in Level Editor"), TOOL_OPEN_IN_LEVEL_EDITOR);
+		}
 	}
 
 	menu->add_icon_item(get_editor_theme_icon(SNAME("Help")), TTRC("Open Documentation"), TOOL_OPEN_DOCUMENTATION);

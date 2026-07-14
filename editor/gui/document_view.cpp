@@ -40,6 +40,8 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/level/level_editor.h"
+#include "editor/level/level_editor_view.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "editor/script/script_editor_plugin.h"
@@ -186,6 +188,14 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 				editor_surface = sep->create_editor_view(shd->get_shader_resource());
 			}
 		} break;
+		case EditorDocument::TYPE_LEVEL: {
+			// G-Level LE0: the singleton owns SERVICES/tool state only. It mints this pane's
+			// camera/viewport/grid surface against the LevelDocument's explicit world.
+			LevelDocument *ld = static_cast<LevelDocument *>(p_document);
+			if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
+				editor_surface = level_editor->create_editor_view(ld);
+			}
+		} break;
 		case EditorDocument::TYPE_HELP: {
 			// G2 S6b: the view is minted by the ScriptEditor SERVICES singleton (wired to go_to_help
 			// navigation + history, registered in the open-help registry). go_to_class needs the view
@@ -234,7 +244,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		// D7b: the per-pane dock column — a vertical accordion of FoldableContainer sections
 		// (Scene Tree + Inspector expanded, Signals + Groups folded), on the RIGHT of the surface.
 		VBoxContainer *dock_column = memnew(VBoxContainer);
-		dock_column->set_custom_minimum_size(Size2(320 * EDSCALE, 0));
+		dock_column->set_custom_minimum_size(Size2(400 * EDSCALE, 0));
 		dock_column->add_theme_constant_override("separation", 6 * EDSCALE); // gaps → sections read as stacked cards.
 
 		// Each section is a styled FoldableContainer "card" built by _add_accordion_section; only the dock
@@ -266,6 +276,9 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		// toolbar_host; it sits empty (zero height) otherwise.
 		toolbar_host = memnew(HBoxContainer);
 		toolbar_host->set_h_size_flags(SIZE_EXPAND_FILL);
+		if (LevelEditorView *level_view = Object::cast_to<LevelEditorView>(editor_surface)) {
+			level_view->mount_top_strip(toolbar_host);
+		}
 		VBoxContainer *surface_vbox = memnew(VBoxContainer);
 		surface_vbox->add_theme_constant_override("separation", 0);
 		surface_vbox->set_h_size_flags(SIZE_EXPAND_FILL);

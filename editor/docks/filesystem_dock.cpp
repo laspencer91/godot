@@ -943,6 +943,15 @@ void FileSystemDock::navigate_to_path(const String &p_path) {
 	callable_mp(this, &FileSystemDock::_update_import_dock).call_deferred();
 }
 
+Error FileSystemDock::open_scene_in_level_editor(const String &p_path) {
+	ERR_FAIL_COND_V_MSG(
+			p_path.get_extension().to_lower() != "tscn" || ResourceLoader::get_resource_type(p_path) != "PackedScene",
+			ERR_INVALID_PARAMETER,
+			"Only .tscn scene files can be opened in the Level Editor.");
+	ERR_FAIL_NULL_V(EditorNode::get_singleton(), ERR_UNAVAILABLE);
+	return EditorNode::get_singleton()->open_scene_in_level_editor(p_path);
+}
+
 void FileSystemDock::_file_list_thumbnail_done(const String &p_path, const Ref<Texture2D> &p_preview, const Ref<Texture2D> &p_small_preview, int p_index, const String &p_filename) {
 	if (p_preview.is_valid()) {
 		if (p_index < files->get_item_count() && files->get_item_text(p_index) == p_filename && files->get_item_metadata(p_index) == p_path) {
@@ -2541,6 +2550,12 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 			}
 		} break;
 
+		case FILE_MENU_OPEN_LEVEL: {
+			if (p_selected.size() == 1) {
+				open_scene_in_level_editor(p_selected[0]);
+			}
+		} break;
+
 		case FILE_MENU_INHERIT: {
 			// Create a new scene inherited from the selected one.
 			if (p_selected.size() == 1) {
@@ -3755,6 +3770,9 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 		if (all_files_scenes) {
 			if (filenames.size() == 1) {
 				p_popup->add_icon_item(get_editor_theme_icon(SNAME("Load")), TTRC("Open Scene"), FILE_MENU_OPEN);
+				if (filenames[0].get_extension().to_lower() == "tscn") {
+					p_popup->add_icon_item(get_editor_theme_icon(SNAME("Grid")), TTRC("Open in Level Editor"), FILE_MENU_OPEN_LEVEL);
+				}
 				p_popup->add_icon_item(get_editor_theme_icon(SNAME("CreateNewSceneFrom")), TTRC("New Inherited Scene"), FILE_MENU_INHERIT);
 				if (main_scene_path != filenames[0]) {
 					p_popup->add_icon_item(get_editor_theme_icon(SNAME("PlayScene")), TTRC("Set as Main Scene"), FILE_MENU_MAIN_SCENE);
@@ -4739,6 +4757,7 @@ void FileSystemDock::_on_open_editor_settings_file_exts() {
 
 void FileSystemDock::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("navigate_to_path", "path"), &FileSystemDock::navigate_to_path);
+	ClassDB::bind_method(D_METHOD("open_scene_in_level_editor", "path"), &FileSystemDock::open_scene_in_level_editor);
 
 	ClassDB::bind_method(D_METHOD("add_resource_tooltip_plugin", "plugin"), &FileSystemDock::add_resource_tooltip_plugin);
 	ClassDB::bind_method(D_METHOD("remove_resource_tooltip_plugin", "plugin"), &FileSystemDock::remove_resource_tooltip_plugin);

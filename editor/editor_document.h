@@ -31,6 +31,7 @@
 
 class Control;
 class Node;
+class SelectionModel;
 class SubViewport;
 class WorkspacePane;
 
@@ -60,6 +61,7 @@ public:
 		TYPE_HELP, // G2 S3: a class-reference (help) document. Append-only — do not reorder.
 		TYPE_SCREEN_HOST, // G2 S5.5: THE one screen-host document (seam #5). Append-only.
 		TYPE_SHADER, // G-Shader: a Shader / ShaderInclude / VisualShader document. Append-only.
+		TYPE_LEVEL, // G-Level LE0: a scene opened in the level-editor workspace. Append-only.
 	};
 
 protected:
@@ -182,6 +184,20 @@ public:
 
 	SceneDocument();
 	virtual ~SceneDocument();
+};
+
+// G-Level LE0: the edited thing is still a scene. Inheriting SceneDocument is the
+// document seam: isolated World3D/World2D, per-document selection, undo history,
+// scene-root ownership, workspace-tab routing, and scene docks all stay identical.
+class LevelDocument : public SceneDocument {
+	SelectionModel *selection_model = nullptr;
+
+public:
+	SelectionModel *get_selection_model() const { return selection_model; }
+	virtual String get_title() const override;
+
+	LevelDocument();
+	virtual ~LevelDocument();
 };
 
 // A generic Resource edited as a first-class workspace tab. It keeps the exact Ref passed to

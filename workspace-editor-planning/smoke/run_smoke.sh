@@ -32,6 +32,7 @@ set -u
 
 SMOKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SMOKE_DIR/../.." && pwd)"
+LEVEL_TESTBED="$REPO_ROOT/level-editor-planning/testbed"
 
 # --- resolve the editor binary -------------------------------------------------
 BIN="${1:-${GODOT_BIN:-}}"
@@ -64,6 +65,16 @@ host_path() {
 # Any of these lines in a run means the case failed. Kept in one place so the net
 # tightens uniformly.
 ERR_RE='ERROR|WARNING|material.*null|leaked|Camera is not|Condition.*is true|Parameter .* is null'
+
+# Some Windows CI images emit a Vulkan loader diagnostic before Godot selects
+# headless rendering. It is environmental and carries no engine error state.
+error_lines() {
+	grep -nE "$ERR_RE" "$1" | grep -v 'Loader Message'
+}
+
+error_count() {
+	error_lines "$1" | wc -l
+}
 
 RUN_ARGS=()
 if [[ "${SMOKE_HEADLESS:-0}" == "1" ]]; then
@@ -99,12 +110,12 @@ run_case() {
 	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_WORK" "$@" --quit-after "$QUIT_AFTER" >"$log" 2>&1
 	local code=$?
 	local errs
-	errs=$(grep -cE "$ERR_RE" "$log")
+	errs=$(error_count "$log")
 	if [[ $code -eq 0 && $errs -eq 0 ]]; then
 		echo "  PASS  $name (exit 0, 0 errors)"
 	else
 		echo "  FAIL  $name (exit $code, $errs error-class lines)"
-		grep -nE "$ERR_RE" "$log" | head -8 | sed 's/^/        /'
+		error_lines "$log" | head -8 | sed 's/^/        /'
 		fail=1
 	fi
 }
@@ -177,6 +188,173 @@ else
 	fail=1
 fi
 
+# Floating camera preview: constructing the overlay applies a local panel style, which synchronously
+# emits a theme-change notification. Exercise open/close/reopen so a recursive theme update fails as
+# a crash (and require the marker so an editor that merely survives without routing the menu also fails).
+cp "$SMOKE_DIR/floating_camera_preview_project.godot" "$WORK/project.godot"
+run_case "floating_camera_preview" -e "res://test_3d.tscn"
+if grep -q 'FLOATING_CAMERA_PREVIEW_TOGGLE_OK' "$WORK/floating_camera_preview.log"; then
+	echo "  PASS  floating_camera_preview_assertions (open/close/reopen verified)"
+else
+	echo "  FAIL  floating_camera_preview_assertions (toggle sequence did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE0: use a throwaway copy of the dedicated level-editor testbed. The plugin calls the same
+# public FileSystemDock route as "Open in Level Editor", checks TYPE_LEVEL + the explicit world bind,
+# closes the workspace tab, and requires that its LevelEditorView has actually been torn down.
+LEVEL_WORK="$WORK/level_tab_smoke"
+mkdir -p "$LEVEL_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$LEVEL_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$LEVEL_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$LEVEL_WORK/"
+cp "$LEVEL_TESTBED/level_tab_smoke_project.godot" "$LEVEL_WORK/project.godot"
+HOST_LEVEL_WORK="$(host_path "$LEVEL_WORK")"
+LEVEL_LOG="$WORK/level_tab_smoke.log"
+"$BIN" "${RUN_ARGS[@]}" --path "$HOST_LEVEL_WORK" -e --quit-after "$QUIT_AFTER" >"$LEVEL_LOG" 2>&1
+level_code=$?
+level_errs=$(error_count "$LEVEL_LOG")
+if [[ $level_code -eq 0 && $level_errs -eq 0 ]]; then
+	echo "  PASS  level_tab_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  level_tab_smoke (exit $level_code, $level_errs error-class lines)"
+	error_lines "$LEVEL_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'LEVEL_TAB_SMOKE_OK' "$LEVEL_LOG"; then
+	echo "  PASS  level_tab_smoke_assertions (document/view/world/teardown verified)"
+else
+	echo "  FAIL  level_tab_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level WP10 same-path staleness: open main.tscn as both a plain scene and a level document,
+# save a level-only mutation, and require the clean sibling to reload silently without changing
+# type/current focus. The dirty-dialog counterpart is skipped because embedded ConfirmationDialog
+# visibility does not transition reliably under the headless display driver.
+STALE_WORK="$WORK/stale_reload_smoke"
+mkdir -p "$STALE_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$STALE_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$STALE_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$STALE_WORK/"
+cp "$LEVEL_TESTBED/stale_reload_smoke_project.godot" "$STALE_WORK/project.godot"
+HOST_STALE_WORK="$(host_path "$STALE_WORK")"
+STALE_LOG="$WORK/stale_reload_smoke.log"
+STALE_QUIT_AFTER="${STALE_QUIT_AFTER:-400}"
+"$BIN" "${RUN_ARGS[@]}" --path "$HOST_STALE_WORK" -e --quit-after "$STALE_QUIT_AFTER" >"$STALE_LOG" 2>&1
+stale_code=$?
+stale_errs=$(error_count "$STALE_LOG")
+if [[ $stale_code -eq 0 && $stale_errs -eq 0 ]]; then
+	echo "  PASS  stale_reload_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  stale_reload_smoke (exit $stale_code, $stale_errs error-class lines)"
+	error_lines "$STALE_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'STALE_RELOAD_SMOKE_OK' "$STALE_LOG"; then
+	echo "  PASS  stale_reload_smoke_assertions (silent/type/current verified; dirty-dialog headless-skipped)"
+else
+	echo "  FAIL  stale_reload_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE0 BlockTool: a separate single-plugin project drives the real level viewport input
+# route, then verifies topology/AABB, document-local undo/redo, and scene save/reload rebuilding.
+BLOCK_WORK="$WORK/block_tool_smoke"
+mkdir -p "$BLOCK_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$BLOCK_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$BLOCK_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$BLOCK_WORK/"
+cp "$LEVEL_TESTBED/block_tool_smoke_project.godot" "$BLOCK_WORK/project.godot"
+HOST_BLOCK_WORK="$(host_path "$BLOCK_WORK")"
+BLOCK_LOG="$WORK/block_tool_smoke.log"
+"$BIN" "${RUN_ARGS[@]}" --path "$HOST_BLOCK_WORK" -e --quit-after "$QUIT_AFTER" >"$BLOCK_LOG" 2>&1
+block_code=$?
+block_errs=$(error_count "$BLOCK_LOG")
+if [[ $block_code -eq 0 && $block_errs -eq 0 ]]; then
+	echo "  PASS  block_tool_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  block_tool_smoke (exit $block_code, $block_errs error-class lines)"
+	error_lines "$BLOCK_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'BLOCK_TOOL_SMOKE_OK' "$BLOCK_LOG"; then
+	echo "  PASS  block_tool_smoke_assertions (input/mesh/undo/save-reload verified)"
+else
+	echo "  FAIL  block_tool_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE1 SelectTool: fixed-camera synthetic input covers the world-scoped gizmo BVH ->
+# element-BVH pipeline, mode/tier resolution, modifier grammar, marquee, adjacency walks,
+# EditorSelection interop, and stale-handle removal when an authored block is undone.
+SELECTION_WORK="$WORK/selection_smoke"
+mkdir -p "$SELECTION_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$SELECTION_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$SELECTION_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$SELECTION_WORK/"
+cp "$LEVEL_TESTBED/selection_smoke_project.godot" "$SELECTION_WORK/project.godot"
+HOST_SELECTION_WORK="$(host_path "$SELECTION_WORK")"
+SELECTION_LOG="$WORK/selection_smoke.log"
+SELECTION_APPDATA="$SELECTION_WORK/appdata"
+SELECTION_LOCALAPPDATA="$SELECTION_WORK/localappdata"
+mkdir -p "$SELECTION_APPDATA/Godot" "$SELECTION_LOCALAPPDATA"
+cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$SELECTION_APPDATA/Godot/editor_settings-4.8.tres"
+HOST_SELECTION_APPDATA="$(host_path "$SELECTION_APPDATA")"
+HOST_SELECTION_LOCALAPPDATA="$(host_path "$SELECTION_LOCALAPPDATA")"
+APPDATA="$HOST_SELECTION_APPDATA" LOCALAPPDATA="$HOST_SELECTION_LOCALAPPDATA" \
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_SELECTION_WORK" -e --quit-after "$QUIT_AFTER" >"$SELECTION_LOG" 2>&1
+selection_code=$?
+selection_errs=$(error_count "$SELECTION_LOG")
+if [[ $selection_code -eq 0 && $selection_errs -eq 0 ]]; then
+	echo "  PASS  selection_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  selection_smoke (exit $selection_code, $selection_errs error-class lines)"
+	error_lines "$SELECTION_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'SELECTION_SMOKE_OK' "$SELECTION_LOG"; then
+	echo "  PASS  selection_smoke_assertions (picking/marquee/walks/object/undo verified)"
+else
+	echo "  FAIL  selection_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE1 transform/extrude: selection-owned synthetic drag input verifies relative
+# world-delta snapping, Escape rollback with no history entry, face extrude composition,
+# one-step undo, and stable SelectionModel handles after topology restoration.
+TRANSFORM_WORK="$WORK/transform_smoke"
+mkdir -p "$TRANSFORM_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$TRANSFORM_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$TRANSFORM_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$TRANSFORM_WORK/"
+cp "$LEVEL_TESTBED/transform_smoke_project.godot" "$TRANSFORM_WORK/project.godot"
+HOST_TRANSFORM_WORK="$(host_path "$TRANSFORM_WORK")"
+TRANSFORM_LOG="$WORK/transform_smoke.log"
+TRANSFORM_APPDATA="$TRANSFORM_WORK/appdata"
+TRANSFORM_LOCALAPPDATA="$TRANSFORM_WORK/localappdata"
+mkdir -p "$TRANSFORM_APPDATA/Godot" "$TRANSFORM_LOCALAPPDATA"
+cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$TRANSFORM_APPDATA/Godot/editor_settings-4.8.tres"
+HOST_TRANSFORM_APPDATA="$(host_path "$TRANSFORM_APPDATA")"
+HOST_TRANSFORM_LOCALAPPDATA="$(host_path "$TRANSFORM_LOCALAPPDATA")"
+APPDATA="$HOST_TRANSFORM_APPDATA" LOCALAPPDATA="$HOST_TRANSFORM_LOCALAPPDATA" \
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_TRANSFORM_WORK" -e --quit-after "$QUIT_AFTER" >"$TRANSFORM_LOG" 2>&1
+transform_code=$?
+transform_errs=$(error_count "$TRANSFORM_LOG")
+if [[ $transform_code -eq 0 && $transform_errs -eq 0 ]]; then
+	echo "  PASS  transform_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  transform_smoke (exit $transform_code, $transform_errs error-class lines)"
+	error_lines "$TRANSFORM_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'TRANSFORM_EDITOR_SMOKE_OK' "$TRANSFORM_LOG"; then
+	echo "  PASS  transform_smoke_assertions (snap/cancel/extrude/undo/selection verified)"
+else
+	echo "  FAIL  transform_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
 # Save-capture round-trip (M6.2): the restore_workspace fixture hand-authors the tab paths, so it
 # never exercises the SAVE side. This case does: restore open scenes (the active one is revealed into
 # a pane by M7.1), quit (which must WRITE that scene into the workspace tabs), then restore again. It
@@ -193,12 +371,12 @@ HOST_RT="$(host_path "$RT")"
 if grep -q '"docs".*res://test_3d.tscn' "$RT/.godot/editor/editor_layout.cfg"; then
 	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_RT" -e --quit-after "$QUIT_AFTER" >"$RT/restore.log" 2>&1
 	rt_code=$?
-	rt_errs=$(grep -cE "$ERR_RE" "$RT/restore.log")
+	rt_errs=$(error_count "$RT/restore.log")
 	if [[ $rt_code -eq 0 && $rt_errs -eq 0 ]]; then
 		echo "  PASS  save_restore_roundtrip (scene persisted to tabs + restored clean)"
 	else
 		echo "  FAIL  save_restore_roundtrip (restore exit $rt_code, $rt_errs error-class lines)"
-		grep -nE "$ERR_RE" "$RT/restore.log" | head -8 | sed 's/^/        /'
+		error_lines "$RT/restore.log" | head -8 | sed 's/^/        /'
 		fail=1
 	fi
 else

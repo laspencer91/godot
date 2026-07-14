@@ -1,0 +1,11 @@
+[gd_resource type="StandardMaterial3D" load_steps=2 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/textures/T_WindowBlockedDividedGrid.png" id="1_albedo"]
+
+[resource]
+resource_name = "M_WindowBlockedDividedGrid"
+cull_mode = 2
+albedo_texture = ExtResource("1_albedo")
+metallic_specular = 0.16
+roughness = 0.92
+texture_filter = 5

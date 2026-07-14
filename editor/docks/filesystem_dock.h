@@ -140,6 +140,7 @@ private:
 		FILE_MENU_COPY,
 		FILE_MENU_CUT,
 		FILE_MENU_PASTE,
+		FILE_MENU_OPEN_LEVEL,
 		FILE_MENU_MAX,
 		// Extra shortcuts that don't exist in the menu.
 		EXTRA_FOCUS_PATH,
@@ -461,6 +462,8 @@ public:
 	String get_folder_path_at_mouse_position() const;
 
 	void navigate_to_path(const String &p_path);
+	// G-Level LE0: public so the context action and headless smoke exercise one route.
+	Error open_scene_in_level_editor(const String &p_path);
 	void focus_on_path();
 	void focus_on_filter();
 	void create_directory(const String &p_path, const String &p_base_dir);
