@@ -9,6 +9,7 @@
 #include "horde_nav_grid.h"
 
 #include "core/math/aabb.h"
+#include "core/math/rect2.h"
 #include "core/object/ref_counted.h"
 #include "core/templates/local_vector.h"
 #include "core/variant/array.h"
@@ -88,6 +89,7 @@ public:
 	static constexpr int HARD_CAP = 1 << ID_SLOT_BITS; // 1024 concurrent ids.
 	static constexpr int ID_SLOT_MASK = HARD_CAP - 1;
 	static constexpr int ID_EPOCH_BIT = HARD_CAP;
+	static constexpr int MAX_FIELDS = 256; // uint8_t field-id space.
 
 private:
 	// --- Config ---
@@ -113,7 +115,28 @@ private:
 	float attack_seek_radius = 3.25f;
 	uint32_t collision_mask = 0xFFFFFFFF; // Static layers the mover sweep tests.
 
-	Ref<HordeFlowField> flow_field;
+	// Flow-field registry indexed by the per-agent uint8_t field id. Field 0 is
+	// the coarse/world field by convention; fine fields may additionally carry
+	// a world-XZ handoff domain.
+	LocalVector<Ref<HordeFlowField>> fields;
+	struct FieldDomain {
+		Rect2 footprint;
+		Rect2 outer;
+		Vector2 center;
+		float inner_radius_sq = 0.0f;
+		float outer_radius_sq = 0.0f;
+		bool enabled = false;
+	};
+	LocalVector<FieldDomain> field_domains;
+
+	// Rebuilt once per movement step from `fields`. Agent sampling reads only
+	// these raw pointers, avoiding a Ref dereference in the per-slot hot loop.
+	struct ResolvedField {
+		HordeFlowField *field = nullptr;
+		HordeNavGrid *grid = nullptr;
+	};
+	LocalVector<ResolvedField> resolved_fields;
+
 	Ref<HordeFSMConfig> fsm_config;
 
 	// Box3D world handle, packed via b3StoreWorldId (kept box3d-free in this
@@ -163,6 +186,7 @@ private:
 	// send decisions on this field.
 	LocalVector<uint8_t> tier;
 	LocalVector<uint8_t> archetype;
+	LocalVector<uint8_t> field_id;
 	LocalVector<uint8_t> active; // 1 if slot holds a live agent.
 	LocalVector<uint8_t> pending_reason; // TransitionReason armed this tick.
 	// 1 if this slot's most recent movement sweep (Hot/Warm only) was clamped
@@ -230,7 +254,8 @@ private:
 			LocalVector<OverlapCandidate> &r_candidates) const;
 
 	void _rebuild_storage();
-	void _init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp);
+	void _init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp, int p_field_id);
+	void _ensure_field_capacity(int p_field_id);
 	// State entry bookkeeping shared by apply_transition() and the native
 	// combat transitions (death, stagger enter/exit).
 	void _enter_state(int p_slot, int p_new_state);
@@ -241,7 +266,8 @@ private:
 	void _assign_tiers();
 	void _build_hot_spatial_hash();
 	void _step_movement(double p_delta);
-	void _move_agent(int p_slot, double p_delta, HordeNavGrid *p_grid, bool p_have_field);
+	void _move_agent(int p_slot, double p_delta, HordeFlowField *p_field, HordeNavGrid *p_grid);
+	void _update_field_handoff(int p_slot, int p_movement_mode);
 	void _evaluate_exits();
 
 	// Movement helpers (hot path).
@@ -250,8 +276,6 @@ private:
 	int _movement_mode(int p_archetype, int p_state) const;
 	float _wander_angle(int p_slot) const;
 	float _sweep_fraction(int p_slot, const Vector2 &p_disp) const;
-	// Grid of the published flow field, or null when no field is available.
-	HordeNavGrid *_resolve_field() const;
 	int32_t _hash_lookup(int64_t p_key) const;
 
 	_FORCE_INLINE_ int _tier_divisor(int p_tier) const {
@@ -281,8 +305,12 @@ public:
 	void set_collision_mask(int p_mask) { collision_mask = (uint32_t)p_mask; }
 	int get_collision_mask() const { return (int)collision_mask; }
 
-	void set_flow_field(const Ref<HordeFlowField> &p_field) { flow_field = p_field; }
-	Ref<HordeFlowField> get_flow_field() const { return flow_field; }
+	void set_field(int p_field_id, const Ref<HordeFlowField> &p_field);
+	void clear_fields();
+	void set_field_domain(int p_field_id, const Rect2 &p_footprint_xz, float p_apron = 3.0f);
+	// Legacy single-field API: field 0 is wired exactly as before.
+	void set_flow_field(const Ref<HordeFlowField> &p_field);
+	Ref<HordeFlowField> get_flow_field() const;
 	void set_fsm_config(const Ref<HordeFSMConfig> &p_config) { fsm_config = p_config; }
 	Ref<HordeFSMConfig> get_fsm_config() const { return fsm_config; }
 
@@ -299,7 +327,7 @@ public:
 
 	// --- Spawn / despawn / recycle (NET R3.4-R3.5) ---
 	// p_hp < 0 spawns at the archetype's CombatRule max_hp (the default path).
-	int spawn(int p_archetype, const Vector3 &p_position, int p_state = STATE_DORMANT, float p_hp = -1.0f);
+	int spawn(int p_archetype, const Vector3 &p_position, int p_state = STATE_DORMANT, float p_hp = -1.0f, int p_field_id = 0);
 	bool despawn(int p_id);
 	bool is_alive(int p_id) const;
 	int get_active_count() const { return active_count; }
@@ -385,6 +413,7 @@ public:
 	int get_agent_state(int p_id) const;
 	int get_agent_tier(int p_id) const;
 	int get_agent_archetype(int p_id) const;
+	int get_agent_field_id(int p_id) const;
 	Vector3 get_agent_position(int p_id) const;
 	float get_agent_yaw(int p_id) const;
 	bool set_agent_yaw(int p_id, float p_yaw);

@@ -35,6 +35,57 @@ void HordeAgents::set_attack_seek_radius(float p_r) {
 	attack_seek_radius = Math::is_finite(p_r) ? MAX(p_r, 0.0f) : 0.0f;
 }
 
+void HordeAgents::_ensure_field_capacity(int p_field_id) {
+	const uint32_t count = (uint32_t)p_field_id + 1;
+	if (fields.size() < count) {
+		fields.resize(count);
+	}
+	if (field_domains.size() < count) {
+		field_domains.resize(count);
+	}
+}
+
+void HordeAgents::set_field(int p_field_id, const Ref<HordeFlowField> &p_field) {
+	ERR_FAIL_INDEX(p_field_id, MAX_FIELDS);
+	_ensure_field_capacity(p_field_id);
+	fields[p_field_id] = p_field;
+}
+
+void HordeAgents::clear_fields() {
+	fields.clear();
+	field_domains.clear();
+	resolved_fields.clear();
+}
+
+void HordeAgents::set_field_domain(int p_field_id, const Rect2 &p_footprint_xz, float p_apron) {
+	ERR_FAIL_INDEX(p_field_id, MAX_FIELDS);
+	ERR_FAIL_COND_MSG(p_field_id == 0, "Field 0 is the coarse/world field and cannot have a handoff domain.");
+	ERR_FAIL_COND_MSG(!p_footprint_xz.is_finite() || p_footprint_xz.size.x <= 0.0f || p_footprint_xz.size.y <= 0.0f,
+			"Field footprint must be finite with positive size.");
+	ERR_FAIL_COND_MSG(!Math::is_finite(p_apron) || p_apron < 0.0f, "Field apron must be finite and non-negative.");
+	const Rect2 outer = p_footprint_xz.grow(p_apron);
+	ERR_FAIL_COND_MSG(!outer.is_finite(), "Field footprint plus apron must be finite.");
+
+	_ensure_field_capacity(p_field_id);
+	FieldDomain &domain = field_domains[p_field_id];
+	domain.footprint = p_footprint_xz;
+	domain.outer = outer;
+	domain.center = p_footprint_xz.get_center();
+	const Vector2 inner_half = p_footprint_xz.size * 0.5f;
+	const Vector2 outer_half = domain.outer.size * 0.5f;
+	domain.inner_radius_sq = inner_half.length_squared();
+	domain.outer_radius_sq = outer_half.length_squared();
+	domain.enabled = true;
+}
+
+void HordeAgents::set_flow_field(const Ref<HordeFlowField> &p_field) {
+	set_field(0, p_field);
+}
+
+Ref<HordeFlowField> HordeAgents::get_flow_field() const {
+	return fields.is_empty() ? Ref<HordeFlowField>() : fields[0];
+}
+
 // Fallback within-state speeds (m/s) when the FSM config leaves move_speed at 0
 // (or no config is assigned). Indexed by HordeAgents::State.
 static const float DEFAULT_STATE_SPEED[HordeAgents::STATE_MAX] = {
@@ -80,6 +131,7 @@ void HordeAgents::_rebuild_storage() {
 	state.resize(cap);
 	tier.resize(cap);
 	archetype.resize(cap);
+	field_id.resize(cap);
 	active.resize(cap);
 	pending_reason.resize(cap);
 	blocked_contact.resize(cap);
@@ -176,7 +228,7 @@ bool HordeAgents::_resolve(int p_id, int &r_slot) const {
 	return true;
 }
 
-void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp) {
+void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp, int p_field_id) {
 	pos_x[p_slot] = p_pos.x;
 	pos_y[p_slot] = p_pos.y;
 	pos_z[p_slot] = p_pos.z;
@@ -199,21 +251,23 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	state[p_slot] = (uint8_t)p_state;
 	tier[p_slot] = (uint8_t)TIER_COLD;
 	archetype[p_slot] = (uint8_t)p_archetype;
+	field_id[p_slot] = (uint8_t)p_field_id;
 	active[p_slot] = 1;
 	pending_reason[p_slot] = (uint8_t)REASON_NONE;
 	blocked_contact[p_slot] = 0;
 	flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
 }
 
-int HordeAgents::spawn(int p_archetype, const Vector3 &p_position, int p_state, float p_hp) {
+int HordeAgents::spawn(int p_archetype, const Vector3 &p_position, int p_state, float p_hp, int p_field_id) {
 	ERR_FAIL_INDEX_V(p_state, STATE_MAX, -1);
+	ERR_FAIL_INDEX_V(p_field_id, MAX_FIELDS, -1);
 	if (free_slots.is_empty()) {
 		return -1; // At the alive cap (R3.4).
 	}
 	const int slot = free_slots[free_slots.size() - 1];
 	free_slots.remove_at(free_slots.size() - 1);
 	const float base_hp = p_hp >= 0.0f ? p_hp : _combat_rule(p_archetype).max_hp;
-	_init_slot(slot, p_archetype, p_position, p_state, base_hp);
+	_init_slot(slot, p_archetype, p_position, p_state, base_hp, p_field_id);
 	active_count++;
 	return _make_id(slot);
 }
@@ -470,18 +524,25 @@ float HordeAgents::_sweep_fraction(int p_slot, const Vector2 &p_disp) const {
 	return b3World_CastMover(world, origin, &cap, translation, filter, nullptr, nullptr);
 }
 
-HordeNavGrid *HordeAgents::_resolve_field() const {
-	// The flow field is only needed by flow-driven states; a null result
-	// disables only the flow branch of movement, never the tick.
-	if (flow_field.is_null() || !flow_field->has_field()) {
-		return nullptr;
-	}
-	return flow_field->get_grid().ptr();
-}
-
 void HordeAgents::_step_movement(double p_delta) {
-	HordeNavGrid *g = _resolve_field();
-	const bool have_field = g != nullptr;
+	// Resolve each registry Ref once per tick. Per-agent sampling below is then
+	// one indexed load of a raw field/grid pair, including holes in the id space.
+	resolved_fields.resize(fields.size());
+	for (uint32_t id = 0; id < resolved_fields.size(); id++) {
+		ResolvedField &resolved = resolved_fields[id];
+		resolved.field = nullptr;
+		resolved.grid = nullptr;
+		HordeFlowField *field = fields[id].ptr();
+		if (field == nullptr || !field->has_field()) {
+			continue;
+		}
+		HordeNavGrid *grid = field->get_grid().ptr();
+		if (grid == nullptr) {
+			continue;
+		}
+		resolved.field = field;
+		resolved.grid = grid;
+	}
 
 	// One pass per tier so per-tier time is a single bracket (not two clock reads
 	// per agent, which would both waste hot-loop cycles and inflate the metric).
@@ -499,13 +560,65 @@ void HordeAgents::_step_movement(double p_delta) {
 			if (((tick_counter + (uint64_t)i) % (uint64_t)divisor) != 0) {
 				continue;
 			}
-			_move_agent(i, p_delta, g, have_field);
+			ResolvedField resolved;
+			const uint32_t id = field_id[i];
+			if (id < resolved_fields.size()) {
+				resolved = resolved_fields[id];
+			}
+			_move_agent(i, p_delta, resolved.field, resolved.grid);
 		}
 		tier_usec[pass] = OS::get_singleton()->get_ticks_usec() - t0;
 	}
 }
 
-void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool have_field) {
+// True when p_point lies inside p_rect, rejecting first against a circumscribed
+// circle (p_center, squared radius p_radius_sq) that bounds the rect: a point
+// outside the circle is outside the rect, so the prefilter only short-circuits a
+// miss and can never flip a hit. Both handoff edges share this exact test; only
+// the circle/rect pair differs (outer apron on exit, inner footprint on enter).
+static _FORCE_INLINE_ bool _circle_prefiltered_contains(const Vector2 &p_center, float p_radius_sq,
+		const Rect2 &p_rect, const Vector2 &p_point) {
+	return (p_point - p_center).length_squared() <= p_radius_sq && p_rect.has_point(p_point);
+}
+
+void HordeAgents::_update_field_handoff(int p_slot, int p_movement_mode) {
+	if (p_movement_mode != HordeFSMConfig::MOVE_FLOW) {
+		return;
+	}
+
+	const uint32_t current = field_id[p_slot];
+	const Vector2 point(pos_x[p_slot], pos_z[p_slot]);
+	if (current != 0) {
+		// A fine field without a domain stays explicitly assigned; with one, the
+		// outer apron edge is the sole exit threshold (hysteresis: exit on outer).
+		if (current >= field_domains.size() || !field_domains[current].enabled) {
+			return;
+		}
+		const FieldDomain &domain = field_domains[current];
+		if (!_circle_prefiltered_contains(domain.center, domain.outer_radius_sq, domain.outer, point)) {
+			field_id[p_slot] = 0;
+			flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
+		}
+		return;
+	}
+
+	// Coarse agents enter the first matching fine footprint (hysteresis: enter on
+	// the inner footprint). Registry order is the deterministic tie-break when
+	// fine domains overlap.
+	for (uint32_t id = 1; id < field_domains.size(); id++) {
+		const FieldDomain &domain = field_domains[id];
+		if (!domain.enabled || id >= resolved_fields.size() || resolved_fields[id].field == nullptr) {
+			continue;
+		}
+		if (_circle_prefiltered_contains(domain.center, domain.inner_radius_sq, domain.footprint, point)) {
+			field_id[p_slot] = (uint8_t)id;
+			flow_octant[p_slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
+			return;
+		}
+	}
+}
+
+void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, HordeNavGrid *grid) {
 	const int t = tier[i];
 	const int divisor = _tier_divisor(t);
 	const float eff_dt = (float)p_delta * (float)divisor;
@@ -528,6 +641,7 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	const int st = state[i];
 	const float speed = _state_speed(archetype[i], st);
 	const int mode = _movement_mode(archetype[i], st);
+	const bool have_field = field != nullptr && grid != nullptr;
 	Vector2 disp; // Planar displacement this step.
 	bool moved_link = false;
 
@@ -580,12 +694,12 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 		const Vector3 wp(pos_x[i], pos_y[i], pos_z[i]);
 		const Vector3i cell = grid->world_to_cell(wp);
 		const int32_t idx = grid->cell_index(cell.x, cell.y, cell.z);
-		const int oct = flow_field->octant_at_index(idx);
+		const int oct = field->octant_at_index(idx);
 		flow_octant[i] = (uint8_t)oct;
 		if (oct == HordeFlowField::OCTANT_LINK) {
 			// Step through an inter-floor link (OCTANT_LINK vocabulary): move
 			// toward the target cell in 3D, snapping (changing floor) on arrival.
-			const int32_t tgt = flow_field->link_target_at_index(idx);
+			const int32_t tgt = field->link_target_at_index(idx);
 			if (tgt >= 0) {
 				const Vector3i tcell = grid->index_to_cell(tgt);
 				const Vector3 twp = grid->cell_to_world(tcell.x, tcell.y, tcell.z);
@@ -644,6 +758,7 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 
 	if (moved_link) {
+		_update_field_handoff(i, mode);
 		return;
 	}
 
@@ -698,6 +813,7 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 
 	if (disp == Vector2()) {
+		_update_field_handoff(i, mode);
 		return;
 	}
 
@@ -719,6 +835,7 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeNavGrid *grid, bool ha
 	}
 	pos_x[i] += disp.x;
 	pos_z[i] += disp.y;
+	_update_field_handoff(i, mode);
 }
 
 void HordeAgents::_evaluate_exits() {
@@ -1180,6 +1297,11 @@ int HordeAgents::get_agent_archetype(int p_id) const {
 	return _resolve(p_id, slot) ? (int)archetype[slot] : -1;
 }
 
+int HordeAgents::get_agent_field_id(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? (int)field_id[slot] : -1;
+}
+
 Vector3 HordeAgents::get_agent_position(int p_id) const {
 	int slot;
 	if (!_resolve(p_id, slot)) {
@@ -1439,6 +1561,9 @@ void HordeAgents::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_flow_field", "flow_field"), &HordeAgents::set_flow_field);
 	ClassDB::bind_method(D_METHOD("get_flow_field"), &HordeAgents::get_flow_field);
+	ClassDB::bind_method(D_METHOD("set_field", "field_id", "field"), &HordeAgents::set_field);
+	ClassDB::bind_method(D_METHOD("clear_fields"), &HordeAgents::clear_fields);
+	ClassDB::bind_method(D_METHOD("set_field_domain", "field_id", "footprint_xz", "apron"), &HordeAgents::set_field_domain, DEFVAL(3.0));
 	ClassDB::bind_method(D_METHOD("set_fsm_config", "config"), &HordeAgents::set_fsm_config);
 	ClassDB::bind_method(D_METHOD("get_fsm_config"), &HordeAgents::get_fsm_config);
 
@@ -1447,7 +1572,7 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("has_physics_space"), &HordeAgents::has_physics_space);
 
 	// Spawn / despawn / recycle.
-	ClassDB::bind_method(D_METHOD("spawn", "archetype", "position", "state", "hp"), &HordeAgents::spawn, DEFVAL(STATE_DORMANT), DEFVAL(-1.0));
+	ClassDB::bind_method(D_METHOD("spawn", "archetype", "position", "state", "hp", "field_id"), &HordeAgents::spawn, DEFVAL(STATE_DORMANT), DEFVAL(-1.0), DEFVAL(0));
 	ClassDB::bind_method(D_METHOD("despawn", "id"), &HordeAgents::despawn);
 	ClassDB::bind_method(D_METHOD("is_alive", "id"), &HordeAgents::is_alive);
 	ClassDB::bind_method(D_METHOD("get_active_count"), &HordeAgents::get_active_count);
@@ -1475,6 +1600,7 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_agent_state", "id"), &HordeAgents::get_agent_state);
 	ClassDB::bind_method(D_METHOD("get_agent_tier", "id"), &HordeAgents::get_agent_tier);
 	ClassDB::bind_method(D_METHOD("get_agent_archetype", "id"), &HordeAgents::get_agent_archetype);
+	ClassDB::bind_method(D_METHOD("get_agent_field_id", "id"), &HordeAgents::get_agent_field_id);
 	ClassDB::bind_method(D_METHOD("get_agent_position", "id"), &HordeAgents::get_agent_position);
 	ClassDB::bind_method(D_METHOD("get_agent_yaw", "id"), &HordeAgents::get_agent_yaw);
 	ClassDB::bind_method(D_METHOD("set_agent_yaw", "id", "yaw"), &HordeAgents::set_agent_yaw);
