@@ -217,6 +217,18 @@ private:
 	// Resolve a packed id to a live slot; false if freed/stale/out-of-range.
 	bool _resolve(int p_id, int &r_slot) const;
 
+	struct OverlapCandidate {
+		int id = -1;
+		Vector3 hit_pos;
+		float height_frac = 0.0f;
+		float contact_dist_sq = 0.0f;
+	};
+	// Exact sphere-versus-capsule gather shared by the rich melee query and the
+	// packed-id stimulus query. Sorts nearest-first, tie-breaks by packed id,
+	// then applies the caller's cap so both public APIs have identical order.
+	void _gather_overlap_candidates(const Vector3 &p_center, float p_radius, int p_max_candidates,
+			LocalVector<OverlapCandidate> &r_candidates) const;
+
 	void _rebuild_storage();
 	void _init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, int p_state, float p_hp);
 	// State entry bookkeeping shared by apply_transition() and the native
@@ -318,13 +330,37 @@ public:
 	// heads). DEAD/despawned agents never hit, and the returned id carries the
 	// current epoch parity so it cannot go stale before use. Per-shot query,
 	// not per-tick; budget-tested <= 50 us against 250 agents.
-	Dictionary raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist) const;
+	// p_padding sweeps a SPHERE of that radius instead of a zero-width ray: it
+	// fattens the capsule radius by p_padding and nothing else (the axis segment
+	// is unchanged), which is exactly the Minkowski sum a spherecast solves.
+	// height_frac stays normalized by the real agent height, so a graze over the
+	// crown clamps to 1.
+	Dictionary raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist, float p_padding = 0.0f) const;
+	// The same scan as raycast_agents(), over capsule feet positions the CALLER
+	// owns: the GEOMETRY without the STORAGE. p_bases and p_ids are parallel and
+	// must be the same length; the scan walks them in ascending index, so a
+	// caller that marshals in id order gets the lowest id on an exact tie -- the
+	// rule the SoA scan's ascending-slot walk follows. Same {id, hit_pos,
+	// height_frac} shape, same p_padding meaning, same boundary rules.
+	// This exists because a predicting client resolves melee itself (D-073) but
+	// has NO SoA: it holds interpolated ghosts of the agents it is rendering
+	// (D-059), and it feeds exactly those in here. Host and client therefore run
+	// one capsule intersection, not two that drift.
+	static Dictionary raycast_capsules(const PackedVector3Array &p_bases, const PackedInt32Array &p_ids,
+			float p_radius, float p_height, const Vector3 &p_from, const Vector3 &p_dir,
+			float p_max_dist, float p_padding = 0.0f);
 	// Exact query-sphere versus live agent capsules. Each result contains the
 	// packed id, closest point on/in the capsule, and normalized hit height.
 	// Results sort by squared contact distance then packed id; the candidate cap
 	// is applied only after sorting. This is a per-swing broadphase query, not a
 	// per-tick path.
 	Array overlap_agents(const Vector3 &p_center, float p_radius, int p_max_candidates) const;
+	// The same exact membership/order as overlap_agents(), but returns only
+	// packed ids. Intended for frequent area stimuli (footsteps, screams) whose
+	// callers do not need hit geometry, avoiding one Dictionary per listener.
+	// The cap bounds returned ids and downstream work; exact discovery still
+	// scans all live slots and sorts all overlaps before truncation.
+	PackedInt32Array overlap_agent_ids(const Vector3 &p_center, float p_radius, int p_max_candidates) const;
 
 	// Damage ingress; returns the resulting state (-1 on a stale id). The game
 	// sends FINAL damage -- headshot multipliers are game-side. At <= 0 HP the
@@ -334,9 +370,12 @@ public:
 	// prior state (and its movement mode) resumes natively. p_knockback > 0
 	// requests a horizontal stumble along p_impulse_dir: distance capped by
 	// knockback_distance_cap, decaying over knockback_duration_ticks, moved
-	// through the CastMover + skin path (never through walls). Deterministic:
-	// pure function of arguments + SoA state, no RNG (L6).
-	int apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint, float p_knockback = 0.0f);
+	// through the CastMover + skin path (never through walls).
+	// p_stagger_duration_ticks >= 0 overrides only the duration for this hit;
+	// -1 preserves the archetype CombatRule. It never bypasses the damage gate.
+	// Deterministic: pure function of arguments + SoA state, no RNG (L6).
+	int apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint,
+			float p_knockback = 0.0f, int p_stagger_duration_ticks = -1);
 
 	// Last hit recorded by apply_damage(): {killer_hint, impulse_dir}. For a
 	// dead agent this is the killing hit -- the R3.9 death event payload.

@@ -600,6 +600,27 @@ TEST_CASE("[HordeSim][Combat] Threshold hit staggers, halts, then resumes the pr
 	CHECK(a->get_agent_state(id) == HordeAgents::STATE_CHASE); // Original prior state, not STAGGER.
 }
 
+TEST_CASE("[HordeSim][Combat] Per-hit stagger duration overrides the window but not the damage gate") {
+	Ref<HordeFSMConfig> cfg;
+	cfg.instantiate();
+	cfg->load_defaults(); // 100 HP, 0.35 threshold, archetype default 90 ticks.
+
+	Ref<HordeAgents> a = make_agents(8);
+	a->set_fsm_config(cfg);
+	const int id = a->spawn(0, Vector3(), HordeAgents::STATE_CHASE);
+
+	// An override cannot turn a sub-threshold hit into a stagger.
+	CHECK(a->apply_damage(id, 10.0f, Vector3(0, 0, -1), 0, 0.0f, 128) == HordeAgents::STATE_CHASE);
+	// A qualifying bat-class hit uses its exact one-second window at the project's 128 Hz tick rate.
+	CHECK(a->apply_damage(id, 40.0f, Vector3(0, 0, -1), 0, 0.0f, 128) == HordeAgents::STATE_STAGGER);
+	for (int t = 0; t < 127; t++) {
+		a->tick(1.0 / 128.0);
+	}
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_STAGGER);
+	a->tick(1.0 / 128.0);
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_CHASE);
+}
+
 // ---------------------------------------------------------------------------
 // 29. Damage -> death: the native DEAD transition emits a REASON_DIED quad,
 // and killer_hint/impulse_dir carry through to the R3.9 death event payload.
@@ -1106,6 +1127,42 @@ TEST_CASE("[HordeSim][Combat] overlap_agents returns exact sorted capsule contac
 	CHECK(a->is_alive(far));
 }
 
+TEST_CASE("[HordeSim][Combat] overlap_agent_ids matches rich overlap membership and order") {
+	Ref<HordeAgents> a = make_agents(12);
+	const int first = a->spawn(0, Vector3(0.5f, 0, 0));
+	const int second = a->spawn(0, Vector3(-0.5f, 0, 0));
+	const int third = a->spawn(0, Vector3(1.5f, 0, 0));
+	const int dead = a->spawn(0, Vector3(0, 0, 0.5f));
+	CHECK(a->apply_damage(dead, 1000.0f, Vector3(), 0) == HordeAgents::STATE_DEAD);
+
+	for (int cap = 1; cap <= 6; cap++) {
+		const Array rich = a->overlap_agents(Vector3(0, 0.9f, 0), 3.0f, cap);
+		const PackedInt32Array ids = a->overlap_agent_ids(Vector3(0, 0.9f, 0), 3.0f, cap);
+		REQUIRE(ids.size() == rich.size());
+		for (int i = 0; i < ids.size(); i++) {
+			CHECK(ids[i] == (int)((Dictionary)rich[i])["id"]);
+		}
+	}
+
+	const PackedInt32Array capped = a->overlap_agent_ids(Vector3(0, 0.9f, 0), 3.0f, 2);
+	REQUIRE(capped.size() == 2);
+	CHECK(capped[0] == MIN(first, second));
+	CHECK(capped[1] == MAX(first, second));
+	CHECK(capped.find(third) == -1);
+	CHECK(capped.find(dead) == -1);
+
+	CHECK(a->despawn(second));
+	const int reused = a->spawn(0, Vector3(-0.5f, 0, 0));
+	CHECK(reused != second);
+	const PackedInt32Array after_reuse = a->overlap_agent_ids(Vector3(0, 0.9f, 0), 3.0f, 12);
+	CHECK(after_reuse.find(second) == -1);
+	CHECK(after_reuse.find(reused) >= 0);
+
+	CHECK(a->overlap_agent_ids(Vector3(Math::INF, 0, 0), 3.0f, 12).is_empty());
+	CHECK(a->overlap_agent_ids(Vector3(), -0.1f, 12).is_empty());
+	CHECK(a->overlap_agent_ids(Vector3(), 3.0f, 0).is_empty());
+}
+
 TEST_CASE("[HordeSim][Combat] 250-agent overlap stays within the per-swing budget") {
 	Ref<HordeAgents> a = make_agents(250);
 	for (int i = 0; i < 250; i++) {
@@ -1113,21 +1170,34 @@ TEST_CASE("[HordeSim][Combat] 250-agent overlap stays within the per-swing budge
 	}
 	for (int warm = 0; warm < 8; warm++) {
 		a->overlap_agents(Vector3(7.2f, 0.9f, 2.7f), 10.0f, 250);
+		a->overlap_agent_ids(Vector3(7.2f, 0.9f, 2.7f), 10.0f, 250);
 	}
 	uint64_t best_batch = UINT64_MAX;
+	uint64_t best_id_batch = UINT64_MAX;
 	for (int trial = 0; trial < 16; trial++) {
 		const uint64_t t0 = OS::get_singleton()->get_ticks_usec();
 		for (int k = 0; k < 32; k++) {
 			a->overlap_agents(Vector3(7.2f, 0.9f, 2.7f), 10.0f, 250);
 		}
 		best_batch = MIN(best_batch, OS::get_singleton()->get_ticks_usec() - t0);
+		const uint64_t id_t0 = OS::get_singleton()->get_ticks_usec();
+		for (int k = 0; k < 32; k++) {
+			a->overlap_agent_ids(Vector3(7.2f, 0.9f, 2.7f), 10.0f, 250);
+		}
+		best_id_batch = MIN(best_id_batch, OS::get_singleton()->get_ticks_usec() - id_t0);
 	}
 	const double per_call = (double)best_batch / 32.0;
+	const double id_per_call = (double)best_id_batch / 32.0;
 	print_line(vformat("[HordeSim] overlap vs 250 agents: %.2f us/call (min-of-16 x32 batch)", per_call));
+	print_line(vformat("[HordeSim] packed-id overlap vs 250 agents: %.2f us/call (min-of-16 x32 batch)", id_per_call));
 	// Dev-build pathological ceiling: all 250 capsules overlap the swing and
 	// therefore materialize result dictionaries. Paid once per melee impact,
 	// never per tick; ordinary daytime encounters return 1-3 candidates.
 	CHECK(per_call < 1000.0);
+	// The frequent stimulus path marshals one packed buffer, never 250
+	// Dictionaries. This deliberately generous dev-build ceiling is tightened
+	// only from measured headroom, not release-build intuition.
+	CHECK(id_per_call < 500.0);
 }
 
 } // namespace TestHordeSim

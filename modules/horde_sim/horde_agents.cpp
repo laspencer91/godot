@@ -893,74 +893,139 @@ _FORCE_INLINE_ static bool _ray_capsule_t(const Vector3 &p_from, const Vector3 &
 	return any;
 }
 
-Dictionary HordeAgents::raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist) const {
+// Geometry constants of one weapon scan: the capsule the ray is tested against,
+// and the bounding radius that rejects candidates before it. Sweeping a SPHERE
+// of p_padding against the capsule IS this ray against the capsule fattened by
+// it (Minkowski sum), so the probe inflates the RADIUS and nothing else -- the
+// axis segment stays on the real r, or the agent would grow taller as well as
+// wider, which no spherecast does.
+struct HordeCapsuleScan {
+	float radius; // Real capsule radius; the axis endpoints hang off this one.
+	float probe; // radius + padding: what the ray is actually tested against.
+	float axis_top; // Axis height above the feet. Same capsule as the mover sweep.
+	float reach; // Bounding-sphere radius around the feet.
+
+	HordeCapsuleScan(float p_radius, float p_height, float p_padding) {
+		radius = p_radius;
+		probe = p_radius + MAX(0.0f, p_padding);
+		axis_top = MAX(p_radius, p_height - p_radius);
+		reach = p_height + probe;
+	}
+};
+
+// One candidate of a nearest-first scan: true only for a hit STRICTLY nearer
+// than r_best_t, which it then advances. This is the whole inner loop of both
+// raycast entry points, and it is a function rather than two copies on purpose
+// -- the host and a predicting client score the same swing with it (D-073), so
+// a divergence here is a head-vs-body damage disagreement, not a rounding one.
+_FORCE_INLINE_ static bool _scan_capsule(const Vector3 &p_from, const Vector3 &p_dir,
+		const Vector3 &p_base, const HordeCapsuleScan &p_scan, float &r_best_t) {
+	// Bounding-sphere reject (feet-centered, radius `reach`) before the exact
+	// capsule test: behind the origin, past the current best, or farther from
+	// the ray line than the whole agent could span.
+	const Vector3 to(p_base.x - p_from.x, p_base.y - p_from.y, p_base.z - p_from.z);
+	const float proj = to.dot(p_dir);
+	if (proj < -p_scan.reach || proj > r_best_t + p_scan.reach) {
+		return false;
+	}
+	if (to.length_squared() - proj * proj > p_scan.reach * p_scan.reach) {
+		return false;
+	}
+	float t;
+	if (!_ray_capsule_t(p_from, p_dir, Vector3(p_base.x, p_base.y + p_scan.radius, p_base.z),
+				p_base.y + p_scan.axis_top, p_scan.probe, t) ||
+			t >= r_best_t) {
+		return false; // Strict '<': an exact tie stays with the earlier candidate.
+	}
+	r_best_t = t;
+	return true;
+}
+
+// The {id, hit_pos, height_frac} a landed scan reports. height_frac normalizes
+// by the REAL agent height, so a probe grazing over the crown clamps to 1.
+static Dictionary _capsule_hit(int p_id, const Vector3 &p_from, const Vector3 &p_dir, float p_t,
+		float p_base_y, float p_height) {
+	Dictionary hit;
+	const Vector3 hit_pos = p_from + p_dir * p_t;
+	hit["id"] = p_id;
+	hit["hit_pos"] = hit_pos;
+	hit["height_frac"] = CLAMP((hit_pos.y - p_base_y) / p_height, 0.0f, 1.0f);
+	return hit;
+}
+
+Dictionary HordeAgents::raycast_agents(const Vector3 &p_from, const Vector3 &p_dir, float p_max_dist, float p_padding) const {
 	Dictionary hit;
 	const float dir_len = p_dir.length();
 	if (dir_len < 1e-6f || p_max_dist <= 0.0f) {
 		return hit;
 	}
 	const Vector3 dir = p_dir / dir_len;
-	const float r = agent_radius;
-	const float axis_top = MAX(r, agent_height - r); // Same capsule as the mover sweep.
-	const float reach = agent_height + r; // Bounding radius around the feet.
+	const HordeCapsuleScan scan(agent_radius, agent_height, p_padding);
 
 	// Flat SoA scan, nearest-first pruning via best_t. Ascending slot order and
-	// a strict '<' keep ties deterministic (L6). NOTE: deliberately NOT the hot
-	// spatial hash -- it only indexes Hot-tier agents, and a rifle out-ranges
-	// the Hot radius (a Warm agent must still be hittable); 250 capsule tests
-	// with the cheap reject below sit far under the 50 us budget anyway.
+	// the strict '<' in _scan_capsule keep ties deterministic (L6). NOTE:
+	// deliberately NOT the hot spatial hash -- it only indexes Hot-tier agents,
+	// and a rifle out-ranges the Hot radius (a Warm agent must still be
+	// hittable); 250 capsule tests with the cheap reject sit far under the 50 us
+	// budget anyway.
 	float best_t = p_max_dist;
 	int best_slot = -1;
 	for (int i = 0; i < capacity; i++) {
 		if (active[i] == 0 || state[i] == (uint8_t)STATE_DEAD) {
 			continue; // Corpses never hit; freed slots can't resurface (epoch).
 		}
-		// Bounding-sphere reject (feet-centered, radius `reach`) before the
-		// exact capsule test: behind the origin, past the current best, or
-		// farther from the ray line than the whole agent could span.
-		const Vector3 to(pos_x[i] - p_from.x, pos_y[i] - p_from.y, pos_z[i] - p_from.z);
-		const float proj = to.dot(dir);
-		if (proj < -reach || proj > best_t + reach) {
-			continue;
-		}
-		if (to.length_squared() - proj * proj > reach * reach) {
-			continue;
-		}
-		float t;
-		if (_ray_capsule_t(p_from, dir, Vector3(pos_x[i], pos_y[i] + r, pos_z[i]), pos_y[i] + axis_top, r, t) && t < best_t) {
-			best_t = t;
+		if (_scan_capsule(p_from, dir, Vector3(pos_x[i], pos_y[i], pos_z[i]), scan, best_t)) {
 			best_slot = i;
 		}
 	}
 	if (best_slot < 0) {
 		return hit;
 	}
-	const Vector3 hit_pos = p_from + dir * best_t;
-	hit["id"] = _make_id(best_slot);
-	hit["hit_pos"] = hit_pos;
-	hit["height_frac"] = CLAMP((hit_pos.y - pos_y[best_slot]) / agent_height, 0.0f, 1.0f);
-	return hit;
+	return _capsule_hit(_make_id(best_slot), p_from, dir, best_t, pos_y[best_slot], agent_height);
 }
 
-Array HordeAgents::overlap_agents(const Vector3 &p_center, float p_radius, int p_max_candidates) const {
-	Array result;
+Dictionary HordeAgents::raycast_capsules(const PackedVector3Array &p_bases, const PackedInt32Array &p_ids,
+		float p_radius, float p_height, const Vector3 &p_from, const Vector3 &p_dir,
+		float p_max_dist, float p_padding) {
+	Dictionary hit;
+	ERR_FAIL_COND_V_MSG(p_bases.size() != p_ids.size(), hit,
+			vformat("raycast_capsules: bases and ids must be parallel (%d bases, %d ids).", p_bases.size(), p_ids.size()));
+	const float dir_len = p_dir.length();
+	if (dir_len < 1e-6f || p_max_dist <= 0.0f || p_radius <= 0.0f || p_height <= 0.0f) {
+		return hit;
+	}
+	const Vector3 dir = p_dir / dir_len;
+	const HordeCapsuleScan scan(p_radius, p_height, p_padding);
+
+	// Ascending index, exactly as the SoA scan walks ascending slot.
+	const Vector3 *bases = p_bases.ptr();
+	const int32_t *ids = p_ids.ptr();
+	float best_t = p_max_dist;
+	int best = -1;
+	for (int i = 0; i < p_bases.size(); i++) {
+		if (_scan_capsule(p_from, dir, bases[i], scan, best_t)) {
+			best = i;
+		}
+	}
+	if (best < 0) {
+		return hit;
+	}
+	return _capsule_hit(ids[best], p_from, dir, best_t, bases[best].y, p_height);
+}
+
+void HordeAgents::_gather_overlap_candidates(const Vector3 &p_center, float p_radius, int p_max_candidates,
+		LocalVector<OverlapCandidate> &r_candidates) const {
+	r_candidates.clear();
 	if (!p_center.is_finite() || !Math::is_finite(p_radius) || p_radius < 0.0f || p_max_candidates <= 0) {
-		return result;
+		return;
 	}
 
-	struct Candidate {
-		int id = -1;
-		Vector3 hit_pos;
-		float height_frac = 0.0f;
-		float contact_dist_sq = 0.0f;
-	};
 	struct CandidateSort {
-		_FORCE_INLINE_ bool operator()(const Candidate &p_a, const Candidate &p_b) const {
+		_FORCE_INLINE_ bool operator()(const OverlapCandidate &p_a, const OverlapCandidate &p_b) const {
 			return p_a.contact_dist_sq < p_b.contact_dist_sq ||
 					(p_a.contact_dist_sq == p_b.contact_dist_sq && p_a.id < p_b.id);
 		}
 	};
-	LocalVector<Candidate> candidates;
 	const float capsule_radius = agent_radius;
 	const float axis_top = MAX(capsule_radius, agent_height - capsule_radius);
 	const float combined_radius = p_radius + capsule_radius;
@@ -978,7 +1043,7 @@ Array HordeAgents::overlap_agents(const Vector3 &p_center, float p_radius, int p
 			continue;
 		}
 
-		Candidate candidate;
+		OverlapCandidate candidate;
 		candidate.id = _make_id(i);
 		const float axis_dist = Math::sqrt(axis_dist_sq);
 		if (axis_dist <= capsule_radius || axis_dist <= CMP_EPSILON) {
@@ -991,14 +1056,22 @@ Array HordeAgents::overlap_agents(const Vector3 &p_center, float p_radius, int p
 			candidate.contact_dist_sq = p_center.distance_squared_to(candidate.hit_pos);
 		}
 		candidate.height_frac = CLAMP((candidate.hit_pos.y - pos_y[i]) / agent_height, 0.0f, 1.0f);
-		candidates.push_back(candidate);
+		r_candidates.push_back(candidate);
 	}
 
-	candidates.sort_custom<CandidateSort>();
+	r_candidates.sort_custom<CandidateSort>();
+	if ((int)r_candidates.size() > p_max_candidates) {
+		r_candidates.resize(p_max_candidates);
+	}
+}
 
-	const int take = MIN(p_max_candidates, (int)candidates.size());
-	result.resize(take);
-	for (int i = 0; i < take; i++) {
+Array HordeAgents::overlap_agents(const Vector3 &p_center, float p_radius, int p_max_candidates) const {
+	LocalVector<OverlapCandidate> candidates;
+	_gather_overlap_candidates(p_center, p_radius, p_max_candidates, candidates);
+
+	Array result;
+	result.resize(candidates.size());
+	for (uint32_t i = 0; i < candidates.size(); i++) {
 		Dictionary item;
 		item["id"] = candidates[i].id;
 		item["hit_pos"] = candidates[i].hit_pos;
@@ -1008,7 +1081,21 @@ Array HordeAgents::overlap_agents(const Vector3 &p_center, float p_radius, int p
 	return result;
 }
 
-int HordeAgents::apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint, float p_knockback) {
+PackedInt32Array HordeAgents::overlap_agent_ids(const Vector3 &p_center, float p_radius, int p_max_candidates) const {
+	LocalVector<OverlapCandidate> candidates;
+	_gather_overlap_candidates(p_center, p_radius, p_max_candidates, candidates);
+
+	PackedInt32Array result;
+	result.resize(candidates.size());
+	int32_t *write = result.ptrw();
+	for (uint32_t i = 0; i < candidates.size(); i++) {
+		write[i] = candidates[i].id;
+	}
+	return result;
+}
+
+int HordeAgents::apply_damage(int p_id, float p_amount, const Vector3 &p_impulse_dir, int p_killer_hint,
+		float p_knockback, int p_stagger_duration_ticks) {
 	int slot;
 	if (!_resolve(p_id, slot)) {
 		return -1;
@@ -1051,14 +1138,16 @@ int HordeAgents::apply_damage(int p_id, float p_amount, const Vector3 &p_impulse
 	}
 
 	// Server-confirmed stagger (COMBAT_FEEL section 3 tier B): one hit at
-	// >= stagger_damage_frac of max HP halts the agent for the config window,
-	// then the prior state resumes natively (see _move_agent).
-	if (p_amount >= cr.stagger_damage_frac * cr.max_hp && cr.stagger_duration_ticks > 0) {
+	// >= stagger_damage_frac of max HP halts the agent for the requested weapon
+	// override, or the archetype config window when no override was supplied.
+	// The damage threshold always remains archetype-owned.
+	const int stagger_duration_ticks = p_stagger_duration_ticks >= 0 ? p_stagger_duration_ticks : cr.stagger_duration_ticks;
+	if (p_amount >= cr.stagger_damage_frac * cr.max_hp && stagger_duration_ticks > 0) {
 		if (state[slot] != (uint8_t)STATE_STAGGER) {
 			prev_state[slot] = state[slot]; // A re-stagger keeps the original resume state.
 		}
 		_enter_state(slot, STATE_STAGGER);
-		stagger_ticks_left[slot] = (uint16_t)MIN(cr.stagger_duration_ticks, 0xFFFF);
+		stagger_ticks_left[slot] = (uint16_t)MIN(stagger_duration_ticks, 0xFFFF);
 	}
 	return (int)state[slot];
 }
@@ -1375,9 +1464,11 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("apply_transitions", "pairs"), &HordeAgents::apply_transitions);
 
 	// Combat ingress (P2.4).
-	ClassDB::bind_method(D_METHOD("raycast_agents", "from", "dir", "max_dist"), &HordeAgents::raycast_agents);
+	ClassDB::bind_method(D_METHOD("raycast_agents", "from", "dir", "max_dist", "padding"), &HordeAgents::raycast_agents, DEFVAL(0.0));
+	ClassDB::bind_static_method("HordeAgents", D_METHOD("raycast_capsules", "bases", "ids", "radius", "height", "from", "dir", "max_dist", "padding"), &HordeAgents::raycast_capsules, DEFVAL(0.0));
 	ClassDB::bind_method(D_METHOD("overlap_agents", "center", "radius", "max_candidates"), &HordeAgents::overlap_agents);
-	ClassDB::bind_method(D_METHOD("apply_damage", "id", "amount", "impulse_dir", "killer_hint", "knockback"), &HordeAgents::apply_damage, DEFVAL(0.0));
+	ClassDB::bind_method(D_METHOD("overlap_agent_ids", "center", "radius", "max_candidates"), &HordeAgents::overlap_agent_ids);
+	ClassDB::bind_method(D_METHOD("apply_damage", "id", "amount", "impulse_dir", "killer_hint", "knockback", "stagger_duration_ticks"), &HordeAgents::apply_damage, DEFVAL(0.0), DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("get_death_info", "id"), &HordeAgents::get_death_info);
 
 	// Agent access.
