@@ -339,7 +339,7 @@ void EditorResourcePicker::_update_menu_items() {
 			if (OS::get_singleton()->has_feature("macos") || OS::get_singleton()->has_feature("web_macos") || OS::get_singleton()->has_feature("web_ios")) {
 				modifier = "Cmd";
 			}
-			const String drag_and_drop_text = vformat(TTR("Hold %s while drag-and-dropping from the FileSystem dock or another resource picker to automatically make a dropped resource unique."), modifier);
+			const String drag_and_drop_text = vformat(TTR("Hold %s while drag-and-dropping from Explore or another resource picker to automatically make a dropped resource unique."), modifier);
 
 			if (!unique_enabled) {
 				if (EditorNode::get_singleton()->is_resource_internal_to_scene(edited_resource) && EditorNode::get_singleton()->get_resource_count(edited_resource) == 1) {
@@ -371,7 +371,7 @@ void EditorResourcePicker::_update_menu_items() {
 
 		if (edited_resource->get_path().is_resource_file()) {
 			edit_menu->add_separator();
-			edit_menu->add_icon_item(get_editor_theme_icon(SNAME("ShowInFileSystem")), TTR("Show in FileSystem"), OBJ_MENU_SHOW_IN_FILE_SYSTEM);
+			edit_menu->add_icon_item(get_editor_theme_icon(SNAME("ShowInFileSystem")), TTR("Show in Explore"), OBJ_MENU_SHOW_IN_FILE_SYSTEM);
 		}
 	}
 

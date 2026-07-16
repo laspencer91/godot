@@ -77,6 +77,39 @@
 #include "scene/resources/packed_scene.h"
 #include "servers/display/display_server.h"
 
+namespace {
+
+struct ExploreCategoryIcon {
+	const char *theme_icon;
+	const char *display_name;
+	bool tintable;
+};
+
+// Keep this list intentionally small and stable: values stored in project.godot are the theme_icon IDs.
+static const ExploreCategoryIcon explore_category_icons[] = {
+	{ "Folder", TTRC("Folder"), true },
+	{ "PackedScene", TTRC("Packed Scene"), true },
+	{ "AudioStream", TTRC("Audio Stream"), false },
+	{ "WorldEnvironment", TTRC("World Environment"), false },
+	{ "StandardMaterial3D", TTRC("Standard Material 3D"), false },
+	{ "Texture2D", TTRC("Texture 2D"), true },
+	{ "Mesh", TTRC("Mesh"), true },
+	{ "Script", TTRC("Script"), true },
+	{ "Tools", TTRC("Tools"), true },
+	{ "Help", TTRC("Help"), true },
+};
+
+const ExploreCategoryIcon *get_explore_category_icon(const String &p_id) {
+	for (const ExploreCategoryIcon &option : explore_category_icons) {
+		if (p_id == option.theme_icon) {
+			return &option;
+		}
+	}
+	return &explore_category_icons[0];
+}
+
+} // namespace
+
 Control *FileSystemTree::make_custom_tooltip(const String &p_text) const {
 	TreeItem *item = get_item_at_position(get_local_mouse_position());
 	if (!item) {
@@ -229,11 +262,24 @@ Ref<Texture2D> FileSystemDock::_get_tree_item_icon(bool p_is_valid, const String
 	}
 }
 
-void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory *p_dir, const Vector<String> &p_uncollapsed_paths, const Vector<String> &p_selected_paths) {
+void FileSystemDock::_add_category_root_badge(TreeItem *p_item, const String &p_color_key) {
+	const ExploreCategoryIcon *category_icon = get_explore_category_icon(_get_color_icon_id(p_color_key));
+	p_item->add_button(0, get_editor_theme_icon(category_icon->theme_icon), -1, true, vformat(TTR("Category root: %s"), _get_color_label(p_color_key)));
+	if (category_icon->tintable) {
+		const Color category_color = folder_colors[p_color_key];
+		p_item->set_button_color(0, p_item->get_button_count(0) - 1, editor_is_dark_icon_and_font ? category_color : category_color * ITEM_COLOR_SCALE);
+	}
+}
+
+void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory *p_dir, const Vector<String> &p_uncollapsed_paths, const Vector<String> &p_selected_paths, const String &p_inherited_color) {
 	// Create a tree item for the subdirectory.
-	TreeItem *subdirectory_item = tree->create_item(p_parent);
 	String dname = p_dir->get_name();
 	String lpath = p_dir->get_path();
+	if (_is_color_collection_active() && !category_visible_paths.has(lpath)) {
+		return;
+	}
+
+	TreeItem *subdirectory_item = tree->create_item(p_parent);
 
 	if (dname.is_empty()) {
 		dname = "res://";
@@ -241,8 +287,10 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 	}
 
 	// Set custom folder color (if applicable).
-	bool has_custom_color = assigned_folder_colors.has(lpath);
-	Color custom_color = has_custom_color ? folder_colors[assigned_folder_colors[lpath]] : Color();
+	const String explicit_color_key = assigned_folder_colors.get(lpath, String());
+	const bool has_custom_color = folder_colors.has(explicit_color_key);
+	const String effective_color_key = has_custom_color ? explicit_color_key : p_inherited_color;
+	Color custom_color = has_custom_color ? folder_colors[explicit_color_key] : Color();
 	Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
 
 	if (has_custom_color) {
@@ -253,7 +301,8 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 		if (parent) {
 			Color parent_bg_color = parent->get_custom_bg_color(0);
 			if (parent_bg_color != Color()) {
-				bool parent_has_custom_color = assigned_folder_colors.has(parent->get_metadata(0));
+				const String parent_color_key = assigned_folder_colors.get(parent->get_metadata(0), String());
+				bool parent_has_custom_color = folder_colors.has(parent_color_key);
 				subdirectory_item->set_custom_bg_color(0, parent_has_custom_color ? parent_bg_color.darkened(ITEM_BG_DARK_SCALE) : parent_bg_color);
 				subdirectory_item->set_icon_modulate(0, parent->get_icon_modulate(0));
 			} else {
@@ -271,27 +320,36 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 	}
 	subdirectory_item->set_selectable(0, true);
 	subdirectory_item->set_metadata(0, lpath);
+	if (has_custom_color) {
+		_add_category_root_badge(subdirectory_item, explicit_color_key);
+	}
 	folder_map[lpath] = subdirectory_item;
 
-	if (current_path == lpath || p_selected_paths.has(lpath) || ((display_mode != DISPLAY_MODE_TREE_ONLY) && (current_path.get_base_dir() == lpath))) {
-		subdirectory_item->select(0, current_path == lpath);
+	const bool category_scope_selected = _is_color_collection_active() && !category_scope_path.is_empty() && category_scope_path == lpath;
+	const bool normal_selected = !_is_color_collection_active() && (current_path == lpath || p_selected_paths.has(lpath) || ((display_mode != DISPLAY_MODE_TREE_ONLY) && (current_path.get_base_dir() == lpath)));
+	if (category_scope_selected || normal_selected) {
+		subdirectory_item->select(0, category_scope_selected || current_path == lpath);
 	}
 
-	subdirectory_item->set_collapsed(!p_uncollapsed_paths.has(lpath));
+	subdirectory_item->set_collapsed(_is_color_collection_active() ? false : !p_uncollapsed_paths.has(lpath));
 
 	// Create items for all subdirectories.
 	bool reversed = file_sort == FileSortOption::FILE_SORT_NAME_REVERSE;
 	for (int i = reversed ? p_dir->get_subdir_count() - 1 : 0;
 			reversed ? i >= 0 : i < p_dir->get_subdir_count();
 			reversed ? i-- : i++) {
-		_create_tree(subdirectory_item, p_dir->get_subdir(i), p_uncollapsed_paths, p_selected_paths);
+		_create_tree(subdirectory_item, p_dir->get_subdir(i), p_uncollapsed_paths, p_selected_paths, effective_color_key);
 	}
 
 	// Create all items for the files in the subdirectory.
 	if (display_mode == DISPLAY_MODE_TREE_ONLY) {
 		// Build the list of the files to display.
 		List<FileInfo> file_list;
-		for (int i = 0; i < p_dir->get_file_count(); i++) {
+		const bool include_directory_files = !_is_color_collection_active() || active_color_filter.has(effective_color_key);
+		for (int i = 0; include_directory_files && i < p_dir->get_file_count(); i++) {
+			if (!searched_tokens.is_empty() && !_matches_all_search_tokens(p_dir->get_file(i))) {
+				continue;
+			}
 			String file_type = p_dir->get_file_type(i);
 			if (_is_file_type_disabled_by_feature_profile(file_type)) {
 				// If type is disabled, file won't be displayed.
@@ -342,7 +400,7 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 			}
 			EditorResourcePreview::get_singleton()->queue_resource_preview(file_metadata, callable_mp(this, &FileSystemDock::_tree_thumbnail_done).bind(tree_update_id, file_item->get_instance_id()));
 		}
-	} else if (lpath.get_base_dir() == current_path.get_base_dir()) {
+	} else if (!_is_color_collection_active() && lpath.get_base_dir() == current_path.get_base_dir()) {
 		subdirectory_item->select(0);
 	}
 }
@@ -381,6 +439,9 @@ Vector<String> FileSystemDock::get_uncollapsed_paths() const {
 
 void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, bool p_uncollapse_root, bool p_scroll_to_selected, const Vector<String> &p_override_selection) {
 	const Vector<String> previous_selection = p_override_selection.is_empty() ? _tree_get_selected(false) : p_override_selection;
+	if (_is_color_collection_active()) {
+		_build_category_visible_paths();
+	}
 
 	// Recreate the tree.
 	tree->clear();
@@ -397,6 +458,7 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 	favorites_item->set_auto_translate_mode(0, AUTO_TRANSLATE_MODE_ALWAYS);
 	favorites_item->set_metadata(0, "Favorites");
 	favorites_item->set_collapsed(!p_uncollapsed_paths.has("Favorites"));
+	favorites_item->set_visible(!_is_color_collection_active());
 
 	Vector<String> favorite_paths = EditorSettings::get_singleton()->get_favorites();
 
@@ -420,6 +482,9 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 
 	const int icon_size = get_theme_constant(SNAME("class_icon_size"), EditorStringName(Editor));
 	for (const String &favorite : favorite_paths) {
+		if (_is_color_collection_active()) {
+			break;
+		}
 		if (!favorite.begins_with("res://")) {
 			continue;
 		}
@@ -456,6 +521,12 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 		ti->set_selectable(0, true);
 		ti->set_metadata(0, favorite);
 		ti->set_accept_children(false);
+		if (favorite.ends_with("/")) {
+			const String explicit_color_key = assigned_folder_colors.get(favorite, String());
+			if (folder_colors.has(explicit_color_key)) {
+				_add_category_root_badge(ti, explicit_color_key);
+			}
+		}
 
 		if (favorite == main_scene_path) {
 			ti->set_custom_color(0, get_theme_color(SNAME("accent_color"), EditorStringName(Editor)));
@@ -473,8 +544,13 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 
 	// Create the remaining of the tree.
 	_create_tree(root, EditorFileSystem::get_singleton()->get_filesystem(), uncollapsed_paths, previous_selection);
-	if (!searched_tokens.is_empty()) {
+	if (!searched_tokens.is_empty() && !_is_color_collection_active()) {
 		_update_filtered_items();
+	}
+	if (_is_color_collection_active() && display_mode == DISPLAY_MODE_TREE_ONLY) {
+		category_collection_stats = CategoryCollectionStats();
+		_gather_color_collection(EditorFileSystem::get_singleton()->get_filesystem(), "res://", String(), nullptr, &category_collection_stats);
+		_update_category_empty_state();
 	}
 
 	if (p_scroll_to_selected) {
@@ -493,10 +569,6 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 	if (!p_force && old_display_mode == display_mode) {
 		return;
 	}
-
-	// G4: while a color collection is active the tree is hidden and the flat asset list owns the pane,
-	// so each mode skips its tree/file-list rebuild -- the tail below performs the single build.
-	const bool collection = _is_color_collection_active();
 
 	// Preserve the selection when switching modes.
 	Vector<String> selected_paths;
@@ -523,9 +595,7 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 			}
 			button_file_list_display_mode->hide();
 
-			if (!collection) {
-				_update_tree(get_uncollapsed_paths(), false, true, selected_paths);
-			}
+			_update_tree(get_uncollapsed_paths(), false, true, selected_paths);
 			file_list_vb->hide();
 		} break;
 
@@ -565,32 +635,20 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 					}
 				}
 
-				if (!collection) {
-					_update_tree(get_uncollapsed_paths(), false, true, selected_paths);
-					_update_file_list(!selected_files.is_empty(), selected_files);
-				}
+				_update_tree(get_uncollapsed_paths(), false, true, selected_paths);
+				_update_file_list(!selected_files.is_empty(), selected_files);
 			} else {
 				tree->ensure_cursor_is_visible();
 
-				if (!collection) {
-					// Always update to avoid broken icons, as previous updates
-					// could have happened before the dock was inside the tree.
-					update_all();
-				}
+				// Always update to avoid broken icons, as previous updates
+				// could have happened before the dock was inside the tree.
+				update_all();
 			}
 		} break;
 	}
 
-	// G4: a color collection overrides the split -- hide the directory tree and let the flat asset
-	// list own the whole pane (the single build for this pass). Clearing the filter falls back to the
-	// normal per-display-mode layout.
-	if (collection) {
-		tree_mc->hide();
-		file_list_vb->show();
-		_update_file_list(false);
-	} else {
-		tree_mc->show();
-	}
+	tree_mc->show();
+	_update_category_empty_state();
 
 	old_display_mode = display_mode;
 }
@@ -615,6 +673,8 @@ void FileSystemDock::_notification(int p_what) {
 
 			set_file_list_display_mode(FileSystemDock::FILE_LIST_DISPLAY_LIST);
 
+			_rebuild_category_rail();
+			_update_responsive_layout();
 			_update_display_mode();
 
 			if (EditorFileSystem::get_singleton()->is_scanning()) {
@@ -622,6 +682,10 @@ void FileSystemDock::_notification(int p_what) {
 			} else {
 				_update_tree(Vector<String>(), true);
 			}
+		} break;
+
+		case NOTIFICATION_RESIZED: {
+			_update_responsive_layout();
 		} break;
 
 		case NOTIFICATION_PROCESS: {
@@ -712,9 +776,10 @@ void FileSystemDock::_notification(int p_what) {
 			file_list_search_box->set_right_icon(get_editor_theme_icon(SNAME("Search")));
 			file_list_button_sort->set_button_icon(get_editor_theme_icon(SNAME("Sort")));
 
-			// G4: the color-filter buttons share the Folder glyph, tinted to the accent while a collection
-			// is active (lightweight -- no pane rebuild here).
-			_update_color_filter_button_state();
+			_rebuild_category_rail();
+			for (const KeyValue<String, MenuButton *> &E : color_icon_buttons) {
+				_update_color_icon_button(E.key);
+			}
 
 			if (is_layout_rtl()) {
 				button_hist_next->set_button_icon(get_editor_theme_icon(SNAME("Back")));
@@ -776,12 +841,24 @@ void FileSystemDock::_tree_multi_selected(Object *p_item, int p_column, bool p_s
 	if (!selected) {
 		return;
 	}
+	const String selected_path = selected->get_metadata(0);
+	if (_is_color_collection_active() && !updating_tree) {
+		if (selected_path.ends_with("/")) {
+			category_scope_path = selected_path;
+		}
+		current_path = selected_path;
+		_set_current_path_line_edit_text(current_path);
+		if (display_mode != DISPLAY_MODE_TREE_ONLY) {
+			_update_file_list(true);
+		}
+		return;
+	}
 
 	if (selected->get_parent() == favorites_item && !String(selected->get_metadata(0)).ends_with("/")) {
 		// Go to the favorites if we click in the favorites and the path has changed.
 		current_path = "Favorites";
 	} else {
-		current_path = selected->get_metadata(0);
+		current_path = selected_path;
 		// Note: the "Favorites" item also leads to this path.
 	}
 
@@ -829,7 +906,7 @@ void FileSystemDock::_set_current_path_line_edit_text(const String &p_path) {
 	if (p_path == "Favorites") {
 		current_path_line_edit->set_text(TTR("Favorites"));
 	} else {
-		current_path_line_edit->set_text(current_path);
+		current_path_line_edit->set_text(p_path);
 	}
 }
 
@@ -930,6 +1007,12 @@ bool FileSystemDock::_update_filtered_items(TreeItem *p_tree_item) {
 }
 
 void FileSystemDock::navigate_to_path(const String &p_path) {
+	if (_is_color_collection_active()) {
+		active_color_filter.clear();
+		_end_category_filter();
+		_rebuild_category_rail();
+		_update_color_filter_view();
+	}
 	file_list_search_box->clear();
 	// G4: FileSystem is hosted by the workspace drawer and intentionally isn't registered with
 	// EditorDockManager. Asking the manager to focus it reports an "unknown dock" error; reveal its
@@ -1133,9 +1216,10 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 	// Build the FileInfo list.
 	List<FileInfo> file_list;
 	if (_is_color_collection_active()) {
-		// G4: a color collection ignores the current directory -- gather every asset under folders of the
-		// selected color(s), recursively, into one flat list (no folder rows).
-		_gather_color_collection(EditorFileSystem::get_singleton()->get_filesystem(), "res://", String(), &file_list);
+		// Categories initially gather a project-wide union. A directory selected in the pruned tree adds
+		// a real res:// scope without replacing the underlying All Assets navigation state.
+		category_collection_stats = CategoryCollectionStats();
+		_gather_color_collection(EditorFileSystem::get_singleton()->get_filesystem(), "res://", String(), &file_list, &category_collection_stats);
 	} else if (current_path == "Favorites") {
 		// Display the favorites.
 		Vector<String> favorites_list = EditorSettings::get_singleton()->get_favorites();
@@ -1345,6 +1429,8 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 	if (files->get_current() == -1 && !valid_selection.is_empty()) {
 		files->set_current(*valid_selection.begin());
 	}
+
+	_update_category_empty_state();
 }
 
 HashSet<String> FileSystemDock::_get_valid_conversions_for_file_paths(const Vector<String> &p_paths) {
@@ -1492,6 +1578,8 @@ void FileSystemDock::_fs_changed() {
 	button_hist_prev->set_disabled(history_pos == 0);
 	button_hist_next->set_disabled(history_pos == history.size() - 1);
 	scanning_vb->hide();
+	category_wide_split->set_visible(responsive_layout != RESPONSIVE_LAYOUT_NARROW);
+	category_narrow_split->set_visible(responsive_layout == RESPONSIVE_LAYOUT_NARROW);
 	split_box->show();
 
 	update_all();
@@ -1513,7 +1601,8 @@ void FileSystemDock::_fs_changed() {
 void FileSystemDock::_set_scanning_mode() {
 	button_hist_prev->set_disabled(true);
 	button_hist_next->set_disabled(true);
-	split_box->hide();
+	category_wide_split->hide();
+	category_narrow_split->hide();
 	scanning_vb->show();
 	set_process(true);
 	if (EditorFileSystem::get_singleton()->is_scanning()) {
@@ -2987,11 +3076,15 @@ void FileSystemDock::_search_changed(const String &p_text, const Control *p_from
 		tree_search_box->set_text(searched_string);
 	}
 
-	_update_filtered_items();
+	if (_is_color_collection_active()) {
+		_update_tree(get_uncollapsed_paths(), false, false);
+	} else {
+		_update_filtered_items();
+	}
 	if (display_mode == DISPLAY_MODE_HSPLIT || display_mode == DISPLAY_MODE_VSPLIT) {
 		_update_file_list(false);
 	}
-	if (searched_tokens.is_empty()) {
+	if (searched_tokens.is_empty() && !_is_color_collection_active()) {
 		_navigate_to_path(current_path);
 	}
 }
@@ -3038,6 +3131,95 @@ void FileSystemDock::_split_dragged(int p_offset) {
 	} else {
 		split_box_offset_h = p_offset;
 	}
+}
+
+void FileSystemDock::_category_split_dragged(int p_offset) {
+	if (responsive_layout == RESPONSIVE_LAYOUT_NARROW) {
+		category_narrow_split_offset = CLAMP(p_offset, int(80 * EDSCALE), int(160 * EDSCALE));
+		category_narrow_split->set_split_offset(category_narrow_split_offset);
+	} else {
+		category_wide_split_offset = p_offset;
+	}
+	emit_signal(SNAME("display_mode_changed"));
+}
+
+void FileSystemDock::_set_category_layout_narrow(bool p_narrow) {
+	if (p_narrow) {
+		if (category_rail->get_parent() == category_narrow_split) {
+			return;
+		}
+		category_wide_split_offset = category_wide_split->get_split_offset();
+		category_rail->reparent(category_narrow_split);
+		split_box->reparent(category_narrow_split);
+		category_narrow_split->move_child(category_rail, 0);
+		category_narrow_split->move_child(split_box, 1);
+		category_wide_split->hide();
+		category_narrow_split->show();
+		category_narrow_split_offset = CLAMP(category_narrow_split_offset, int(80 * EDSCALE), int(160 * EDSCALE));
+		category_narrow_split->set_split_offset(category_narrow_split_offset);
+	} else {
+		if (category_rail->get_parent() == category_wide_split) {
+			return;
+		}
+		category_narrow_split_offset = category_narrow_split->get_split_offset();
+		category_rail->reparent(category_wide_split);
+		split_box->reparent(category_wide_split);
+		category_wide_split->move_child(category_rail, 0);
+		category_wide_split->move_child(split_box, 1);
+		category_narrow_split->hide();
+		category_wide_split->show();
+		category_wide_split->set_split_offset(category_wide_split_offset);
+	}
+}
+
+void FileSystemDock::_update_responsive_layout() {
+	if (updating_responsive_layout || !category_rail || get_size().x <= 0) {
+		return;
+	}
+
+	const float width = get_size().x / EDSCALE;
+	ResponsiveLayout next_layout = RESPONSIVE_LAYOUT_WIDE;
+	if (width < 640.0f) {
+		next_layout = RESPONSIVE_LAYOUT_NARROW;
+	} else if (width < 960.0f) {
+		next_layout = RESPONSIVE_LAYOUT_MEDIUM;
+	}
+	if (next_layout == responsive_layout) {
+		return;
+	}
+
+	updating_responsive_layout = true;
+	const ResponsiveLayout previous_layout = responsive_layout;
+	if (next_layout == RESPONSIVE_LAYOUT_NARROW) {
+		if (previous_layout == RESPONSIVE_LAYOUT_WIDE) {
+			responsive_wide_display_mode = display_mode;
+		}
+		_set_category_layout_narrow(true);
+		category_rail->set_custom_minimum_size(Size2(0, 80) * EDSCALE);
+		update_layout(EditorDock::DOCK_LAYOUT_VERTICAL, EditorDock::DOCK_SLOT_LEFT_BR);
+	} else {
+		_set_category_layout_narrow(false);
+		category_rail->set_custom_minimum_size(Size2(next_layout == RESPONSIVE_LAYOUT_WIDE ? 190 : 140, 0) * EDSCALE);
+		update_layout(EditorDock::DOCK_LAYOUT_HORIZONTAL, EditorDock::DOCK_SLOT_BOTTOM);
+		if (next_layout == RESPONSIVE_LAYOUT_MEDIUM) {
+			if (previous_layout == RESPONSIVE_LAYOUT_WIDE || previous_layout == RESPONSIVE_LAYOUT_UNSET) {
+				responsive_wide_display_mode = display_mode;
+			}
+			if (display_mode == DISPLAY_MODE_HSPLIT) {
+				set_display_mode(DISPLAY_MODE_VSPLIT);
+			}
+		} else if (previous_layout != RESPONSIVE_LAYOUT_WIDE && previous_layout != RESPONSIVE_LAYOUT_UNSET) {
+			set_display_mode(responsive_wide_display_mode);
+		}
+		const int maximum_rail_width = int((next_layout == RESPONSIVE_LAYOUT_WIDE ? 280 : 180) * EDSCALE);
+		category_wide_split->set_split_offset(MIN(category_wide_split_offset, maximum_rail_width));
+	}
+	responsive_layout = next_layout;
+	if (scanning_vb->is_visible()) {
+		category_wide_split->hide();
+		category_narrow_split->hide();
+	}
+	updating_responsive_layout = false;
 }
 
 void FileSystemDock::fix_dependencies(const String &p_for_file) {
@@ -3512,14 +3694,7 @@ void FileSystemDock::_folder_color_index_pressed(int p_index, PopupMenu *p_menu)
 	emit_signal(SNAME("folder_color_changed"));
 }
 
-// G4: folder-color "collections" -- custom labels + filter-to-flat-asset-view. -------------------------
-
-// Ids for the color-filter dropdown. Individual colors use 0..N-1 (their index in folder_colors); these
-// two sit above that range.
-enum {
-	COLOR_FILTER_ID_ALL = 1000,
-	COLOR_FILTER_ID_EDIT_NAMES = 1001,
-};
+// Explore categories are the existing folder-color collections promoted to a first-class rail. --------
 
 String FileSystemDock::_get_color_label(const String &p_color_key) const {
 	HashMap<String, String>::ConstIterator it = color_labels.find(p_color_key);
@@ -3539,134 +3714,340 @@ void FileSystemDock::_load_color_labels() {
 	}
 }
 
-MenuButton *FileSystemDock::_create_color_filter_button() {
-	MenuButton *button = memnew(MenuButton);
-	button->set_flat(false);
-	button->set_theme_type_variation("FlatMenuButton");
-	button->set_tooltip_text(TTRC("Filter files by folder color collection."));
-	button->set_accessibility_name(TTRC("Filter by Folder Color"));
-	PopupMenu *popup = button->get_popup();
-	// Keep the menu open across checkable toggles so several colors can be picked in one visit.
-	popup->set_hide_on_checkable_item_selection(false);
-	popup->connect("about_to_popup", callable_mp(this, &FileSystemDock::_build_color_filter_menu).bind(popup));
-	popup->connect(SceneStringName(id_pressed), callable_mp(this, &FileSystemDock::_color_filter_menu_pressed).bind(popup));
-	return button;
+String FileSystemDock::_get_color_icon_id(const String &p_color_key, bool p_use_edited) const {
+	const HashMap<String, String> &source = p_use_edited ? edited_color_icons : color_icons;
+	HashMap<String, String>::ConstIterator icon = source.find(p_color_key);
+	return icon ? get_explore_category_icon(icon->value)->theme_icon : String("Folder");
 }
 
-void FileSystemDock::_build_color_filter_menu(PopupMenu *p_menu) {
-	p_menu->clear();
-
-	p_menu->add_check_item(TTR("All"), COLOR_FILTER_ID_ALL);
-	p_menu->set_item_checked(p_menu->get_item_index(COLOR_FILTER_ID_ALL), active_color_filter.is_empty());
-	p_menu->add_separator();
-
-	const Ref<Texture2D> folder_icon = get_editor_theme_icon(SNAME("Folder"));
-	int id = 0;
-	for (const KeyValue<String, Color> &E : folder_colors) {
-		p_menu->add_check_item(_get_color_label(E.key), id);
-		const int idx = p_menu->get_item_index(id);
-		p_menu->set_item_metadata(idx, E.key);
-		p_menu->set_item_icon(idx, folder_icon);
-		p_menu->set_item_icon_modulate(idx, editor_is_dark_icon_and_font ? E.value : E.value * 2);
-		p_menu->set_item_checked(idx, active_color_filter.has(E.key));
-		id++;
-	}
-
-	p_menu->add_separator();
-	p_menu->add_icon_item(get_editor_theme_icon(SNAME("Edit")), TTR("Edit Names..."), COLOR_FILTER_ID_EDIT_NAMES);
-}
-
-void FileSystemDock::_color_filter_menu_pressed(int p_id, PopupMenu *p_menu) {
-	if (p_id == COLOR_FILTER_ID_EDIT_NAMES) {
-		_popup_color_labels_dialog();
+void FileSystemDock::_load_color_icons() {
+	color_icons.clear();
+	if (!ProjectSettings::get_singleton()->has_setting("file_customization/color_icons")) {
 		return;
 	}
 
-	if (p_id == COLOR_FILTER_ID_ALL) {
-		active_color_filter.clear();
-	} else {
-		const String key = p_menu->get_item_metadata(p_menu->get_item_index(p_id));
-		if (active_color_filter.has(key)) {
-			active_color_filter.erase(key);
-		} else {
-			active_color_filter.insert(key);
+	Dictionary icons = ProjectSettings::get_singleton()->get_setting("file_customization/color_icons");
+	for (const Variant &key : icons.get_key_list()) {
+		const String color_key = key;
+		const String icon_id = icons[key];
+		if (folder_colors.has(color_key) && icon_id == get_explore_category_icon(icon_id)->theme_icon && icon_id != "Folder") {
+			color_icons[color_key] = icon_id;
 		}
 	}
-
-	// Reflect the new state on the still-open popup (color rows carry their key as metadata).
-	p_menu->set_item_checked(p_menu->get_item_index(COLOR_FILTER_ID_ALL), active_color_filter.is_empty());
-	for (int i = 0; i < p_menu->get_item_count(); i++) {
-		const Variant meta = p_menu->get_item_metadata(i);
-		if (meta.get_type() == Variant::STRING) {
-			p_menu->set_item_checked(i, active_color_filter.has(String(meta)));
-		}
-	}
-
-	_update_color_filter_view();
 }
 
-void FileSystemDock::_update_color_filter_button_state() {
-	const bool active = _is_color_collection_active();
-	const Ref<Texture2D> icon = get_editor_theme_icon(SNAME("Folder"));
-	const Color tint = active ? get_theme_color(SNAME("accent_color"), EditorStringName(Editor)) : Color(1, 1, 1);
-	MenuButton *buttons[2] = { tree_color_filter, file_list_color_filter };
-	for (MenuButton *mb : buttons) {
-		mb->set_button_icon(icon);
-		mb->set_self_modulate(tint); // self_modulate stays on the button; it doesn't bleed into the popup.
-		mb->set_tooltip_text(active ? vformat(TTR("Showing %d color collection(s). Click to change."), active_color_filter.size()) : TTR("Filter files by folder color collection."));
+void FileSystemDock::_load_color_customization() {
+	if (ProjectSettings::get_singleton()->has_setting("file_customization/folder_colors")) {
+		assigned_folder_colors = ProjectSettings::get_singleton()->get_setting("file_customization/folder_colors");
+	} else {
+		assigned_folder_colors = Dictionary();
 	}
+	_load_color_labels();
+	_load_color_icons();
+}
+
+void FileSystemDock::_rebuild_category_rail() {
+	if (!category_tree) {
+		return;
+	}
+	category_edit_button->set_button_icon(get_editor_theme_icon(SNAME("Edit")));
+	category_result_edit_button->set_button_icon(get_editor_theme_icon(SNAME("Edit")));
+
+	HashSet<String> assigned_colors;
+	for (const Variant &path : assigned_folder_colors.get_key_list()) {
+		const String folder_path = path;
+		const String color_key = assigned_folder_colors[path];
+		if (folder_colors.has(color_key) && DirAccess::dir_exists_absolute(ProjectSettings::get_singleton()->globalize_path(folder_path))) {
+			assigned_colors.insert(color_key);
+		}
+	}
+
+	HashSet<String> visible_colors;
+	for (const String &color_key : folder_color_order) {
+		HashMap<String, String>::ConstIterator label = color_labels.find(color_key);
+		const bool explicitly_named = label && !label->value.strip_edges().is_empty();
+		if (explicitly_named || assigned_colors.has(color_key)) {
+			visible_colors.insert(color_key);
+		}
+	}
+
+	bool selection_changed = false;
+	for (const String &color_key : folder_color_order) {
+		if (active_color_filter.has(color_key) && !visible_colors.has(color_key)) {
+			active_color_filter.erase(color_key);
+			selection_changed = true;
+		}
+	}
+	if (selection_changed && active_color_filter.is_empty()) {
+		_end_category_filter();
+	}
+
+	category_tree->clear();
+	TreeItem *root = category_tree->create_item();
+	TreeItem *all_assets = category_tree->create_item(root);
+	all_assets->set_icon(0, get_editor_theme_icon(SNAME("Folder")));
+	all_assets->set_cell_mode(1, TreeItem::CELL_MODE_CHECK);
+	all_assets->set_checked(1, active_color_filter.is_empty());
+	all_assets->set_text(1, TTR("All Assets"));
+	all_assets->set_metadata(0, String());
+	all_assets->set_metadata(1, String());
+	all_assets->set_selectable(0, true);
+	all_assets->set_selectable(1, true);
+
+	for (const String &color_key : folder_color_order) {
+		if (!visible_colors.has(color_key)) {
+			continue;
+		}
+
+		TreeItem *item = category_tree->create_item(root);
+		const ExploreCategoryIcon *icon = get_explore_category_icon(_get_color_icon_id(color_key));
+		item->set_icon(0, get_editor_theme_icon(icon->theme_icon));
+		if (icon->tintable) {
+			item->set_icon_modulate(0, editor_is_dark_icon_and_font ? folder_colors[color_key] : folder_colors[color_key] * ITEM_COLOR_SCALE);
+		} else {
+			item->set_icon(1, get_editor_theme_icon(SNAME("Folder")));
+			item->set_icon_modulate(1, editor_is_dark_icon_and_font ? folder_colors[color_key] : folder_colors[color_key] * ITEM_COLOR_SCALE);
+		}
+		item->set_cell_mode(1, TreeItem::CELL_MODE_CHECK);
+		item->set_checked(1, active_color_filter.has(color_key));
+		item->set_text(1, _get_color_label(color_key));
+		item->set_metadata(0, color_key);
+		item->set_metadata(1, color_key);
+		item->set_selectable(0, true);
+		item->set_selectable(1, true);
+	}
+
+	category_rail_empty_state->set_visible(visible_colors.is_empty());
+}
+
+void FileSystemDock::_category_rail_item_clicked(const Vector2 &p_pos, MouseButton p_button) {
+	if (p_button != MouseButton::LEFT) {
+		return;
+	}
+	TreeItem *item = category_tree->get_item_at_position(p_pos);
+	if (!item || item == category_tree->get_root()) {
+		return;
+	}
+	const String color_key = item->get_metadata(1);
+	callable_mp(this, &FileSystemDock::_set_category_filter).call_deferred(color_key);
+}
+
+void FileSystemDock::_begin_category_filter() {
+	if (category_restore_state_valid) {
+		return;
+	}
+	category_restore_path = current_path;
+	category_restore_selection = get_selected_paths();
+	category_restore_uncollapsed_paths = get_uncollapsed_paths();
+	category_scope_path.clear();
+	category_restore_state_valid = true;
+}
+
+void FileSystemDock::_end_category_filter() {
+	category_scope_path.clear();
+	if (!category_restore_state_valid) {
+		return;
+	}
+	current_path = category_restore_path;
+	category_restore_path.clear();
+	category_restore_state_valid = false;
+	category_restore_pending = true;
+}
+
+void FileSystemDock::_set_category_filter(const String &p_color_key) {
+	const bool was_active = _is_color_collection_active();
+	if (p_color_key.is_empty()) {
+		active_color_filter.clear();
+	} else {
+		if (!was_active) {
+			_begin_category_filter();
+		}
+		if (active_color_filter.has(p_color_key)) {
+			active_color_filter.erase(p_color_key);
+		} else {
+			active_color_filter.insert(p_color_key);
+		}
+	}
+
+	if (active_color_filter.is_empty()) {
+		_end_category_filter();
+	} else if (was_active) {
+		// Changing the union returns it to its project-wide scope. The saved All Assets path remains intact.
+		category_scope_path.clear();
+		if (category_restore_state_valid) {
+			current_path = category_restore_path;
+		}
+	}
+	_rebuild_category_rail();
+	_update_color_filter_view();
+	emit_signal(SNAME("display_mode_changed"));
 }
 
 void FileSystemDock::_update_color_filter_view() {
-	_update_color_filter_button_state();
-	// _update_display_mode's tail flattens the pane while a collection is active (and restores the tree
-	// when it clears), so a single forced pass covers both directions.
 	_update_display_mode(true);
+	if (!_is_color_collection_active() && category_restore_pending) {
+		_update_tree(category_restore_uncollapsed_paths, false, true, category_restore_selection);
+		if (display_mode != DISPLAY_MODE_TREE_ONLY) {
+			_update_file_list(true, category_restore_selection);
+		}
+		category_restore_selection.clear();
+		category_restore_uncollapsed_paths.clear();
+		category_restore_pending = false;
+	}
+	_set_current_path_line_edit_text(current_path);
 }
 
-void FileSystemDock::_gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches) {
+void FileSystemDock::_build_category_visible_paths() {
+	category_visible_paths.clear();
+	if (!_is_color_collection_active()) {
+		return;
+	}
+	_gather_category_tree_paths(EditorFileSystem::get_singleton()->get_filesystem(), "res://", String());
+	category_visible_paths.insert("res://");
+}
+
+bool FileSystemDock::_gather_category_tree_paths(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color) {
+	if (!p_dir) {
+		return false;
+	}
+	const String explicit_color = assigned_folder_colors.get(p_dir_path, String());
+	const String effective_color = folder_colors.has(explicit_color) ? explicit_color : p_inherited_color;
+	bool keep = active_color_filter.has(effective_color);
+	for (int i = 0; i < p_dir->get_subdir_count(); i++) {
+		EditorFileSystemDirectory *subdir = p_dir->get_subdir(i);
+		keep = _gather_category_tree_paths(subdir, p_dir_path.path_join(subdir->get_name()) + "/", effective_color) || keep;
+	}
+	if (keep) {
+		category_visible_paths.insert(p_dir_path);
+	}
+	return keep;
+}
+
+void FileSystemDock::_gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches, CategoryCollectionStats *r_stats) {
 	if (!p_dir) {
 		return;
 	}
 
-	// A folder's own assignment wins; otherwise it inherits its nearest colored ancestor (so a colored
-	// folder's whole subtree is that color, and an override deeper down re-colors from there down). The
-	// path is threaded down the recursion (keys end with "/"), avoiding a per-node get_path() root-walk.
-	const String effective_color = assigned_folder_colors.get(p_dir_path, p_inherited_color);
+	const String explicit_color = assigned_folder_colors.get(p_dir_path, String());
+	const String effective_color = folder_colors.has(explicit_color) ? explicit_color : p_inherited_color;
+	if (r_stats && active_color_filter.has(explicit_color)) {
+		r_stats->assigned_folder_count++;
+	}
 
 	for (int i = 0; i < p_dir->get_subdir_count(); i++) {
 		EditorFileSystemDirectory *subdir = p_dir->get_subdir(i);
-		_gather_color_collection(subdir, p_dir_path + subdir->get_name() + "/", effective_color, r_matches);
+		_gather_color_collection(subdir, p_dir_path.path_join(subdir->get_name()) + "/", effective_color, r_matches, r_stats);
 	}
 
-	if (effective_color.is_empty() || !active_color_filter.has(effective_color)) {
+	if (!active_color_filter.has(effective_color) || (!category_scope_path.is_empty() && !p_dir_path.begins_with(category_scope_path))) {
 		return;
 	}
 
 	for (int i = 0; i < p_dir->get_file_count(); i++) {
-		FileInfo file_info;
-		file_info.name = p_dir->get_file(i);
-		file_info.path = p_dir->get_file_path(i);
-		file_info.type = p_dir->get_file_type(i);
-		file_info.icon_path = p_dir->get_file_icon_path(i);
-		file_info.import_broken = !p_dir->get_file_import_is_valid(i);
-		file_info.modified_time = p_dir->get_file_modified_time(i);
+		if (r_stats) {
+			r_stats->total_file_count++;
+		}
+		const StringName file_type = p_dir->get_file_type(i);
+		if (_is_file_type_disabled_by_feature_profile(file_type)) {
+			continue;
+		}
+		if (r_stats) {
+			r_stats->available_file_count++;
+		}
+		const String file_name = p_dir->get_file(i);
+		if (!searched_tokens.is_empty() && !_matches_all_search_tokens(file_name)) {
+			continue;
+		}
 
-		if (_is_file_type_disabled_by_feature_profile(file_info.type)) {
-			continue;
+		if (r_stats) {
+			r_stats->matched_file_count++;
 		}
-		// Honor the text filter too when both are active.
-		if (!searched_tokens.is_empty() && !_matches_all_search_tokens(file_info.name)) {
-			continue;
+		// TREE_ONLY only needs the stats (rows come from _create_tree), so it passes a null match list
+		// and we skip building a FileInfo that would be discarded.
+		if (r_matches) {
+			FileInfo file_info;
+			file_info.name = file_name;
+			file_info.path = p_dir->get_file_path(i);
+			file_info.type = file_type;
+			file_info.icon_path = p_dir->get_file_icon_path(i);
+			file_info.import_broken = !p_dir->get_file_import_is_valid(i);
+			file_info.modified_time = p_dir->get_file_modified_time(i);
+			r_matches->push_back(file_info);
 		}
-		r_matches->push_back(file_info);
 	}
+}
+
+String FileSystemDock::_get_active_category_display_name() const {
+	String category_name;
+	int count = 0;
+	for (const String &color_key : folder_color_order) {
+		if (!active_color_filter.has(color_key)) {
+			continue;
+		}
+		category_name = _get_color_label(color_key);
+		count++;
+	}
+	return count == 1 ? category_name : vformat(TTR("%d selected categories"), count);
+}
+
+void FileSystemDock::_update_category_empty_state() {
+	if (!category_result_empty_state) {
+		return;
+	}
+
+	VBoxContainer *target_parent = display_mode == DISPLAY_MODE_TREE_ONLY ? tree_content_vb : files_content_vb;
+	if (category_result_empty_state->get_parent() != target_parent) {
+		category_result_empty_state->reparent(target_parent);
+	}
+
+	bool show_empty_state = false;
+	bool show_edit = false;
+	bool show_clear_search = false;
+	String message;
+	String hint;
+	if (_is_color_collection_active()) {
+		const String category_name = _get_active_category_display_name();
+		if (category_collection_stats.assigned_folder_count == 0) {
+			show_empty_state = true;
+			show_edit = true;
+			message = vformat(TTR("No folders use “%s”."), category_name);
+			hint = TTR("Right-click a folder and choose Set Folder Color... to assign this category.");
+		} else if (category_collection_stats.total_file_count == 0) {
+			show_empty_state = true;
+			message = vformat(TTR("No assets in “%s”."), category_name);
+		} else if (category_collection_stats.available_file_count == 0) {
+			show_empty_state = true;
+			message = TTR("No available assets match this category under the current feature profile.");
+		} else if (!searched_tokens.is_empty() && category_collection_stats.matched_file_count == 0) {
+			show_empty_state = true;
+			show_clear_search = true;
+			message = vformat(TTR("No assets match “%s”."), file_list_search_box->get_text());
+		}
+	}
+
+	category_result_empty_label->set_text(message);
+	category_result_empty_hint->set_text(hint);
+	category_result_empty_hint->set_visible(!hint.is_empty());
+	category_result_edit_button->set_visible(show_edit);
+	category_result_clear_search_button->set_visible(show_clear_search);
+	category_result_empty_state->set_visible(show_empty_state);
+
+	if (display_mode == DISPLAY_MODE_TREE_ONLY) {
+		tree->show();
+		files->show();
+	} else {
+		files->set_visible(!show_empty_state);
+	}
+}
+
+void FileSystemDock::_clear_category_search() {
+	file_list_search_box->clear();
 }
 
 void FileSystemDock::_popup_color_labels_dialog() {
 	if (!color_labels_dialog) {
 		color_labels_dialog = memnew(ConfirmationDialog);
-		color_labels_dialog->set_title(TTR("Edit Color Collection Names"));
+		color_labels_dialog->set_title(TTR("Edit Categories"));
 		color_labels_dialog->set_ok_button_text(TTR("Save"));
 		color_labels_dialog->connect(SceneStringName(confirmed), callable_mp(this, &FileSystemDock::_color_labels_dialog_confirmed));
 		add_child(color_labels_dialog);
@@ -3675,7 +4056,7 @@ void FileSystemDock::_popup_color_labels_dialog() {
 		color_labels_dialog->add_child(vb);
 
 		Label *hint = memnew(Label);
-		hint->set_text(TTR("Give each folder color a meaning (e.g. \"Prefabs\", \"Levels\"). Saved in the project."));
+		hint->set_text(TTR("Give each folder color a name and icon. Categories are saved in the project."));
 		vb->add_child(hint);
 
 		GridContainer *grid = memnew(GridContainer);
@@ -3683,46 +4064,95 @@ void FileSystemDock::_popup_color_labels_dialog() {
 		grid->set_v_size_flags(SIZE_EXPAND_FILL);
 		vb->add_child(grid);
 
-		for (const KeyValue<String, Color> &E : folder_colors) {
-			TextureRect *swatch = memnew(TextureRect);
-			swatch->set_texture(get_editor_theme_icon(SNAME("Folder")));
-			swatch->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
-			swatch->set_custom_minimum_size(Size2(24, 24) * EDSCALE);
-			swatch->set_self_modulate(editor_is_dark_icon_and_font ? E.value : E.value * 2);
-			grid->add_child(swatch);
+		for (const String &color_key : folder_color_order) {
+			MenuButton *icon_button = memnew(MenuButton);
+			icon_button->set_text(String::chr(0x25A0));
+			icon_button->set_accessibility_name(vformat(TTR("Icon for %s category"), color_key.capitalize()));
+			icon_button->set_custom_minimum_size(Size2(72, 28) * EDSCALE);
+			PopupMenu *icon_popup = icon_button->get_popup();
+			for (int i = 0; i < (int)std_size(explore_category_icons); i++) {
+				const ExploreCategoryIcon &option = explore_category_icons[i];
+				icon_popup->add_icon_item(get_editor_theme_icon(option.theme_icon), TTR(option.display_name), i);
+			}
+			icon_popup->connect(SceneStringName(id_pressed), callable_mp(this, &FileSystemDock::_category_icon_selected).bind(color_key));
+			grid->add_child(icon_button);
+			color_icon_buttons[color_key] = icon_button;
 
 			LineEdit *le = memnew(LineEdit);
 			le->set_h_size_flags(SIZE_EXPAND_FILL);
-			le->set_placeholder(E.key.capitalize());
+			le->set_placeholder(color_key.capitalize());
 			grid->add_child(le);
-			color_label_edits[E.key] = le;
+			color_label_edits[color_key] = le;
 		}
 	}
 
+	edited_color_icons = color_icons;
 	// Seed each field from the current label (blank == using the default capitalized name).
 	for (const KeyValue<String, LineEdit *> &E : color_label_edits) {
 		HashMap<String, String>::ConstIterator it = color_labels.find(E.key);
 		E.value->set_text(it ? it->value : String());
+		_update_color_icon_button(E.key);
 	}
-	color_labels_dialog->popup_centered(Size2(420, 0) * EDSCALE);
+	color_labels_dialog->popup_centered(Size2(500, 0) * EDSCALE);
+}
+
+void FileSystemDock::_category_icon_selected(int p_id, const String &p_color_key) {
+	ERR_FAIL_INDEX(p_id, (int)std_size(explore_category_icons));
+	edited_color_icons[p_color_key] = explore_category_icons[p_id].theme_icon;
+	_update_color_icon_button(p_color_key);
+}
+
+void FileSystemDock::_update_color_icon_button(const String &p_color_key) {
+	MenuButton **button_ptr = color_icon_buttons.getptr(p_color_key);
+	if (!button_ptr) {
+		return;
+	}
+	MenuButton *button = *button_ptr;
+	const ExploreCategoryIcon *icon = get_explore_category_icon(_get_color_icon_id(p_color_key, true));
+	button->set_button_icon(get_editor_theme_icon(icon->theme_icon));
+	button->set_tooltip_text(vformat(TTR("Category icon: %s"), TTR(icon->display_name)));
+	button->set_theme_type_variation(icon->tintable ? StringName("FlatMenuButton") : StringName("FlatMenuButtonNoIconTint"));
+	const Color category_color = editor_is_dark_icon_and_font ? folder_colors[p_color_key] : folder_colors[p_color_key] * ITEM_COLOR_SCALE;
+	for (const StringName &state : { SNAME("font_color"), SNAME("font_hover_color"), SNAME("font_pressed_color"), SNAME("font_focus_color") }) {
+		button->add_theme_color_override(state, category_color);
+	}
+	for (const StringName &state : { SNAME("icon_normal_color"), SNAME("icon_hover_color"), SNAME("icon_pressed_color"), SNAME("icon_focus_color") }) {
+		if (icon->tintable) {
+			button->add_theme_color_override(state, category_color);
+		} else {
+			button->remove_theme_color_override(state);
+		}
+	}
 }
 
 void FileSystemDock::_color_labels_dialog_confirmed() {
-	Dictionary d;
+	Dictionary labels_dictionary;
 	for (const KeyValue<String, LineEdit *> &E : color_label_edits) {
 		const String txt = E.value->get_text().strip_edges();
 		if (!txt.is_empty() && txt != E.key.capitalize()) {
 			color_labels[E.key] = txt;
-			d[E.key] = txt;
+			labels_dictionary[E.key] = txt;
 		} else {
 			color_labels.erase(E.key);
 		}
 	}
-	// Mirror _update_folder_colors_setting exactly: store the whole map (or clear the key when empty) and
-	// persist immediately -- otherwise a renamed label lives only in memory until some unrelated save.
-	ProjectSettings::get_singleton()->set_setting("file_customization/color_labels", d.is_empty() ? Variant() : Variant(d));
+
+	Dictionary icons_dictionary;
+	color_icons.clear();
+	for (const String &color_key : folder_color_order) {
+		const String icon_id = _get_color_icon_id(color_key, true);
+		if (icon_id != "Folder") {
+			color_icons[color_key] = icon_id;
+			icons_dictionary[color_key] = icon_id;
+		}
+	}
+
+	// Names and icons are one category edit transaction and share a single project save.
+	ProjectSettings::get_singleton()->set_setting("file_customization/color_labels", labels_dictionary.is_empty() ? Variant() : Variant(labels_dictionary));
+	ProjectSettings::get_singleton()->set_setting("file_customization/color_icons", icons_dictionary.is_empty() ? Variant() : Variant(icons_dictionary));
 	ProjectSettings::get_singleton()->save();
 
+	_rebuild_category_rail();
 	_update_color_filter_view();
 }
 
@@ -3842,11 +4272,11 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 			folder_colors_menu->set_item_icon_modulate(0, get_theme_color(SNAME("folder_icon_color"), SNAME("FileDialog")));
 			folder_colors_menu->add_separator();
 
-			for (const KeyValue<String, Color> &E : folder_colors) {
-				folder_colors_menu->add_icon_item(get_editor_theme_icon(SNAME("Folder")), _get_color_label(E.key));
+			for (const String &color_key : folder_color_order) {
+				folder_colors_menu->add_icon_item(get_editor_theme_icon(SNAME("Folder")), _get_color_label(color_key));
 
-				folder_colors_menu->set_item_icon_modulate(-1, editor_is_dark_icon_and_font ? E.value : E.value * 2);
-				folder_colors_menu->set_item_metadata(-1, E.key);
+				folder_colors_menu->set_item_icon_modulate(-1, editor_is_dark_icon_and_font ? folder_colors[color_key] : folder_colors[color_key] * 2);
+				folder_colors_menu->set_item_metadata(-1, color_key);
 			}
 		}
 	}
@@ -3976,7 +4406,7 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 			if (is_item_in_favorites) {
 				p_popup->add_separator();
 				added_separator = true;
-				p_popup->add_icon_item(get_editor_theme_icon(SNAME("ShowInFileSystem")), TTRC("Show in FileSystem"), FILE_MENU_SHOW_IN_FILESYSTEM);
+				p_popup->add_icon_item(get_editor_theme_icon(SNAME("ShowInFileSystem")), TTRC("Show in Explore"), FILE_MENU_SHOW_IN_FILESYSTEM);
 			}
 		}
 
@@ -4469,7 +4899,9 @@ void FileSystemDock::_feature_profile_changed() {
 }
 
 void FileSystemDock::_project_settings_changed() {
-	assigned_folder_colors = ProjectSettings::get_singleton()->get_setting("file_customization/folder_colors");
+	_load_color_customization();
+	_rebuild_category_rail();
+	_update_color_filter_view();
 
 	const String &current_main_scene_path = ResourceUID::ensure_path(GLOBAL_GET("application/run/main_scene"));
 	if (main_scene_path != current_main_scene_path) {
@@ -4586,11 +5018,25 @@ void FileSystemDock::update_layout(EditorDock::DockLayout p_layout, int p_slot) 
 void FileSystemDock::save_layout_to_config(Ref<ConfigFile> &p_layout, const String &p_section) const {
 	p_layout->set_value(p_section, "h_split_offset", get_h_split_offset());
 	p_layout->set_value(p_section, "v_split_offset", get_v_split_offset());
+	p_layout->set_value(p_section, "category_wide_split_offset", category_wide_split_offset);
+	p_layout->set_value(p_section, "category_narrow_split_offset", category_narrow_split_offset);
 	p_layout->set_value(p_section, "display_mode", get_display_mode());
 	p_layout->set_value(p_section, "file_sort", (int)get_file_sort());
 	p_layout->set_value(p_section, "file_list_display_mode", get_file_list_display_mode());
-	p_layout->set_value(p_section, "selected_paths", get_selected_paths());
-	p_layout->set_value(p_section, "uncollapsed_paths", searched_tokens.is_empty() ? get_uncollapsed_paths() : uncollapsed_paths_before_search);
+	const Vector<String> selected_paths = _is_color_collection_active() && category_restore_state_valid ? category_restore_selection : get_selected_paths();
+	const Vector<String> uncollapsed_paths = _is_color_collection_active() && category_restore_state_valid ? category_restore_uncollapsed_paths : (searched_tokens.is_empty() ? get_uncollapsed_paths() : uncollapsed_paths_before_search);
+	p_layout->set_value(p_section, "selected_paths", selected_paths);
+	p_layout->set_value(p_section, "uncollapsed_paths", uncollapsed_paths);
+
+	PackedStringArray active_categories;
+	for (const String &color_key : folder_color_order) {
+		if (active_color_filter.has(color_key)) {
+			active_categories.push_back(color_key);
+		}
+	}
+	p_layout->set_value(p_section, "active_categories", active_categories);
+	p_layout->set_value(p_section, "category_restore_path", category_restore_state_valid ? category_restore_path : current_path);
+	p_layout->set_value(p_section, "category_scope_path", category_scope_path);
 }
 
 void FileSystemDock::load_layout_from_config(const Ref<ConfigFile> &p_layout, const String &p_section) {
@@ -4603,6 +5049,11 @@ void FileSystemDock::load_layout_from_config(const Ref<ConfigFile> &p_layout, co
 		int fs_v_split_ofs = p_layout->get_value(p_section, "v_split_offset");
 		set_v_split_offset(fs_v_split_ofs);
 	}
+
+	category_wide_split_offset = p_layout->get_value(p_section, "category_wide_split_offset", category_wide_split_offset);
+	category_narrow_split_offset = p_layout->get_value(p_section, "category_narrow_split_offset", category_narrow_split_offset);
+	category_wide_split->set_split_offset(category_wide_split_offset);
+	category_narrow_split->set_split_offset(CLAMP(category_narrow_split_offset, int(80 * EDSCALE), int(160 * EDSCALE)));
 
 	if (p_layout->has_section_key(p_section, "display_mode")) {
 		DisplayMode dock_filesystem_display_mode = DisplayMode(int(p_layout->get_value(p_section, "display_mode")));
@@ -4742,6 +5193,33 @@ void FileSystemDock::load_layout_from_config(const Ref<ConfigFile> &p_layout, co
 			}
 		}
 	}
+
+	active_color_filter.clear();
+	const PackedStringArray active_categories = p_layout->get_value(p_section, "active_categories", PackedStringArray());
+	for (const String &color_key : active_categories) {
+		if (folder_colors.has(color_key)) {
+			active_color_filter.insert(color_key);
+		}
+	}
+	if (_is_color_collection_active()) {
+		category_restore_path = p_layout->get_value(p_section, "category_restore_path", current_path);
+		category_restore_selection = p_layout->get_value(p_section, "selected_paths", PackedStringArray());
+		PackedStringArray restore_uncollapsed = p_layout->get_value(p_section, "uncollapsed_paths", PackedStringArray());
+		if (restore_uncollapsed.is_empty()) {
+			restore_uncollapsed.push_back("res://");
+		}
+		category_restore_uncollapsed_paths = restore_uncollapsed;
+		category_restore_state_valid = true;
+		category_scope_path = p_layout->get_value(p_section, "category_scope_path", String());
+		if (!category_scope_path.is_empty() && DirAccess::dir_exists_absolute(ProjectSettings::get_singleton()->globalize_path(category_scope_path))) {
+			current_path = category_scope_path;
+		} else {
+			category_scope_path.clear();
+			current_path = category_restore_path;
+		}
+	}
+	_rebuild_category_rail();
+	_update_color_filter_view();
 }
 
 void FileSystemDock::_on_open_editor_settings_file_exts() {
@@ -4778,7 +5256,7 @@ void FileSystemDock::_bind_methods() {
 
 FileSystemDock::FileSystemDock() {
 	singleton = this;
-	set_name(TTRC("FileSystem"));
+	set_name(TTRC("Explore"));
 	set_icon_name("Folder");
 	// Registered by EditorNode before this unmanaged drawer-hosted dock is constructed.
 	set_dock_shortcut(ED_GET_SHORTCUT("docks/open_filesystem"));
@@ -4819,6 +5297,15 @@ FileSystemDock::FileSystemDock() {
 			{ int32_t(KeyModifierMask::META | Key::L), int32_t(KeyModifierMask::META | KeyModifierMask::SHIFT | Key::G) });
 
 	// Properly translating color names would require a separate HashMap, so for simplicity they are provided as comments.
+	folder_color_order.push_back("red");
+	folder_color_order.push_back("orange");
+	folder_color_order.push_back("yellow");
+	folder_color_order.push_back("green");
+	folder_color_order.push_back("teal");
+	folder_color_order.push_back("blue");
+	folder_color_order.push_back("purple");
+	folder_color_order.push_back("pink");
+	folder_color_order.push_back("gray");
 	folder_colors["red"] = Color(1.0, 0.271, 0.271); // TTR("Red")
 	folder_colors["orange"] = Color(1.0, 0.561, 0.271); // TTR("Orange")
 	folder_colors["yellow"] = Color(1.0, 0.890, 0.271); // TTR("Yellow")
@@ -4829,8 +5316,7 @@ FileSystemDock::FileSystemDock() {
 	folder_colors["pink"] = Color(1.0, 0.271, 0.588); // TTR("Pink")
 	folder_colors["gray"] = Color(0.616, 0.616, 0.616); // TTR("Gray")
 
-	assigned_folder_colors = ProjectSettings::get_singleton()->get_setting("file_customization/folder_colors");
-	_load_color_labels(); // G4: custom per-color names for the collection filter.
+	_load_color_customization();
 
 	editor_is_dark_icon_and_font = EditorThemeManager::is_dark_icon_and_font();
 
@@ -4880,13 +5366,10 @@ FileSystemDock::FileSystemDock() {
 
 	tree_search_box = memnew(LineEdit);
 	tree_search_box->set_h_size_flags(SIZE_EXPAND_FILL);
-	tree_search_box->set_placeholder(TTRC("Filter Files"));
+	tree_search_box->set_placeholder(TTRC("Filter Assets"));
 	tree_search_box->set_clear_button_enabled(true);
 	tree_search_box->connect(SceneStringName(text_changed), callable_mp(this, &FileSystemDock::_search_changed).bind(tree_search_box));
 	toolbar2_hbc->add_child(tree_search_box);
-
-	tree_color_filter = _create_color_filter_button();
-	toolbar2_hbc->add_child(tree_color_filter);
 
 	tree_button_sort = _create_file_menu_button();
 	toolbar2_hbc->add_child(tree_button_sort);
@@ -4899,16 +5382,73 @@ FileSystemDock::FileSystemDock() {
 
 	add_child(tree_popup);
 
+	category_wide_split = memnew(HSplitContainer);
+	category_wide_split->set_v_size_flags(SIZE_EXPAND_FILL);
+	category_wide_split->connect("dragged", callable_mp(this, &FileSystemDock::_category_split_dragged));
+	category_wide_split_offset = 210 * EDSCALE;
+	category_wide_split->set_split_offset(category_wide_split_offset);
+	main_vb->add_child(category_wide_split);
+
+	category_narrow_split = memnew(VSplitContainer);
+	category_narrow_split->set_v_size_flags(SIZE_EXPAND_FILL);
+	category_narrow_split->connect("dragged", callable_mp(this, &FileSystemDock::_category_split_dragged));
+	category_narrow_split_offset = 120 * EDSCALE;
+	category_narrow_split->set_split_offset(category_narrow_split_offset);
+	category_narrow_split->hide();
+	main_vb->add_child(category_narrow_split);
+
+	category_rail = memnew(VBoxContainer);
+	category_rail->set_v_size_flags(SIZE_EXPAND_FILL);
+	category_rail->set_custom_minimum_size(Size2(190, 0) * EDSCALE);
+	category_wide_split->add_child(category_rail);
+
+	Label *category_title = memnew(Label);
+	category_title->set_text(TTRC("Categories"));
+	category_rail->add_child(category_title);
+
+	category_tree = memnew(Tree);
+	category_tree->set_accessibility_name(TTRC("Asset Categories"));
+	category_tree->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
+	category_tree->set_hide_root(true);
+	category_tree->set_columns(2);
+	category_tree->set_column_expand(0, false);
+	category_tree->set_column_custom_minimum_width(0, 24 * EDSCALE);
+	category_tree->set_column_expand(1, true);
+	category_tree->set_column_clip_content(1, true);
+	category_tree->set_allow_reselect(true);
+	category_tree->set_v_size_flags(SIZE_EXPAND_FILL);
+	category_tree->connect("item_mouse_selected", callable_mp(this, &FileSystemDock::_category_rail_item_clicked));
+	category_rail->add_child(category_tree);
+
+	category_rail_empty_state = memnew(VBoxContainer);
+	category_rail->add_child(category_rail_empty_state);
+	Label *no_categories_label = memnew(Label);
+	no_categories_label->set_text(TTRC("No categories yet"));
+	category_rail_empty_state->add_child(no_categories_label);
+	Label *no_categories_hint = memnew(Label);
+	no_categories_hint->set_text(TTRC("Right-click a folder to set its color, or edit category names below."));
+	no_categories_hint->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	category_rail_empty_state->add_child(no_categories_hint);
+
+	category_edit_button = memnew(Button);
+	category_edit_button->set_text(TTRC("Edit Categories..."));
+	category_edit_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_popup_color_labels_dialog));
+	category_rail->add_child(category_edit_button);
+
 	split_box = memnew(SplitContainer);
 	split_box->set_v_size_flags(SIZE_EXPAND_FILL);
+	split_box->set_h_size_flags(SIZE_EXPAND_FILL);
 	split_box->connect("dragged", callable_mp(this, &FileSystemDock::_split_dragged));
 	split_box_offset_h = 240 * EDSCALE;
-	main_vb->add_child(split_box);
+	category_wide_split->add_child(split_box);
 
 	tree_mc = memnew(MarginContainer);
 	split_box->add_child(tree_mc);
 	tree_mc->set_theme_type_variation("NoBorderHorizontalBottom");
 	tree_mc->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	tree_content_vb = memnew(VBoxContainer);
+	tree_content_vb->set_v_size_flags(SIZE_EXPAND_FILL);
+	tree_mc->add_child(tree_content_vb);
 
 	tree = memnew(FileSystemTree);
 	tree->set_accessibility_name(TTRC("Directories"));
@@ -4921,7 +5461,7 @@ FileSystemDock::FileSystemDock() {
 	tree->set_select_mode(Tree::SELECT_MULTI);
 	tree->set_custom_minimum_size(Size2(40 * EDSCALE, 15 * EDSCALE));
 	tree->set_column_clip_content(0, true);
-	tree_mc->add_child(tree);
+	tree_content_vb->add_child(tree);
 
 	tree->connect("item_activated", callable_mp(this, &FileSystemDock::_tree_activate_file));
 	tree->connect("multi_selected", callable_mp(this, &FileSystemDock::_tree_multi_selected));
@@ -4942,14 +5482,11 @@ FileSystemDock::FileSystemDock() {
 
 	file_list_search_box = memnew(LineEdit);
 	file_list_search_box->set_h_size_flags(SIZE_EXPAND_FILL);
-	file_list_search_box->set_placeholder(TTRC("Filter Files"));
-	file_list_search_box->set_accessibility_name(TTRC("Filter Files"));
+	file_list_search_box->set_placeholder(TTRC("Filter Assets"));
+	file_list_search_box->set_accessibility_name(TTRC("Filter Assets"));
 	file_list_search_box->set_clear_button_enabled(true);
 	file_list_search_box->connect(SceneStringName(text_changed), callable_mp(this, &FileSystemDock::_search_changed).bind(file_list_search_box));
 	path_hb->add_child(file_list_search_box);
-
-	file_list_color_filter = _create_color_filter_button();
-	path_hb->add_child(file_list_color_filter);
 
 	file_list_button_sort = _create_file_menu_button();
 	path_hb->add_child(file_list_button_sort);
@@ -4963,6 +5500,9 @@ FileSystemDock::FileSystemDock() {
 	file_list_vb->add_child(files_mc);
 	files_mc->set_theme_type_variation("NoBorderHorizontalBottom");
 	files_mc->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	files_content_vb = memnew(VBoxContainer);
+	files_content_vb->set_v_size_flags(SIZE_EXPAND_FILL);
+	files_mc->add_child(files_content_vb);
 
 	files = memnew(FileSystemList);
 	files->set_accessibility_name(TTRC("Files"));
@@ -4976,7 +5516,33 @@ FileSystemDock::FileSystemDock() {
 	files->connect("item_edited", callable_mp(this, &FileSystemDock::_rename_operation_confirm));
 	files->set_custom_minimum_size(Size2(0, 15 * EDSCALE));
 	files->set_allow_rmb_select(true);
-	files_mc->add_child(files);
+	files_content_vb->add_child(files);
+
+	category_result_empty_state = memnew(VBoxContainer);
+	category_result_empty_state->set_h_size_flags(SIZE_EXPAND_FILL);
+	category_result_empty_state->set_v_size_flags(SIZE_SHRINK_CENTER);
+	category_result_empty_state->hide();
+	files_content_vb->add_child(category_result_empty_state);
+
+	category_result_empty_label = memnew(Label);
+	category_result_empty_label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	category_result_empty_label->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	category_result_empty_state->add_child(category_result_empty_label);
+
+	category_result_empty_hint = memnew(Label);
+	category_result_empty_hint->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	category_result_empty_hint->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	category_result_empty_state->add_child(category_result_empty_hint);
+
+	category_result_edit_button = memnew(Button);
+	category_result_edit_button->set_text(TTRC("Edit Categories..."));
+	category_result_edit_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_popup_color_labels_dialog));
+	category_result_empty_state->add_child(category_result_edit_button);
+
+	category_result_clear_search_button = memnew(Button);
+	category_result_clear_search_button->set_text(TTRC("Clear Search"));
+	category_result_clear_search_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_clear_category_search));
+	category_result_empty_state->add_child(category_result_clear_search_button);
 
 	scanning_vb = memnew(VBoxContainer);
 	scanning_vb->hide();
@@ -5069,13 +5635,13 @@ FileSystemDock::FileSystemDock() {
 	move_confirm_dialog_label->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
 	vb->add_child(move_confirm_dialog_label);
 	confirm_before_move_checkbox = memnew(CheckBox(TTRC("Don't Ask Again")));
-	confirm_before_move_checkbox->set_tooltip_text(TTRC("This dialog can be skipped by holding shift or enabled/disabled in the Editor Settings: Docks > FileSystem > Ask Before Moving Files."));
+	confirm_before_move_checkbox->set_tooltip_text(TTRC("This dialog can be skipped by holding shift or enabled/disabled in the Editor Settings: Docks > Explore > Ask Before Moving Files."));
 	vb->add_child(confirm_before_move_checkbox);
 
 	unrecognized_ext_dialog = memnew(AcceptDialog);
 	unrecognized_ext_dialog->set_flag(Window::FLAG_RESIZE_DISABLED, true);
 	add_child(unrecognized_ext_dialog);
-	unrecognized_ext_dialog->set_text(TTRC("This file extension is not recognized by the editor.\nIf you want to rename it anyway, use your operating system's file manager.\nAfter renaming to an unknown extension, the file won't be shown in the editor anymore.\nTo make the editor recognize this file extension, add it to one of the lists of extensions in Editor Settings > Docks > FileSystem."));
+	unrecognized_ext_dialog->set_text(TTRC("This file extension is not recognized by the editor.\nIf you want to rename it anyway, use your operating system's file manager.\nAfter renaming to an unknown extension, the file won't be shown in the editor anymore.\nTo make the editor recognize this file extension, add it to one of the lists of extensions in Editor Settings > Docks > Explore."));
 	Button *settings_button = unrecognized_ext_dialog->add_button(TTRC("Open Editor Settings"), false, "open_editor_settings_docks_filesystem");
 	settings_button->connect("pressed", callable_mp(this, &FileSystemDock::_on_open_editor_settings_file_exts));
 

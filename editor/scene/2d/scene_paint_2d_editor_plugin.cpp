@@ -888,7 +888,7 @@ ScenePaint2DEditor::ScenePaint2DEditor() {
 	scene_picker_button->set_toggle_mode(true);
 	scene_picker_button->set_accessibility_name(TTRC("Scene Picker"));
 	scene_picker_button->set_theme_type_variation(SceneStringName(FlatButton));
-	scene_picker_button->set_tooltip_text(TTRC("When enabled, you can select scenes from the FileSystem dock, Scene dock, or 2D editor's viewport.\nHolding Ctrl enables picking from the 2D editor's viewport."));
+	scene_picker_button->set_tooltip_text(TTRC("When enabled, you can select scenes from Explore, the Scene dock, or the 2D editor's viewport.\nHolding Ctrl enables picking from the 2D editor's viewport."));
 	scene_picker_button->connect(SceneStringName(toggled), callable_mp(this, &ScenePaint2DEditor::_scene_picker_toggled));
 	scene_picker_button->set_shortcut(ED_SHORTCUT("scene_painter/scene_picker", TTRC("Scene Picker"), Key::I));
 	scene_picker_button->set_shortcut_context(CanvasItemEditor::get_singleton());

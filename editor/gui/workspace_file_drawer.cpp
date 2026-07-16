@@ -318,7 +318,7 @@ WorkspaceFileDrawer::WorkspaceFileDrawer() {
 	body->add_child(header);
 
 	Label *title_label = memnew(Label);
-	title_label->set_text(TTR("FileSystem"));
+	title_label->set_text(TTR("Explore"));
 	title_label->set_h_size_flags(SIZE_EXPAND_FILL);
 	header->add_child(title_label);
 

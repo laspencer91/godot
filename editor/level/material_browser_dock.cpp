@@ -470,7 +470,7 @@ void MaterialBrowserDock::_show_context_menu(const String &p_path, const Vector2
 	context_menu->add_check_item(material_index->is_hidden(p_path) ? TTRC("Unhide") : TTRC("Hide"), MENU_TOGGLE_HIDDEN);
 	context_menu->add_separator();
 	context_menu->add_item(TTRC("Open in Inspector"), MENU_OPEN_INSPECTOR);
-	context_menu->add_item(TTRC("Reveal in FileSystem"), MENU_REVEAL_FILESYSTEM);
+	context_menu->add_item(TTRC("Reveal in Explore"), MENU_REVEAL_FILESYSTEM);
 	context_menu->set_position(p_screen_position);
 	context_menu->popup();
 }

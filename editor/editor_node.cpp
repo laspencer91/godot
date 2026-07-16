@@ -401,6 +401,18 @@ void EditorNode::_update_unsaved_cache() {
 	}
 }
 
+void EditorNode::_update_filesystem_drawer_button_tooltip() {
+	if (!filesystem_drawer_button) {
+		return;
+	}
+	const Ref<Shortcut> shortcut = ED_GET_SHORTCUT("docks/open_filesystem");
+	if (shortcut.is_valid() && shortcut->has_valid_event()) {
+		filesystem_drawer_button->set_tooltip_text(vformat(TTR("Toggle Explore (%s)"), shortcut->get_as_text()));
+	} else {
+		filesystem_drawer_button->set_tooltip_text(TTR("Toggle Explore"));
+	}
+}
+
 void EditorNode::input(const Ref<InputEvent> &p_event) {
 	// EditorNode::get_singleton()->set_process_input is set to true in ProgressDialog
 	// only when the progress dialog is visible.
@@ -929,6 +941,7 @@ void EditorNode::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_TRANSLATION_CHANGED: {
 			_update_title();
+			_update_filesystem_drawer_button_tooltip();
 			callable_mp(this, &EditorNode::_titlebar_resized).call_deferred();
 
 			// The rendering method selector.
@@ -9467,7 +9480,7 @@ EditorNode::EditorNode() {
 	ED_SHORTCUT_OVERRIDE("editor/distraction_free_mode", "macos", KeyModifierMask::META | KeyModifierMask::SHIFT | Key::D);
 	ED_SHORTCUT_AND_COMMAND("editor/toggle_last_opened_bottom_panel", TTRC("Toggle Last Opened Bottom Panel"), KeyModifierMask::CMD_OR_CTRL | Key::J);
 	// Preserve Godot's familiar FileSystem action/key while routing it to the workspace drawer.
-	ED_SHORTCUT_AND_COMMAND("docks/open_filesystem", TTRC("Toggle FileSystem Drawer"), KeyModifierMask::ALT | Key::F);
+	ED_SHORTCUT_AND_COMMAND("docks/open_filesystem", TTRC("Toggle Explore"), KeyModifierMask::ALT | Key::F);
 	distraction_free->set_shortcut(ED_GET_SHORTCUT("editor/distraction_free_mode"));
 	distraction_free->set_tooltip_text(TTRC("Toggle distraction-free mode."));
 	distraction_free->set_toggle_mode(true);
@@ -9563,7 +9576,7 @@ EditorNode::EditorNode() {
 
 	ED_SHORTCUT("editor/next_tab", TTRC("Next Scene Tab"), KeyModifierMask::CTRL + Key::TAB);
 	ED_SHORTCUT("editor/prev_tab", TTRC("Previous Scene Tab"), KeyModifierMask::CTRL + KeyModifierMask::SHIFT + Key::TAB);
-	ED_SHORTCUT("editor/filter_files", TTRC("Focus FileSystem Filter"), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::ALT + Key::P);
+	ED_SHORTCUT("editor/filter_files", TTRC("Focus Explore Filter"), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::ALT + Key::P);
 
 	ED_SHORTCUT_AND_COMMAND("editor/new_scene", TTRC("New Scene"), KeyModifierMask::CMD_OR_CTRL + Key::N);
 	ED_SHORTCUT_AND_COMMAND("editor/new_inherited_scene", TTRC("New Inherited Scene..."), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::SHIFT + Key::N);
@@ -9825,7 +9838,7 @@ EditorNode::EditorNode() {
 	// G4: the FileSystem dock lives in the slide-up drawer, not a side dock slot. It is unmanaged by
 	// EditorDockManager -- its singleton is still set in the ctor, so the ~100 get_singleton() callers
 	// keep working; its own layout is persisted directly (see _save/_load_central_editor_layout).
-	workspace_file_drawer->add_panel(filesystem_dock, TTR("FileSystem"));
+	workspace_file_drawer->add_panel(filesystem_dock, TTR("Explore"));
 	// G4: Import rides as the drawer's collapsible right panel, driven by the FileSystem selection (which
 	// already updates the ImportDock singleton directly). The signal auto-reveals it on a reimportable file.
 	workspace_file_drawer->set_import_panel(ImportDock::get_singleton());
@@ -9917,8 +9930,9 @@ EditorNode::EditorNode() {
 	// G4: unified bottom-bar toggle for the FileSystem drawer. Seated at the far left of the bar
 	// (ahead of the Output/Debugger/Audio dock tabs) so it reads as its own leading entry. The button
 	// drives the overlay; the drawer reports back so the two stay in sync.
-	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("FileSystem"), gui_base->get_editor_theme_icon(SNAME("Folder")), Ref<Shortcut>(), true);
-	filesystem_drawer_button->set_tooltip_text(vformat("%s (%s)", TTR("Toggle FileSystem Drawer"), ED_GET_SHORTCUT("docks/open_filesystem")->get_as_text()));
+	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("Explore"), gui_base->get_editor_theme_icon(SNAME("Folder")), Ref<Shortcut>(), true);
+	_update_filesystem_drawer_button_tooltip();
+	ED_GET_SHORTCUT("docks/open_filesystem")->connect_changed(callable_mp(this, &EditorNode::_update_filesystem_drawer_button_tooltip));
 	filesystem_drawer_button->connect(SceneStringName(toggled), callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::set_open).bind(true));
 	workspace_file_drawer->connect("open_toggled", callable_mp(static_cast<BaseButton *>(filesystem_drawer_button), &BaseButton::set_pressed_no_signal));
 

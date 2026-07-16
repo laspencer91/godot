@@ -204,7 +204,7 @@ void EditorSceneTabs::_update_context_menu(int p_index) {
 		const String main_scene_path = GLOBAL_GET("application/run/main_scene");
 
 		scene_tabs_context_menu->add_separator();
-		scene_tabs_context_menu->add_item(TTR("Show in FileSystem"), SCENE_SHOW_IN_FILESYSTEM);
+		scene_tabs_context_menu->add_item(TTR("Show in Explore"), SCENE_SHOW_IN_FILESYSTEM);
 		DISABLE_LAST_OPTION_IF(!ResourceLoader::exists(scene_path));
 		scene_tabs_context_menu->add_item(TTR("Play This Scene"), SCENE_RUN);
 		DISABLE_LAST_OPTION_IF(no_root_node);

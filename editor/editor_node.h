@@ -601,6 +601,7 @@ private:
 	void _load_editor_plugin_states_from_config(const Ref<ConfigFile> &p_config_file);
 	void _update_title();
 	void _update_unsaved_cache();
+	void _update_filesystem_drawer_button_tooltip();
 	void _version_control_menu_option(int p_idx);
 	void _close_messages();
 	void _show_messages();

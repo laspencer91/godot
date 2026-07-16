@@ -52,7 +52,7 @@ const char *EditorFeatureProfile::feature_names[FEATURE_MAX] = {
 #ifndef DISABLE_DEPRECATED
 	TTRC("Node Dock (deprecated)"),
 #endif
-	TTRC("FileSystem Dock"),
+	TTRC("Explore"),
 	TTRC("Import Dock"),
 	TTRC("History Dock"),
 	TTRC("Game View"),
@@ -68,8 +68,8 @@ const char *EditorFeatureProfile::feature_descriptions[FEATURE_MAX] = {
 #ifndef DISABLE_DEPRECATED
 	TTRC("Allows to work with signals and groups of the node selected in the Scene dock."),
 #endif
-	TTRC("Allows to browse the local file system via a dedicated dock."),
-	TTRC("Allows to configure import settings for individual assets. Requires the FileSystem dock to function."),
+	TTRC("Allows browsing and discovering project assets in Explore."),
+	TTRC("Allows to configure import settings for individual assets. Requires Explore to function."),
 	TTRC("Provides an overview of the editor's and each scene's undo history."),
 	TTRC("Provides tools for selecting and debugging nodes at runtime."),
 	TTRC("Allows to work with signals of the node selected in the Scene dock."),

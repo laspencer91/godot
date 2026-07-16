@@ -726,7 +726,7 @@ void ImportDock::_set_dirty(bool p_dirty) {
 		// Add a dirty marker to notify the user that they should reimport the selected resource to see changes.
 		import->set_text(TTR("Reimport") + " (*)");
 		import->add_theme_color_override(SceneStringName(font_color), get_theme_color(SNAME("warning_color"), EditorStringName(Editor)));
-		import->set_tooltip_text(TTRC("You have pending changes that haven't been applied yet. Click Reimport to apply changes made to the import options.\nSelecting another resource in the FileSystem dock without clicking Reimport first will discard changes made in the Import dock."));
+		import->set_tooltip_text(TTRC("You have pending changes that haven't been applied yet. Click Reimport to apply changes made to the import options.\nSelecting another resource in Explore without clicking Reimport first will discard changes made in the Import dock."));
 	} else {
 		// Remove the dirty marker on the Reimport button.
 		import->set_text(TTRC("Reimport"));

@@ -50,13 +50,16 @@ class DependencyEditor;
 class DependencyEditorOwners;
 class DependencyRemoveDialog;
 class EditorDirDialog;
+class HSplitContainer;
 class HBoxContainer;
+class Label;
 class LineEdit;
 class ProgressBar;
 class SceneCreateDialog;
 class ShaderCreateDialog;
 class DirectoryCreateDialog;
 class EditorResourceTooltipPlugin;
+class VSplitContainer;
 class VBoxContainer;
 
 class FileSystemTree : public Tree {
@@ -151,26 +154,68 @@ private:
 
 	HashMap<String, TreeItem *> folder_map;
 	HashMap<String, Color> folder_colors;
+	Vector<String> folder_color_order;
 	Dictionary assigned_folder_colors;
 
-	// G4: folder-color "collections". Colors double as named buckets -- a custom label per color key
-	// (default: capitalized key) lets "blue" read as "Prefabs" etc., stored in project settings. Selecting
-	// one or more colors switches the file pane to a flat, recursive view of every asset under folders of
-	// those colors (active_color_filter empty == All == normal browsing).
+	// Folder colors double as named Explore categories. Category metadata is committed project state;
+	// active_color_filter is personal layout state (empty == All Assets == normal path-based browsing).
 	HashMap<String, String> color_labels;
+	HashMap<String, String> color_icons;
 	HashSet<String> active_color_filter;
+	HashSet<String> category_visible_paths;
+
+	struct CategoryCollectionStats {
+		int assigned_folder_count = 0;
+		int total_file_count = 0;
+		int available_file_count = 0;
+		int matched_file_count = 0;
+	};
+
+	CategoryCollectionStats category_collection_stats;
+	String category_restore_path;
+	Vector<String> category_restore_selection;
+	Vector<String> category_restore_uncollapsed_paths;
+	String category_scope_path;
+	bool category_restore_state_valid = false;
+	bool category_restore_pending = false;
 
 	FileSortOption file_sort = FileSortOption::FILE_SORT_NAME;
 
 	VBoxContainer *scanning_vb = nullptr;
 	ProgressBar *scanning_progress = nullptr;
+	HSplitContainer *category_wide_split = nullptr;
+	VSplitContainer *category_narrow_split = nullptr;
+	VBoxContainer *category_rail = nullptr;
+	Tree *category_tree = nullptr;
+	VBoxContainer *category_rail_empty_state = nullptr;
+	Button *category_edit_button = nullptr;
 	SplitContainer *split_box = nullptr;
 	MarginContainer *tree_mc = nullptr;
 	MarginContainer *files_mc = nullptr;
+	VBoxContainer *tree_content_vb = nullptr;
+	VBoxContainer *files_content_vb = nullptr;
 	VBoxContainer *file_list_vb = nullptr;
+	VBoxContainer *category_result_empty_state = nullptr;
+	Label *category_result_empty_label = nullptr;
+	Label *category_result_empty_hint = nullptr;
+	Button *category_result_edit_button = nullptr;
+	Button *category_result_clear_search_button = nullptr;
 
 	int split_box_offset_h = 0;
 	int split_box_offset_v = 0;
+	int category_wide_split_offset = 0;
+	int category_narrow_split_offset = 0;
+
+	enum ResponsiveLayout {
+		RESPONSIVE_LAYOUT_UNSET,
+		RESPONSIVE_LAYOUT_WIDE,
+		RESPONSIVE_LAYOUT_MEDIUM,
+		RESPONSIVE_LAYOUT_NARROW,
+	};
+
+	ResponsiveLayout responsive_layout = RESPONSIVE_LAYOUT_UNSET;
+	DisplayMode responsive_wide_display_mode = DISPLAY_MODE_HSPLIT;
+	bool updating_responsive_layout = false;
 
 	HashSet<String> favorites;
 
@@ -188,12 +233,11 @@ private:
 	LineEdit *file_list_search_box = nullptr;
 	MenuButton *file_list_button_sort = nullptr;
 
-	// G4: color-collection filter dropdowns (one per search row, both driving active_color_filter), plus
-	// the inline label editor launched from either dropdown.
-	MenuButton *tree_color_filter = nullptr;
-	MenuButton *file_list_color_filter = nullptr;
+	// Explore categories use the existing folder-color collection model, promoted to a persistent rail.
 	ConfirmationDialog *color_labels_dialog = nullptr;
 	HashMap<String, LineEdit *> color_label_edits;
+	HashMap<String, MenuButton *> color_icon_buttons;
+	HashMap<String, String> edited_color_icons;
 
 	PackedStringArray searched_tokens;
 	Vector<String> uncollapsed_paths_before_search;
@@ -303,7 +347,8 @@ private:
 	void _reselect_items_selected_on_drag_begin(bool reset = false);
 
 	Ref<Texture2D> _get_tree_item_icon(bool p_is_valid, const String &p_file_type, const String &p_icon_path);
-	void _create_tree(TreeItem *p_parent, EditorFileSystemDirectory *p_dir, const Vector<String> &p_uncollapsed_paths, const Vector<String> &p_selected_paths);
+	void _add_category_root_badge(TreeItem *p_item, const String &p_color_key);
+	void _create_tree(TreeItem *p_parent, EditorFileSystemDirectory *p_dir, const Vector<String> &p_uncollapsed_paths, const Vector<String> &p_selected_paths, const String &p_inherited_color = String());
 	void _update_tree(const Vector<String> &p_uncollapsed_paths = Vector<String>(), bool p_uncollapse_root = false, bool p_scroll_to_selected = true, const Vector<String> &p_override_selection = Vector<String>());
 	void _navigate_to_path(const String &p_path, bool p_select_in_favorites = false, bool p_grab_focus = false);
 	bool _update_filtered_items(TreeItem *p_tree_item = nullptr);
@@ -372,6 +417,9 @@ private:
 
 	void _change_split_mode();
 	void _split_dragged(int p_offset);
+	void _category_split_dragged(int p_offset);
+	void _update_responsive_layout();
+	void _set_category_layout_narrow(bool p_narrow);
 
 	void _search_changed(const String &p_text, const Control *p_from);
 	bool _matches_all_search_tokens(const String &p_text);
@@ -384,14 +432,25 @@ private:
 	// G4: folder-color collections.
 	String _get_color_label(const String &p_color_key) const;
 	void _load_color_labels();
-	MenuButton *_create_color_filter_button();
-	void _build_color_filter_menu(PopupMenu *p_menu);
-	void _color_filter_menu_pressed(int p_id, PopupMenu *p_menu);
+	String _get_color_icon_id(const String &p_color_key, bool p_use_edited = false) const;
+	void _load_color_icons();
+	void _load_color_customization();
+	void _rebuild_category_rail();
+	void _category_rail_item_clicked(const Vector2 &p_pos, MouseButton p_button);
+	void _set_category_filter(const String &p_color_key);
+	void _begin_category_filter();
+	void _end_category_filter();
+	void _build_category_visible_paths();
+	bool _gather_category_tree_paths(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color);
 	void _update_color_filter_view();
-	void _update_color_filter_button_state();
 	bool _is_color_collection_active() const { return !active_color_filter.is_empty(); }
-	void _gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches);
+	void _gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches, CategoryCollectionStats *r_stats);
+	void _update_category_empty_state();
+	String _get_active_category_display_name() const;
+	void _clear_category_search();
 	void _popup_color_labels_dialog();
+	void _category_icon_selected(int p_id, const String &p_color_key);
+	void _update_color_icon_button(const String &p_color_key);
 	void _color_labels_dialog_confirmed();
 	void _file_and_folders_fill_popup(PopupMenu *p_popup, const Vector<String> &p_paths, bool p_display_path_dependent_options = true);
 	void _add_create_options(PopupMenu *p_popup, const String &p_base_folder);

@@ -1515,7 +1515,7 @@ void SpriteFramesEditor::_frame_list_gui_input(const Ref<InputEvent> &p_event) {
 					menu = memnew(PopupMenu);
 					add_child(menu);
 					menu->connect(SceneStringName(id_pressed), callable_mp(this, &SpriteFramesEditor::_menu_selected));
-					menu->add_icon_item(get_editor_theme_icon(SNAME("ShowInFileSystem")), TTRC("Show in FileSystem"), MENU_SHOW_IN_FILESYSTEM);
+					menu->add_icon_item(get_editor_theme_icon(SNAME("ShowInFileSystem")), TTRC("Show in Explore"), MENU_SHOW_IN_FILESYSTEM);
 				}
 
 				menu->set_position(get_screen_position() + get_local_mouse_position());

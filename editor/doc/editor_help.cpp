@@ -4254,7 +4254,7 @@ void EditorHelpBit::_update_labels() {
 		if (is_valid) {
 			content->push_meta("show:" + help_data.resource_path, RichTextLabel::META_UNDERLINE_ON_HOVER);
 			content->add_image(get_editor_theme_icon(SNAME("Filesystem")));
-			content->add_text(nbsp + TTR("Show in FileSystem"));
+			content->add_text(nbsp + TTR("Show in Explore"));
 			content->pop(); // meta
 		} else {
 			content->push_meta("open-file:" + help_data.resource_path, RichTextLabel::META_UNDERLINE_ON_HOVER);
