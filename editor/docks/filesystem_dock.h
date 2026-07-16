@@ -55,8 +55,10 @@ class HBoxContainer;
 class Label;
 class LineEdit;
 class ProgressBar;
+class RichTextLabel;
 class SceneCreateDialog;
 class ShaderCreateDialog;
+class TextEdit;
 class DirectoryCreateDialog;
 class EditorResourceTooltipPlugin;
 class VSplitContainer;
@@ -144,6 +146,8 @@ private:
 		FILE_MENU_CUT,
 		FILE_MENU_PASTE,
 		FILE_MENU_OPEN_LEVEL,
+		FILE_MENU_VIEW_DESCRIPTION,
+		FILE_MENU_EDIT_DESCRIPTION,
 		FILE_MENU_MAX,
 		// Extra shortcuts that don't exist in the menu.
 		EXTRA_FOCUS_PATH,
@@ -278,6 +282,16 @@ private:
 	CreateDialog *new_resource_dialog = nullptr;
 
 	AcceptDialog *unrecognized_ext_dialog = nullptr;
+	AcceptDialog *description_viewer = nullptr;
+	RichTextLabel *description_viewer_text = nullptr;
+	ConfirmationDialog *description_editor = nullptr;
+	Label *description_path_type_label = nullptr;
+	TextEdit *description_text_edit = nullptr;
+	AcceptDialog *description_error_dialog = nullptr;
+	ConfirmationDialog *description_link_dialog = nullptr;
+	String description_viewer_path;
+	String description_editor_path;
+	String description_pending_link;
 
 	String confirm_move_to_dir;
 	bool confirm_to_copy = false;
@@ -339,6 +353,12 @@ private:
 
 	HashSet<String> cached_valid_conversion_targets;
 
+	struct DescriptionCacheEntry {
+		uint64_t modified_time = 0;
+		bool has_description = false;
+	};
+	HashMap<String, DescriptionCacheEntry> description_cache;
+
 	Vector<String> prev_selection;
 
 	void _update_selection_changed();
@@ -367,6 +387,8 @@ private:
 	void _select_file(const String &p_path, bool p_select_in_favorites = false, bool p_navigate = true);
 	void _tree_activate_file();
 	void _file_list_activate_file(int p_idx);
+	void _file_list_description_action_clicked(int p_idx, const Vector2 &p_position, MouseButton p_button);
+	void _tree_description_button_clicked(TreeItem *p_item, int p_column, int p_id, MouseButton p_button);
 	void _file_multi_selected(int p_index, bool p_selected);
 	void _tree_multi_selected(Object *p_item, int p_column, bool p_selected);
 
@@ -452,6 +474,18 @@ private:
 	void _category_icon_selected(int p_id, const String &p_color_key);
 	void _update_color_icon_button(const String &p_color_key);
 	void _color_labels_dialog_confirmed();
+	bool _asset_has_description(const String &p_path);
+	void _set_tree_description_indicator(TreeItem *p_item, bool p_has_description);
+	void _set_file_list_description_icon(int p_item_index, bool p_has_description, const String &p_file_name);
+	void _refresh_description_indicator(const String &p_path);
+	void _refresh_all_description_indicators();
+	void _show_description(const String &p_path);
+	void _edit_description(const String &p_path);
+	void _edit_viewed_description();
+	void _save_description();
+	void _show_description_error(const String &p_message);
+	void _description_meta_clicked(const Variant &p_meta);
+	void _open_description_link();
 	void _file_and_folders_fill_popup(PopupMenu *p_popup, const Vector<String> &p_paths, bool p_display_path_dependent_options = true);
 	void _add_create_options(PopupMenu *p_popup, const String &p_base_folder);
 	void _tree_rmb_select(const Vector2 &p_pos, MouseButton p_button);

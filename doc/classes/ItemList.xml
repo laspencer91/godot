@@ -79,6 +79,27 @@
 				[b]Warning:[/b] This is a required internal node, removing and freeing it may cause a crash. If you wish to hide it or any of its children, use their [member CanvasItem.visible] property.
 			</description>
 		</method>
+		<method name="get_item_action_icon" qualifiers="const">
+			<return type="Texture2D" />
+			<param index="0" name="idx" type="int" />
+			<description>
+				Returns the trailing action icon associated with the item at index [param idx].
+			</description>
+		</method>
+		<method name="get_item_action_icon_accessibility_text" qualifiers="const">
+			<return type="String" />
+			<param index="0" name="idx" type="int" />
+			<description>
+				Returns the accessibility text for the trailing action icon associated with the item at index [param idx].
+			</description>
+		</method>
+		<method name="get_item_action_icon_tooltip" qualifiers="const">
+			<return type="String" />
+			<param index="0" name="idx" type="int" />
+			<description>
+				Returns the tooltip for the trailing action icon associated with the item at index [param idx].
+			</description>
+		</method>
 		<method name="get_item_at_position" qualifiers="const">
 			<return type="int" />
 			<param index="0" name="position" type="Vector2" />
@@ -251,6 +272,30 @@
 			<description>
 				Selects the item at the specified index.
 				[b]Note:[/b] This method does not trigger the item selection signal.
+			</description>
+		</method>
+		<method name="set_item_action_icon">
+			<return type="void" />
+			<param index="0" name="idx" type="int" />
+			<param index="1" name="icon" type="Texture2D" />
+			<description>
+				Sets a trailing action [param icon] for the item at index [param idx]. Passing [code]null[/code] removes it. Clicking the icon emits [signal item_action_clicked] without selecting or activating the item.
+			</description>
+		</method>
+		<method name="set_item_action_icon_accessibility_text">
+			<return type="void" />
+			<param index="0" name="idx" type="int" />
+			<param index="1" name="text" type="String" />
+			<description>
+				Sets the accessibility text for the trailing action icon associated with the item at index [param idx]. If empty, its tooltip is used as the accessible name.
+			</description>
+		</method>
+		<method name="set_item_action_icon_tooltip">
+			<return type="void" />
+			<param index="0" name="idx" type="int" />
+			<param index="1" name="tooltip" type="String" />
+			<description>
+				Sets the tooltip for the trailing action icon associated with the item at index [param idx].
 			</description>
 		</method>
 		<method name="set_item_auto_translate_mode">
@@ -470,6 +515,14 @@
 			<description>
 				Emitted when any mouse click is issued within the rect of the list but on empty space.
 				[param at_position] is the click position in this control's local coordinate system.
+			</description>
+		</signal>
+		<signal name="item_action_clicked">
+			<param index="0" name="index" type="int" />
+			<param index="1" name="at_position" type="Vector2" />
+			<param index="2" name="mouse_button_index" type="int" />
+			<description>
+				Emitted when an item's trailing action icon is clicked. The click does not select or activate the item. [param at_position] is in this control's local coordinate system.
 			</description>
 		</signal>
 		<signal name="item_activated">

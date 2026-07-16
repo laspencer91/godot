@@ -195,6 +195,19 @@ String Resource::get_name() const {
 	return name;
 }
 
+void Resource::set_editor_description(const String &p_editor_description) {
+	if (editor_description == p_editor_description) {
+		return;
+	}
+
+	editor_description = p_editor_description;
+	emit_changed();
+}
+
+String Resource::get_editor_description() const {
+	return editor_description;
+}
+
 void Resource::update_configuration_warning() {
 	if (_update_configuration_warning) {
 		_update_configuration_warning();
@@ -737,6 +750,8 @@ void Resource::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_path_cache", "path"), &Resource::set_path_cache);
 	ClassDB::bind_method(D_METHOD("set_name", "name"), &Resource::set_name);
 	ClassDB::bind_method(D_METHOD("get_name"), &Resource::get_name);
+	ClassDB::bind_method(D_METHOD("set_editor_description", "editor_description"), &Resource::set_editor_description);
+	ClassDB::bind_method(D_METHOD("get_editor_description"), &Resource::get_editor_description);
 	ClassDB::bind_method(D_METHOD("get_rid"), &Resource::get_rid);
 	ClassDB::bind_method(D_METHOD("set_local_to_scene", "enable"), &Resource::set_local_to_scene);
 	ClassDB::bind_method(D_METHOD("is_local_to_scene"), &Resource::is_local_to_scene);
@@ -775,6 +790,9 @@ void Resource::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "resource_path", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR), "set_path", "get_path");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "resource_name"), "set_name", "get_name");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "resource_scene_unique_id", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_scene_unique_id", "get_scene_unique_id");
+
+	ADD_GROUP("Editor Description", "editor_");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "editor_description", PROPERTY_HINT_MULTILINE_TEXT), "set_editor_description", "get_editor_description");
 
 	GDVIRTUAL_BIND(_setup_local_to_scene);
 	GDVIRTUAL_BIND(_get_rid);

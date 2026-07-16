@@ -70,6 +70,7 @@ private:
 	friend class ResourceCache;
 
 	String name;
+	String editor_description;
 	String path_cache;
 	String scene_unique_id;
 
@@ -140,6 +141,8 @@ public:
 
 	void set_name(const String &p_name);
 	String get_name() const;
+	void set_editor_description(const String &p_editor_description);
+	String get_editor_description() const;
 
 	virtual void set_path(const String &p_path, bool p_take_over = false);
 	String get_path() const;

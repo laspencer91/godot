@@ -60,6 +60,7 @@ public:
 private:
 	struct Item {
 		mutable RID accessibility_item_element;
+		mutable RID accessibility_action_element;
 		mutable bool accessibility_item_dirty = true;
 
 		Ref<Texture2D> icon;
@@ -67,6 +68,9 @@ private:
 		Rect2i icon_region;
 		Color icon_modulate = Color(1, 1, 1, 1);
 		Ref<Texture2D> tag_icon;
+		Ref<Texture2D> action_icon;
+		String action_icon_tooltip;
+		String action_icon_accessibility_text;
 		String text;
 		String xl_text;
 		Ref<TextParagraph> text_buf;
@@ -145,6 +149,7 @@ private:
 	Size2 fixed_tag_icon_size;
 
 	int defer_select_single = -1;
+	bool action_icon_pressed = false;
 	bool allow_rmb_select = false;
 	bool allow_reselect = false;
 
@@ -156,6 +161,7 @@ private:
 	void _shape_text(int p_idx);
 	void _mouse_exited();
 	void _shift_range_select(int p_from, int p_to);
+	Rect2 _get_item_action_icon_rect(int p_idx) const;
 
 	String _atr(int p_idx, const String &p_text) const;
 
@@ -211,9 +217,11 @@ protected:
 	void _accessibility_action_scroll_into_view(const Variant &p_data, int p_index);
 	void _accessibility_action_focus(const Variant &p_data, int p_index);
 	void _accessibility_action_blur(const Variant &p_data, int p_index);
+	void _accessibility_action_item_action(const Variant &p_data, int p_index);
 
 public:
 	virtual RID get_focused_accessibility_element() const override;
+	virtual Variant get_drag_data(const Point2 &p_point) override;
 
 	virtual void gui_input(const Ref<InputEvent> &p_event) override;
 
@@ -254,6 +262,12 @@ public:
 	Variant get_item_metadata(int p_idx) const;
 
 	void set_item_tag_icon(int p_idx, const Ref<Texture2D> &p_tag_icon);
+	void set_item_action_icon(int p_idx, const Ref<Texture2D> &p_action_icon);
+	Ref<Texture2D> get_item_action_icon(int p_idx) const;
+	void set_item_action_icon_tooltip(int p_idx, const String &p_tooltip);
+	String get_item_action_icon_tooltip(int p_idx) const;
+	void set_item_action_icon_accessibility_text(int p_idx, const String &p_text);
+	String get_item_action_icon_accessibility_text(int p_idx) const;
 
 	void set_item_tooltip_enabled(int p_idx, const bool p_enabled);
 	bool is_item_tooltip_enabled(int p_idx) const;

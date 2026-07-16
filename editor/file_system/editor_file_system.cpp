@@ -2705,6 +2705,7 @@ Error EditorFileSystem::_reimport_group(const String &p_group_file, const Vector
 	HashMap<String, HashMap<StringName, Variant>> source_file_options;
 	HashMap<String, ResourceUID::ID> uids;
 	HashMap<String, String> base_paths;
+	HashMap<String, String> descriptions;
 	for (int i = 0; i < p_files.size(); i++) {
 		Ref<ConfigFile> config;
 		config.instantiate();
@@ -2724,6 +2725,9 @@ Error EditorFileSystem::_reimport_group(const String &p_group_file, const Vector
 		if (config->has_section_key("remap", "uid")) {
 			String uidt = config->get_value("remap", "uid");
 			uid = ResourceUID::get_singleton()->text_to_id(uidt);
+		}
+		if (config->has_section_key("remap", "description")) {
+			descriptions[p_files[i]] = config->get_value("remap", "description");
 		}
 
 		uids[p_files[i]] = uid;
@@ -2793,6 +2797,11 @@ Error EditorFileSystem::_reimport_group(const String &p_group_file, const Vector
 			}
 
 			f->store_line("uid=\"" + ResourceUID::get_singleton()->id_to_text(uid) + "\""); // Store in readable format.
+			if (const String *description = descriptions.getptr(file)) {
+				String value;
+				VariantWriter::write_to_string(*description, value);
+				f->store_line("description=" + value);
+			}
 
 			if (err == OK) {
 				String path = base_path + "." + importer->get_save_extension();
@@ -2918,6 +2927,7 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 	ResourceUID::ID uid = ResourceUID::INVALID_ID;
 	Variant generator_parameters;
 	String group_file;
+	String description;
 	if (p_generator_parameters) {
 		generator_parameters = *p_generator_parameters;
 	}
@@ -2949,6 +2959,9 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 
 				if (cf->has_section_key("remap", "group_file")) {
 					group_file = cf->get_value("remap", "group_file");
+				}
+				if (cf->has_section_key("remap", "description")) {
+					description = cf->get_value("remap", "description");
 				}
 
 				if (!p_generator_parameters) {
@@ -3050,6 +3063,11 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 		}
 
 		import_file_content += "uid=\"" + ResourceUID::get_singleton()->id_to_text(uid) + "\"\n"; // Store in readable format.
+		if (!description.is_empty()) {
+			String value;
+			VariantWriter::write_to_string(description, value);
+			import_file_content += "description=" + value + "\n";
+		}
 		if (!group_file.is_empty()) {
 			import_file_content += "group_file=\"" + group_file + "\"\n";
 		}

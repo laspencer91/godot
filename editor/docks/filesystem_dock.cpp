@@ -50,9 +50,11 @@
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/file_system/dependency_editor.h"
+#include "editor/file_system/editor_asset_description.h"
 #include "editor/gui/create_dialog.h"
 #include "editor/gui/directory_create_dialog.h"
 #include "editor/gui/editor_dir_dialog.h"
+#include "editor/gui/editor_simple_markdown.h"
 #include "editor/import/3d/scene_import_settings.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
 #include "editor/inspector/editor_resource_preview.h"
@@ -73,11 +75,16 @@
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/progress_bar.h"
+#include "scene/gui/rich_text_label.h"
+#include "scene/gui/text_edit.h"
 #include "scene/gui/texture_rect.h"
 #include "scene/resources/packed_scene.h"
 #include "servers/display/display_server.h"
 
 namespace {
+
+constexpr int DESCRIPTION_TREE_BUTTON_ID = 2001;
+constexpr int MAX_DESCRIPTION_SIZE_BYTES = 32 * 1024;
 
 struct ExploreCategoryIcon {
 	const char *theme_icon;
@@ -111,6 +118,11 @@ const ExploreCategoryIcon *get_explore_category_icon(const String &p_id) {
 } // namespace
 
 Control *FileSystemTree::make_custom_tooltip(const String &p_text) const {
+	if (p_text == TTR("View asset description")) {
+		Label *label = memnew(Label);
+		label->set_text(p_text);
+		return label;
+	}
 	TreeItem *item = get_item_at_position(get_local_mouse_position());
 	if (!item) {
 		return nullptr;
@@ -122,6 +134,12 @@ Control *FileSystemList::make_custom_tooltip(const String &p_text) const {
 	int idx = get_item_at_position(get_local_mouse_position(), true);
 	if (idx == -1) {
 		return nullptr;
+	}
+	const String action_icon_tooltip = get_item_action_icon_tooltip(idx);
+	if (!action_icon_tooltip.is_empty() && p_text == action_icon_tooltip) {
+		Label *label = memnew(Label);
+		label->set_text(p_text);
+		return label;
 	}
 	return FileSystemDock::get_singleton()->create_tooltip_for_path(get_item_metadata(idx));
 }
@@ -391,6 +409,9 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 				file_item->set_custom_bg_color(0, parent_bg_color);
 			}
 			file_item->set_metadata(0, file_metadata);
+			if (_asset_has_description(file_metadata)) {
+				_set_tree_description_indicator(file_item, true);
+			}
 			file_item->set_accept_children(false);
 			if (current_path == file_metadata || p_selected_paths.has(file_metadata)) {
 				file_item->select(0, current_path == file_metadata);
@@ -521,6 +542,9 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 		ti->set_selectable(0, true);
 		ti->set_metadata(0, favorite);
 		ti->set_accept_children(false);
+		if (!favorite.ends_with("/") && _asset_has_description(favorite)) {
+			_set_tree_description_indicator(ti, true);
+		}
 		if (favorite.ends_with("/")) {
 			const String explicit_color_key = assigned_folder_colors.get(favorite, String());
 			if (folder_colors.has(explicit_color_key)) {
@@ -775,6 +799,8 @@ void FileSystemDock::_notification(int p_what) {
 
 			file_list_search_box->set_right_icon(get_editor_theme_icon(SNAME("Search")));
 			file_list_button_sort->set_button_icon(get_editor_theme_icon(SNAME("Sort")));
+			description_text_edit->add_theme_font_override(SceneStringName(font), get_theme_font(SNAME("source"), EditorStringName(EditorFonts)));
+			description_text_edit->add_theme_font_size_override(SceneStringName(font_size), get_theme_font_size(SNAME("source_size"), EditorStringName(EditorFonts)));
 
 			_rebuild_category_rail();
 			for (const KeyValue<String, MenuButton *> &E : color_icon_buttons) {
@@ -790,6 +816,7 @@ void FileSystemDock::_notification(int p_what) {
 			}
 
 			overwrite_dialog_scroll->add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SceneStringName(panel), "Tree"));
+			_refresh_all_description_indicators();
 		} break;
 
 		case EditorSettings::NOTIFICATION_EDITOR_SETTINGS_CHANGED: {
@@ -1392,6 +1419,9 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 			item_index = files->get_item_count() - 1;
 			files->set_item_metadata(item_index, fpath);
 		}
+		if (_asset_has_description(fpath)) {
+			_set_file_list_description_icon(item_index, true, fname);
+		}
 
 		if (fpath == main_scene_path) {
 			files->set_item_custom_fg_color(item_index, get_theme_color(SNAME("accent_color"), EditorStringName(Editor)));
@@ -1560,6 +1590,193 @@ void FileSystemDock::_tree_activate_file() {
 
 void FileSystemDock::_file_list_activate_file(int p_idx) {
 	_select_file(files->get_item_metadata(p_idx));
+}
+
+void FileSystemDock::_file_list_description_action_clicked(int p_idx, const Vector2 &p_position, MouseButton p_button) {
+	if (p_button != MouseButton::LEFT || p_idx < 0 || p_idx >= files->get_item_count()) {
+		return;
+	}
+	_show_description(files->get_item_metadata(p_idx));
+}
+
+void FileSystemDock::_tree_description_button_clicked(TreeItem *p_item, int p_column, int p_id, MouseButton p_button) {
+	if (!p_item || p_column != 0 || p_id != DESCRIPTION_TREE_BUTTON_ID || p_button != MouseButton::LEFT) {
+		return;
+	}
+	_show_description(p_item->get_metadata(0));
+}
+
+bool FileSystemDock::_asset_has_description(const String &p_path) {
+	if (!EditorAssetDescription::is_supported(p_path)) {
+		return false;
+	}
+	const uint64_t modified_time = EditorAssetDescription::get_cache_modified_time(p_path);
+	HashMap<String, DescriptionCacheEntry>::Iterator cached = description_cache.find(p_path);
+	if (cached && cached->value.modified_time == modified_time) {
+		return cached->value.has_description;
+	}
+
+	DescriptionCacheEntry entry;
+	entry.modified_time = modified_time;
+	entry.has_description = EditorAssetDescription::has_description_bounded(p_path);
+	description_cache.insert(p_path, entry);
+	return entry.has_description;
+}
+
+void FileSystemDock::_set_tree_description_indicator(TreeItem *p_item, bool p_has_description) {
+	ERR_FAIL_NULL(p_item);
+	const int button_index = p_item->get_button_by_id(0, DESCRIPTION_TREE_BUTTON_ID);
+	if (!p_has_description) {
+		if (button_index >= 0) {
+			p_item->erase_button(0, button_index);
+		}
+		return;
+	}
+
+	const String tooltip = TTR("View asset description");
+	if (button_index >= 0) {
+		p_item->set_button(0, button_index, get_editor_theme_icon(SNAME("Info")));
+		p_item->set_button_tooltip_text(0, button_index, tooltip);
+		p_item->set_button_description(0, button_index, tooltip);
+	} else {
+		p_item->add_button(0, get_editor_theme_icon(SNAME("Info")), DESCRIPTION_TREE_BUTTON_ID, false, tooltip, tooltip);
+	}
+}
+
+void FileSystemDock::_set_file_list_description_icon(int p_item_index, bool p_has_description, const String &p_file_name) {
+	files->set_item_action_icon(p_item_index, p_has_description ? get_editor_theme_icon(SNAME("Info")) : Ref<Texture2D>());
+	files->set_item_action_icon_tooltip(p_item_index, p_has_description ? TTR("View asset description") : String());
+	files->set_item_action_icon_accessibility_text(p_item_index, p_has_description ? vformat(TTR("View description for %s"), p_file_name) : String());
+}
+
+void FileSystemDock::_refresh_description_indicator(const String &p_path) {
+	description_cache.erase(p_path);
+	const bool has_description = _asset_has_description(p_path);
+	for (int item_index = 0; item_index < files->get_item_count(); item_index++) {
+		if (files->get_item_metadata(item_index) != p_path) {
+			continue;
+		}
+		_set_file_list_description_icon(item_index, has_description, p_path.get_file());
+	}
+
+	for (TreeItem *item = tree->get_root(); item; item = item->get_next_in_tree()) {
+		if (item->get_metadata(0) == p_path) {
+			_set_tree_description_indicator(item, has_description);
+		}
+	}
+}
+
+void FileSystemDock::_refresh_all_description_indicators() {
+	if (!files || !tree) {
+		return;
+	}
+	for (int item_index = 0; item_index < files->get_item_count(); item_index++) {
+		const String path = files->get_item_metadata(item_index);
+		const bool has_description = !path.ends_with("/") && _asset_has_description(path);
+		_set_file_list_description_icon(item_index, has_description, path.get_file());
+	}
+	for (TreeItem *item = tree->get_root(); item; item = item->get_next_in_tree()) {
+		const String path = item->get_metadata(0);
+		_set_tree_description_indicator(item, !path.ends_with("/") && _asset_has_description(path));
+	}
+}
+
+void FileSystemDock::_show_description_error(const String &p_message) {
+	description_error_dialog->set_text(p_message);
+	description_error_dialog->popup_centered();
+}
+
+void FileSystemDock::_show_description(const String &p_path) {
+	String description;
+	String error_message;
+	if (EditorAssetDescription::read_description(p_path, description, error_message) != OK) {
+		_show_description_error(error_message);
+		return;
+	}
+
+	description_viewer_path = p_path;
+	description_viewer->set_title(p_path.get_file());
+	EditorSimpleMarkdown::render(description_viewer_text, description, get_theme_font_size(SNAME("main_size"), EditorStringName(EditorFonts)));
+	description_viewer->popup_centered(Size2(700, 500) * EDSCALE);
+}
+
+void FileSystemDock::_edit_description(const String &p_path) {
+	if (!EditorAssetDescription::is_supported(p_path)) {
+		return;
+	}
+	String description;
+	String error_message;
+	if (EditorAssetDescription::read_description(p_path, description, error_message) != OK) {
+		_show_description_error(error_message);
+		return;
+	}
+
+	description_editor_path = p_path;
+	description_editor->set_title(vformat(TTR("Edit Description — %s"), p_path.get_file()));
+	description_path_type_label->set_text(vformat(TTR("Path: %s\nType: %s"), p_path, EditorAssetDescription::get_asset_kind_name(EditorAssetDescription::get_asset_kind(p_path))));
+	description_text_edit->set_text(description);
+	description_text_edit->set_caret_line(0);
+	description_text_edit->set_caret_column(0);
+	description_editor->popup_centered(Size2(720, 520) * EDSCALE);
+	description_text_edit->grab_focus();
+}
+
+void FileSystemDock::_edit_viewed_description() {
+	if (description_viewer_path.is_empty()) {
+		return;
+	}
+	description_viewer->hide();
+	_edit_description(description_viewer_path);
+}
+
+void FileSystemDock::_save_description() {
+	const String description = description_text_edit->get_text();
+	const CharString utf8 = description.utf8();
+	String utf8_round_trip;
+	if (utf8_round_trip.append_utf8(utf8.get_data(), utf8.length()) != OK || utf8_round_trip != description) {
+		_show_description_error(TTR("The description is not valid UTF-8 and cannot be saved."));
+		return;
+	}
+	if (utf8.length() > MAX_DESCRIPTION_SIZE_BYTES) {
+		_show_description_error(vformat(TTR("The description is %d bytes. Descriptions are limited to 32 KiB (32768 bytes)."), utf8.length()));
+		return;
+	}
+
+	String error_message;
+	if (EditorAssetDescription::write_description(description_editor_path, description, error_message) != OK) {
+		_show_description_error(error_message);
+		return;
+	}
+
+	description_editor->hide();
+	_refresh_description_indicator(description_editor_path);
+	if (description_viewer->is_visible() && description_viewer_path == description_editor_path) {
+		EditorSimpleMarkdown::render(description_viewer_text, description, get_theme_font_size(SNAME("main_size"), EditorStringName(EditorFonts)));
+	}
+}
+
+void FileSystemDock::_description_meta_clicked(const Variant &p_meta) {
+	if (p_meta.get_type() != Variant::STRING) {
+		return;
+	}
+	const String link = p_meta;
+	if (!EditorSimpleMarkdown::is_safe_http_link(link)) {
+		return;
+	}
+	description_pending_link = link;
+	description_link_dialog->set_text(vformat(TTR("Open this external link in your default browser?\n\n%s"), link));
+	description_link_dialog->popup_centered();
+}
+
+void FileSystemDock::_open_description_link() {
+	if (!EditorSimpleMarkdown::is_safe_http_link(description_pending_link)) {
+		return;
+	}
+	const Error error = OS::get_singleton()->shell_open(description_pending_link);
+	if (error != OK) {
+		_show_description_error(TTR("The external link could not be opened."));
+	}
+	description_pending_link.clear();
 }
 
 void FileSystemDock::_preview_invalidated(const String &p_path) {
@@ -2414,6 +2631,18 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 	// The first one should be the active item.
 
 	switch (p_option) {
+		case FILE_MENU_VIEW_DESCRIPTION: {
+			if (p_selected.size() == 1) {
+				_show_description(p_selected[0]);
+			}
+		} break;
+
+		case FILE_MENU_EDIT_DESCRIPTION: {
+			if (p_selected.size() == 1) {
+				_edit_description(p_selected[0]);
+			}
+		} break;
+
 		case FILE_MENU_SHOW_IN_EXPLORER: {
 			// Show the file/folder in the OS explorer.
 			String fpath = current_path;
@@ -4234,6 +4463,14 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 		}
 	}
 
+	if (filenames.size() == 1 && EditorAssetDescription::is_supported(filenames[0])) {
+		if (_asset_has_description(filenames[0])) {
+			p_popup->add_icon_item(get_editor_theme_icon(SNAME("Info")), TTRC("View Description"), FILE_MENU_VIEW_DESCRIPTION);
+		}
+		p_popup->add_icon_item(get_editor_theme_icon(SNAME("Edit")), TTRC("Edit Description"), FILE_MENU_EDIT_DESCRIPTION);
+		p_popup->add_separator();
+	}
+
 	if (no_paths) {
 		_add_create_options(p_popup, String());
 	} else if (single_path && p_display_path_dependent_options) {
@@ -5464,6 +5701,7 @@ FileSystemDock::FileSystemDock() {
 	tree_content_vb->add_child(tree);
 
 	tree->connect("item_activated", callable_mp(this, &FileSystemDock::_tree_activate_file));
+	tree->connect("button_clicked", callable_mp(this, &FileSystemDock::_tree_description_button_clicked));
 	tree->connect("multi_selected", callable_mp(this, &FileSystemDock::_tree_multi_selected));
 	tree->connect("item_mouse_selected", callable_mp(this, &FileSystemDock::_tree_rmb_select));
 	tree->connect("empty_clicked", callable_mp(this, &FileSystemDock::_tree_empty_click));
@@ -5510,6 +5748,7 @@ FileSystemDock::FileSystemDock() {
 	files->set_scroll_hint_mode(ItemList::SCROLL_HINT_MODE_TOP);
 	SET_DRAG_FORWARDING_GCD(files, FileSystemDock);
 	files->connect("item_clicked", callable_mp(this, &FileSystemDock::_file_list_item_clicked));
+	files->connect("item_action_clicked", callable_mp(this, &FileSystemDock::_file_list_description_action_clicked));
 	files->connect(SceneStringName(gui_input), callable_mp(this, &FileSystemDock::_file_list_gui_input));
 	files->connect("multi_selected", callable_mp(this, &FileSystemDock::_file_multi_selected));
 	files->connect("empty_clicked", callable_mp(this, &FileSystemDock::_file_list_empty_clicked));
@@ -5637,6 +5876,56 @@ FileSystemDock::FileSystemDock() {
 	confirm_before_move_checkbox = memnew(CheckBox(TTRC("Don't Ask Again")));
 	confirm_before_move_checkbox->set_tooltip_text(TTRC("This dialog can be skipped by holding shift or enabled/disabled in the Editor Settings: Docks > Explore > Ask Before Moving Files."));
 	vb->add_child(confirm_before_move_checkbox);
+
+	description_viewer = memnew(AcceptDialog);
+	description_viewer->set_ok_button_text(TTRC("Close"));
+	description_viewer->set_hide_on_ok(true);
+	add_child(description_viewer);
+	Button *description_edit_button = description_viewer->add_button(TTRC("Edit"), true);
+	description_edit_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_edit_viewed_description));
+	description_viewer_text = memnew(RichTextLabel);
+	description_viewer_text->set_use_bbcode(false);
+	description_viewer_text->set_selection_enabled(true);
+	description_viewer_text->set_context_menu_enabled(true);
+	description_viewer_text->set_focus_mode(Control::FOCUS_ALL);
+	description_viewer_text->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	description_viewer_text->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	description_viewer_text->set_custom_minimum_size(Size2(620, 400) * EDSCALE);
+	description_viewer_text->connect("meta_clicked", callable_mp(this, &FileSystemDock::_description_meta_clicked));
+	description_viewer->add_child(description_viewer_text);
+
+	description_editor = memnew(ConfirmationDialog);
+	description_editor->set_ok_button_text(TTRC("Save"));
+	description_editor->set_hide_on_ok(false);
+	description_editor->connect(SceneStringName(confirmed), callable_mp(this, &FileSystemDock::_save_description));
+	add_child(description_editor);
+	VBoxContainer *description_editor_vb = memnew(VBoxContainer);
+	description_editor_vb->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	description_editor->add_child(description_editor_vb);
+	description_path_type_label = memnew(Label);
+	description_path_type_label->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+	description_editor_vb->add_child(description_path_type_label);
+	Label *description_syntax_hint = memnew(Label);
+	description_syntax_hint->set_text(TTRC("Markdown: # headings, - lists, **bold**, *italic*, `code`, fenced code, and http/https links."));
+	description_syntax_hint->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+	description_editor_vb->add_child(description_syntax_hint);
+	description_text_edit = memnew(TextEdit);
+	description_text_edit->set_accessibility_name(TTRC("Asset description Markdown"));
+	description_text_edit->set_line_wrapping_mode(TextEdit::LINE_WRAPPING_BOUNDARY);
+	description_text_edit->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	description_text_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	description_text_edit->set_custom_minimum_size(Size2(640, 360) * EDSCALE);
+	description_editor_vb->add_child(description_text_edit);
+
+	description_error_dialog = memnew(AcceptDialog);
+	description_error_dialog->set_title(TTRC("Asset Description"));
+	add_child(description_error_dialog);
+
+	description_link_dialog = memnew(ConfirmationDialog);
+	description_link_dialog->set_title(TTRC("Open External Link"));
+	description_link_dialog->set_ok_button_text(TTRC("Open"));
+	description_link_dialog->connect(SceneStringName(confirmed), callable_mp(this, &FileSystemDock::_open_description_link));
+	add_child(description_link_dialog);
 
 	unrecognized_ext_dialog = memnew(AcceptDialog);
 	unrecognized_ext_dialog->set_flag(Window::FLAG_RESIZE_DISABLED, true);
