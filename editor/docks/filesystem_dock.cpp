@@ -79,6 +79,7 @@
 #include "scene/gui/text_edit.h"
 #include "scene/gui/texture_rect.h"
 #include "scene/resources/packed_scene.h"
+#include "scene/resources/style_box_flat.h"
 #include "servers/display/display_server.h"
 
 namespace {
@@ -783,6 +784,24 @@ void FileSystemDock::_notification(int p_what) {
 		case NOTIFICATION_LAYOUT_DIRECTION_CHANGED:
 		case NOTIFICATION_THEME_CHANGED: {
 			_update_display_mode(true);
+			if (p_what == NOTIFICATION_THEME_CHANGED) {
+				const Color browsing_surface_color = get_theme_color(SNAME("dark_color_1"), EditorStringName(Editor)).lerp(get_theme_color(SNAME("dark_color_2"), EditorStringName(Editor)), 0.5);
+				auto make_browsing_surface = [&](Control *p_control) {
+					p_control->remove_theme_style_override(SceneStringName(panel));
+					Ref<StyleBox> panel_style = p_control->get_theme_stylebox(SceneStringName(panel));
+					Ref<StyleBoxFlat> surface_style = panel_style->duplicate();
+					if (surface_style.is_null()) {
+						surface_style.instantiate();
+						for (int side = 0; side <= SIDE_BOTTOM; side++) {
+							surface_style->set_content_margin(Side(side), panel_style->get_content_margin(Side(side)));
+						}
+					}
+					surface_style->set_bg_color(browsing_surface_color);
+					return surface_style;
+				};
+				tree->add_theme_style_override(SceneStringName(panel), make_browsing_surface(tree));
+				files->add_theme_style_override(SceneStringName(panel), make_browsing_surface(files));
+			}
 
 			StringName mode_icon = "Panels1";
 			if (display_mode == DISPLAY_MODE_VSPLIT) {
@@ -4403,7 +4422,9 @@ void FileSystemDock::_popup_color_labels_dialog() {
 		E.value->set_text(it ? it->value : String());
 		_update_color_icon_button(E.key);
 	}
-	color_labels_dialog->popup_centered(Size2(500, 0) * EDSCALE);
+	const Size2 dialog_minimum_size = color_labels_dialog->get_contents_minimum_size().ceil();
+	color_labels_dialog->set_min_size(dialog_minimum_size);
+	color_labels_dialog->popup_centered(Size2(MAX(500 * EDSCALE, dialog_minimum_size.x), dialog_minimum_size.y));
 }
 
 void FileSystemDock::_category_icon_selected(int p_id, const String &p_color_key) {
@@ -5728,6 +5749,7 @@ FileSystemDock::FileSystemDock() {
 	category_tree->set_accessibility_name(TTRC("Asset Categories"));
 	category_tree->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
 	category_tree->set_hide_root(true);
+	category_tree->set_hide_folding(true);
 	category_tree->set_columns(2);
 	category_tree->set_column_expand(0, false);
 	category_tree->set_column_custom_minimum_width(0, 24 * EDSCALE);
@@ -5748,10 +5770,14 @@ FileSystemDock::FileSystemDock() {
 	no_categories_hint->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
 	category_rail_empty_state->add_child(no_categories_hint);
 
+	MarginContainer *category_edit_margin = memnew(MarginContainer);
+	category_edit_margin->set_theme_type_variation("MarginContainer4px");
+	category_rail->add_child(category_edit_margin);
+
 	category_edit_button = memnew(Button);
 	category_edit_button->set_text(TTRC("Edit Categories..."));
 	category_edit_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_popup_color_labels_dialog));
-	category_rail->add_child(category_edit_button);
+	category_edit_margin->add_child(category_edit_button);
 
 	split_box = memnew(SplitContainer);
 	split_box->set_v_size_flags(SIZE_EXPAND_FILL);
@@ -5838,6 +5864,7 @@ FileSystemDock::FileSystemDock() {
 	files->get_v_scroll_bar()->connect(SceneStringName(value_changed), callable_mp(this, &FileSystemDock::_file_list_scroll_changed));
 	files->get_h_scroll_bar()->connect(SceneStringName(value_changed), callable_mp(this, &FileSystemDock::_file_list_scroll_changed));
 	files->set_custom_minimum_size(Size2(0, 15 * EDSCALE));
+	files->set_v_size_flags(SIZE_EXPAND_FILL);
 	files->set_allow_rmb_select(true);
 	files_content_vb->add_child(files);
 
