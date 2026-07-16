@@ -31,9 +31,9 @@
 #include "editor_resource_preview.h"
 
 #include "core/config/project_settings.h"
+#include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
-#include "core/io/resource_saver.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
@@ -172,7 +172,7 @@ void EditorResourcePreview::_preview_ready(const String &p_path, int p_hash, con
 	p_callback.call_deferred(p_path, p_texture, p_small_texture);
 }
 
-void EditorResourcePreview::_generate_preview(Ref<ImageTexture> &r_texture, Ref<ImageTexture> &r_small_texture, const QueueItem &p_item, const String &cache_base, Dictionary &p_metadata) {
+void EditorResourcePreview::_generate_preview(Ref<ImageTexture> &r_texture, Ref<ImageTexture> &r_small_texture, const QueueItem &p_item, Dictionary &p_metadata) {
 	String type;
 
 	uint64_t started_at = OS::get_singleton()->get_ticks_usec();
@@ -255,22 +255,13 @@ void EditorResourcePreview::_generate_preview(Ref<ImageTexture> &r_texture, Ref<
 	if (p_item.resource.is_null()) {
 		// Cache the preview in case it's a resource on disk.
 		if (r_texture.is_valid()) {
-			// Wow it generated a preview... save cache.
-			bool has_small_texture = r_small_texture.is_valid();
-			ResourceSaver::save(r_texture, cache_base + ".png");
-			if (has_small_texture) {
-				ResourceSaver::save(r_small_texture, cache_base + "_small.png");
+			Ref<Image> preview = r_texture->get_image();
+			Ref<Image> small_preview;
+			if (r_small_texture.is_valid()) {
+				small_preview = r_small_texture->get_image();
 			}
-			Ref<FileAccess> f = FileAccess::open(cache_base + ".txt", FileAccess::WRITE);
-			ERR_FAIL_COND_MSG(f.is_null(), "Cannot create file '" + cache_base + ".txt'. Check user write permissions.");
-
-			uint64_t modtime = FileAccess::get_modified_time(p_item.path);
-			String import_path = p_item.path + ".import";
-			if (FileAccess::exists(import_path)) {
-				modtime = MAX(modtime, FileAccess::get_modified_time(import_path));
-			}
-
-			_write_preview_cache(f, thumbnail_size, has_small_texture, modtime, FileAccess::get_md5(p_item.path), p_metadata);
+			Error err = save_preview_cache(p_item.path, preview, small_preview, p_metadata);
+			ERR_FAIL_COND_MSG(err != OK, vformat("Cannot save preview cache for '%s'.", p_item.path));
 		}
 	}
 
@@ -312,7 +303,7 @@ void EditorResourcePreview::_iterate() {
 
 	if (item.resource.is_valid()) {
 		Dictionary preview_metadata;
-		_generate_preview(texture, small_texture, item, String(), preview_metadata);
+		_generate_preview(texture, small_texture, item, preview_metadata);
 		_preview_ready(item.path, item.resource->hash_edited_version_for_preview(), texture, small_texture, item.callback, preview_metadata);
 		return;
 	}
@@ -328,7 +319,7 @@ void EditorResourcePreview::_iterate() {
 	Ref<FileAccess> f = FileAccess::open(file, FileAccess::READ);
 	if (f.is_null()) {
 		// No cache found, generate.
-		_generate_preview(texture, small_texture, item, cache_base, preview_metadata);
+		_generate_preview(texture, small_texture, item, preview_metadata);
 	} else {
 		uint64_t modtime = FileAccess::get_modified_time(item.path);
 		String import_path = item.path + ".import";
@@ -352,11 +343,10 @@ void EditorResourcePreview::_iterate() {
 			cache_valid = false;
 			f.unref();
 		} else if (last_modtime != modtime) {
-			String last_md5 = f->get_line();
 			String md5 = FileAccess::get_md5(item.path);
 			f.unref();
 
-			if (last_md5 != md5) {
+			if (hash != md5) {
 				cache_valid = false;
 			} else {
 				// Update modified time.
@@ -398,10 +388,107 @@ void EditorResourcePreview::_iterate() {
 		}
 
 		if (!cache_valid) {
-			_generate_preview(texture, small_texture, item, cache_base, preview_metadata);
+			_generate_preview(texture, small_texture, item, preview_metadata);
 		}
 	}
 	_preview_ready(item.path, 0, texture, small_texture, item.callback, preview_metadata);
+}
+
+Error EditorResourcePreview::save_preview_cache(const String &p_path, const Ref<Image> &p_preview, const Ref<Image> &p_small_preview, const Dictionary &p_metadata) {
+	ERR_FAIL_COND_V(p_path.is_empty(), ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(p_preview.is_null() || p_preview->is_empty(), ERR_INVALID_PARAMETER);
+
+	MutexLock lock(preview_mutex);
+
+	String cache_base = ProjectSettings::get_singleton()->globalize_path(p_path).md5_text();
+	cache_base = EditorPaths::get_singleton()->get_cache_dir().path_join("resthumb-" + cache_base);
+
+	const String temporary_suffix = ".tmp-" + itos(OS::get_singleton()->get_ticks_usec());
+	const String preview_path = cache_base + ".png";
+	const String small_preview_path = cache_base + "_small.png";
+	const String metadata_path = cache_base + ".txt";
+	const String temporary_preview_path = cache_base + temporary_suffix + ".png";
+	const String temporary_small_preview_path = cache_base + temporary_suffix + "_small.png";
+	const String temporary_metadata_path = cache_base + temporary_suffix + ".txt";
+
+	auto cleanup_temporary_files = [&]() {
+		if (FileAccess::exists(temporary_preview_path)) {
+			DirAccess::remove_absolute(temporary_preview_path);
+		}
+		if (FileAccess::exists(temporary_small_preview_path)) {
+			DirAccess::remove_absolute(temporary_small_preview_path);
+		}
+		if (FileAccess::exists(temporary_metadata_path)) {
+			DirAccess::remove_absolute(temporary_metadata_path);
+		}
+	};
+
+	Error err = p_preview->save_png(temporary_preview_path);
+	if (err != OK) {
+		cleanup_temporary_files();
+		return err;
+	}
+
+	const bool has_small_preview = p_small_preview.is_valid() && !p_small_preview->is_empty();
+	if (has_small_preview) {
+		err = p_small_preview->save_png(temporary_small_preview_path);
+		if (err != OK) {
+			cleanup_temporary_files();
+			return err;
+		}
+	}
+
+	uint64_t modified_time = FileAccess::get_modified_time(p_path);
+	const String import_path = p_path + ".import";
+	if (FileAccess::exists(import_path)) {
+		modified_time = MAX(modified_time, FileAccess::get_modified_time(import_path));
+	}
+
+	Ref<FileAccess> metadata_file = FileAccess::open(temporary_metadata_path, FileAccess::WRITE, &err);
+	if (metadata_file.is_null()) {
+		cleanup_temporary_files();
+		return err;
+	}
+	int thumbnail_size = EDITOR_GET("filesystem/file_dialog/thumbnail_size");
+	thumbnail_size *= EDSCALE;
+	_write_preview_cache(metadata_file, thumbnail_size, has_small_preview, modified_time, FileAccess::get_md5(p_path), p_metadata);
+	metadata_file.unref();
+
+	// The metadata file is the cache's commit marker. Remove it before replacing the images, and
+	// publish the new metadata only after every image is in place, so readers never accept a partial set.
+	if (FileAccess::exists(metadata_path)) {
+		err = DirAccess::remove_absolute(metadata_path);
+		if (err != OK) {
+			cleanup_temporary_files();
+			return err;
+		}
+	}
+	err = DirAccess::rename_absolute(temporary_preview_path, preview_path);
+	if (err != OK) {
+		cleanup_temporary_files();
+		return err;
+	}
+	if (has_small_preview) {
+		err = DirAccess::rename_absolute(temporary_small_preview_path, small_preview_path);
+		if (err != OK) {
+			cleanup_temporary_files();
+			return err;
+		}
+	} else if (FileAccess::exists(small_preview_path)) {
+		DirAccess::remove_absolute(small_preview_path);
+	}
+	err = DirAccess::rename_absolute(temporary_metadata_path, metadata_path);
+	if (err != OK) {
+		cleanup_temporary_files();
+		return err;
+	}
+
+	const Item *cached_item = cache.getptr(p_path);
+	if (cached_item && cached_item->preview.is_null()) {
+		cache.erase(p_path);
+	}
+
+	return OK;
 }
 
 void EditorResourcePreview::_write_preview_cache(Ref<FileAccess> p_file, int p_thumbnail_size, bool p_has_small_texture, uint64_t p_modified_time, const String &p_hash, const Dictionary &p_metadata) {

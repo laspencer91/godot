@@ -35,6 +35,7 @@
 #include "core/templates/safe_refcount.h"
 #include "scene/main/node.h"
 
+class Image;
 class ImageTexture;
 class Texture2D;
 
@@ -75,8 +76,10 @@ public:
 class EditorResourcePreview : public Node {
 	GDCLASS(EditorResourcePreview, Node);
 
-	static constexpr int CURRENT_METADATA_VERSION = 1; // Increment this number to invalidate all previews.
+	static constexpr int CURRENT_METADATA_VERSION = 2; // Increment this number to invalidate all previews.
 	inline static EditorResourcePreview *singleton = nullptr;
+
+	friend struct EditorResourcePreviewTestAccess;
 
 	struct QueueItem {
 		Ref<Resource> resource;
@@ -103,7 +106,7 @@ class EditorResourcePreview : public Node {
 	HashMap<String, Item> cache;
 
 	void _preview_ready(const String &p_path, int p_hash, const Ref<Texture2D> &p_texture, const Ref<Texture2D> &p_small_texture, const Callable &p_callback, const Dictionary &p_metadata);
-	void _generate_preview(Ref<ImageTexture> &r_texture, Ref<ImageTexture> &r_small_texture, const QueueItem &p_item, const String &cache_base, Dictionary &p_metadata);
+	void _generate_preview(Ref<ImageTexture> &r_texture, Ref<ImageTexture> &r_small_texture, const QueueItem &p_item, Dictionary &p_metadata);
 
 	int small_thumbnail_size = -1;
 
@@ -140,6 +143,8 @@ public:
 	const Dictionary get_preview_metadata(const String &p_path) const;
 
 	PreviewItem get_resource_preview_if_available(const String &p_path);
+	// Publishes the image files and their fingerprint metadata as one cache commit.
+	Error save_preview_cache(const String &p_path, const Ref<Image> &p_preview, const Ref<Image> &p_small_preview = Ref<Image>(), const Dictionary &p_metadata = Dictionary());
 
 	void add_preview_generator(const Ref<EditorResourcePreviewGenerator> &p_generator);
 	void remove_preview_generator(const Ref<EditorResourcePreviewGenerator> &p_generator);

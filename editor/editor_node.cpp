@@ -2384,8 +2384,8 @@ void EditorNode::_save_edited_subresources(Node *scene, HashMap<Ref<Resource>, b
 	}
 }
 
-void EditorNode::_find_node_types(Node *p_node, int &count_2d, int &count_3d) {
-	if (p_node->is_class("Viewport") || (p_node != editor_data.get_edited_scene_root() && p_node->get_owner() != editor_data.get_edited_scene_root())) {
+void EditorNode::_find_node_types(Node *p_node, Node *p_scene_root, int &count_2d, int &count_3d) {
+	if (p_node->is_class("Viewport") || (p_node != p_scene_root && p_node->get_owner() != p_scene_root)) {
 		return;
 	}
 
@@ -2396,25 +2396,36 @@ void EditorNode::_find_node_types(Node *p_node, int &count_2d, int &count_3d) {
 	}
 
 	for (int i = 0; i < p_node->get_child_count(); i++) {
-		_find_node_types(p_node->get_child(i), count_2d, count_3d);
+		_find_node_types(p_node->get_child(i), p_scene_root, count_2d, count_3d);
 	}
 }
 
 void EditorNode::_save_scene_with_preview(String p_file, int p_idx) {
 	save_scene_progress = memnew(EditorProgress("save", TTR("Saving Scene"), 4));
 
-	if (editor_data.get_edited_scene_root() != nullptr) {
+	Ref<Image> img;
+	Node *scene = editor_data.get_edited_scene_root(p_idx);
+	EditorDocument *document = scene ? editor_data.get_document(p_idx) : nullptr;
+	DocumentView *document_view = editor_main_screen && document ? editor_main_screen->get_document_view(document) : nullptr;
+	if (scene && document_view && document_view->is_inside_tree() && DisplayServer::get_singleton()->window_can_draw()) {
 		save_scene_progress->step(TTR("Analyzing"), 0);
 
 		int c2d = 0;
 		int c3d = 0;
 
-		_find_node_types(editor_data.get_edited_scene_root(), c2d, c3d);
+		_find_node_types(scene, scene, c2d, c3d);
 
 		save_scene_progress->step(TTR("Creating Thumbnail"), 1);
-		// Current view?
 
-		Ref<Image> img;
+		auto capture_scene_viewport_image = [&]() -> Ref<Image> {
+			SubViewport *scene_viewport = document_view->get_scene_viewport();
+			Ref<ViewportTexture> viewport_texture = scene_viewport ? scene_viewport->get_texture() : Ref<ViewportTexture>();
+			if (viewport_texture.is_valid() && viewport_texture->get_width() > 0 && viewport_texture->get_height() > 0) {
+				return viewport_texture->get_image();
+			}
+			return Ref<Image>();
+		};
+
 		// If neither 3D or 2D nodes are present, make a 1x1 black texture.
 		// We cannot fallback on the 2D editor, because it may not have been used yet,
 		// which would result in an invalid texture.
@@ -2422,17 +2433,14 @@ void EditorNode::_save_scene_with_preview(String p_file, int p_idx) {
 			img.instantiate();
 			img->initialize_data(1, 1, false, Image::FORMAT_RGB8);
 		} else if (c3d < c2d) {
-			Ref<ViewportTexture> viewport_texture = scene_root->get_texture();
-			if (viewport_texture->get_width() > 0 && viewport_texture->get_height() > 0) {
-				img = viewport_texture->get_image();
-			}
+			img = capture_scene_viewport_image();
 		} else {
 			// The 3D editor may be disabled as a feature, but scenes can still be opened.
 			// This check prevents the preview from regenerating in case those scenes are then saved.
 			// The preview will be generated if no feature profile is set (as the 3D editor is enabled by default).
 			Ref<EditorFeatureProfile> profile = feature_profile_manager->get_current_profile();
 			if (profile.is_null() || !profile->is_feature_disabled(EditorFeatureProfile::FEATURE_3D)) {
-				img = Node3DEditor::get_singleton()->get_editor_viewport(0)->get_viewport_node()->get_texture()->get_image();
+				img = capture_scene_viewport_image();
 			}
 		}
 
@@ -2464,19 +2472,18 @@ void EditorNode::_save_scene_with_preview(String p_file, int p_idx) {
 			}
 			img->convert(Image::FORMAT_RGB8);
 
-			// Save thumbnail directly, as thumbnailer may not update due to actual scene not changing md5.
-			String temp_path = EditorPaths::get_singleton()->get_cache_dir();
-			String cache_base = ProjectSettings::get_singleton()->globalize_path(p_file).md5_text();
-			cache_base = temp_path.path_join("resthumb-" + cache_base);
-
-			// Does not have it, try to load a cached thumbnail.
 			post_process_preview(img);
-			img->save_png(cache_base + ".png");
 		}
 	}
 
 	save_scene_progress->step(TTR("Saving Scene"), 4);
 	_save_scene(p_file, p_idx);
+	if (img.is_valid() && !img->is_empty()) {
+		Error err = EditorResourcePreview::get_singleton()->save_preview_cache(p_file, img);
+		if (err != OK) {
+			ERR_PRINT(vformat("Cannot save preview cache for '%s'.", p_file));
+		}
+	}
 
 	if (!singleton->cmdline_mode) {
 		EditorResourcePreview::get_singleton()->check_for_invalidation(p_file);
@@ -2790,11 +2797,7 @@ void EditorNode::_save_all_scenes() {
 			continue;
 		}
 
-		if (i == editor_data.get_edited_scene()) {
-			_save_scene_with_preview(scene_path);
-		} else {
-			_save_scene(scene_path, i);
-		}
+		_save_scene_with_preview(scene_path, i);
 	}
 	save_default_environment();
 

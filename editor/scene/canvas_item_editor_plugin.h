@@ -741,6 +741,7 @@ public:
 
 	void update_viewport();
 	Transform2D get_canvas_transform() const { return transform; }
+	SubViewport *get_scene_viewport() const { return view_viewport; }
 	Control *get_overlay_control() const { return viewport; }
 	Control *get_controls_container() const { return controls_vb; }
 

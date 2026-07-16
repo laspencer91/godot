@@ -30,15 +30,23 @@
 
 #pragma once
 
+#include "scene/gui/box_container.h"
 #include "scene/gui/margin_container.h"
 
 class EditorDocument;
 class EditorDocumentView;
+class AnimationPlayerEditor;
+class Button;
+class DocumentBottomDockHost;
 class FoldableContainer;
 class GroupsDock;
+class HBoxContainer;
 class InspectorDock;
+class Label;
+class MaterialBrowserDock;
 class SceneTreeDock;
 class SignalsDock;
+class SubViewport;
 class VBoxContainer;
 
 // DocumentView is the per-pane presentation of one open document (G2). A
@@ -119,6 +127,7 @@ protected:
 public:
 	EditorDocumentView *get_document_view() const { return doc_view; }
 	Control *get_editor_surface() const { return editor_surface; }
+	SubViewport *get_scene_viewport() const;
 
 	// G2 S7 (seam #8): where the focused tab's shared chrome (ScriptEditor menu strip + find
 	// bar) mounts. Null cast target for non-hosting views is fine — callers null-check.

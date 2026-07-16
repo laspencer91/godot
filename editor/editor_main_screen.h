@@ -36,6 +36,7 @@
 class Button;
 class ConfigFile;
 class EditorDocument;
+class DocumentView;
 class EditorPlugin;
 class EditorWorkspace;
 class HBoxContainer;
@@ -131,6 +132,7 @@ public:
 	// Mechanical tab removal (no close routing/prompt) — used while p_document is being
 	// destroyed (EditorData::remove_scene), so views never outlive the document they bind.
 	void drop_document_tabs(EditorDocument *p_document);
+	DocumentView *get_document_view(EditorDocument *p_document) const;
 	void focus_editor(const StringName &p_name);
 	int get_selected_index() const;
 	int get_plugin_index(EditorPlugin *p_editor) const;

@@ -495,6 +495,15 @@ void EditorMainScreen::drop_document_tabs(EditorDocument *p_document) {
 	}
 }
 
+DocumentView *EditorMainScreen::get_document_view(EditorDocument *p_document) const {
+	if (!workspace || !p_document) {
+		return nullptr;
+	}
+	WorkspacePane *pane = workspace->find_pane_showing(p_document);
+	TabbedDocumentHost *host = pane ? Object::cast_to<TabbedDocumentHost>(pane->get_content()) : nullptr;
+	return host ? host->get_document_view(p_document) : nullptr;
+}
+
 int EditorMainScreen::get_selected_index() const {
 	for (int i = 0; i < editor_table.size(); i++) {
 		if (selected_plugin == editor_table[i]) {

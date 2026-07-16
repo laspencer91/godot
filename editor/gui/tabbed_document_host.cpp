@@ -167,6 +167,11 @@ DocumentView *TabbedDocumentHost::get_current_view() const {
 	return views[current];
 }
 
+DocumentView *TabbedDocumentHost::get_document_view(EditorDocument *p_document) const {
+	const int index = documents.find(p_document);
+	return index >= 0 ? views[index] : nullptr;
+}
+
 DocumentView *TabbedDocumentHost::_ensure_view(int p_idx) {
 	ERR_FAIL_INDEX_V(p_idx, documents.size(), nullptr);
 	if (!views[p_idx]) {

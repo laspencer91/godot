@@ -32,7 +32,6 @@
 #include "editor_interface.compat.inc"
 
 #include "core/config/engine.h"
-#include "core/config/project_settings.h"
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
@@ -369,12 +368,11 @@ void EditorInterface::make_scene_preview(const String &p_path, Node *p_scene, in
 		}
 		img->convert(Image::FORMAT_RGB8);
 
-		String temp_path = EditorPaths::get_singleton()->get_cache_dir();
-		String cache_base = ProjectSettings::get_singleton()->globalize_path(p_path).md5_text();
-		cache_base = temp_path.path_join("resthumb-" + cache_base);
-
 		post_process_preview(img);
-		img->save_png(cache_base + ".png");
+		Error err = EditorResourcePreview::get_singleton()->save_preview_cache(p_path, img);
+		if (err != OK) {
+			ERR_PRINT(vformat("Cannot save preview cache for '%s'.", p_path));
+		}
 	}
 
 	EditorResourcePreview::get_singleton()->check_for_invalidation(p_path);

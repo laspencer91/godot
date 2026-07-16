@@ -565,6 +565,20 @@ Control *DocumentView::get_chrome_host() const {
 	return content_vbox;
 }
 
+SubViewport *DocumentView::get_scene_viewport() const {
+	if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {
+		return canvas_view->get_scene_viewport();
+	}
+	if (Node3DEditorView *spatial_view = Object::cast_to<Node3DEditorView>(document_surface)) {
+		Node3DEditorViewport *editor_viewport = spatial_view->get_last_used_viewport();
+		return editor_viewport ? editor_viewport->get_viewport_node() : nullptr;
+	}
+	if (LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface)) {
+		return level_view->get_level_viewport();
+	}
+	return nullptr;
+}
+
 void DocumentView::set_context_active(bool p_active) {
 	if (context_active == p_active) {
 		return;
