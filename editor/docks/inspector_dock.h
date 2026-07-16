@@ -98,6 +98,11 @@ class InspectorDock : public EditorDock {
 	// G2 D6: when bound to a document (the D7b per-pane composite), selection history resolves to
 	// that document's own store instead of the global. Null on the global dock => today's behavior.
 	EditorDocument *bound_document = nullptr;
+	// A document Inspector may stay on its current object while the paired Scene Tree selection
+	// changes. This gates only the Scene Tree -> Inspector route; explicit history/resource
+	// navigation inside the Inspector remains available.
+	bool selection_locked = false;
+	ObjectID selection_lock_target;
 	EditorSelectionHistory *_doc_history() const;
 
 	bool info_is_warning = false; // Display in yellow and use warning icon if true.
@@ -187,6 +192,9 @@ public:
 	void edit_resource_document(const Ref<Resource> &p_resource);
 	void set_context_active(bool p_active);
 	EditorDocument *get_bound_document() const { return bound_document; }
+	void set_selection_locked(bool p_locked);
+	bool is_selection_locked() const { return selection_locked; }
+	bool is_selection_lock_target_valid() const;
 
 	// G2 D7b: p_is_global==false builds a bound per-pane inspector that does not claim the singleton
 	// or re-register the dock command (which would error as a duplicate).

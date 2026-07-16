@@ -1007,6 +1007,28 @@ ShaderDocument *EditorData::get_or_create_shader_document(const Ref<Resource> &p
 	return sd;
 }
 
+HotspotAtlasDocument *EditorData::get_or_create_hotspot_atlas_document(const Ref<Resource> &p_resource) {
+	// G-Level WP21: one specialized resource document per atlas. Keep the
+	// shader/resource dedup contract (same Ref first, stable non-empty path
+	// second) so FileSystem double-click and EditorInterface.edit_resource()
+	// converge on the same workspace tab.
+	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
+	const String path = p_resource->get_path();
+	for (EditorDocument *doc : aux_documents) {
+		if (doc->get_type() != EditorDocument::TYPE_HOTSPOT_ATLAS) {
+			continue;
+		}
+		HotspotAtlasDocument *hd = static_cast<HotspotAtlasDocument *>(doc);
+		if (hd->get_resource() == p_resource || (!path.is_empty() && hd->get_path() == path)) {
+			return hd;
+		}
+	}
+	HotspotAtlasDocument *hd = memnew(HotspotAtlasDocument);
+	hd->set_resource(p_resource);
+	aux_documents.push_back(hd);
+	return hd;
+}
+
 ResourceDocument *EditorData::get_or_create_resource_document(const Ref<Resource> &p_resource, EditorDocument *p_scene_context) {
 	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
 
@@ -1099,8 +1121,11 @@ EditorDocument *EditorData::get_or_create_document_for_path(const String &p_path
 	if (res.is_null()) {
 		return nullptr;
 	}
-	// Specialized text/shader resources keep their existing view factories. Everything else uses a
-	// generic Inspector-backed resource document.
+	// Specialized text/shader/hotspot resources keep their existing view factories. Everything else
+	// uses a generic Inspector-backed resource document.
+	if (res->is_class("HotspotAtlas")) {
+		return get_or_create_hotspot_atlas_document(res);
+	}
 	if (Object::cast_to<Shader>(res.ptr()) || Object::cast_to<ShaderInclude>(res.ptr())) {
 		return get_or_create_shader_document(res);
 	}
@@ -1292,6 +1317,21 @@ Dictionary EditorData::restore_edited_scene_state(EditorSelection *p_selection, 
 }
 
 void EditorData::clear_edited_scenes() {
+	// G2: DocumentViews retain raw pointers to their EditorDocument (and scene root) so they can
+	// persist pane-local state during PREDELETE. Normal scene removal upholds that lifetime contract
+	// in remove_scene(); editor shutdown must do the same before deleting any document. Drain every
+	// scene workspace view in a separate first pass while all scene documents are still alive, since
+	// removing one tab may synchronously reveal/deactivate another view. Auxiliary documents already
+	// outlive the workspace tree (EditorData owns them until its destructor), so leave those views to
+	// normal tree teardown; draining them here would reorder Inspector child destruction.
+	if (EditorNode *editor_node = EditorNode::get_singleton()) {
+		for (int i = 0; i < edited_scene.size(); i++) {
+			if (edited_scene[i].document) {
+				editor_node->drop_workspace_tabs_for_document(edited_scene[i].document);
+			}
+		}
+	}
+
 	for (int i = 0; i < edited_scene.size(); i++) {
 		if (edited_scene[i].root) {
 			memdelete(edited_scene[i].root);

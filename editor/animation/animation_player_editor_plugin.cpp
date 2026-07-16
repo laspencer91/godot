@@ -40,6 +40,7 @@
 #include "editor/docks/editor_dock_manager.h"
 #include "editor/docks/inspector_dock.h"
 #include "editor/docks/scene_tree_dock.h"
+#include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/gui/editor_file_dialog.h"
@@ -62,12 +63,26 @@
 
 ///////////////////////////////////
 
+Node *AnimationPlayerEditor::_get_edited_scene() const {
+	return bound_document ? bound_document->get_root() : EditorNode::get_singleton()->get_edited_scene();
+}
+
+EditorSelection *AnimationPlayerEditor::_get_editor_selection() const {
+	EditorSelection *selection = bound_document ? bound_document->get_selection() : nullptr;
+	return selection ? selection : EditorNode::get_singleton()->get_editor_selection();
+}
+
+EditorSelectionHistory *AnimationPlayerEditor::_get_editor_selection_history() const {
+	EditorSelectionHistory *history = bound_document ? bound_document->get_selection_history() : nullptr;
+	return history ? history : EditorNode::get_singleton()->get_editor_selection_history();
+}
+
 void AnimationPlayerEditor::_find_player() {
-	if (!is_visible()) {
+	if (is_global_instance ? !is_visible() : !embedded_open) {
 		return;
 	}
 
-	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
+	Node *edited_scene = _get_edited_scene();
 
 	// Workspace model: documents stay resident, so switching tabs never fires the
 	// node_removed that used to unbind the previous scene's player when that scene
@@ -88,9 +103,7 @@ void AnimationPlayerEditor::_find_player() {
 	TypedArray<Node> players = edited_scene->find_children("", "AnimationPlayer");
 
 	if (players.size() == 1) {
-		// Replicating EditorNode::_plugin_over_edit to ensure an identical setup as when selecting manually.
-		plugin->edit(players.front());
-		plugin->make_visible(true);
+		_edit_object(players.front());
 	}
 }
 
@@ -102,10 +115,12 @@ void AnimationPlayerEditor::_node_removed(Node *p_node) {
 
 void AnimationPlayerEditor::_unbind_player() {
 	if (is_dummy) {
-		plugin->_clear_dummy_player();
+		_clear_dummy_player();
 	}
 
 	player = nullptr;
+	original_node = nullptr;
+	is_dummy = false;
 
 	set_process(false);
 
@@ -172,9 +187,17 @@ void AnimationPlayerEditor::_notification(int p_what) {
 		case NOTIFICATION_EXIT_TREE: {
 			get_tree()->disconnect(SNAME("node_removed"), callable_mp(this, &AnimationPlayerEditor::_node_removed));
 		} break;
+		case NOTIFICATION_PREDELETE: {
+			_clear_dummy_player();
+			if (active_instance == this) {
+				active_instance = nullptr;
+			}
+		} break;
 
 		case NOTIFICATION_READY: {
-			EditorNode::get_singleton()->connect("scene_changed", callable_mp(this, &AnimationPlayerEditor::_find_player));
+			if (is_global_instance) {
+				EditorNode::get_singleton()->connect("scene_changed", callable_mp(this, &AnimationPlayerEditor::_find_player));
+			}
 
 			add_theme_style_override(SceneStringName(panel), EditorNode::get_singleton()->get_editor_theme()->get_stylebox(SceneStringName(panel), SNAME("Panel")));
 
@@ -289,8 +312,10 @@ void AnimationPlayerEditor::go_to_nearest_keyframe(bool p_backward) {
 	int track_count = anim->get_track_count();
 	bool bezier_active = track_editor->is_bezier_editor_active();
 
-	Node *root = get_tree()->get_edited_scene_root();
-	EditorSelection *selection = EditorNode::get_singleton()->get_editor_selection();
+	Node *root = _get_edited_scene();
+	EditorSelection *selection = _get_editor_selection();
+	ERR_FAIL_NULL(root);
+	ERR_FAIL_NULL(selection);
 
 	Vector<int> selected_tracks;
 	for (int i = 0; i < track_count; ++i) {
@@ -489,7 +514,7 @@ void AnimationPlayerEditor::_animation_selected(int p_which) {
 			Node *root = player->get_node_or_null(player->get_root_node());
 
 			// Player shouldn't access parent if it's the scene root.
-			if (!root || (player == get_tree()->get_edited_scene_root() && player->get_root_node() == NodePath(".."))) {
+			if (!root || (player == _get_edited_scene() && player->get_root_node() == NodePath(".."))) {
 				NodePath cached_root_path = player->get_path_to(get_cached_root_node());
 				if (player->get_node_or_null(cached_root_path) != nullptr) {
 					player->set_root_node(cached_root_path);
@@ -510,7 +535,7 @@ void AnimationPlayerEditor::_animation_selected(int p_which) {
 		autoplay->set_pressed(false);
 	}
 
-	AnimationPlayerEditor::get_singleton()->get_track_editor()->update_keying();
+	track_editor->update_keying();
 	_animation_key_editor_seek(timeline_position);
 
 	emit_signal("animation_selected", current);
@@ -697,7 +722,7 @@ void AnimationPlayerEditor::_animation_name_edited() {
 			undo_redo->commit_action();
 
 			if (is_dummy) {
-				plugin->_update_dummy_player(original_node);
+				_update_dummy_player(original_node);
 			}
 			_select_anim_by_name(new_library_prefix + new_name);
 		} break;
@@ -753,7 +778,7 @@ void AnimationPlayerEditor::_animation_name_edited() {
 			}
 
 			if (is_dummy) {
-				plugin->_update_dummy_player(original_node);
+				_update_dummy_player(original_node);
 			}
 			_select_anim_by_name(library_name + new_name);
 
@@ -805,7 +830,7 @@ void AnimationPlayerEditor::_animation_name_edited() {
 			}
 
 			if (is_dummy) {
-				plugin->_update_dummy_player(original_node);
+				_update_dummy_player(original_node);
 			}
 			_select_anim_by_name(library_name + new_name);
 		} break;
@@ -920,12 +945,14 @@ void AnimationPlayerEditor::ensure_visibility() {
 Dictionary AnimationPlayerEditor::get_state() const {
 	Dictionary d;
 
-	d["dock_open"] = is_dock_open();
+	const bool drawer_visible = is_global_instance ? is_dock_open() : embedded_open;
+	d["dock_open"] = drawer_visible;
 
 	if (!is_dummy) {
-		d["visible"] = is_visible_in_tree();
-		if (EditorNode::get_singleton()->get_edited_scene() && is_visible_in_tree() && player) {
-			d["player"] = EditorNode::get_singleton()->get_edited_scene()->get_path_to(player);
+		d["visible"] = drawer_visible;
+		Node *edited_scene = _get_edited_scene();
+		if (edited_scene && drawer_visible && player) {
+			d["player"] = edited_scene->get_path_to(player);
 			d["animation"] = player->get_assigned_animation();
 			d["track_editor_state"] = track_editor->get_state();
 		}
@@ -938,23 +965,30 @@ void AnimationPlayerEditor::set_state(const Dictionary &p_state) {
 	// Workspace model: the dock's open/closed state follows each scene. Applied before
 	// the visibility early-out so a scene that left the dock closed also closes it.
 	if (p_state.has("dock_open")) {
-		if (bool(p_state["dock_open"])) {
-			open();
+		const bool should_open = bool(p_state["dock_open"]);
+		if (is_global_instance) {
+			if (should_open) {
+				open();
+			} else {
+				close();
+			}
 		} else {
-			close();
+			emit_signal(SNAME("drawer_visibility_requested"), should_open);
 		}
 	}
 
 	if (!p_state.has("visible") || !p_state["visible"]) {
 		return;
 	}
-	if (!EditorNode::get_singleton()->get_edited_scene()) {
+	Node *edited_scene = _get_edited_scene();
+	if (!edited_scene) {
 		return;
 	}
 
 	if (p_state.has("player")) {
-		Node *n = EditorNode::get_singleton()->get_edited_scene()->get_node(p_state["player"]);
-		if (Object::cast_to<AnimationPlayer>(n) && EditorNode::get_singleton()->get_editor_selection()->is_selected(n)) {
+		Node *n = edited_scene->get_node_or_null(p_state["player"]);
+		EditorSelection *selection = _get_editor_selection();
+		if (Object::cast_to<AnimationPlayer>(n) && selection && selection->is_selected(n)) {
 			if (player) {
 				if (player->is_connected(SNAME("animation_list_changed"), callable_mp(this, &AnimationPlayerEditor::_animation_libraries_updated))) {
 					player->disconnect(SNAME("animation_list_changed"), callable_mp(this, &AnimationPlayerEditor::_animation_libraries_updated));
@@ -974,7 +1008,11 @@ void AnimationPlayerEditor::set_state(const Dictionary &p_state) {
 			}
 
 			_update_player();
-			make_visible();
+			if (is_global_instance) {
+				make_visible();
+			} else {
+				request_open();
+			}
 			set_process(true);
 			ensure_visibility();
 
@@ -1051,27 +1089,6 @@ void AnimationPlayerEditor::_update_animation() {
 	updating = false;
 }
 
-void AnimationPlayerEditor::_update_bound_scene_label() {
-	String scene_name;
-	if (player) {
-		EditorData &ed = EditorNode::get_singleton()->get_editor_data();
-		for (int i = 0; i < ed.get_edited_scene_count(); i++) {
-			Node *root = ed.get_edited_scene_root(i);
-			if (root && (root == player || root->is_ancestor_of(player))) {
-				scene_name = ed.get_scene_path(i).get_file();
-				if (scene_name.is_empty()) {
-					scene_name = root->get_name();
-				}
-				break;
-			}
-		}
-	}
-
-	bound_scene_label->set_text(scene_name);
-	bound_scene_label->set_tooltip_text(scene_name.is_empty() ? String() : vformat(TTR("Editing animation in scene \"%s\"."), scene_name));
-	bound_scene_label->set_visible(!scene_name.is_empty());
-}
-
 void AnimationPlayerEditor::_update_player() {
 	updating = true;
 
@@ -1080,10 +1097,9 @@ void AnimationPlayerEditor::_update_player() {
 	tool_anim->set_disabled(player == nullptr);
 	pin->set_disabled(player == nullptr);
 	_set_controls_disabled(player == nullptr);
-	_update_bound_scene_label();
 
 	if (!player) {
-		AnimationPlayerEditor::get_singleton()->get_track_editor()->update_keying();
+		track_editor->update_keying();
 		return;
 	}
 
@@ -1289,7 +1305,8 @@ void AnimationPlayerEditor::_update_playback_tooltips() {
 void AnimationPlayerEditor::_ensure_dummy_player() {
 	bool dummy_exists = is_dummy && player && original_node;
 	if (dummy_exists) {
-		if (is_visible()) {
+		const bool editor_visible = is_global_instance ? is_visible() : embedded_open;
+		if (editor_visible) {
 			player->set_active(true);
 			original_node->set_editing(true);
 		} else {
@@ -1305,6 +1322,116 @@ void AnimationPlayerEditor::_ensure_dummy_player() {
 	if (track_editor) {
 		track_editor->show_dummy_player_warning(dummy_exists);
 	}
+}
+
+void AnimationPlayerEditor::_clear_dummy_player() {
+	AnimationMixer *mixer = Object::cast_to<AnimationMixer>(original_node);
+	const Callable update_callback = callable_mp(this, &AnimationPlayerEditor::_update_dummy_player).bind(mixer);
+	if (mixer) {
+		if (mixer->is_connected(SNAME("mixer_updated"), update_callback)) {
+			mixer->disconnect(SNAME("mixer_updated"), update_callback);
+		}
+		if (mixer->is_connected(SNAME("animation_libraries_updated"), update_callback)) {
+			mixer->disconnect(SNAME("animation_libraries_updated"), update_callback);
+		}
+	}
+
+	if (!dummy_player) {
+		return;
+	}
+	Node *parent = dummy_player->get_parent();
+	if (parent) {
+		callable_mp(parent, &Node::remove_child).call_deferred(dummy_player);
+	}
+	dummy_player->queue_free();
+	dummy_player = nullptr;
+}
+
+void AnimationPlayerEditor::_update_dummy_player(AnimationMixer *p_mixer) {
+	ERR_FAIL_NULL(p_mixer);
+	const Callable update_callback = callable_mp(this, &AnimationPlayerEditor::_update_dummy_player).bind(p_mixer);
+	if (p_mixer->get_instance_id() != last_mixer) {
+		if (p_mixer->is_connected(SNAME("mixer_updated"), update_callback)) {
+			p_mixer->disconnect(SNAME("mixer_updated"), update_callback);
+		}
+		if (p_mixer->is_connected(SNAME("animation_libraries_updated"), update_callback)) {
+			p_mixer->disconnect(SNAME("animation_libraries_updated"), update_callback);
+		}
+		return;
+	}
+
+	if (!dummy_player) {
+		Node *parent = p_mixer->get_parent();
+		ERR_FAIL_NULL(parent);
+		dummy_player = memnew(AnimationPlayer);
+		dummy_player->set_active(false);
+		parent->add_child(dummy_player);
+	}
+
+	AnimationMixer *default_node = memnew(AnimationMixer);
+	List<PropertyInfo> pinfo;
+	default_node->get_property_list(&pinfo);
+	for (const PropertyInfo &E : pinfo) {
+		if (!(E.usage & PROPERTY_USAGE_STORAGE)) {
+			continue;
+		}
+		if (E.name != "script" && E.name != "active" && E.name != "deterministic" && E.name != "root_motion_track") {
+			dummy_player->set(E.name, p_mixer->get(E.name));
+		}
+	}
+	memdelete(default_node);
+
+	LocalVector<StringName> existing_libs;
+	dummy_player->get_animation_library_list(&existing_libs);
+	for (const StringName &K : existing_libs) {
+		dummy_player->remove_animation_library(K);
+	}
+	LocalVector<StringName> libraries;
+	p_mixer->get_animation_library_list(&libraries);
+	for (const StringName &K : libraries) {
+		dummy_player->add_animation_library(K, p_mixer->get_animation_library(K));
+	}
+
+	if (original_node == p_mixer && is_dummy) {
+		player = dummy_player;
+		_update_player();
+		library_editor->set_animation_mixer(fetch_mixer_for_library());
+	}
+}
+
+void AnimationPlayerEditor::_edit_object(Object *p_object) {
+	if (player && is_pinned()) {
+		return;
+	}
+	if (!p_object) {
+		_unbind_player();
+		return;
+	}
+
+	AnimationMixer *src_node = Object::cast_to<AnimationMixer>(p_object);
+	ERR_FAIL_NULL(src_node);
+	last_mixer = p_object->get_instance_id();
+
+	AnimationPlayer *target_player = Object::cast_to<AnimationPlayer>(p_object);
+	const bool needs_dummy = target_player == nullptr;
+	if (needs_dummy) {
+		_clear_dummy_player();
+		_update_dummy_player(src_node);
+		target_player = dummy_player;
+		const Callable update_callback = callable_mp(this, &AnimationPlayerEditor::_update_dummy_player).bind(src_node);
+		if (!src_node->is_connected(SNAME("mixer_updated"), update_callback)) {
+			src_node->connect(SNAME("mixer_updated"), update_callback, CONNECT_DEFERRED);
+		}
+		if (!src_node->is_connected(SNAME("animation_libraries_updated"), update_callback)) {
+			src_node->connect(SNAME("animation_libraries_updated"), update_callback, CONNECT_DEFERRED);
+		}
+	} else {
+		_clear_dummy_player();
+	}
+
+	ERR_FAIL_NULL(target_player);
+	target_player->set_dummy(needs_dummy);
+	edit(src_node, target_player, needs_dummy);
 }
 
 void AnimationPlayerEditor::edit(AnimationMixer *p_node, AnimationPlayer *p_player, bool p_is_dummy) {
@@ -2111,9 +2238,21 @@ void AnimationPlayerEditor::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("_stop_onion_skinning"), &AnimationPlayerEditor::_stop_onion_skinning);
 
 	ADD_SIGNAL(MethodInfo("animation_selected", PropertyInfo(Variant::STRING, "name")));
+	ADD_SIGNAL(MethodInfo("drawer_visibility_requested", PropertyInfo(Variant::BOOL, "open")));
 }
 
 AnimationPlayerEditor *AnimationPlayerEditor::singleton = nullptr;
+AnimationPlayerEditor *AnimationPlayerEditor::active_instance = nullptr;
+
+AnimationPlayerEditor *AnimationPlayerEditor::get_for_node(const Object *p_object) {
+	const Node *start = Object::cast_to<Node>(const_cast<Object *>(p_object));
+	for (const Node *node = start; node; node = node->get_parent()) {
+		if (const AnimationPlayerEditor *editor = Object::cast_to<AnimationPlayerEditor>(node)) {
+			return const_cast<AnimationPlayerEditor *>(editor);
+		}
+	}
+	return get_singleton();
+}
 
 AnimationPlayer *AnimationPlayerEditor::get_player() const {
 	return player;
@@ -2123,13 +2262,61 @@ AnimationMixer *AnimationPlayerEditor::get_editing_node() const {
 	return original_node;
 }
 
-AnimationPlayerEditor::AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plugin) {
+void AnimationPlayerEditor::set_context_active(bool p_active) {
+	context_active = p_active;
+	if (p_active) {
+		active_instance = this;
+		if (embedded_open) {
+			_find_player();
+		}
+	} else if (active_instance == this) {
+		active_instance = nullptr;
+	}
+}
+
+void AnimationPlayerEditor::request_open() {
+	if (is_global_instance) {
+		make_visible();
+	} else {
+		emit_signal(SNAME("drawer_visibility_requested"), true);
+	}
+}
+
+void AnimationPlayerEditor::request_toggle() {
+	if (is_global_instance) {
+		if (is_dock_open()) {
+			close();
+		} else {
+			make_visible();
+		}
+	} else {
+		emit_signal(SNAME("drawer_visibility_requested"), !embedded_open);
+	}
+}
+
+void AnimationPlayerEditor::set_embedded_open(bool p_open) {
+	embedded_open = p_open;
+	if (p_open) {
+		set_process(true);
+		_find_player();
+	} else {
+		set_process(false);
+	}
+	_ensure_dummy_player();
+}
+
+AnimationPlayerEditor::AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plugin, bool p_is_global) {
 	plugin = p_plugin;
-	singleton = this;
+	is_global_instance = p_is_global;
+	if (is_global_instance) {
+		singleton = this;
+	}
 
 	set_name(TTRC("Animation"));
 	set_icon_name("Animation");
-	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("bottom_panels/toggle_animation_bottom_panel", TTRC("Toggle Animation Dock"), KeyModifierMask::ALT | Key::N));
+	if (is_global_instance) {
+		set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("bottom_panels/toggle_animation_bottom_panel", TTRC("Toggle Animation Dock"), KeyModifierMask::ALT | Key::N));
+	}
 	set_default_slot(EditorDock::DOCK_SLOT_BOTTOM);
 	set_available_layouts(EditorDock::DOCK_LAYOUT_HORIZONTAL | EditorDock::DOCK_LAYOUT_FLOATING);
 
@@ -2263,15 +2450,6 @@ AnimationPlayerEditor::AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plug
 	hb->add_child(onion_skinning);
 
 	hb->add_child(memnew(VSeparator));
-
-	// Which scene the timeline is bound to — a global bottom panel over multiple
-	// workspace panes is otherwise ambiguous.
-	bound_scene_label = memnew(Label);
-	bound_scene_label->set_focus_mode(FOCUS_NONE);
-	bound_scene_label->set_modulate(Color(1, 1, 1, 0.55));
-	bound_scene_label->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
-	bound_scene_label->hide();
-	hb->add_child(bound_scene_label);
 
 	pin = memnew(Button);
 	pin->set_theme_type_variation(SceneStringName(FlatButton));
@@ -2411,142 +2589,131 @@ void fragment() {
 }
 
 AnimationPlayerEditor::~AnimationPlayerEditor() {
+	if (active_instance == this) {
+		active_instance = nullptr;
+	}
+	if (singleton == this) {
+		singleton = nullptr;
+	}
 	_free_onion_layers();
 	RS::get_singleton()->free_rid(onion.capture.canvas);
 	RS::get_singleton()->free_rid(onion.capture.canvas_item);
 	onion.capture = {};
 }
 
+AnimationPlayerEditorPlugin *AnimationPlayerEditorPlugin::singleton = nullptr;
+
+AnimationPlayerEditor *AnimationPlayerEditorPlugin::_get_editor_for_active_document() const {
+	EditorNode *editor_node = EditorNode::get_singleton();
+	EditorDocument *document = editor_node ? editor_node->get_editor_data().get_active_document() : nullptr;
+	AnimationPlayerEditor *const *editor = document ? document_editors.getptr(document) : nullptr;
+	return editor ? *editor : anim_editor;
+}
+
+void AnimationPlayerEditorPlugin::_bind_editor_signals(AnimationPlayerEditor *p_editor, InspectorDock *p_inspector) {
+	ERR_FAIL_NULL(p_editor);
+	ERR_FAIL_NULL(p_inspector);
+	EditorInspector *inspector = p_inspector->get_inspector();
+	ERR_FAIL_NULL(inspector);
+
+	inspector->connect(SNAME("property_keyed"), callable_mp(this, &AnimationPlayerEditorPlugin::_property_keyed).bind(p_editor));
+	inspector->connect(SNAME("edited_object_changed"), callable_mp(p_editor->get_track_editor(), &AnimationTrackEditor::update_keying));
+	p_editor->get_track_editor()->connect(SNAME("keying_changed"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_keying).bind(p_editor));
+}
+
 void AnimationPlayerEditorPlugin::_notification(int p_what) {
-	switch (p_what) {
-		case NOTIFICATION_READY: {
-			Node3DEditor::get_singleton()->connect(SNAME("transform_3d_key_request"), callable_mp(this, &AnimationPlayerEditorPlugin::_transform_3d_key_request));
-			InspectorDock::get_inspector_singleton()->connect(SNAME("property_keyed"), callable_mp(this, &AnimationPlayerEditorPlugin::_property_keyed));
-			anim_editor->get_track_editor()->connect(SNAME("keying_changed"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_keying));
-			InspectorDock::get_inspector_singleton()->connect(SNAME("edited_object_changed"), callable_mp(anim_editor->get_track_editor(), &AnimationTrackEditor::update_keying));
-			set_force_draw_over_forwarding_enabled();
-		} break;
+	if (p_what == NOTIFICATION_READY) {
+		Node3DEditor::get_singleton()->connect(SNAME("transform_3d_key_request"), callable_mp(this, &AnimationPlayerEditorPlugin::_transform_3d_key_request));
+		_bind_editor_signals(anim_editor, InspectorDock::get_fallback_singleton());
+		set_force_draw_over_forwarding_enabled();
 	}
 }
 
-void AnimationPlayerEditorPlugin::_property_keyed(const String &p_keyed, const Variant &p_value, bool p_advance) {
-	AnimationTrackEditor *te = anim_editor->get_track_editor();
-	if (!te || !te->has_keying()) {
+void AnimationPlayerEditorPlugin::shortcut_input(const Ref<InputEvent> &p_event) {
+	ERR_FAIL_COND(p_event.is_null());
+	Ref<InputEventKey> key = p_event;
+	if (key.is_null() || !key->is_pressed() || key->is_echo()) {
 		return;
 	}
-	te->_clear_selection();
-	te->insert_value_key(p_keyed, p_advance);
+	if (ED_IS_SHORTCUT("bottom_panels/toggle_animation_bottom_panel", p_event)) {
+		AnimationPlayerEditor *editor = _get_editor_for_active_document();
+		if (editor && editor != anim_editor) {
+			editor->request_toggle();
+			get_viewport()->set_input_as_handled();
+		}
+	}
+}
+
+void AnimationPlayerEditorPlugin::_property_keyed(const String &p_keyed, const Variant &p_value, bool p_advance, AnimationPlayerEditor *p_editor) {
+	ERR_FAIL_NULL(p_editor);
+	AnimationTrackEditor *track_editor = p_editor->get_track_editor();
+	if (!track_editor || !track_editor->has_keying()) {
+		return;
+	}
+	track_editor->_clear_selection();
+	track_editor->insert_value_key(p_keyed, p_advance);
 }
 
 void AnimationPlayerEditorPlugin::_transform_3d_key_request(Object *sp, const String &p_sub, const Transform3D &p_key) {
-	if (!anim_editor->get_track_editor()->has_keying()) {
+	AnimationPlayerEditor *editor = _get_editor_for_active_document();
+	if (!editor || !editor->get_track_editor()->has_keying()) {
 		return;
 	}
-	Node3D *s = Object::cast_to<Node3D>(sp);
-	if (!s) {
+	Node3D *node_3d = Object::cast_to<Node3D>(sp);
+	if (!node_3d) {
 		return;
 	}
-	anim_editor->get_track_editor()->insert_transform_3d_key(s, p_sub, Animation::TYPE_POSITION_3D, p_key.origin);
-	anim_editor->get_track_editor()->insert_transform_3d_key(s, p_sub, Animation::TYPE_ROTATION_3D, p_key.basis.get_rotation_quaternion());
-	anim_editor->get_track_editor()->insert_transform_3d_key(s, p_sub, Animation::TYPE_SCALE_3D, p_key.basis.get_scale());
+	AnimationTrackEditor *track_editor = editor->get_track_editor();
+	track_editor->insert_transform_3d_key(node_3d, p_sub, Animation::TYPE_POSITION_3D, p_key.origin);
+	track_editor->insert_transform_3d_key(node_3d, p_sub, Animation::TYPE_ROTATION_3D, p_key.basis.get_rotation_quaternion());
+	track_editor->insert_transform_3d_key(node_3d, p_sub, Animation::TYPE_SCALE_3D, p_key.basis.get_scale());
 }
 
-void AnimationPlayerEditorPlugin::_update_keying() {
-	InspectorDock::get_inspector_singleton()->set_keying(anim_editor->get_track_editor()->has_keying());
+void AnimationPlayerEditorPlugin::_update_keying(AnimationPlayerEditor *p_editor) {
+	ERR_FAIL_NULL(p_editor);
+	InspectorDock *inspector_dock = p_editor->get_bound_inspector();
+	EditorInspector *inspector = inspector_dock ? inspector_dock->get_inspector() : InspectorDock::get_inspector_singleton();
+	if (inspector) {
+		inspector->set_keying(p_editor->get_track_editor()->has_keying());
+	}
+}
+
+Dictionary AnimationPlayerEditorPlugin::get_state() const {
+	AnimationPlayerEditor *editor = _get_editor_for_active_document();
+	Dictionary state = editor ? editor->get_state() : Dictionary();
+	if (EditorNode *editor_node = EditorNode::get_singleton()) {
+		if (EditorDocument *document = editor_node->get_editor_data().get_active_document()) {
+			document->set_contextual_editor_state(SNAME("Animation"), state);
+		}
+	}
+	return state;
+}
+
+void AnimationPlayerEditorPlugin::set_state(const Dictionary &p_state) {
+	EditorDocument *document = nullptr;
+	if (EditorNode *editor_node = EditorNode::get_singleton()) {
+		document = editor_node->get_editor_data().get_active_document();
+		if (document) {
+			document->set_contextual_editor_state(SNAME("Animation"), p_state);
+		}
+	}
+	AnimationPlayerEditor **editor = document ? document_editors.getptr(document) : nullptr;
+	if (editor && *editor) {
+		(*editor)->set_state(p_state);
+	} else if (!document && anim_editor) {
+		anim_editor->set_state(p_state);
+	}
+}
+
+void AnimationPlayerEditorPlugin::clear() {
+	if (AnimationPlayerEditor *editor = _get_editor_for_active_document()) {
+		editor->clear();
+	}
 }
 
 void AnimationPlayerEditorPlugin::edit(Object *p_object) {
-	if (player && anim_editor && anim_editor->is_pinned()) {
-		return; // Ignore, pinned.
-	}
-
-	player = nullptr;
-	if (!p_object) {
-		return;
-	}
-	last_mixer = p_object->get_instance_id();
-
-	AnimationMixer *src_node = Object::cast_to<AnimationMixer>(p_object);
-	bool is_dummy = false;
-	if (!p_object->is_class("AnimationPlayer")) {
-		// If it needs dummy AnimationPlayer, assign original AnimationMixer to LibraryEditor.
-		_update_dummy_player(src_node);
-
-		is_dummy = true;
-
-		if (!src_node->is_connected(SNAME("mixer_updated"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_dummy_player))) {
-			src_node->connect(SNAME("mixer_updated"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_dummy_player).bind(src_node), CONNECT_DEFERRED);
-		}
-		if (!src_node->is_connected(SNAME("animation_libraries_updated"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_dummy_player))) {
-			src_node->connect(SNAME("animation_libraries_updated"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_dummy_player).bind(src_node), CONNECT_DEFERRED);
-		}
-	} else {
-		_clear_dummy_player();
-		player = Object::cast_to<AnimationPlayer>(p_object);
-	}
-	player->set_dummy(is_dummy);
-
-	anim_editor->edit(src_node, player, is_dummy);
-}
-
-void AnimationPlayerEditorPlugin::_clear_dummy_player() {
-	if (!dummy_player) {
-		return;
-	}
-	Node *parent = dummy_player->get_parent();
-	if (parent) {
-		callable_mp(parent, &Node::remove_child).call_deferred(dummy_player);
-	}
-	dummy_player->queue_free();
-	dummy_player = nullptr;
-}
-
-void AnimationPlayerEditorPlugin::_update_dummy_player(AnimationMixer *p_mixer) {
-	// Check current editing object.
-	if (p_mixer->get_instance_id() != last_mixer && p_mixer->is_connected(SNAME("mixer_updated"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_dummy_player))) {
-		p_mixer->disconnect(SNAME("mixer_updated"), callable_mp(this, &AnimationPlayerEditorPlugin::_update_dummy_player));
-		return;
-	}
-
-	// Add dummy player to scene.
-	if (!dummy_player) {
-		Node *parent = p_mixer->get_parent();
-		ERR_FAIL_NULL(parent);
-		dummy_player = memnew(AnimationPlayer);
-		dummy_player->set_active(false); // Inactive as default, it will be activated if the AnimationPlayerEditor visibility is changed.
-		parent->add_child(dummy_player);
-	}
-	player = dummy_player;
-
-	// Convert AnimationTree (AnimationMixer) to AnimationPlayer.
-	AnimationMixer *default_node = memnew(AnimationMixer);
-	List<PropertyInfo> pinfo;
-	default_node->get_property_list(&pinfo);
-	for (const PropertyInfo &E : pinfo) {
-		if (!(E.usage & PROPERTY_USAGE_STORAGE)) {
-			continue;
-		}
-		if (E.name != "script" && E.name != "active" && E.name != "deterministic" && E.name != "root_motion_track") {
-			dummy_player->set(E.name, p_mixer->get(E.name));
-		}
-	}
-	memdelete(default_node);
-
-	// Library list is dynamically added to property list, should be copied explicitly.
-	LocalVector<StringName> existing_libs;
-	dummy_player->get_animation_library_list(&existing_libs);
-	for (const StringName &K : existing_libs) {
-		dummy_player->remove_animation_library(K);
-	}
-
-	LocalVector<StringName> libraries;
-	p_mixer->get_animation_library_list(&libraries);
-	for (const StringName &K : libraries) {
-		dummy_player->add_animation_library(K, p_mixer->get_animation_library(K));
-	}
-
-	if (anim_editor) {
-		anim_editor->_update_player();
+	if (AnimationPlayerEditor *editor = _get_editor_for_active_document()) {
+		editor->_edit_object(p_object);
 	}
 }
 
@@ -2555,19 +2722,69 @@ bool AnimationPlayerEditorPlugin::handles(Object *p_object) const {
 }
 
 void AnimationPlayerEditorPlugin::make_visible(bool p_visible) {
-	if (p_visible) {
-		anim_editor->make_visible();
-		anim_editor->set_process(true);
-		anim_editor->ensure_visibility();
+	if (!p_visible) {
+		return;
+	}
+	if (AnimationPlayerEditor *editor = _get_editor_for_active_document()) {
+		editor->request_open();
+		editor->set_process(true);
+		editor->ensure_visibility();
 	}
 }
 
+void AnimationPlayerEditorPlugin::forward_canvas_force_draw_over_viewport(Control *p_overlay) {
+	if (AnimationPlayerEditor *editor = _get_editor_for_active_document()) {
+		editor->forward_force_draw_over_viewport(p_overlay);
+	}
+}
+
+void AnimationPlayerEditorPlugin::forward_3d_force_draw_over_viewport(Control *p_overlay) {
+	forward_canvas_force_draw_over_viewport(p_overlay);
+}
+
+AnimationPlayerEditor *AnimationPlayerEditorPlugin::create_editor_view(EditorDocument *p_document, InspectorDock *p_inspector) {
+	ERR_FAIL_NULL_V(p_document, nullptr);
+	ERR_FAIL_NULL_V(p_inspector, nullptr);
+	ERR_FAIL_COND_V(document_editors.has(p_document), nullptr);
+
+	AnimationPlayerEditor *editor = memnew(AnimationPlayerEditor(this, false));
+	editor->set_bound_document(p_document);
+	editor->set_bound_inspector(p_inspector);
+	document_editors.insert(p_document, editor);
+	_bind_editor_signals(editor, p_inspector);
+	return editor;
+}
+
+void AnimationPlayerEditorPlugin::release_editor_view(AnimationPlayerEditor *p_editor) {
+	if (!p_editor) {
+		return;
+	}
+	p_editor->set_context_active(false);
+	EditorDocument *document = p_editor->get_bound_document();
+	AnimationPlayerEditor **registered = document ? document_editors.getptr(document) : nullptr;
+	if (registered && *registered == p_editor) {
+		document_editors.erase(document);
+	}
+	p_editor->set_bound_inspector(nullptr);
+	p_editor->set_bound_document(nullptr);
+}
+
 AnimationPlayerEditorPlugin::AnimationPlayerEditorPlugin() {
+	singleton = this;
 	anim_editor = memnew(AnimationPlayerEditor(this));
 	EditorDockManager::get_singleton()->add_dock(anim_editor);
+	EditorDockManager::mark_dock_retired(anim_editor);
+	EditorDockManager::get_singleton()->set_dock_enabled(anim_editor, false);
+	// Keep the registered Alt+N command, but remove it from the retired dock so the generic dock
+	// shortcut handler cannot reopen that legacy surface. This plugin routes it to the active view.
+	anim_editor->set_dock_shortcut(Ref<Shortcut>());
+	set_process_shortcut_input(true);
 }
 
 AnimationPlayerEditorPlugin::~AnimationPlayerEditorPlugin() {
+	if (singleton == this) {
+		singleton = nullptr;
+	}
 }
 
 // AnimationTrackKeyEditEditorPlugin

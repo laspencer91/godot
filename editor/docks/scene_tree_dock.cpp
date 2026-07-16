@@ -293,6 +293,21 @@ void SceneTreeDock::shortcut_input(const Ref<InputEvent> &p_event) {
 }
 
 void SceneTreeDock::_scene_tree_gui_input(Ref<InputEvent> p_event) {
+	Ref<InputEventMouseButton> mouse_button = p_event;
+	if (mouse_button.is_valid() && (mouse_button->get_button_index() == MouseButton::LEFT || mouse_button->get_button_index() == MouseButton::RIGHT)) {
+		// This signal runs immediately before Tree handles the same event. Mark the press here so
+		// Tree's synchronous selection_changed callback can defer its Inspector update, then commit
+		// that update on the matching release. Using the target Tree's GUI stream is important for
+		// pane-hosted trees (and synthetic input): the dock-wide _input pass can run at a different
+		// point in the viewport dispatch and is only retained as a release-outside fallback.
+		if (mouse_button->is_pressed()) {
+			tree_clicked = true;
+		} else {
+			tree_clicked = false;
+			_commit_pending_inspector_commit();
+		}
+	}
+
 	Ref<InputEventKey> key = p_event;
 
 	if (key.is_null() || !key->is_pressed() || key->is_echo()) {
@@ -1962,6 +1977,9 @@ void SceneTreeDock::_script_open_request(const Ref<Script> &p_script) {
 
 void SceneTreeDock::_push_item(Object *p_object) {
 	if (bound_inspector) {
+		if (bound_inspector->is_selection_locked()) {
+			return;
+		}
 		bound_inspector->push_bound_item(p_object);
 		return;
 	}
@@ -1976,6 +1994,24 @@ void SceneTreeDock::_push_item(Object *p_object) {
 
 	if (p_object == nullptr) {
 		EditorNode::get_singleton()->hide_unused_editors(this);
+	}
+}
+
+void SceneTreeDock::sync_bound_inspector_to_selection() {
+	ERR_FAIL_NULL(bound_inspector);
+	if (bound_inspector->is_selection_locked()) {
+		return;
+	}
+
+	_clear_pending_inspector_commit();
+	const int selection_size = editor_selection->get_selection().size();
+	if (selection_size > 1) {
+		_tool_selected(TOOL_MULTI_EDIT);
+	} else if (selection_size == 1) {
+		Node *node = ObjectDB::get_instance<Node>(editor_selection->get_selection().begin()->key);
+		_push_item(node);
+	} else {
+		_push_item(nullptr);
 	}
 }
 

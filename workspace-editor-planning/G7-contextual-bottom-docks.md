@@ -1,59 +1,99 @@
-# G7 — Contextual bottom docks in the workspace model
+# G7 - Contextual bottom drawers in the workspace model
 
-**Status:** Animation and AnimationTree docks migrated. TileMap / Theme / SpriteFrames /
-Polygon2D / ResourcePreloader / MeshLibrary still follow stock behavior.
+**Status:** Animation and the Level Editor's Materials browser are document-owned. AnimationTree
+has the hardened global binding from the earlier G7 pass but has not yet moved into the document
+host. TileMap / TileSet, Theme,
+SpriteFrames, Polygon2D, ResourcePreloader, and MeshLibrary still follow their stock loose binding.
 
-## Decision (owner, 2026-07-09)
+## Decision (owner, 2026-07-15)
 
-Selection-driven bottom editors stay in the **full-width global bottom panel** — they are not
-per-pane and not "traveling chrome." Rationale: the animation timeline (and tilemap palette,
-theme editor, …) need horizontal space; a per-pane drawer gets pane-width minus the ~400px
-dock accordion, which is unusable in splits. The trade-off (a global surface showing state
-for one specific pane) is solved by hardening the *binding* instead of moving the *host*.
+Contextual editors for normal 2D/3D scene documents live in a **document-owned bottom drawer**,
+not in the full-width global bottom panel. The right Scene Tree / Inspector accordion remains full
+height; the drawer is nested under only the viewport side of the scene split. This makes ownership
+unambiguous when multiple panes are visible and naturally moves viewport-bottom overlays, including
+the floating Camera Preview, above an open drawer.
 
-## The binding contract
+Each available contextual editor gets a compact icon toggle at the right side of that document's
+scene toolbar. The toggle remains visible and pressed while its drawer is open, so the same target
+both opens and closes it. The drawer header also has an explicit close button. This avoids a second
+floating button row and leaves one discoverable, stable control in both states.
 
-A selection-driven bottom dock is correct under the workspace model when it satisfies all of:
+Animation is the first implementation of the contract; the Level Editor's Materials browser is the
+second. The generic host is deliberately capable of holding more contextual editors, but shows only
+one drawer at a time.
 
-1. **No reliance on `node_removed` for scene switches.** Stock Godot unbound the edited
-   object when the previous scene left the tree; resident documents never leave the tree.
-   The dock must detect a binding that points outside `EditorNode::get_edited_scene()` and
-   unbind explicitly. Trigger: the `EditorNode::scene_changed` signal (fires at the end of
-   every document switch) and/or `NOTIFICATION_VISIBILITY_CHANGED`.
-   *Animation:* `AnimationPlayerEditor::_find_player()` → `_unbind_player()`.
-   *AnimationTree:* `AnimationTreeEditorPlugin::edited_scene_changed()` → `_unbind_tree()`.
+## Document drawer contract
 
-2. **Per-scene state round-trip via plugin `get_state()`/`set_state()`.** The machinery
-   already runs on every switch (`EditorNode::_set_current_scene_nocheck` →
-   `save_edited_scene_state`/`restore_edited_scene_state`). Include a `"dock_open"` bool so
-   each scene remembers whether the dock was open (apply it *before* any visibility
-   early-out so a scene that left it closed also closes it).
-   *Animation:* `AnimationPlayerEditor::get_state()/set_state()`; `EditorDock::is_dock_open()`.
-   *AnimationTree:* `AnimationTreeEditor::get_state()/set_state()`.
+1. **The view owns the host.** `DocumentView` creates one `DocumentBottomDockHost` for a normal
+   2D/3D scene. The host's split contains the concrete 2D/3D surface and one drawer stack. The outer
+   scene split still owns the right accordion as its other child, so opening a drawer cannot shorten
+   or cover that column.
 
-3. **Boot restore gets a switch tail.** During session restore every `_set_current_scene`
-   skips `_set_main_scene_state` (gated on `restoring_scenes`), so `scene_changed` /
-   `notify_edited_scene_changed` never fired for the boot scene. Fixed centrally:
-   `EditorNode::_notify_restored_scene_current()` (deferred from
-   `_load_open_scenes_from_config`) fires the notification tail once after restore — new
-   docks get this for free, but must bind off `scene_changed`, not off assumptions about
-   load order.
+2. **Toggles are document-local chrome.** The host adds a named toggle to that view's
+   `toolbar_host`. The shared 2D/3D toolbar may travel in and out at child index zero; document
+   toggles remain with their view. Every drawer also exposes a close button in its header.
 
-4. **Bound-scene indicator.** A global panel over multiple visible panes is ambiguous;
-   show the owning scene's short name in the dock's toolbar. Derive it from the bound
-   node's owning edited scene (scan `EditorData` edited scenes for the ancestor root),
-   NOT from `get_edited_scene()` — a pinned binding may belong to a non-active scene.
-   *Animation / AnimationTree:* `_update_bound_scene_label()`.
+3. **One contextual drawer is open per view.** Opening a different registered drawer closes the
+   previous one and synchronizes both toggle states. Hidden drawers remain alive so editor state is
+   retained without reconstructing their controls.
 
-5. **Pin-style overrides survive switches deliberately.** If the dock supports pinning a
-   binding, the stale-binding unbind (contract #1) must skip pinned bindings; the indicator
-   (#4) then tells the user they're looking at another scene's object.
+4. **State belongs to the document.** Open/closed state and editor-specific state are mirrored into
+   `EditorDocument::contextual_editor_states`. The normal `EditorPlugin::get_state()` /
+   `set_state()` path still round-trips the same dictionary for scene persistence, including when
+   restore state arrives before the `DocumentView` has been constructed.
+
+5. **Services are global; views are not.** A contextual editor plugin remains the global services
+   and routing object, but mints one editor view for its owning `EditorDocument`. The old global dock
+   is retired and disabled after it supplies legacy command registration/fallback services.
+
+6. **All context is explicit.** A document editor binds to that document's root, selection,
+   selection history, and paired Inspector. Child animation controls resolve their owning
+   `AnimationPlayerEditor` through their node ancestry rather than reading a process-global editor
+   singleton. This is required when two scene panes and two timelines are simultaneously visible.
+
+7. **Focus changes routing, not ownership.** `DocumentView::set_context_active()` selects the editor
+   instance that plugin callbacks and 3D key requests should use. Deactivation snapshots state.
+   `NOTIFICATION_PREDELETE` unregisters the view before Node frees its children.
+
+## Animation implementation notes
+
+- Selecting an `AnimationPlayer`, `AnimationTree`, or `AnimationMixer` routes editing and the open
+  request to the active document's Animation drawer.
+- Dummy `AnimationPlayer` instances used for `AnimationMixer` editing are owned per drawer, including
+  their signal connections and cleanup.
+- Track, bezier, and library editors resolve the owning player, scene root, selection, and Inspector
+  history from their ancestor drawer. Undo actions therefore retain the correct concrete editor even
+  after focus moves to another pane.
+- The drawer toggle is named `AnimationBottomDockToggle`; the body is named
+  `AnimationBottomDockPanel`. These stable names are used by the workspace smoke coverage.
+
+## Level Materials implementation notes
+
+- `LevelEditor` owns the project-shared material index, scanner, blockout registry, and thumbnail
+  queue/cache. It mints one `MaterialBrowserDock` view for each live Level `DocumentView`; the class
+  name is retained only for script/smoke compatibility and it is no longer registered globally.
+- Active material/binding, captured Lift mapping, and hotspot override live on `LevelDocument`.
+  Filter/search/zoom/scroll, drawer open state, and contextual-panel expansion round-trip through
+  `EditorDocument::contextual_editor_states`.
+- The drawer toggle/body are `MaterialsBottomDockToggle` and `MaterialsBottomDockPanel`. `M` toggles
+  the active Level document. User opens focus search; programmatic reveals do not steal focus.
+- Gallery cells default to 108 logical px, reflow column-major into a horizontal shelf, and
+  virtualize visible columns plus one overscan column. Selection commits on release so a resource
+  drag never changes the active material as a side effect.
+- Face/object UV commands live in the Level view's fixed-width, selection-aware contextual panel.
+  The gallery contains material discovery/selection only.
+
+## Remaining rollout
+
+AnimationTree is the next natural migration because it shares the animation selection machinery.
+After that, TileMap / TileSet, Theme, SpriteFrames, Polygon2D, ResourcePreloader, and MeshLibrary can
+follow the same factory, explicit-context, state, and release pattern. Until each moves, its hardened
+global binding remains a transitional behavior rather than the target UX.
 
 ## Known limitation
 
-Onion skinning captures viewport state through the `Node3DEditor`/`CanvasItemEditor`
-singleton main views, which are **unbound** for pane-hosted scenes — expected broken under
-the workspace model. Confirmed from the implemented routing: pane views render through their own
-document-bound `SubViewport`s, pane 2D views do not forward the force-overlay, and
-`EditorPlugin::update_overlays()` refreshes only the singleton main views. Both onion controls
-are disabled with an explanatory tooltip until capture is made document-view-aware.
+Onion skinning captures viewport state through the `Node3DEditor` / `CanvasItemEditor` singleton
+main views, which are unbound for pane-hosted scenes. Pane views render through their own
+document-bound `SubViewport`s, and the pane 2D views do not forward the force-overlay. Both onion
+controls therefore remain disabled with an explanatory tooltip until capture is made
+document-view-aware.

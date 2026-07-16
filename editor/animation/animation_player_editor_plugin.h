@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/templates/hash_map.h"
 #include "editor/animation/animation_library_editor.h"
 #include "editor/animation/animation_track_editor.h"
 #include "editor/docks/editor_dock.h"
@@ -41,7 +42,9 @@
 #include "scene/resources/material.h"
 
 class AnimationPlayerEditorPlugin;
+class EditorDocument;
 class ImageTexture;
+class InspectorDock;
 
 class AnimationPlayerEditor : public EditorDock {
 	GDCLASS(AnimationPlayerEditor, EditorDock);
@@ -49,10 +52,17 @@ class AnimationPlayerEditor : public EditorDock {
 	friend AnimationPlayerEditorPlugin;
 
 	AnimationPlayerEditorPlugin *plugin = nullptr;
+	EditorDocument *bound_document = nullptr;
+	InspectorDock *bound_inspector = nullptr;
 	AnimationMixer *original_node = nullptr; // For pinned mark in SceneTree.
 	AnimationPlayer *player = nullptr; // For AnimationPlayerEditor, could be dummy.
+	AnimationPlayer *dummy_player = nullptr;
 	ObjectID cached_root_node_id;
+	ObjectID last_mixer;
 	bool is_dummy = false;
+	bool is_global_instance = true;
+	bool embedded_open = false;
+	bool context_active = false;
 
 	enum {
 		TOOL_NEW_ANIM,
@@ -100,7 +110,6 @@ class AnimationPlayerEditor : public EditorDock {
 	Button *onion_toggle = nullptr;
 	MenuButton *onion_skinning = nullptr;
 	Button *pin = nullptr;
-	Label *bound_scene_label = nullptr;
 	SpinBox *frame = nullptr;
 	LineEdit *scale = nullptr;
 	LineEdit *name = nullptr;
@@ -138,6 +147,7 @@ class AnimationPlayerEditor : public EditorDock {
 
 	AnimationTrackEditor *track_editor = nullptr;
 	static AnimationPlayerEditor *singleton;
+	static AnimationPlayerEditor *active_instance;
 
 	// Onion skinning.
 	struct {
@@ -209,7 +219,6 @@ class AnimationPlayerEditor : public EditorDock {
 	void _current_animation_changed(const StringName &p_name);
 	void _update_animation();
 	void _update_player();
-	void _update_bound_scene_label();
 	void _set_controls_disabled(bool p_disabled);
 	void _update_animation_list_icons();
 	void _update_name_dialog_library_dropdown();
@@ -245,6 +254,12 @@ class AnimationPlayerEditor : public EditorDock {
 	String _get_current() const;
 
 	void _ensure_dummy_player();
+	void _edit_object(Object *p_object);
+	void _clear_dummy_player();
+	void _update_dummy_player(AnimationMixer *p_mixer);
+	Node *_get_edited_scene() const;
+	EditorSelection *_get_editor_selection() const;
+	EditorSelectionHistory *_get_editor_selection_history() const;
 
 	~AnimationPlayerEditor();
 
@@ -262,8 +277,12 @@ public:
 	AnimationPlayer *get_player() const;
 	AnimationMixer *fetch_mixer_for_library() const;
 	Node *get_cached_root_node() const;
+	Node *get_edited_scene_root() const { return _get_edited_scene(); }
+	EditorSelection *get_editor_selection() const { return _get_editor_selection(); }
+	EditorSelectionHistory *get_editor_selection_history() const { return _get_editor_selection_history(); }
 
-	static AnimationPlayerEditor *get_singleton() { return singleton; }
+	static AnimationPlayerEditor *get_singleton() { return active_instance ? active_instance : singleton; }
+	static AnimationPlayerEditor *get_for_node(const Object *p_object);
 
 	bool is_pinned() const { return pin->is_pressed(); }
 	void unpin() {
@@ -280,8 +299,17 @@ public:
 
 	void edit(AnimationMixer *p_node, AnimationPlayer *p_player, bool p_is_dummy);
 	void forward_force_draw_over_viewport(Control *p_overlay);
+	void set_bound_document(EditorDocument *p_document) { bound_document = p_document; }
+	EditorDocument *get_bound_document() const { return bound_document; }
+	void set_bound_inspector(InspectorDock *p_inspector) { bound_inspector = p_inspector; }
+	InspectorDock *get_bound_inspector() const { return bound_inspector; }
+	void set_context_active(bool p_active);
+	void request_open();
+	void request_toggle();
+	void set_embedded_open(bool p_open);
+	bool is_embedded_open() const { return embedded_open; }
 
-	AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plugin);
+	AnimationPlayerEditor(AnimationPlayerEditorPlugin *p_plugin, bool p_is_global = true);
 };
 
 class AnimationPlayerEditorPlugin : public EditorPlugin {
@@ -289,33 +317,37 @@ class AnimationPlayerEditorPlugin : public EditorPlugin {
 
 	friend AnimationPlayerEditor;
 
+	static AnimationPlayerEditorPlugin *singleton;
 	AnimationPlayerEditor *anim_editor = nullptr;
-	AnimationPlayer *player = nullptr;
-	AnimationPlayer *dummy_player = nullptr;
-	ObjectID last_mixer;
+	HashMap<EditorDocument *, AnimationPlayerEditor *> document_editors;
 
-	void _update_dummy_player(AnimationMixer *p_mixer);
-	void _clear_dummy_player();
+	AnimationPlayerEditor *_get_editor_for_active_document() const;
+	void _bind_editor_signals(AnimationPlayerEditor *p_editor, InspectorDock *p_inspector);
 
 protected:
 	void _notification(int p_what);
+	virtual void shortcut_input(const Ref<InputEvent> &p_event) override;
 
-	void _property_keyed(const String &p_keyed, const Variant &p_value, bool p_advance);
+	void _property_keyed(const String &p_keyed, const Variant &p_value, bool p_advance, AnimationPlayerEditor *p_editor);
 	void _transform_3d_key_request(Object *sp, const String &p_sub, const Transform3D &p_key);
-	void _update_keying();
+	void _update_keying(AnimationPlayerEditor *p_editor);
 
 public:
-	virtual Dictionary get_state() const override { return anim_editor->get_state(); }
-	virtual void set_state(const Dictionary &p_state) override { anim_editor->set_state(p_state); }
-	virtual void clear() override { anim_editor->clear(); }
+	static AnimationPlayerEditorPlugin *get_singleton() { return singleton; }
+	virtual Dictionary get_state() const override;
+	virtual void set_state(const Dictionary &p_state) override;
+	virtual void clear() override;
 
 	virtual String get_plugin_name() const override { return "Anim"; }
 	virtual void edit(Object *p_object) override;
 	virtual bool handles(Object *p_object) const override;
 	virtual void make_visible(bool p_visible) override;
 
-	virtual void forward_canvas_force_draw_over_viewport(Control *p_overlay) override { anim_editor->forward_force_draw_over_viewport(p_overlay); }
-	virtual void forward_3d_force_draw_over_viewport(Control *p_overlay) override { anim_editor->forward_force_draw_over_viewport(p_overlay); }
+	virtual void forward_canvas_force_draw_over_viewport(Control *p_overlay) override;
+	virtual void forward_3d_force_draw_over_viewport(Control *p_overlay) override;
+
+	AnimationPlayerEditor *create_editor_view(EditorDocument *p_document, InspectorDock *p_inspector);
+	void release_editor_view(AnimationPlayerEditor *p_editor);
 
 	AnimationPlayerEditorPlugin();
 	~AnimationPlayerEditorPlugin();

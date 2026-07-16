@@ -23,10 +23,13 @@
 #include "core/io/resource.h" // Ref<Resource> by-value getter on ScriptDocument.
 #include "core/object/object_id.h" // Park-holder handle on ScreenHostDocument.
 #include "core/string/ustring.h"
+#include "core/templates/hash_map.h"
 #include "core/templates/rid.h"
+#include "core/variant/array.h"
 #include "core/variant/dictionary.h"
 #include "editor/editor_data.h" // EditorSelectionHistory (value member) + EditorSelection (fwd).
 #include "scene/resources/3d/world_3d.h" // Ref<World3D> by-value getters need the complete type.
+#include "scene/resources/material.h" // LevelDocument owns its active material interaction state.
 #include "scene/resources/world_2d.h" // Ref<World2D> by-value getters need the complete type.
 
 class Control;
@@ -62,6 +65,7 @@ public:
 		TYPE_SCREEN_HOST, // G2 S5.5: THE one screen-host document (seam #5). Append-only.
 		TYPE_SHADER, // G-Shader: a Shader / ShaderInclude / VisualShader document. Append-only.
 		TYPE_LEVEL, // G-Level LE0: a scene opened in the level-editor workspace. Append-only.
+		TYPE_HOTSPOT_ATLAS, // G-Level WP21: HotspotAtlas resource patch-editor tab. Append-only.
 	};
 
 protected:
@@ -76,6 +80,10 @@ protected:
 	uint64_t time_opened = 0;
 	String path;
 	bool dirty = false; // RESERVED: unsaved-changes flag (not yet wired).
+	// Document-owned state for contextual editor surfaces (for example the Animation drawer).
+	// Editor plugins mirror this through their normal per-scene get_state()/set_state() contract,
+	// while DocumentView can consume it even when the plugin state restores before the view exists.
+	HashMap<StringName, Dictionary> contextual_editor_states;
 
 public:
 	Type get_type() const { return type; }
@@ -113,6 +121,12 @@ public:
 
 	bool is_dirty() const { return dirty; }
 	void set_dirty(bool p_dirty) { dirty = p_dirty; }
+
+	void set_contextual_editor_state(const StringName &p_editor, const Dictionary &p_state) { contextual_editor_states[p_editor] = p_state; }
+	Dictionary get_contextual_editor_state(const StringName &p_editor) const {
+		const Dictionary *state = contextual_editor_states.getptr(p_editor);
+		return state ? *state : Dictionary();
+	}
 
 	// World accessors — default to "no world" (a script/resource document has
 	// none). SceneDocument overrides these; consumers never cast.
@@ -191,9 +205,25 @@ public:
 // scene-root ownership, workspace-tab routing, and scene docks all stay identical.
 class LevelDocument : public SceneDocument {
 	SelectionModel *selection_model = nullptr;
+	// WP22: semantic material interaction state belongs to the Level document,
+	// never to the project-wide LevelEditor service. This lets two visible Level
+	// documents keep independent material/UV contexts even while one is focused.
+	Ref<Material> active_material;
+	String active_material_path;
+	String active_material_binding_path;
+	Dictionary captured_mapping;
+	int hotspot_mapping_mode_override = -1;
+	// WP21: decision diagnostics from the last committed hotspot fit. This is
+	// editor-session/document state only; it is never serialized into the scene.
+	Array last_hotspot_fit_diagnostics;
+
+	friend class LevelEditor;
 
 public:
 	SelectionModel *get_selection_model() const { return selection_model; }
+	void set_last_hotspot_fit_diagnostics(const Array &p_diagnostics) { last_hotspot_fit_diagnostics = p_diagnostics; }
+	Array get_last_hotspot_fit_diagnostics() const { return last_hotspot_fit_diagnostics; }
+	void clear_last_hotspot_fit_diagnostics() { last_hotspot_fit_diagnostics.clear(); }
 	virtual String get_title() const override;
 
 	LevelDocument();
@@ -221,6 +251,18 @@ public:
 
 	ResourceDocument() { type = TYPE_RESOURCE; }
 	virtual ~ResourceDocument() {}
+};
+
+// G-Level WP21: a HotspotAtlas is still resource document state, but its
+// append-only type discriminator lets DocumentView route it through the
+// LevelEditor factory instead of the generic Inspector surface. This mirrors
+// ShaderDocument while retaining ResourceDocument's exact Ref/path/history.
+class HotspotAtlasDocument : public ResourceDocument {
+public:
+	virtual String get_title() const override { return ResourceDocument::get_title() + " [Hotspot]"; }
+
+	HotspotAtlasDocument() { type = TYPE_HOTSPOT_ATLAS; }
+	virtual ~HotspotAtlasDocument() {}
 };
 
 // G2 S3: a script (or text) document opened as a workspace tab. No render world — the view

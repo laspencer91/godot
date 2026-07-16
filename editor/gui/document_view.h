@@ -65,6 +65,10 @@ class DocumentView : public MarginContainer {
 	// The editor surface rendering the document (a Node3DEditorView in v1). A child
 	// Control, so the scene tree frees it with this node.
 	Control *editor_surface = nullptr;
+	// The concrete per-document editor minted by the services singleton. For scene documents,
+	// editor_surface becomes the outer viewport/right-dock composite while this keeps addressing
+	// the actual 2D/3D surface for lifecycle and context routing.
+	Control *document_surface = nullptr;
 
 	// G2 D7a: for a scene document, its own Scene Tree dock embedded to the left of the surface,
 	// bound to this document. Null for non-scene (script/help/resource) views. bound_scene_document
@@ -78,7 +82,12 @@ class DocumentView : public MarginContainer {
 	EditorDocument *bound_scene_document = nullptr;
 	// G2 M7.2a: the slot above this scene pane's viewport where the shared 2D/3D toolbar mounts while
 	// this pane is focused. Null for non-scene views.
-	Control *toolbar_host = nullptr;
+	HBoxContainer *toolbar_host = nullptr;
+	DocumentBottomDockHost *bottom_dock_host = nullptr;
+	AnimationPlayerEditor *animation_editor = nullptr;
+	MaterialBrowserDock *material_browser = nullptr;
+	Label *inspector_target_label = nullptr;
+	Button *inspector_lock_button = nullptr;
 	bool context_active = false;
 
 	void _bound_selection_changed();
@@ -87,8 +96,17 @@ class DocumentView : public MarginContainer {
 	// header + leading icon), initial fold state, the fold→expand-flag binding — and add it to p_column.
 	// _on_section_folded keeps expanded sections sharing the column while collapsed ones shrink to their
 	// header, so folding one frees space for the rest.
-	void _add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded);
+	FoldableContainer *_add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded);
 	void _on_section_folded(bool p_folded, FoldableContainer *p_section);
+	void _inspector_lock_toggled(bool p_locked);
+	void _update_inspector_header();
+	void _document_bottom_dock_toggled(StringName p_id, bool p_open);
+	void _document_bottom_dock_user_toggled(StringName p_id, bool p_open);
+	void _animation_drawer_visibility_requested(bool p_open);
+	void _materials_drawer_requested(int p_request, bool p_focus_search);
+	void _store_material_drawer_state();
+	void _store_level_context_state();
+	void _store_animation_drawer_state();
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The
 	// ScriptEditor mounts its menu strip / find bar here while this view's tab is current.

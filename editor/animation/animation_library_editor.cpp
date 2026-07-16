@@ -37,6 +37,7 @@
 #include "core/string/ustring.h"
 #include "core/templates/vector.h"
 #include "core/variant/variant.h"
+#include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
@@ -179,7 +180,7 @@ void AnimationLibraryEditor::_file_popup_selected(int p_id) {
 					int srpos = al_path.find("::");
 					if (srpos != -1) {
 						String base = al_path.substr(0, srpos);
-						if (!get_tree()->get_edited_scene_root() || get_tree()->get_edited_scene_root()->get_scene_file_path() != base) {
+						if (!AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root() || AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root()->get_scene_file_path() != base) {
 							error_dialog->set_text(TTR("This animation library can't be saved because it does not belong to the edited scene. Make it unique first."));
 							error_dialog->popup_centered();
 							return;
@@ -257,7 +258,7 @@ void AnimationLibraryEditor::_file_popup_selected(int p_id) {
 					int srpos = anim_path.find("::");
 					if (srpos != -1) {
 						String base = anim_path.substr(0, srpos);
-						if (!get_tree()->get_edited_scene_root() || get_tree()->get_edited_scene_root()->get_scene_file_path() != base) {
+						if (!AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root() || AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root()->get_scene_file_path() != base) {
 							error_dialog->set_text(TTR("This animation can't be saved because it does not belong to the edited scene. Make it unique first."));
 							error_dialog->popup_centered();
 							return;
@@ -711,7 +712,7 @@ void AnimationLibraryEditor::update_tree() {
 			if (srpos != -1) {
 				String base = al_path.substr(0, srpos);
 				if (ResourceLoader::get_resource_type(base) == "PackedScene") {
-					if (!get_tree()->get_edited_scene_root() || get_tree()->get_edited_scene_root()->get_scene_file_path() != base) {
+					if (!AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root() || AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root()->get_scene_file_path() != base) {
 						animation_library_is_foreign = true;
 						libitem->set_text(1, TTR("[foreign]"));
 					}
@@ -763,7 +764,7 @@ void AnimationLibraryEditor::update_tree() {
 				if (srpos != -1) {
 					String base = anim_path.substr(0, srpos);
 					if (ResourceLoader::get_resource_type(base) == "PackedScene") {
-						if (!get_tree()->get_edited_scene_root() || get_tree()->get_edited_scene_root()->get_scene_file_path() != base) {
+						if (!AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root() || AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root()->get_scene_file_path() != base) {
 							anitem->set_text(1, TTR("[foreign]"));
 						}
 					} else {
@@ -806,7 +807,7 @@ void AnimationLibraryEditor::_save_mixer_lib_folding(TreeItem *p_item) {
 	}
 
 	// Get unique identifier for this scene+mixer combination.
-	const String md = (mixer->get_tree()->get_edited_scene_root()->get_scene_file_path() + String(mixer->get_path())).md5_text();
+	const String md = (AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root()->get_scene_file_path() + String(mixer->get_path())).md5_text();
 
 	Vector<String> collapsed_libs;
 	if (config->has_section_key(md, "folding")) {
@@ -860,7 +861,7 @@ Vector<String> AnimationLibraryEditor::_load_mixer_libs_folding() {
 	ERR_FAIL_COND_V_MSG(err != OK && err != ERR_FILE_NOT_FOUND, Vector<String>(), "Error loading lib_folding.cfg: " + itos(err));
 
 	// Get unique identifier for this scene+mixer combination.
-	const String md = (mixer->get_tree()->get_edited_scene_root()->get_scene_file_path() + String(mixer->get_path())).md5_text();
+	const String md = (AnimationPlayerEditor::get_for_node(this)->get_edited_scene_root()->get_scene_file_path() + String(mixer->get_path())).md5_text();
 
 	if (!config->has_section(md)) {
 		// The scene/mixer combination is no longer valid and we'll try to recover.

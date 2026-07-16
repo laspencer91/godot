@@ -341,7 +341,7 @@ void AnimationBezierTrackEdit::_notification(int p_what) {
 					double end_time = animation->get_marker_time(end_marker);
 
 					// When AnimationPlayer is playing, don't move the preview rect, so it still indicates the playback section.
-					AnimationPlayer *player = AnimationPlayerEditor::get_singleton()->get_player();
+					AnimationPlayer *player = AnimationPlayerEditor::get_for_node(this)->get_player();
 					if (editor->is_marker_moving_selection() && !(player && player->is_playing())) {
 						start_time += editor->get_marker_moving_selection_offset();
 						end_time += editor->get_marker_moving_selection_offset();
@@ -882,7 +882,7 @@ bool AnimationBezierTrackEdit::_is_track_displayed(int p_track_index) {
 			if (!node) {
 				return false; // No node, no filter.
 			}
-			if (!EditorNode::get_singleton()->get_editor_selection()->is_selected(node)) {
+			if (!AnimationPlayerEditor::get_for_node(this)->get_editor_selection()->is_selected(node)) {
 				return false; // Skip track due to not selected.
 			}
 		}
@@ -1019,7 +1019,7 @@ void AnimationBezierTrackEdit::set_filtered(bool p_filtered) {
 	if (is_filtered) {
 		if (root && root->has_node(base_path)) {
 			Node *node = root->get_node(base_path);
-			if (!node || !EditorNode::get_singleton()->get_editor_selection()->is_selected(node)) {
+			if (!node || !AnimationPlayerEditor::get_for_node(this)->get_editor_selection()->is_selected(node)) {
 				for (int i = 0; i < animation->get_track_count(); ++i) {
 					if (animation->track_get_type(i) != Animation::TrackType::TYPE_BEZIER) {
 						continue;
@@ -1031,7 +1031,7 @@ void AnimationBezierTrackEdit::set_filtered(bool p_filtered) {
 						if (!node) {
 							continue; // No node, no filter.
 						}
-						if (!EditorNode::get_singleton()->get_editor_selection()->is_selected(node)) {
+						if (!AnimationPlayerEditor::get_for_node(this)->get_editor_selection()->is_selected(node)) {
 							continue; // Skip track due to not selected.
 						}
 
@@ -1194,7 +1194,7 @@ void AnimationBezierTrackEdit::_change_selected_keys_handle_mode(Animation::Hand
 		undo_redo->add_undo_method(animation.ptr(), "bezier_track_set_key_out_handle", track_key_pair.first, track_key_pair.second, animation->bezier_track_get_key_out_handle(track_key_pair.first, track_key_pair.second));
 		undo_redo->add_do_method(editor, "_bezier_track_set_key_handle_mode", animation.ptr(), track_key_pair.first, track_key_pair.second, p_mode, p_auto ? Animation::HANDLE_SET_MODE_AUTO : Animation::HANDLE_SET_MODE_RESET);
 	}
-	AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+	AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 	if (ape) {
 		undo_redo->add_do_method(ape, "_animation_update_key_frame");
 		undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -1961,7 +1961,7 @@ void AnimationBezierTrackEdit::gui_input(const Ref<InputEvent> &p_event) {
 					i++;
 				}
 
-				AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+				AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 				if (ape) {
 					undo_redo->add_do_method(ape, "_animation_update_key_frame");
 					undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2098,7 +2098,7 @@ void AnimationBezierTrackEdit::gui_input(const Ref<InputEvent> &p_event) {
 				i++;
 			}
 
-			AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+			AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 			if (ape) {
 				undo_redo->add_do_method(ape, "_animation_update_key_frame");
 				undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2301,7 +2301,7 @@ void AnimationBezierTrackEdit::gui_input(const Ref<InputEvent> &p_event) {
 				undo_redo->add_do_method(animation.ptr(), "bezier_track_set_key_out_handle", moving_handle_track, moving_handle_key, moving_handle_right, ratio);
 				undo_redo->add_undo_method(animation.ptr(), "bezier_track_set_key_out_handle", moving_handle_track, moving_handle_key, animation->bezier_track_get_key_out_handle(moving_handle_track, moving_handle_key), ratio);
 			}
-			AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+			AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 			if (ape) {
 				undo_redo->add_do_method(ape, "_animation_update_key_frame");
 				undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2421,7 +2421,7 @@ void AnimationBezierTrackEdit::_menu_selected(int p_index) {
 				undo_redo->add_do_method(editor, "_bezier_track_set_key_handle_mode_at_time", animation.ptr(), selected_track, time, handle_mode, Animation::HANDLE_SET_MODE_AUTO);
 				undo_redo->add_undo_method(this, "_clear_selection_for_anim", animation);
 				undo_redo->add_undo_method(animation.ptr(), "track_remove_key_at_time", selected_track, time);
-				AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+				AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 				if (ape) {
 					undo_redo->add_do_method(ape, "_animation_update_key_frame");
 					undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2526,7 +2526,7 @@ void AnimationBezierTrackEdit::duplicate_selected_keys(real_t p_ofs, bool p_ofs_
 		i++;
 	}
 
-	AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+	AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 	if (ape) {
 		undo_redo->add_do_method(ape, "_animation_update_key_frame");
 		undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2581,7 +2581,7 @@ void AnimationBezierTrackEdit::copy_selected_keys(bool p_cut) {
 			i++;
 		}
 
-		AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+		AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 		if (ape) {
 			undo_redo->add_do_method(ape, "_animation_update_key_frame");
 			undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2667,7 +2667,7 @@ void AnimationBezierTrackEdit::paste_keys(real_t p_ofs, bool p_ofs_valid) {
 			i++;
 		}
 
-		AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+		AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 		if (ape) {
 			undo_redo->add_do_method(ape, "_animation_update_key_frame");
 			undo_redo->add_undo_method(ape, "_animation_update_key_frame");
@@ -2690,7 +2690,7 @@ void AnimationBezierTrackEdit::delete_selection() {
 		}
 		undo_redo->add_do_method(this, "_clear_selection_for_anim", animation);
 		undo_redo->add_undo_method(this, "_clear_selection_for_anim", animation);
-		AnimationPlayerEditor *ape = AnimationPlayerEditor::get_singleton();
+		AnimationPlayerEditor *ape = AnimationPlayerEditor::get_for_node(this);
 		if (ape) {
 			undo_redo->add_do_method(ape, "_animation_update_key_frame");
 			undo_redo->add_undo_method(ape, "_animation_update_key_frame");

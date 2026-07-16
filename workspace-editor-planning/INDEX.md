@@ -16,7 +16,7 @@ This package reconciles the per-goal plans into one buildable sequence. Each goa
 | **G4** | Bottom drawer slideout for file exploration with drag-drop into panes | M | [G4-bottom-drawer.md](./G4-bottom-drawer.md) |
 | **G5** | Faster scene/resource open and editor startup (investigation + optimization) | M–L | [G5-faster-load.md](./G5-faster-load.md) |
 | **G6** | Drag-a-tab-to-split compass overlay (landed) | M | [G6-drag-to-split.md](./G6-drag-to-split.md) |
-| **G7** | Contextual bottom docks: focus-bound binding contract (Animation + AnimationTree migrated) | M | [G7-contextual-bottom-docks.md](./G7-contextual-bottom-docks.md) |
+| **G7** | Document contextual drawers (Animation + Level Materials migrated; AnimationTree binding hardened) | M | [G7-contextual-bottom-docks.md](./G7-contextual-bottom-docks.md) |
 
 ## Cross-cutting references
 

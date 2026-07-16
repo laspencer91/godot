@@ -178,8 +178,11 @@ run_case "context_routes" -e
 
 # Pane SceneTree selection timing: a click must commit its node to the paired Inspector on release,
 # while the same press becoming a drag must preserve the previously inspected object as the property
-# drop target. The marker makes sure the synthetic GUI sequence ran to completion.
+# drop target. This case does not depend on the preceding route case's restored split, and native-
+# window GUI input is not addressable through an inherited compact layout under the headless driver,
+# so isolate it with the editor's clean single-pane default. The marker proves completion.
 cp "$SMOKE_DIR/scene_tree_drag_project.godot" "$WORK/project.godot"
+rm -f "$WORK/.godot/editor/editor_layout.cfg"
 run_case "scene_tree_drag" -e "res://test_3d.tscn"
 if grep -q 'SCENE_TREE_DRAG_SELECTION_OK' "$WORK/scene_tree_drag.log"; then
 	echo "  PASS  scene_tree_drag_assertions (press/release/drag states verified)"
@@ -268,7 +271,10 @@ cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$BLOCK_WORK/"
 cp "$LEVEL_TESTBED/block_tool_smoke_project.godot" "$BLOCK_WORK/project.godot"
 HOST_BLOCK_WORK="$(host_path "$BLOCK_WORK")"
 BLOCK_LOG="$WORK/block_tool_smoke.log"
-"$BIN" "${RUN_ARGS[@]}" --path "$HOST_BLOCK_WORK" -e --quit-after "$QUIT_AFTER" >"$BLOCK_LOG" 2>&1
+# WP18's additive surface/hover/state regressions need more than the suite-wide
+# 200-frame budget on slower editor starts.
+BLOCK_QUIT_AFTER="${BLOCK_QUIT_AFTER:-400}"
+"$BIN" "${RUN_ARGS[@]}" --path "$HOST_BLOCK_WORK" -e --quit-after "$BLOCK_QUIT_AFTER" >"$BLOCK_LOG" 2>&1
 block_code=$?
 block_errs=$(error_count "$BLOCK_LOG")
 if [[ $block_code -eq 0 && $block_errs -eq 0 ]]; then
@@ -296,6 +302,7 @@ cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$SELECTION_WORK/"
 cp "$LEVEL_TESTBED/selection_smoke_project.godot" "$SELECTION_WORK/project.godot"
 HOST_SELECTION_WORK="$(host_path "$SELECTION_WORK")"
 SELECTION_LOG="$WORK/selection_smoke.log"
+SELECTION_QUIT_AFTER="${SELECTION_QUIT_AFTER:-400}"
 SELECTION_APPDATA="$SELECTION_WORK/appdata"
 SELECTION_LOCALAPPDATA="$SELECTION_WORK/localappdata"
 mkdir -p "$SELECTION_APPDATA/Godot" "$SELECTION_LOCALAPPDATA"
@@ -303,7 +310,7 @@ cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$SELECTION_APPDATA/Godot/edi
 HOST_SELECTION_APPDATA="$(host_path "$SELECTION_APPDATA")"
 HOST_SELECTION_LOCALAPPDATA="$(host_path "$SELECTION_LOCALAPPDATA")"
 APPDATA="$HOST_SELECTION_APPDATA" LOCALAPPDATA="$HOST_SELECTION_LOCALAPPDATA" \
-	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_SELECTION_WORK" -e --quit-after "$QUIT_AFTER" >"$SELECTION_LOG" 2>&1
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_SELECTION_WORK" -e --quit-after "$SELECTION_QUIT_AFTER" >"$SELECTION_LOG" 2>&1
 selection_code=$?
 selection_errs=$(error_count "$SELECTION_LOG")
 if [[ $selection_code -eq 0 && $selection_errs -eq 0 ]]; then
@@ -337,8 +344,11 @@ mkdir -p "$TRANSFORM_APPDATA/Godot" "$TRANSFORM_LOCALAPPDATA"
 cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$TRANSFORM_APPDATA/Godot/editor_settings-4.8.tres"
 HOST_TRANSFORM_APPDATA="$(host_path "$TRANSFORM_APPDATA")"
 HOST_TRANSFORM_LOCALAPPDATA="$(host_path "$TRANSFORM_LOCALAPPDATA")"
+# WP12's gizmo section pushed the case past the 200-frame default (same budget
+# treatment as stale_reload above).
+TRANSFORM_QUIT_AFTER="${TRANSFORM_QUIT_AFTER:-400}"
 APPDATA="$HOST_TRANSFORM_APPDATA" LOCALAPPDATA="$HOST_TRANSFORM_LOCALAPPDATA" \
-	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_TRANSFORM_WORK" -e --quit-after "$QUIT_AFTER" >"$TRANSFORM_LOG" 2>&1
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_TRANSFORM_WORK" -e --quit-after "$TRANSFORM_QUIT_AFTER" >"$TRANSFORM_LOG" 2>&1
 transform_code=$?
 transform_errs=$(error_count "$TRANSFORM_LOG")
 if [[ $transform_code -eq 0 && $transform_errs -eq 0 ]]; then
@@ -352,6 +362,152 @@ if grep -q 'TRANSFORM_EDITOR_SMOKE_OK' "$TRANSFORM_LOG"; then
 	echo "  PASS  transform_smoke_assertions (snap/cancel/extrude/undo/selection verified)"
 else
 	echo "  FAIL  transform_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE2 material browser: metadata-only indexing, imported texture dimensions,
+# source/name/convention filters, hidden metadata persistence, active swatch agreement,
+# procedural/override blockout slots, and the real Shift+Alt digit input path.
+MATERIAL_WORK="$WORK/material_browser_smoke"
+mkdir -p "$MATERIAL_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$MATERIAL_WORK/"
+cp "$LEVEL_TESTBED/main_second.tscn" "$MATERIAL_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$MATERIAL_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$MATERIAL_WORK/"
+cp "$LEVEL_TESTBED/material_browser_smoke_project.godot" "$MATERIAL_WORK/project.godot"
+HOST_MATERIAL_WORK="$(host_path "$MATERIAL_WORK")"
+MATERIAL_LOG="$WORK/material_browser_smoke.log"
+MATERIAL_APPDATA="$MATERIAL_WORK/appdata"
+MATERIAL_LOCALAPPDATA="$MATERIAL_WORK/localappdata"
+mkdir -p "$MATERIAL_APPDATA/Godot" "$MATERIAL_LOCALAPPDATA"
+cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$MATERIAL_APPDATA/Godot/editor_settings-4.8.tres"
+HOST_MATERIAL_APPDATA="$(host_path "$MATERIAL_APPDATA")"
+HOST_MATERIAL_LOCALAPPDATA="$(host_path "$MATERIAL_LOCALAPPDATA")"
+MATERIAL_QUIT_AFTER="${MATERIAL_QUIT_AFTER:-400}"
+APPDATA="$HOST_MATERIAL_APPDATA" LOCALAPPDATA="$HOST_MATERIAL_LOCALAPPDATA" \
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_MATERIAL_WORK" -e --quit-after "$MATERIAL_QUIT_AFTER" >"$MATERIAL_LOG" 2>&1
+material_code=$?
+material_errs=$(error_count "$MATERIAL_LOG")
+if [[ $material_code -eq 0 && $material_errs -eq 0 ]]; then
+	echo "  PASS  material_browser_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  material_browser_smoke (exit $material_code, $material_errs error-class lines)"
+	error_lines "$MATERIAL_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'MATERIAL_BROWSER_SMOKE_OK' "$MATERIAL_LOG"; then
+	echo "  PASS  material_browser_smoke_assertions (index/scanner/filter/hide/active/blockout/quick-slot verified)"
+else
+	echo "  FAIL  material_browser_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE2 face texturing: the real pane-focused routes apply the active
+# material, Lift it back from a cursor pick, and execute one numpad Modify
+# Texture command with one-step document-local undo.
+FACE_TEXTURE_WORK="$WORK/face_texture_smoke"
+mkdir -p "$FACE_TEXTURE_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$FACE_TEXTURE_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$FACE_TEXTURE_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$FACE_TEXTURE_WORK/"
+cp "$LEVEL_TESTBED/face_texture_smoke_project.godot" "$FACE_TEXTURE_WORK/project.godot"
+HOST_FACE_TEXTURE_WORK="$(host_path "$FACE_TEXTURE_WORK")"
+FACE_TEXTURE_LOG="$WORK/face_texture_smoke.log"
+FACE_TEXTURE_APPDATA="$FACE_TEXTURE_WORK/appdata"
+FACE_TEXTURE_LOCALAPPDATA="$FACE_TEXTURE_WORK/localappdata"
+mkdir -p "$FACE_TEXTURE_APPDATA/Godot" "$FACE_TEXTURE_LOCALAPPDATA"
+cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$FACE_TEXTURE_APPDATA/Godot/editor_settings-4.8.tres"
+HOST_FACE_TEXTURE_APPDATA="$(host_path "$FACE_TEXTURE_APPDATA")"
+HOST_FACE_TEXTURE_LOCALAPPDATA="$(host_path "$FACE_TEXTURE_LOCALAPPDATA")"
+FACE_TEXTURE_QUIT_AFTER="${FACE_TEXTURE_QUIT_AFTER:-400}"
+APPDATA="$HOST_FACE_TEXTURE_APPDATA" LOCALAPPDATA="$HOST_FACE_TEXTURE_LOCALAPPDATA" \
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_FACE_TEXTURE_WORK" -e --quit-after "$FACE_TEXTURE_QUIT_AFTER" >"$FACE_TEXTURE_LOG" 2>&1
+face_texture_code=$?
+face_texture_errs=$(error_count "$FACE_TEXTURE_LOG")
+if [[ $face_texture_code -eq 0 && $face_texture_errs -eq 0 ]]; then
+	echo "  PASS  face_texture_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  face_texture_smoke (exit $face_texture_code, $face_texture_errs error-class lines)"
+	error_lines "$FACE_TEXTURE_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'FACE_TEXTURE_EDITOR_SMOKE_OK' "$FACE_TEXTURE_LOG"; then
+	echo "  PASS  face_texture_smoke_assertions (Apply/Lift/numpad/undo/panel verified)"
+else
+	echo "  FAIL  face_texture_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE2 Fast Texture: the pane-owned modal overlay drives the registered
+# working-copy session API, then verifies one-action accept, exact cancel/undo,
+# projected nudge composition, input-context restoration, and mode isolation.
+FAST_TEXTURE_WORK="$WORK/fast_texture_smoke"
+mkdir -p "$FAST_TEXTURE_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$FAST_TEXTURE_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$FAST_TEXTURE_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$FAST_TEXTURE_WORK/"
+cp "$LEVEL_TESTBED/fast_texture_smoke_project.godot" "$FAST_TEXTURE_WORK/project.godot"
+HOST_FAST_TEXTURE_WORK="$(host_path "$FAST_TEXTURE_WORK")"
+FAST_TEXTURE_LOG="$WORK/fast_texture_smoke.log"
+FAST_TEXTURE_APPDATA="$FAST_TEXTURE_WORK/appdata"
+FAST_TEXTURE_LOCALAPPDATA="$FAST_TEXTURE_WORK/localappdata"
+mkdir -p "$FAST_TEXTURE_APPDATA/Godot" "$FAST_TEXTURE_LOCALAPPDATA"
+cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$FAST_TEXTURE_APPDATA/Godot/editor_settings-4.8.tres"
+HOST_FAST_TEXTURE_APPDATA="$(host_path "$FAST_TEXTURE_APPDATA")"
+HOST_FAST_TEXTURE_LOCALAPPDATA="$(host_path "$FAST_TEXTURE_LOCALAPPDATA")"
+FAST_TEXTURE_QUIT_AFTER="${FAST_TEXTURE_QUIT_AFTER:-500}"
+APPDATA="$HOST_FAST_TEXTURE_APPDATA" LOCALAPPDATA="$HOST_FAST_TEXTURE_LOCALAPPDATA" \
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_FAST_TEXTURE_WORK" -e --quit-after "$FAST_TEXTURE_QUIT_AFTER" >"$FAST_TEXTURE_LOG" 2>&1
+fast_texture_code=$?
+fast_texture_errs=$(error_count "$FAST_TEXTURE_LOG")
+if [[ $fast_texture_code -eq 0 && $fast_texture_errs -eq 0 ]]; then
+	echo "  PASS  fast_texture_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  fast_texture_smoke (exit $fast_texture_code, $fast_texture_errs error-class lines)"
+	error_lines "$FAST_TEXTURE_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'FAST_TEXTURE_EDITOR_SMOKE_OK' "$FAST_TEXTURE_LOG"; then
+	echo "  PASS  fast_texture_smoke_assertions (session/undo/cancel/nudge/routing/mode isolation verified)"
+else
+	echo "  FAIL  fast_texture_smoke_assertions (test did not reach its success marker)"
+	fail=1
+fi
+
+# G-Level LE3 HotspotAtlas patch editor: the public resource route must mint a
+# dedicated document/view. The test then calls the same handlers as gestures and
+# buttons to verify one-step undo, save/reload, rect I/O, binding persistence,
+# transient preview/debug toggles, and clean document teardown.
+HOTSPOT_PATCH_WORK="$WORK/hotspot_patch_editor_smoke"
+mkdir -p "$HOTSPOT_PATCH_WORK"
+cp "$LEVEL_TESTBED/main.tscn" "$HOTSPOT_PATCH_WORK/"
+cp "$REPO_ROOT/thirdparty/certs/ca-bundle.crt" "$HOTSPOT_PATCH_WORK/"
+cp -R "$LEVEL_TESTBED/assets" "$LEVEL_TESTBED/addons" "$HOTSPOT_PATCH_WORK/"
+cp "$LEVEL_TESTBED/hotspot_patch_editor_smoke_project.godot" "$HOTSPOT_PATCH_WORK/project.godot"
+HOST_HOTSPOT_PATCH_WORK="$(host_path "$HOTSPOT_PATCH_WORK")"
+HOTSPOT_PATCH_LOG="$WORK/hotspot_patch_editor_smoke.log"
+HOTSPOT_PATCH_APPDATA="$HOTSPOT_PATCH_WORK/appdata"
+HOTSPOT_PATCH_LOCALAPPDATA="$HOTSPOT_PATCH_WORK/localappdata"
+mkdir -p "$HOTSPOT_PATCH_APPDATA/Godot" "$HOTSPOT_PATCH_LOCALAPPDATA"
+cp "$LEVEL_TESTBED/selection_editor_settings.tres" "$HOTSPOT_PATCH_APPDATA/Godot/editor_settings-4.8.tres"
+HOST_HOTSPOT_PATCH_APPDATA="$(host_path "$HOTSPOT_PATCH_APPDATA")"
+HOST_HOTSPOT_PATCH_LOCALAPPDATA="$(host_path "$HOTSPOT_PATCH_LOCALAPPDATA")"
+HOTSPOT_PATCH_QUIT_AFTER="${HOTSPOT_PATCH_QUIT_AFTER:-500}"
+APPDATA="$HOST_HOTSPOT_PATCH_APPDATA" LOCALAPPDATA="$HOST_HOTSPOT_PATCH_LOCALAPPDATA" \
+	"$BIN" "${RUN_ARGS[@]}" --path "$HOST_HOTSPOT_PATCH_WORK" -e --quit-after "$HOTSPOT_PATCH_QUIT_AFTER" >"$HOTSPOT_PATCH_LOG" 2>&1
+hotspot_patch_code=$?
+hotspot_patch_errs=$(error_count "$HOTSPOT_PATCH_LOG")
+if [[ $hotspot_patch_code -eq 0 && $hotspot_patch_errs -eq 0 ]]; then
+	echo "  PASS  hotspot_patch_editor_smoke (exit 0, 0 errors)"
+else
+	echo "  FAIL  hotspot_patch_editor_smoke (exit $hotspot_patch_code, $hotspot_patch_errs error-class lines)"
+	error_lines "$HOTSPOT_PATCH_LOG" | head -8 | sed 's/^/        /'
+	fail=1
+fi
+if grep -q 'HOTSPOT_PATCH_EDITOR_SMOKE_OK' "$HOTSPOT_PATCH_LOG"; then
+	echo "  PASS  hotspot_patch_editor_smoke_assertions (document/gestures/rect I/O/bindings/toggles/close verified)"
+else
+	echo "  FAIL  hotspot_patch_editor_smoke_assertions (test did not reach its success marker)"
 	fail=1
 fi
 

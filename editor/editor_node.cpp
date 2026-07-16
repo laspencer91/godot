@@ -1865,7 +1865,11 @@ void EditorNode::edit_resource(const Ref<Resource> &p_resource) {
 	ERR_FAIL_COND(p_resource.is_null());
 
 	EditorDocument *document = nullptr;
-	if (p_resource->is_class("Shader") || p_resource->is_class("ShaderInclude")) {
+	if (p_resource->is_class("HotspotAtlas")) {
+		// G-Level WP21: mirror the shader document route so both FileSystem
+		// activation and EditorInterface.edit_resource() reveal the patch editor.
+		document = editor_data.get_or_create_hotspot_atlas_document(p_resource);
+	} else if (p_resource->is_class("Shader") || p_resource->is_class("ShaderInclude")) {
 		document = editor_data.get_or_create_shader_document(p_resource);
 	} else if (p_resource->is_class("Script") || p_resource->is_class("TextFile")) {
 		document = editor_data.get_or_create_script_document(p_resource);
@@ -3290,6 +3294,17 @@ void EditorNode::_edit_current(bool p_skip_foreign, bool p_skip_inspector_update
 
 	bool inspector_only = editor_history.is_current_inspector_only();
 
+	// A per-pane Inspector the user locked must ignore external re-selection that arrives here: viewport
+	// gizmos and plugin edit_node()/inspect_object() calls both route through push_item() -> _edit_current,
+	// which repoints InspectorDock::get_singleton() (the active bound dock) directly, bypassing the lock
+	// gate that only lived in SceneTreeDock::_push_item. The Inspector's own breadcrumb/sub-resource
+	// navigation uses InspectorDock::_push_bound_item and never reaches here, so this does not fight the
+	// "explicit navigation re-targets the lock" path. Selection, the Scene Tree highlight, and the
+	// selection-following docks still track the click; only the Inspector's edited object stays pinned --
+	// exactly the behavior SceneTreeDock::_push_item already produces for tree-driven selection.
+	InspectorDock *dest_inspector_dock = InspectorDock::get_singleton();
+	const bool inspector_locked = dest_inspector_dock && dest_inspector_dock->is_selection_locked();
+
 	if (!current_obj) {
 		SceneTreeDock::get_singleton()->set_selected(nullptr);
 		InspectorDock::get_inspector_singleton()->edit(nullptr);
@@ -3325,7 +3340,7 @@ void EditorNode::_edit_current(bool p_skip_foreign, bool p_skip_inspector_update
 		Resource *current_res = Object::cast_to<Resource>(current_obj);
 		ERR_FAIL_NULL(current_res);
 
-		if (!p_skip_inspector_update) {
+		if (!p_skip_inspector_update && !inspector_locked) {
 			InspectorDock::get_inspector_singleton()->edit(current_res);
 			SceneTreeDock::get_singleton()->set_selected(nullptr);
 			SignalsDock::get_singleton()->set_object(current_res);
@@ -3357,13 +3372,17 @@ void EditorNode::_edit_current(bool p_skip_foreign, bool p_skip_inspector_update
 		Node *current_node = Object::cast_to<Node>(current_obj);
 		ERR_FAIL_NULL(current_node);
 
-		InspectorDock::get_inspector_singleton()->edit(current_node);
+		if (!inspector_locked) {
+			InspectorDock::get_inspector_singleton()->edit(current_node);
+		}
 		if (current_node->is_inside_tree()) {
 			SignalsDock::get_singleton()->set_object(current_node);
 			GroupsDock::get_singleton()->set_selection(Vector<Node *>{ current_node });
 			SceneTreeDock::get_singleton()->set_selected(current_node);
 			SceneTreeDock::get_singleton()->set_selection({ current_node });
-			InspectorDock::get_singleton()->update(current_node);
+			if (!inspector_locked) {
+				InspectorDock::get_singleton()->update(current_node);
+			}
 			if (!inspector_only && !skip_main_plugin) {
 				if (!ScriptEditor::get_singleton()->is_editor_floating() && ScriptEditor::get_singleton()->is_visible_in_tree()) {
 					skip_main_plugin = stay_in_script_editor_on_node_selected;
@@ -3420,12 +3439,16 @@ void EditorNode::_edit_current(bool p_skip_foreign, bool p_skip_inspector_update
 			EditorDebuggerNode::get_singleton()->clear_remote_tree_selection();
 		}
 
-		InspectorDock::get_inspector_singleton()->edit(current_obj);
+		if (!inspector_locked) {
+			InspectorDock::get_inspector_singleton()->edit(current_obj);
+		}
 		SignalsDock::get_singleton()->set_object(nullptr);
 		GroupsDock::get_singleton()->set_selection(multi_nodes);
 		SceneTreeDock::get_singleton()->set_selected(selected_node);
 		SceneTreeDock::get_singleton()->set_selection(multi_nodes);
-		InspectorDock::get_singleton()->update(nullptr);
+		if (!inspector_locked) {
+			InspectorDock::get_singleton()->update(nullptr);
+		}
 	}
 
 	InspectorDock::get_singleton()->set_info(

@@ -777,6 +777,19 @@ void InspectorDock::set_bound_document(EditorDocument *p_document) {
 	}
 }
 
+void InspectorDock::set_selection_locked(bool p_locked) {
+	selection_locked = p_locked;
+	Object *object = p_locked && inspector ? inspector->get_edited_object() : nullptr;
+	selection_lock_target = object ? object->get_instance_id() : ObjectID();
+	if (!selection_lock_target.is_valid()) {
+		selection_locked = false;
+	}
+}
+
+bool InspectorDock::is_selection_lock_target_valid() const {
+	return !selection_locked || (selection_lock_target.is_valid() && ObjectDB::get_instance(selection_lock_target));
+}
+
 void InspectorDock::edit_bound(Object *p_object) {
 	// G2 D7b: drive this bound inspector to show p_object (mirrors EditorNode::_edit_current's inspector
 	// half, but for a per-pane instance sourced from its document's selection).

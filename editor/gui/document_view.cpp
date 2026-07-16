@@ -31,6 +31,7 @@
 #include "document_view.h"
 
 #include "core/object/callable_mp.h"
+#include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/doc/editor_help.h"
 #include "editor/docks/groups_dock.h"
 #include "editor/docks/inspector_dock.h"
@@ -40,16 +41,22 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/gui/document_bottom_dock.h"
 #include "editor/level/level_editor.h"
 #include "editor/level/level_editor_view.h"
+#include "editor/level/hotspot_patch_editor.h"
+#include "editor/level/material_browser_dock.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
+#include "editor/scene/3d/node_3d_editor_viewport.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
 #include "editor/script/script_editor_plugin.h"
 #include "editor/shader/shader_editor.h"
 #include "editor/shader/shader_editor_plugin.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/button.h"
 #include "scene/gui/foldable_container.h"
+#include "scene/gui/label.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/texture_rect.h"
 #include "scene/resources/style_box_flat.h"
@@ -88,7 +95,22 @@ static Ref<StyleBoxFlat> _dock_card_sb(const Color &p_bg, bool p_header, bool p_
 	return sb;
 }
 
-void DocumentView::_add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded) {
+static void _add_accordion_title_icon(FoldableContainer *p_section, const StringName &p_icon) {
+	if (p_icon == StringName()) {
+		return;
+	}
+	Control *gui_base = EditorNode::get_singleton()->get_gui_base();
+	Ref<Texture2D> icon = gui_base->get_theme_icon(p_icon, EditorStringName(EditorIcons));
+	if (icon.is_valid()) {
+		TextureRect *rect = memnew(TextureRect);
+		rect->set_texture(icon);
+		rect->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
+		rect->set_custom_minimum_size(Size2(16, 16) * EDSCALE);
+		p_section->add_title_bar_control(rect);
+	}
+}
+
+FoldableContainer *DocumentView::_add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded) {
 	// Build one GDStudio-style dock "card": a raised rounded header (leading icon + top-edge highlight)
 	// over a recessed content panel. Colors are read from the editor theme at construction time — they
 	// do NOT re-tint on a later theme change (accepted tradeoff until this moves to a DockSection theme
@@ -112,21 +134,13 @@ void DocumentView::_add_accordion_section(VBoxContainer *p_column, Control *p_do
 	// mouse-driven — drop the ring so no blue shows behind the rounded tops.
 	section->add_theme_style_override(SNAME("focus"), Ref<StyleBox>(memnew(StyleBoxEmpty)));
 
-	if (p_icon != StringName()) {
-		Ref<Texture2D> icon = gui_base->get_theme_icon(p_icon, EditorStringName(EditorIcons));
-		if (icon.is_valid()) {
-			TextureRect *rect = memnew(TextureRect);
-			rect->set_texture(icon);
-			rect->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
-			rect->set_custom_minimum_size(Size2(16, 16) * EDSCALE);
-			section->add_title_bar_control(rect);
-		}
-	}
+	_add_accordion_title_icon(section, p_icon);
 
 	section->set_folded(!p_expanded);
 	_on_section_folded(!p_expanded, section); // single source for the fold→expand-flag rule (no signal yet).
 	section->connect("folding_changed", callable_mp(this, &DocumentView::_on_section_folded).bind(section));
 	p_column->add_child(section);
+	return section;
 }
 
 void DocumentView::_on_section_folded(bool p_folded, FoldableContainer *p_section) {
@@ -134,6 +148,147 @@ void DocumentView::_on_section_folded(bool p_folded, FoldableContainer *p_sectio
 	// it to just its header, freeing that space for the rest (so e.g. folding Inspector lifts Signals
 	// and Groups up). No fixed heights, so nothing stays locked or clips.
 	p_section->set_v_size_flags(p_folded ? SIZE_FILL : SIZE_EXPAND_FILL);
+}
+
+static String _get_inspector_target_name(Object *p_object) {
+	if (!p_object) {
+		return String();
+	}
+	if (p_object->has_method(SNAME("_get_editor_name"))) {
+		const String editor_name = p_object->call(SNAME("_get_editor_name"));
+		if (!editor_name.is_empty()) {
+			return editor_name;
+		}
+	}
+	if (Node *node = Object::cast_to<Node>(p_object)) {
+		return node->get_name();
+	}
+	if (Resource *resource = Object::cast_to<Resource>(p_object)) {
+		if (!resource->get_name().is_empty()) {
+			return resource->get_name();
+		}
+		if (resource->get_path().is_resource_file()) {
+			return resource->get_path().get_file();
+		}
+	}
+	return p_object->get_class();
+}
+
+void DocumentView::_inspector_lock_toggled(bool p_locked) {
+	if (!inspector_dock || !inspector_lock_button) {
+		return;
+	}
+	if (p_locked && !inspector_dock->get_inspector()->get_edited_object()) {
+		inspector_lock_button->set_pressed_no_signal(false);
+		p_locked = false;
+	}
+
+	inspector_dock->set_selection_locked(p_locked);
+	if (!p_locked && scene_tree_dock) {
+		scene_tree_dock->sync_bound_inspector_to_selection();
+	}
+	_update_inspector_header();
+}
+
+void DocumentView::_update_inspector_header() {
+	if (!inspector_dock || !inspector_target_label || !inspector_lock_button) {
+		return;
+	}
+	if (!inspector_dock->is_selection_lock_target_valid()) {
+		inspector_dock->set_selection_locked(false);
+		inspector_lock_button->set_pressed_no_signal(false);
+		inspector_dock->edit_bound(nullptr); // Clears a possibly stale raw pointer safely.
+		if (scene_tree_dock) {
+			callable_mp(scene_tree_dock, &SceneTreeDock::sync_bound_inspector_to_selection).call_deferred();
+		}
+		return;
+	}
+	Object *object = inspector_dock->get_inspector()->get_edited_object();
+	if (!object && inspector_dock->is_selection_locked()) {
+		inspector_dock->set_selection_locked(false);
+		inspector_lock_button->set_pressed_no_signal(false);
+		if (scene_tree_dock) {
+			callable_mp(scene_tree_dock, &SceneTreeDock::sync_bound_inspector_to_selection).call_deferred();
+		}
+	}
+	if (object && inspector_dock->is_selection_locked()) {
+		// Explicit Inspector history/resource navigation is allowed while locked; that newly
+		// inspected object becomes the target protected from subsequent Scene Tree selection.
+		inspector_dock->set_selection_locked(true);
+	}
+
+	const String target_name = _get_inspector_target_name(object);
+	inspector_target_label->set_text(target_name);
+	inspector_target_label->set_tooltip_text(target_name);
+	inspector_target_label->set_visible(!target_name.is_empty());
+	inspector_lock_button->set_disabled(object == nullptr);
+	inspector_lock_button->set_pressed_no_signal(inspector_dock->is_selection_locked());
+	// Through gui_base (always in-tree): this runs during construction, where a
+	// bare get_theme_icon() on the not-yet-added view warns "too early".
+	inspector_lock_button->set_button_icon(EditorNode::get_singleton()->get_gui_base()->get_theme_icon(inspector_dock->is_selection_locked() ? SNAME("Lock") : SNAME("Unlock"), EditorStringName(EditorIcons)));
+	inspector_lock_button->set_tooltip_text(inspector_dock->is_selection_locked() ? TTR("Unlock Inspector and follow the Scene Tree selection") : TTR("Lock Inspector to the current object"));
+}
+
+void DocumentView::_document_bottom_dock_toggled(StringName p_id, bool p_open) {
+	if (p_id == SNAME("Animation") && animation_editor) {
+		animation_editor->set_embedded_open(p_open);
+		_store_animation_drawer_state();
+	} else if (p_id == SNAME("Materials") && material_browser) {
+		if (p_open) {
+			material_browser->drawer_opened(false);
+		}
+		_store_material_drawer_state();
+	}
+}
+
+void DocumentView::_document_bottom_dock_user_toggled(StringName p_id, bool p_open) {
+	if (p_id == SNAME("Materials") && p_open && material_browser) {
+		material_browser->drawer_opened(true);
+	}
+}
+
+void DocumentView::_animation_drawer_visibility_requested(bool p_open) {
+	if (bottom_dock_host) {
+		bottom_dock_host->set_dock_open(SNAME("Animation"), p_open);
+	}
+}
+
+void DocumentView::_materials_drawer_requested(int p_request, bool p_focus_search) {
+	if (!bottom_dock_host || !material_browser) {
+		return;
+	}
+	const bool reveal_active = p_request == int(LevelEditorView::MATERIALS_DRAWER_REVEAL_ACTIVE);
+	const bool open = reveal_active || !bottom_dock_host->is_dock_open(SNAME("Materials"));
+	bottom_dock_host->set_dock_open(SNAME("Materials"), open);
+	if (open) {
+		material_browser->drawer_opened(p_focus_search);
+		if (reveal_active && !material_browser->get_selected_path().is_empty()) {
+			material_browser->scroll_to_material(material_browser->get_selected_path());
+		}
+	}
+}
+
+void DocumentView::_store_material_drawer_state() {
+	if (!bound_scene_document || !material_browser) {
+		return;
+	}
+	Dictionary state = material_browser->get_presentation_state();
+	state["dock_open"] = bottom_dock_host && bottom_dock_host->is_dock_open(SNAME("Materials"));
+	bound_scene_document->set_contextual_editor_state(SNAME("Materials"), state);
+}
+
+void DocumentView::_store_level_context_state() {
+	LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface);
+	if (bound_scene_document && level_view) {
+		bound_scene_document->set_contextual_editor_state(SNAME("LevelToolContext"), level_view->get_context_panel_state());
+	}
+}
+
+void DocumentView::_store_animation_drawer_state() {
+	if (!bound_scene_document || !animation_editor) {
+		return;
+	}
+	bound_scene_document->set_contextual_editor_state(SNAME("Animation"), animation_editor->get_state());
 }
 
 DocumentView::DocumentView(EditorDocument *p_document) {
@@ -196,6 +351,14 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 				editor_surface = level_editor->create_editor_view(ld);
 			}
 		} break;
+		case EditorDocument::TYPE_HOTSPOT_ATLAS: {
+			// G-Level WP21: same document->services factory seam as shaders and
+			// levels; the per-pane patch editor is parented below like any surface.
+			HotspotAtlasDocument *hd = static_cast<HotspotAtlasDocument *>(p_document);
+			if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
+				editor_surface = level_editor->create_editor_view(hd);
+			}
+		} break;
 		case EditorDocument::TYPE_HELP: {
 			// G2 S6b: the view is minted by the ScriptEditor SERVICES singleton (wired to go_to_help
 			// navigation + history, registered in the open-help registry). go_to_class needs the view
@@ -231,6 +394,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			}
 		} break;
 	}
+	document_surface = editor_surface;
 	// G2 D7a: a scene document's tab is a COMPOSITE — its own Scene Tree dock to the left of the
 	// editor surface, bound to this document. The dock is a bound instance (is_global=false, D5, so it
 	// never claims the SceneTreeDock singleton) reading this doc's own root/selection/history via the
@@ -257,7 +421,27 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		inspector_dock = memnew(InspectorDock(ed, false));
 		inspector_dock->set_bound_document(p_document);
 		scene_tree_dock->set_bound_inspector(inspector_dock);
-		_add_accordion_section(dock_column, inspector_dock, TTR("Inspector"), SNAME("Object"), true);
+		FoldableContainer *inspector_section = _add_accordion_section(dock_column, inspector_dock, TTR("Inspector"), StringName(), true);
+
+		inspector_target_label = memnew(Label);
+		inspector_target_label->set_custom_minimum_size(Size2(96 * EDSCALE, 0));
+		inspector_target_label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_RIGHT);
+		inspector_target_label->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+		inspector_target_label->set_clip_text(true);
+		inspector_target_label->set_mouse_filter(MOUSE_FILTER_IGNORE);
+		inspector_target_label->set_modulate(Color(1, 1, 1, 0.58));
+		inspector_section->add_title_bar_control(inspector_target_label);
+
+		inspector_lock_button = memnew(Button);
+		inspector_lock_button->set_name("InspectorLock");
+		inspector_lock_button->set_toggle_mode(true);
+		inspector_lock_button->set_flat(true);
+		inspector_lock_button->set_focus_mode(FOCUS_NONE);
+		inspector_lock_button->set_accessibility_name(TTR("Lock Inspector"));
+		inspector_lock_button->connect(SceneStringName(toggled), callable_mp(this, &DocumentView::_inspector_lock_toggled));
+		inspector_section->add_title_bar_control(inspector_lock_button);
+		_add_accordion_title_icon(inspector_section, SNAME("Object"));
+		inspector_dock->get_inspector()->connect(SNAME("edited_object_changed"), callable_mp(this, &DocumentView::_update_inspector_header));
 
 		signals_dock = memnew(SignalsDock(false));
 		_add_accordion_section(dock_column, signals_dock, TTR("Signals"), SNAME("Signals"), false);
@@ -271,22 +455,69 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		List<Node *> initial_nodes = p_document->get_selection()->get_top_selected_node_list();
 		inspector_dock->edit_bound(initial_nodes.is_empty() ? nullptr : initial_nodes.front()->get());
 		_bound_selection_changed();
+		_update_inspector_header();
 
 		// Left side: [toolbar host | viewport]. M7.2a mounts the focused pane's 2D/3D toolbar into
 		// toolbar_host; it sits empty (zero height) otherwise.
 		toolbar_host = memnew(HBoxContainer);
 		toolbar_host->set_h_size_flags(SIZE_EXPAND_FILL);
-		if (LevelEditorView *level_view = Object::cast_to<LevelEditorView>(editor_surface)) {
+		LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface);
+		if (level_view) {
 			level_view->mount_top_strip(toolbar_host);
+			const Dictionary context_state = p_document->get_contextual_editor_state(SNAME("LevelToolContext"));
+			if (!context_state.is_empty()) {
+				level_view->set_context_panel_state(context_state);
+			}
+			level_view->connect(SNAME("materials_drawer_requested"), callable_mp(this, &DocumentView::_materials_drawer_requested));
+			if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
+				material_browser = level_editor->create_material_browser_view(static_cast<LevelDocument *>(p_document));
+			}
 		}
 		VBoxContainer *surface_vbox = memnew(VBoxContainer);
 		surface_vbox->add_theme_constant_override("separation", 0);
 		surface_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
 		surface_vbox->set_v_size_flags(SIZE_EXPAND_FILL);
 		surface_vbox->add_child(toolbar_host);
-		editor_surface->set_h_size_flags(SIZE_EXPAND_FILL);
-		editor_surface->set_v_size_flags(SIZE_EXPAND_FILL);
-		surface_vbox->add_child(editor_surface);
+		document_surface->set_h_size_flags(SIZE_EXPAND_FILL);
+		document_surface->set_v_size_flags(SIZE_EXPAND_FILL);
+
+		const bool supports_animation_drawer = type == EditorDocument::TYPE_SCENE_2D || type == EditorDocument::TYPE_SCENE_3D || type == EditorDocument::TYPE_SCENE_MIXED;
+		AnimationPlayerEditorPlugin *animation_plugin = supports_animation_drawer ? AnimationPlayerEditorPlugin::get_singleton() : nullptr;
+		animation_editor = animation_plugin ? animation_plugin->create_editor_view(p_document, inspector_dock) : nullptr;
+		if (animation_editor || material_browser) {
+			bottom_dock_host = memnew(DocumentBottomDockHost(toolbar_host));
+			bottom_dock_host->set_surface(document_surface);
+			bottom_dock_host->connect(SNAME("dock_toggled"), callable_mp(this, &DocumentView::_document_bottom_dock_toggled));
+			bottom_dock_host->connect(SNAME("dock_user_toggled"), callable_mp(this, &DocumentView::_document_bottom_dock_user_toggled));
+			if (animation_editor) {
+				animation_editor->connect(SNAME("drawer_visibility_requested"), callable_mp(this, &DocumentView::_animation_drawer_visibility_requested));
+				bottom_dock_host->add_dock(SNAME("Animation"), TTR("Animation"), SNAME("Animation"), animation_editor);
+			}
+			if (material_browser) {
+				bottom_dock_host->add_dock(SNAME("Materials"), TTR("Materials"), SNAME("StandardMaterial3D"), material_browser);
+			}
+			surface_vbox->add_child(bottom_dock_host);
+
+			if (animation_editor) {
+				const Dictionary animation_state = p_document->get_contextual_editor_state(SNAME("Animation"));
+				if (animation_state.is_empty()) {
+					animation_editor->set_embedded_open(false);
+				} else {
+					animation_editor->set_state(animation_state);
+				}
+			}
+			if (material_browser) {
+				const Dictionary material_state = p_document->get_contextual_editor_state(SNAME("Materials"));
+				if (!material_state.is_empty()) {
+					material_browser->set_presentation_state(material_state);
+					if (bool(material_state.get("dock_open", false))) {
+						bottom_dock_host->set_dock_open(SNAME("Materials"), true);
+					}
+				}
+			}
+		} else {
+			surface_vbox->add_child(document_surface);
+		}
 
 		// Compose: [toolbar|viewport] | dock column (docks on the right, per the design). The accordion
 		// sizes responsively — expanded sections share the column via SIZE_EXPAND_FILL, collapsed ones
@@ -327,6 +558,7 @@ void DocumentView::_bound_selection_changed() {
 		}
 		groups_dock->set_selection(node_vec);
 	}
+	_update_inspector_header();
 }
 
 Control *DocumentView::get_chrome_host() const {
@@ -344,9 +576,29 @@ void DocumentView::set_context_active(bool p_active) {
 	if (inspector_dock) {
 		inspector_dock->set_context_active(p_active);
 	}
+	if (animation_editor) {
+		if (!p_active) {
+			_store_animation_drawer_state();
+		}
+		animation_editor->set_context_active(p_active);
+	}
+	if (LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface)) {
+		level_view->set_context_active(p_active);
+	}
+	if (!p_active) {
+		_store_material_drawer_state();
+		_store_level_context_state();
+	}
+	if (HotspotPatchEditor *hotspot_editor = Object::cast_to<HotspotPatchEditor>(document_surface)) {
+		hotspot_editor->set_context_active(p_active);
+	}
 }
 
 void DocumentView::_notification(int p_what) {
+	if (p_what == NOTIFICATION_THEME_CHANGED) {
+		_update_inspector_header();
+		return;
+	}
 	if (p_what == NOTIFICATION_READY) {
 		// G2 D7a: re-point the embedded Scene Tree at its document's root now that we're in-tree. The
 		// scene root can be assigned after a background (grab_focus=false) view is minted, so a refresh
@@ -360,8 +612,22 @@ void DocumentView::_notification(int p_what) {
 		return;
 	}
 	set_context_active(false);
+	_store_material_drawer_state();
+	_store_level_context_state();
 	if (scene_tree_dock) {
 		scene_tree_dock->set_bound_inspector(nullptr);
+	}
+	if (animation_editor) {
+		_store_animation_drawer_state();
+		if (AnimationPlayerEditorPlugin *plugin = AnimationPlayerEditorPlugin::get_singleton()) {
+			plugin->release_editor_view(animation_editor);
+		}
+	}
+	if (material_browser) {
+		if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
+			level_editor->release_material_browser_view(material_browser);
+		}
+		material_browser = nullptr;
 	}
 	// PREDELETE dispatches derived-first, so this runs BEFORE Node's handler frees the children —
 	// the last moment editor_surface is guaranteed alive (the destructor is too late: children are
@@ -391,14 +657,14 @@ void DocumentView::_notification(int p_what) {
 	}
 	// G2 S4: if this view hosted a script surface, drop it from the ScriptEditor open-scripts
 	// registry before it is freed (idempotent belt-and-suspenders with tree_exiting).
-	if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(editor_surface)) {
+	if (ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(document_surface)) {
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 			se->release_editor_view(seb);
 		}
 	}
 	// G-Shader: same for a shader surface — park the traveling File menu (if hosted here) and drop
 	// the plugin's tracking entry before Node frees this view's children.
-	if (ShaderEditor *she = Object::cast_to<ShaderEditor>(editor_surface)) {
+	if (ShaderEditor *she = Object::cast_to<ShaderEditor>(document_surface)) {
 		if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
 			sep->release_editor_view(she);
 		}
@@ -408,12 +674,13 @@ void DocumentView::_notification(int p_what) {
 	// gone (whole-editor teardown, children die last-first), leave the stack to be freed with this
 	// view, matching the stock lifetime where the vbox died with the main-screen tree.
 	EditorDocument *doc = doc_view ? doc_view->get_document() : nullptr;
-	if (doc && doc->get_type() == EditorDocument::TYPE_SCREEN_HOST && editor_surface->get_parent() == content_vbox) { // G2 S7: surfaces live under content_vbox now.
+	if (doc && doc->get_type() == EditorDocument::TYPE_SCREEN_HOST && document_surface && document_surface->get_parent() == content_vbox) { // G2 S7: surfaces live under content_vbox now.
 		ScreenHostDocument *shd = static_cast<ScreenHostDocument *>(doc);
 		Control *park = Object::cast_to<Control>(ObjectDB::get_instance(shd->get_park_holder_id()));
 		if (park) {
-			content_vbox->remove_child(editor_surface);
-			park->add_child(editor_surface);
+			content_vbox->remove_child(document_surface);
+			park->add_child(document_surface);
+			document_surface = nullptr;
 			editor_surface = nullptr; // No longer ours; Node's PREDELETE must not free it.
 		}
 	}

@@ -46,10 +46,30 @@ func _find_item(tree: Tree, metadata: Variant) -> TreeItem:
 
 
 func _find_scene_tree(node: Node) -> Tree:
-	for candidate in EditorInterface.get_base_control().find_children("*", "Tree", true, false):
-		var tree := candidate as Tree
-		if tree and tree.is_visible_in_tree() and _find_item(tree, node.get_path()):
-			return tree
+	# Multiple workspace panes may display instances of the same scene, so their TreeItem metadata
+	# contains identical NodePaths. Resolve outward from the active document Inspector and only accept
+	# the Scene Tree in that same document composite.
+	var scope: Node = EditorInterface.get_inspector()
+	while scope:
+		for candidate in scope.find_children("*", "Tree", true, false):
+			var tree := candidate as Tree
+			if tree and tree.is_visible_in_tree() and _find_item(tree, node.get_path()):
+				return tree
+		scope = scope.get_parent()
+	return null
+
+
+func _find_inspector_lock() -> Button:
+	# Resolve outward from the active document Inspector, just like the paired Scene Tree above.
+	# A split workspace may have several visible lock buttons; a base-control-wide first match can
+	# toggle a different document's Inspector and make the active one appear to ignore the lock.
+	var scope: Node = EditorInterface.get_inspector()
+	while scope:
+		for candidate in scope.find_children("InspectorLock", "Button", true, false):
+			var button := candidate as Button
+			if button and button.is_visible_in_tree():
+				return button
+		scope = scope.get_parent()
 	return null
 
 
@@ -72,7 +92,20 @@ func _run_test() -> void:
 	if tree == null:
 		push_error("Could not find the visible pane-hosted SceneTree.")
 		return
+
+	# Establish the Inspector's starting object before deriving click geometry. Selecting it can
+	# auto-scroll or re-layout a short pane-hosted Tree, invalidating coordinates captured earlier.
+	_set_selection(original)
+	await get_tree().process_frame
+	if _edited_object() != original:
+		push_error("Pane Inspector did not start on the original node.")
+		return
+
 	var dragged_item := _find_item(tree, dragged.get_path())
+	# A restored multi-pane layout can leave the target row outside this pane's short Tree viewport.
+	# Bring it into view before deriving screen coordinates for the synthetic click.
+	tree.scroll_to_item(dragged_item, true)
+	await get_tree().process_frame
 	var item_rect := tree.get_item_area_rect(dragged_item, 0)
 	var click_position: Vector2 = tree.get_global_transform_with_canvas() * item_rect.get_center()
 	var viewport := tree.get_viewport()
@@ -84,11 +117,6 @@ func _run_test() -> void:
 
 	# A normal click changes the Tree selection on press, but the Inspector must retain the old object
 	# until release. This is what permits the same gesture to become a property drag instead.
-	_set_selection(original)
-	await get_tree().process_frame
-	if _edited_object() != original:
-		push_error("Pane Inspector did not start on the original node.")
-		return
 	_send_button(viewport, click_position, true)
 	await get_tree().process_frame
 	if _edited_object() != original:
@@ -97,7 +125,7 @@ func _run_test() -> void:
 	_send_button(viewport, click_position, false)
 	await get_tree().process_frame
 	if _edited_object() != dragged:
-		push_error("Pane Inspector did not commit the clicked node on mouse release.")
+		push_error("Pane Inspector did not commit the clicked node on mouse release (tree=%s, inspector=%s)." % [tree.get_selected().get_metadata(0) if tree.get_selected() else "<none>", _edited_object()])
 		return
 
 	# Repeat the press, then cross the GUI drag threshold. The Inspector must remain a stable drop
@@ -126,4 +154,24 @@ func _run_test() -> void:
 
 	viewport.gui_cancel_drag()
 	_send_button(viewport, previous_position, false)
+
+	# Locking is intentionally narrower than pinning/history: it freezes only the Scene Tree ->
+	# Inspector route. Unlocking must immediately catch up to the selection made while locked.
+	_set_selection(original)
+	await get_tree().process_frame
+	var inspector_lock := _find_inspector_lock()
+	if inspector_lock == null:
+		push_error("Could not find the document Inspector lock button.")
+		return
+	inspector_lock.toggled.emit(true)
+	_set_selection(dragged)
+	await get_tree().process_frame
+	if _edited_object() != original:
+		push_error("Locked Inspector followed a Scene Tree selection change.")
+		return
+	inspector_lock.toggled.emit(false)
+	await get_tree().process_frame
+	if _edited_object() != dragged:
+		push_error("Unlocked Inspector did not catch up to the Scene Tree selection.")
+		return
 	print("SCENE_TREE_DRAG_SELECTION_OK")

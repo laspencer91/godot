@@ -397,6 +397,9 @@ public:
 	// document's own EditorSelection; scene root / history follow via the resolvers.
 	void set_bound_document(EditorDocument *p_document);
 	void set_bound_inspector(InspectorDock *p_inspector) { bound_inspector = p_inspector; }
+	// Immediately make the paired Inspector follow the current document selection. Used when
+	// unlocking an Inspector after selection changed behind the locked target.
+	void sync_bound_inspector_to_selection();
 
 	// G2 D5: p_is_global==false constructs a bound instance (D7a per-pane composite) that does NOT
 	// claim the `singleton` — the ~80 SceneTreeDock::get_singleton() callers keep resolving to the
