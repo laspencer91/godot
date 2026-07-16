@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/io/config_file.h"
+#include "editor/file_system/editor_external_file_drop_request.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/gui/control.h"
@@ -110,6 +111,11 @@ public:
 		AFTER_GUI_INPUT_CUSTOM,
 	};
 
+	enum ExternalFileDropClaim {
+		EXTERNAL_FILE_DROP_PASS,
+		EXTERNAL_FILE_DROP_CLAIM,
+	};
+
 protected:
 	void _notification(int p_what);
 
@@ -144,6 +150,8 @@ protected:
 	GDVIRTUAL2RC(Vector<String>, _run_scene, String, Vector<String>)
 	GDVIRTUAL0(_enable_plugin)
 	GDVIRTUAL0(_disable_plugin)
+	GDVIRTUAL0RC(int, _get_external_file_drop_priority)
+	GDVIRTUAL1R(int, _intercept_external_file_drop, Ref<EditorExternalFileDropRequest>)
 
 #ifndef DISABLE_DEPRECATED
 	Button *_add_control_to_bottom_panel_compat_88081(Control *p_control, const String &p_title);
@@ -217,6 +225,8 @@ public:
 	virtual void edited_scene_changed() {} // if changes are pending in editor, apply them
 	virtual bool build(); // builds with external tools. Returns true if safe to continue running scene.
 	virtual void run_scene(const String &p_scene, Vector<String> &r_args);
+	virtual int get_external_file_drop_priority() const;
+	virtual ExternalFileDropClaim intercept_external_file_drop(const Ref<EditorExternalFileDropRequest> &p_request);
 
 	EditorInterface *get_editor_interface();
 	ScriptCreateDialog *get_script_create_dialog();
@@ -276,6 +286,7 @@ VARIANT_ENUM_CAST(EditorPlugin::DockSlot);
 #endif
 VARIANT_ENUM_CAST(EditorPlugin::CustomControlContainer);
 VARIANT_ENUM_CAST(EditorPlugin::AfterGUIInput);
+VARIANT_ENUM_CAST(EditorPlugin::ExternalFileDropClaim);
 
 typedef EditorPlugin *(*EditorPluginCreateFunc)();
 

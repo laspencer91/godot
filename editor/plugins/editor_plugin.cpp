@@ -578,6 +578,19 @@ void EditorPlugin::run_scene(const String &p_scene, Vector<String> &r_args) {
 	}
 }
 
+int EditorPlugin::get_external_file_drop_priority() const {
+	int priority = 0;
+	GDVIRTUAL_CALL(_get_external_file_drop_priority, priority);
+	return priority;
+}
+
+EditorPlugin::ExternalFileDropClaim EditorPlugin::intercept_external_file_drop(const Ref<EditorExternalFileDropRequest> &p_request) {
+	int claim = EXTERNAL_FILE_DROP_PASS;
+	GDVIRTUAL_CALL(_intercept_external_file_drop, p_request, claim);
+	ERR_FAIL_COND_V_MSG(claim != EXTERNAL_FILE_DROP_PASS && claim != EXTERNAL_FILE_DROP_CLAIM, EXTERNAL_FILE_DROP_PASS, vformat("EditorPlugin '%s' returned an invalid external file drop claim value (%d).", get_class(), claim));
+	return static_cast<ExternalFileDropClaim>(claim);
+}
+
 void EditorPlugin::queue_save_layout() {
 	EditorNode::get_singleton()->save_editor_layout_delayed();
 }
@@ -721,6 +734,8 @@ void EditorPlugin::_bind_methods() {
 	GDVIRTUAL_BIND(_run_scene, "scene", "args");
 	GDVIRTUAL_BIND(_enable_plugin);
 	GDVIRTUAL_BIND(_disable_plugin);
+	GDVIRTUAL_BIND(_get_external_file_drop_priority);
+	GDVIRTUAL_BIND(_intercept_external_file_drop, "request");
 
 	ADD_SIGNAL(MethodInfo("scene_changed", PropertyInfo(Variant::OBJECT, "scene_root", PROPERTY_HINT_RESOURCE_TYPE, Node::get_class_static())));
 	ADD_SIGNAL(MethodInfo("scene_closed", PropertyInfo(Variant::STRING, "filepath")));
@@ -759,6 +774,9 @@ void EditorPlugin::_bind_methods() {
 	BIND_ENUM_CONSTANT(AFTER_GUI_INPUT_PASS);
 	BIND_ENUM_CONSTANT(AFTER_GUI_INPUT_STOP);
 	BIND_ENUM_CONSTANT(AFTER_GUI_INPUT_CUSTOM);
+
+	BIND_ENUM_CONSTANT(EXTERNAL_FILE_DROP_PASS);
+	BIND_ENUM_CONSTANT(EXTERNAL_FILE_DROP_CLAIM);
 }
 
 EditorUndoRedoManager *EditorPlugin::get_undo_redo() {

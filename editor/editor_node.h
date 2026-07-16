@@ -455,6 +455,7 @@ private:
 	// G4: slide-up file-exploration overlay + its unified bottom-bar toggle button.
 	WorkspaceFileDrawer *workspace_file_drawer = nullptr;
 	Button *filesystem_drawer_button = nullptr;
+	EditorExternalFileDropDispatcher external_file_drop_dispatcher;
 
 	Tree *disk_changed_list = nullptr;
 	LocalVector<String> disk_changed_scenes;
@@ -656,7 +657,11 @@ private:
 	void _update_recent_scenes();
 	void _open_recent_scene(int p_idx);
 
+	static int _get_external_file_drop_plugin_count(void *p_userdata);
+	static EditorPlugin *_get_external_file_drop_plugin(void *p_userdata, int p_index);
+	static void _perform_default_external_file_drop_callback(void *p_userdata, const PackedStringArray &p_source_paths, const String &p_destination_directory);
 	void _dropped_files(const Vector<String> &p_files);
+	void _perform_default_external_file_drop(const Vector<String> &p_files, const String &p_destination_directory);
 	void _add_dropped_files_recursive(const Vector<String> &p_files, String to_path);
 
 	void _update_vsync_mode();

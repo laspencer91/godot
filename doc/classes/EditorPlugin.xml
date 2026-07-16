@@ -230,6 +230,12 @@
 				This is for editors that edit script-based objects. You can return a list of breakpoints in the format ([code]script:line[/code]), for example: [code]res://path_to_script.gd:25[/code].
 			</description>
 		</method>
+		<method name="_get_external_file_drop_priority" qualifiers="virtual const">
+			<return type="int" />
+			<description>
+				Returns the priority used by [method _intercept_external_file_drop]. Enabled plugins are called in descending priority order. Plugins with the same priority are called in their registration order. The default priority is [code]0[/code].
+			</description>
+		</method>
 		<method name="_get_plugin_icon" qualifiers="virtual const">
 			<return type="Texture2D" />
 			<description>
@@ -352,6 +358,15 @@
 				func _get_plugin_icon():
 					return EditorInterface.get_editor_theme().get_icon("Node", "EditorIcons")
 				[/codeblock]
+			</description>
+		</method>
+		<method name="_intercept_external_file_drop" qualifiers="virtual">
+			<return type="int" />
+			<param index="0" name="request" type="EditorExternalFileDropRequest" />
+			<description>
+				Called on the editor main thread before any external operating system file drop is copied or imported. [param request] contains the entire dropped batch and its normalized project destination.
+				Return [constant EXTERNAL_FILE_DROP_PASS] to offer the same untouched request to the next plugin. Return [constant EXTERNAL_FILE_DROP_CLAIM] to own the whole batch and stop dispatch immediately, then resolve it exactly once with [method EditorExternalFileDropRequest.continue_default], [method EditorExternalFileDropRequest.finish_handled], or [method EditorExternalFileDropRequest.cancel]. A synchronous resolution from inside this callback is invalid because ownership begins after it returns Claim.
+				A claimed request has no timeout. Further external drops are queued in FIFO order until it resolves. Disabling or unloading the owner plugin, or shutting down the editor, cancels the request without copying or importing files.
 			</description>
 		</method>
 		<method name="_make_visible" qualifiers="virtual">
@@ -925,6 +940,12 @@
 		</constant>
 		<constant name="AFTER_GUI_INPUT_CUSTOM" value="2" enum="AfterGUIInput">
 			Pass the [InputEvent] to other editor plugins except the main [Node3D] one. This can be used to prevent node selection changes and work with sub-gizmos instead.
+		</constant>
+		<constant name="EXTERNAL_FILE_DROP_PASS" value="0" enum="ExternalFileDropClaim">
+			Passes the untouched external file drop request to the next enabled [EditorPlugin]. If every plugin passes, the editor runs its default copy and import path exactly once.
+		</constant>
+		<constant name="EXTERNAL_FILE_DROP_CLAIM" value="1" enum="ExternalFileDropClaim">
+			Claims the complete external file drop batch and stops dispatch immediately. The claiming plugin must resolve the request exactly once.
 		</constant>
 	</constants>
 </class>

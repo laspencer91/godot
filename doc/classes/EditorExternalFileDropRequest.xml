@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorExternalFileDropRequest" inherits="RefCounted" api_type="editor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Represents a pending external operating system file drop in the editor.
+	</brief_description>
+	<description>
+		An [EditorExternalFileDropRequest] is passed to [method EditorPlugin._intercept_external_file_drop] before the editor copies or imports any files dropped from the operating system. It contains the complete dropped batch and its project destination.
+		This class cannot be instantiated directly. Only the [EditorPlugin] that returns [constant EditorPlugin.EXTERNAL_FILE_DROP_CLAIM] owns the request and may resolve it. The owner must call exactly one of [method continue_default], [method finish_handled], or [method cancel]. Calling another resolution method afterward reports an error and has no effect.
+		A claimed request has no timeout. If its owner plugin is disabled or unloaded, or if the editor shuts down, the request is canceled. Other external file drops remain queued in FIFO order until the request resolves.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="cancel">
+			<return type="void" />
+			<description>
+				Cancels the drop. The editor does not copy the source files or scan the project for changes.
+				This method must be called on the editor main thread and can only resolve the request once.
+			</description>
+		</method>
+		<method name="continue_default">
+			<return type="void" />
+			<description>
+				Continues directly with the editor's default recursive copy and file system scan. The request is not offered to any lower-priority plugin.
+				This method must be called on the editor main thread and can only resolve the request once.
+			</description>
+		</method>
+		<method name="finish_handled">
+			<return type="void" />
+			<description>
+				Finishes the drop as handled by the owner plugin. The editor does not copy the source files or scan the project for changes. The plugin is responsible for its own file operations and any required file system scan.
+				This method must be called on the editor main thread and can only resolve the request once.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="destination_directory" type="String" setter="" getter="get_destination_directory">
+			The normalized [code]res://[/code] directory selected as the destination before any path is globalized or any file is copied.
+		</member>
+		<member name="source_paths" type="PackedStringArray" setter="" getter="get_source_paths">
+			The absolute operating system paths in the complete dropped batch, as received from [signal Window.files_dropped].
+		</member>
+	</members>
+</class>

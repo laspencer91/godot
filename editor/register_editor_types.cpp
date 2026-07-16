@@ -52,6 +52,7 @@
 #include "editor/export/editor_export_platform_pc.h"
 #include "editor/export/editor_export_plugin.h"
 #include "editor/export/register_exporters.h"
+#include "editor/file_system/editor_external_file_drop_request.h"
 #include "editor/file_system/editor_file_system.h"
 #include "editor/file_system/editor_paths.h"
 #include "editor/gui/editor_file_dialog.h"
@@ -161,6 +162,7 @@ void register_editor_types() {
 
 	GDREGISTER_CLASS(EditorPaths);
 	GDREGISTER_ABSTRACT_CLASS(ScenePaint2DEditor);
+	GDREGISTER_ABSTRACT_CLASS(EditorExternalFileDropRequest);
 	GDREGISTER_VIRTUAL_CLASS(EditorPlugin);
 	GDREGISTER_CLASS(EditorTranslationParserPlugin);
 	GDREGISTER_CLASS(EditorImportPlugin);

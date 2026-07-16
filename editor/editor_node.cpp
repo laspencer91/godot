@@ -1050,6 +1050,7 @@ void EditorNode::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
+			external_file_drop_dispatcher.shutdown();
 			singleton->active_plugins.clear();
 
 			if (progress_dialog) {
@@ -4398,6 +4399,7 @@ int EditorNode::_next_unsaved_scene(bool p_valid_filename, int p_start) {
 
 void EditorNode::_exit_editor(int p_exit_code) {
 	exiting = true;
+	external_file_drop_dispatcher.shutdown();
 	waiting_for_first_scan = false;
 	resource_preview->stop(); // Stop early to avoid crashes.
 	_save_editor_layout();
@@ -4581,6 +4583,7 @@ void EditorNode::add_editor_plugin(EditorPlugin *p_editor, bool p_config_changed
 }
 
 void EditorNode::remove_editor_plugin(EditorPlugin *p_editor, bool p_config_changed) {
+	singleton->external_file_drop_dispatcher.begin_plugin_removal(p_editor);
 	if (p_editor->has_main_screen()) {
 		singleton->editor_main_screen->remove_main_plugin(p_editor);
 	}
@@ -4598,6 +4601,7 @@ void EditorNode::remove_editor_plugin(EditorPlugin *p_editor, bool p_config_chan
 	for (KeyValue<ObjectID, HashSet<EditorPlugin *>> &kv : singleton->active_plugins) {
 		kv.value.erase(p_editor);
 	}
+	singleton->external_file_drop_dispatcher.end_plugin_removal(p_editor);
 }
 
 void EditorNode::add_extension_editor_plugin(const StringName &p_class_name) {
@@ -7624,12 +7628,41 @@ PopupMenu *EditorNode::get_export_as_menu() {
 	return export_as_menu;
 }
 
+int EditorNode::_get_external_file_drop_plugin_count(void *p_userdata) {
+	EditorNode *editor = static_cast<EditorNode *>(p_userdata);
+	return editor->editor_data.get_editor_plugin_count();
+}
+
+EditorPlugin *EditorNode::_get_external_file_drop_plugin(void *p_userdata, int p_index) {
+	EditorNode *editor = static_cast<EditorNode *>(p_userdata);
+	return editor->editor_data.get_editor_plugin(p_index);
+}
+
+void EditorNode::_perform_default_external_file_drop_callback(void *p_userdata, const PackedStringArray &p_source_paths, const String &p_destination_directory) {
+	EditorNode *editor = static_cast<EditorNode *>(p_userdata);
+	editor->_perform_default_external_file_drop(p_source_paths, p_destination_directory);
+}
+
 void EditorNode::_dropped_files(const Vector<String> &p_files) {
-	String to_path = FileSystemDock::get_singleton()->get_folder_path_at_mouse_position();
-	if (to_path.is_empty()) {
-		to_path = FileSystemDock::get_singleton()->get_current_directory();
+	String default_destination_directory = FileSystemDock::get_singleton()->get_folder_path_at_mouse_position();
+	if (default_destination_directory.is_empty()) {
+		default_destination_directory = FileSystemDock::get_singleton()->get_current_directory();
 	}
-	to_path = ProjectSettings::get_singleton()->globalize_path(to_path);
+	String destination_directory = default_destination_directory;
+	if (destination_directory.is_empty() || destination_directory == "." || destination_directory == "Favorites") {
+		destination_directory = "res://";
+	}
+	destination_directory = destination_directory.simplify_path();
+	ERR_FAIL_COND_MSG(!destination_directory.begins_with("res://"), vformat("External files can only be dropped into the project resource path, got '%s'.", destination_directory));
+	if (!destination_directory.ends_with("/")) {
+		destination_directory += "/";
+	}
+
+	external_file_drop_dispatcher.enqueue(p_files, destination_directory, default_destination_directory);
+}
+
+void EditorNode::_perform_default_external_file_drop(const Vector<String> &p_files, const String &p_destination_directory) {
+	String to_path = ProjectSettings::get_singleton()->globalize_path(p_destination_directory);
 
 	_add_dropped_files_recursive(p_files, to_path);
 
@@ -8947,6 +8980,7 @@ HashMap<String, Variant> EditorNode::get_initial_settings() {
 EditorNode::EditorNode() {
 	DEV_ASSERT(!singleton);
 	singleton = this;
+	external_file_drop_dispatcher.configure(this, &_get_external_file_drop_plugin_count, &_get_external_file_drop_plugin, &_perform_default_external_file_drop_callback);
 
 	// Detecting headless mode, that means the editor is running in command line.
 	if (!DisplayServer::get_singleton()->window_can_draw()) {
@@ -10330,6 +10364,7 @@ EditorNode::EditorNode() {
 }
 
 EditorNode::~EditorNode() {
+	external_file_drop_dispatcher.shutdown();
 	EditorInspector::cleanup_plugins();
 	EditorTranslationParser::get_singleton()->clean_parsers();
 	ResourceImporterScene::clean_up_importer_plugins();
