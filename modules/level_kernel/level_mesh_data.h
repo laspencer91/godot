@@ -13,6 +13,7 @@ class LevelMeshAdjacency;
 class LevelMeshBaker;
 class LevelMeshDiff;
 class LevelMeshElementBVH;
+class Material;
 
 class LevelMeshData : public Resource {
 	GDCLASS(LevelMeshData, Resource);
@@ -30,6 +31,11 @@ public:
 	};
 
 private:
+	// Ordered, path-keyed material table. Face material indices address this
+	// array; resources themselves stay out of the mesh resource and are loaded
+	// lazily by LevelMeshBaker.
+	PackedStringArray material_paths;
+
 	// Physical row ids are stable. Alive columns distinguish active rows from
 	// holes, while the free-id columns reserve those holes for later Euler ops.
 	PackedVector3Array vertex_positions;
@@ -53,6 +59,9 @@ private:
 	PackedVector3Array face_uv_tangents;
 	// Six consecutive floats per face: Transform2D x, y, then origin columns.
 	PackedFloat32Array face_uv_transforms;
+	// Sticky hotspot identity only. UV representation remains the existing
+	// PROJECTED transform / EXPLICIT loop-UV dual path.
+	PackedStringArray face_hotspot_patch_names;
 	PackedInt32Array face_polygroup_ids;
 	PackedInt32Array face_flags;
 	PackedByteArray face_alive;
@@ -120,6 +129,12 @@ protected:
 	static void _bind_methods();
 
 public:
+	void set_material_paths(const PackedStringArray &p_values);
+	PackedStringArray get_material_paths() const;
+	int intern_material_path(const String &p_path);
+	int intern_material(const Ref<Material> &p_material);
+	String get_material_path(int p_material_index) const;
+
 	void set_vertex_positions(const PackedVector3Array &p_values);
 	PackedVector3Array get_vertex_positions() const;
 	void set_vertex_alive(const PackedByteArray &p_values);
@@ -152,6 +167,8 @@ public:
 	PackedVector3Array get_face_uv_tangents() const;
 	void set_face_uv_transforms(const PackedFloat32Array &p_values);
 	PackedFloat32Array get_face_uv_transforms() const;
+	void set_face_hotspot_patch_names(const PackedStringArray &p_values);
+	PackedStringArray get_face_hotspot_patch_names() const;
 	void set_face_polygroup_ids(const PackedInt32Array &p_values);
 	PackedInt32Array get_face_polygroup_ids() const;
 	void set_face_flags(const PackedInt32Array &p_values);
@@ -178,6 +195,16 @@ public:
 
 	Transform2D get_face_uv_transform(int p_face_id) const;
 	void set_face_uv_transform(int p_face_id, const Transform2D &p_transform);
+	String get_face_hotspot_patch_name(int p_face_id) const;
+	void set_face_hotspot_patch_name(int p_face_id, const String &p_patch_name);
+	int get_face_uv_mode(int p_face_id) const;
+	void set_face_uv_mode(int p_face_id, int p_mode);
+	Vector3 get_face_uv_origin(int p_face_id) const;
+	void set_face_uv_origin(int p_face_id, const Vector3 &p_origin);
+	Vector3 get_face_uv_tangent(int p_face_id) const;
+	void set_face_uv_tangent(int p_face_id, const Vector3 &p_tangent);
+	Vector2 get_loop_uv(int p_loop_id) const;
+	void set_loop_uv(int p_loop_id, const Vector2 &p_uv);
 	bool face_is_bakeable(int p_face_id) const;
 
 	int vertex_count() const;

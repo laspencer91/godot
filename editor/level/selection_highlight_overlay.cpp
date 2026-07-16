@@ -5,7 +5,6 @@
 #include "selection_highlight_overlay.h"
 
 #include "core/object/callable_mp.h"
-#include "core/templates/hash_set.h"
 #include "editor/level/selection_model.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -111,6 +110,10 @@ void SelectionHighlightOverlay::_rebuild_block(ObjectID p_block_id) {
 	if (!selection_model) {
 		return;
 	}
+	if (!selection_model->is_block_tracked(p_block_id)) {
+		_free_block_render(p_block_id);
+		return;
+	}
 	Object *object = ObjectDB::get_instance(p_block_id);
 	LevelBlock *block = Object::cast_to<LevelBlock>(object);
 	if (!block || block->get_data().is_null()) {
@@ -118,18 +121,46 @@ void SelectionHighlightOverlay::_rebuild_block(ObjectID p_block_id) {
 		return;
 	}
 
+	Vector<Vector3> passive_vertices;
 	Vector<Vector3> vertices;
 	Vector<Vector3> active_vertices;
+	Vector<Vector3> passive_edges;
 	Vector<Vector3> edges;
 	Vector<Vector3> active_edges;
 	Vector<Vector3> faces;
 	Vector<Vector3> active_faces;
 	const Ref<LevelMeshData> data = block->get_data();
 	const PackedVector3Array positions = data->get_vertex_positions();
+	const PackedByteArray vertex_alive = data->get_vertex_alive();
 	const PackedInt32Array edge_vertices = data->get_edge_vertices();
+	const PackedByteArray edge_alive = data->get_edge_alive();
 	const PackedInt32Array face_starts = data->get_face_loop_starts();
 	const PackedInt32Array face_counts = data->get_face_loop_counts();
 	const PackedInt32Array loop_vertices = data->get_loop_vertex_indices();
+
+	if (selection_model->get_mode() == SelectionModel::MODE_VERTEX) {
+		for (int vertex_id = 0; vertex_id < positions.size() && vertex_id < vertex_alive.size(); vertex_id++) {
+			if (vertex_alive[vertex_id] != 0) {
+				passive_vertices.push_back(positions[vertex_id]);
+			}
+		}
+	} else if (selection_model->get_mode() == SelectionModel::MODE_EDGE) {
+		for (int edge_id = 0; edge_id < edge_alive.size(); edge_id++) {
+			if (edge_alive[edge_id] == 0) {
+				continue;
+			}
+			const int offset = edge_id * 2;
+			if (offset < 0 || offset + 1 >= edge_vertices.size()) {
+				continue;
+			}
+			const int vertex_a = edge_vertices[offset];
+			const int vertex_b = edge_vertices[offset + 1];
+			if (vertex_a >= 0 && vertex_a < positions.size() && vertex_b >= 0 && vertex_b < positions.size()) {
+				passive_edges.push_back(positions[vertex_a]);
+				passive_edges.push_back(positions[vertex_b]);
+			}
+		}
+	}
 
 	for (int feature = 0; feature < SelectionModel::FEATURE_MAX; feature++) {
 		for (const SelectionModel::Element &element : selection_model->get_selected(SelectionModel::Feature(feature))) {
@@ -207,13 +238,16 @@ void SelectionHighlightOverlay::_rebuild_block(ObjectID p_block_id) {
 		}
 		render->value.mesh->surface_end();
 	};
+	append_surface(Mesh::PRIMITIVE_LINES, passive_edge_material, passive_edges);
+	append_surface(Mesh::PRIMITIVE_POINTS, passive_vertex_material, passive_vertices);
 	append_surface(Mesh::PRIMITIVE_TRIANGLES, face_material, faces);
 	append_surface(Mesh::PRIMITIVE_TRIANGLES, active_face_material, active_faces);
 	append_surface(Mesh::PRIMITIVE_LINES, edge_material, edges);
 	append_surface(Mesh::PRIMITIVE_LINES, active_edge_material, active_edges);
 	append_surface(Mesh::PRIMITIVE_POINTS, vertex_material, vertices);
 	append_surface(Mesh::PRIMITIVE_POINTS, active_vertex_material, active_vertices);
-	render->value.has_geometry = !vertices.is_empty() || !active_vertices.is_empty() || !edges.is_empty() ||
+	render->value.has_geometry = !passive_vertices.is_empty() || !passive_edges.is_empty() ||
+			!vertices.is_empty() || !active_vertices.is_empty() || !edges.is_empty() ||
 			!active_edges.is_empty() || !faces.is_empty() || !active_faces.is_empty();
 	if (render->value.instance.is_valid() && RenderingServer::get_singleton()) {
 		RenderingServer::get_singleton()->instance_set_transform(render->value.instance, block->get_global_transform());
@@ -239,45 +273,54 @@ void SelectionHighlightOverlay::set_view_visible(bool p_visible) {
 	}
 }
 
+void SelectionHighlightOverlay::set_face_highlight_dimmed(bool p_dimmed) {
+	if (face_highlight_dimmed == p_dimmed) {
+		return;
+	}
+	face_highlight_dimmed = p_dimmed;
+	face_material->set_albedo(Color(0.18, 0.58, 1.0, p_dimmed ? 0.06 : 0.22));
+	active_face_material->set_albedo(Color(1.0, 0.56, 0.10, p_dimmed ? 0.09 : 0.34));
+}
+
 void SelectionHighlightOverlay::mark_all_dirty() {
 	if (!selection_model) {
 		return;
 	}
-	HashSet<ObjectID> blocks;
-	for (int feature = 0; feature < SelectionModel::FEATURE_MAX; feature++) {
-		for (const SelectionModel::Element &element : selection_model->get_selected(SelectionModel::Feature(feature))) {
-			blocks.insert(element.block_id);
-		}
-	}
-	for (const ObjectID &block_id : blocks) {
+	for (const ObjectID &block_id : selection_model->get_tracked_block_ids()) {
 		_rebuild_block(block_id);
 	}
 }
 
 SelectionHighlightOverlay::SelectionHighlightOverlay() {
-	auto configure_material = [](const Ref<StandardMaterial3D> &p_material, const Color &p_color) {
+	auto configure_material = [](const Ref<StandardMaterial3D> &p_material, const Color &p_color, bool p_disable_depth_test = true) {
 		p_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
 		p_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
 		p_material->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-		p_material->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
+		p_material->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, p_disable_depth_test);
 		p_material->set_albedo(p_color);
 	};
 	vertex_material.instantiate();
 	active_vertex_material.instantiate();
+	passive_vertex_material.instantiate();
 	edge_material.instantiate();
 	active_edge_material.instantiate();
+	passive_edge_material.instantiate();
 	face_material.instantiate();
 	active_face_material.instantiate();
 	configure_material(vertex_material, Color(0.30, 0.76, 1.0, 0.96));
 	configure_material(active_vertex_material, Color(1.0, 0.72, 0.18, 1.0));
+	configure_material(passive_vertex_material, Color(0.42, 0.78, 1.0, 0.52), false);
 	configure_material(edge_material, Color(0.24, 0.70, 1.0, 0.92));
 	configure_material(active_edge_material, Color(1.0, 0.64, 0.12, 1.0));
+	configure_material(passive_edge_material, Color(0.38, 0.72, 1.0, 0.22), false);
 	configure_material(face_material, Color(0.18, 0.58, 1.0, 0.22));
 	configure_material(active_face_material, Color(1.0, 0.56, 0.10, 0.34));
 	vertex_material->set_flag(BaseMaterial3D::FLAG_USE_POINT_SIZE, true);
 	active_vertex_material->set_flag(BaseMaterial3D::FLAG_USE_POINT_SIZE, true);
+	passive_vertex_material->set_flag(BaseMaterial3D::FLAG_USE_POINT_SIZE, true);
 	vertex_material->set_point_size(9.0f);
 	active_vertex_material->set_point_size(12.0f);
+	passive_vertex_material->set_point_size(5.0f);
 }
 
 SelectionHighlightOverlay::~SelectionHighlightOverlay() {

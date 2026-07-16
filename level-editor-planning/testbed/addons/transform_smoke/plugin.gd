@@ -2,6 +2,7 @@
 extends EditorPlugin
 
 
+const SmokeInputReady = preload("res://addons/smoke_input_ready.gd")
 const TOOL_SELECT := 0
 const FEATURE_VERTEX := 0
 const FEATURE_FACE := 2
@@ -195,6 +196,9 @@ func _run_test() -> void:
 	block.owner = scene_root
 	for frame in 5:
 		await get_tree().process_frame
+	var input_ready_error: String = await SmokeInputReady.wait_for_level_view(get_tree(), view, container, scene_root)
+	if not _check(input_ready_error.is_empty(), input_ready_error):
+		return
 	var mesh := LevelMesh.new()
 	mesh.data = block.data
 	var host_viewport := container.get_viewport()
@@ -445,6 +449,187 @@ func _run_test() -> void:
 		await get_tree().process_frame
 	if not _check(block.data.vertex_positions == active_move_originals,
 			"Undo after the active-move R guard did not restore exact positions."):
+		return
+
+	# Persistent transform gizmo: an X-arrow drag enters the existing move
+	# lifecycle with an axis constraint already selected. Relative snapping,
+	# one-action history, and exact undo remain the same as a bare drag.
+	level_editor.snap_enabled = true
+	for frame in 3:
+		await get_tree().process_frame
+	if not _check(bool(view.get_meta("_level_transform_gizmo_visible", false)),
+			"Transform gizmo was not visible for the selected face."):
+		return
+	var gizmo_pivot: Vector3 = view.get_meta("_level_transform_gizmo_pivot", Vector3.ZERO)
+	var gizmo_scale: float = float(view.get_meta("_level_transform_gizmo_scale", 0.0))
+	var arrow_offset: float = float(view.get_meta("_level_transform_gizmo_arrow_offset", 0.0))
+	var gizmo_move_originals: PackedVector3Array = block.data.vertex_positions.duplicate()
+	var gizmo_move_version: int = history.get_version()
+	var x_arrow_world := gizmo_pivot + Vector3.RIGHT * gizmo_scale * arrow_offset
+	var x_arrow_screen := _global_screen(container, camera, x_arrow_world)
+	var x_arrow_target := _global_screen(container, camera, x_arrow_world + Vector3(1.2, 0, 0))
+	await _send_drag(host_viewport, x_arrow_screen, x_arrow_target)
+	var arrow_move_matches := true
+	var arrow_move_snapped := true
+	for vertex_id in block.data.vertex_positions.size():
+		var before_world: Vector3 = block.global_transform * gizmo_move_originals[vertex_id]
+		var after_world: Vector3 = block.global_transform * block.data.vertex_positions[vertex_id]
+		var world_delta := after_world - before_world
+		if rotation_vertex_ids.has(vertex_id):
+			arrow_move_matches = arrow_move_matches and abs(world_delta.x) > ROTATION_EPSILON and \
+					abs(world_delta.y) <= ROTATION_EPSILON and abs(world_delta.z) <= ROTATION_EPSILON
+			arrow_move_snapped = arrow_move_snapped and abs(world_delta.x - round(world_delta.x)) <= ROTATION_EPSILON
+		else:
+			arrow_move_matches = arrow_move_matches and world_delta.length() <= ROTATION_EPSILON
+	if not _check(arrow_move_matches and arrow_move_snapped and history.get_version() == gizmo_move_version + 1,
+			"X-arrow drag was not a snapped X-only move with one undo action."):
+		return
+	history.undo()
+	for frame in 3:
+		await get_tree().process_frame
+	if not _check(block.data.vertex_positions == gizmo_move_originals,
+			"Undo after X-arrow drag did not restore exact positions."):
+		return
+
+	# The XY quad stores Z as its excluding normal. A diagonal drag must keep
+	# every selected vertex's world-Z component unchanged and commit once.
+	gizmo_pivot = view.get_meta("_level_transform_gizmo_pivot", Vector3.ZERO)
+	gizmo_scale = float(view.get_meta("_level_transform_gizmo_scale", 0.0))
+	var plane_offset: float = float(view.get_meta("_level_transform_gizmo_plane_offset", 0.0))
+	var gizmo_plane_originals: PackedVector3Array = block.data.vertex_positions.duplicate()
+	var gizmo_plane_version: int = history.get_version()
+	var xy_plane_world := gizmo_pivot + (Vector3.RIGHT + Vector3.UP) * gizmo_scale * plane_offset
+	var xy_plane_screen := _global_screen(container, camera, xy_plane_world)
+	var xy_plane_target := _global_screen(container, camera, xy_plane_world + Vector3(1.2, 1.2, 0))
+	await _send_drag(host_viewport, xy_plane_screen, xy_plane_target)
+	var plane_move_matches := true
+	for vertex_id in rotation_vertex_ids:
+		var plane_before_world: Vector3 = block.global_transform * gizmo_plane_originals[vertex_id]
+		var plane_after_world: Vector3 = block.global_transform * block.data.vertex_positions[vertex_id]
+		var gizmo_plane_delta := plane_after_world - plane_before_world
+		plane_move_matches = plane_move_matches and abs(gizmo_plane_delta.x) > ROTATION_EPSILON and \
+				abs(gizmo_plane_delta.y) > ROTATION_EPSILON and abs(gizmo_plane_delta.z) <= ROTATION_EPSILON
+	if not _check(plane_move_matches and history.get_version() == gizmo_plane_version + 1,
+			"XY-plane gizmo drag escaped its plane or did not create exactly one undo action."):
+		return
+	history.undo()
+	for frame in 3:
+		await get_tree().process_frame
+	if not _check(block.data.vertex_positions == gizmo_plane_originals,
+			"Undo after plane-handle drag did not restore exact positions."):
+		return
+
+	# Grab the Z ring away from the arrow crossings. Ctrl inverts disabled
+	# snapping, so a raw 17-degree sweep resolves to an exact 15 degrees.
+	level_editor.snap_enabled = false
+	gizmo_pivot = view.get_meta("_level_transform_gizmo_pivot", Vector3.ZERO)
+	gizmo_scale = float(view.get_meta("_level_transform_gizmo_scale", 0.0))
+	var ring_radius: float = float(view.get_meta("_level_transform_gizmo_ring_radius", 0.0))
+	var ring_direction := (Vector3.RIGHT + Vector3.UP).normalized()
+	var ring_start_world := gizmo_pivot + ring_direction * gizmo_scale * ring_radius
+	var ring_start_screen := _global_screen(container, camera, ring_start_world)
+	var ring_pivot_screen := _global_screen(container, camera, gizmo_pivot)
+	var ring_target_screen := ring_pivot_screen + (ring_start_screen - ring_pivot_screen).rotated(deg_to_rad(17.0))
+	var gizmo_rotate_originals: PackedVector3Array = block.data.vertex_positions.duplicate()
+	var gizmo_rotate_version: int = history.get_version()
+	await _send_drag(host_viewport, ring_start_screen, ring_target_screen, false, true)
+	var gizmo_rotate_expected: PackedVector3Array = gizmo_rotate_originals.duplicate()
+	var gizmo_rotation := Basis(Vector3(0, 0, 1), deg_to_rad(15.0))
+	var gizmo_block_inverse := block.global_transform.affine_inverse()
+	for vertex_id in rotation_vertex_ids:
+		var gizmo_original_world: Vector3 = block.global_transform * gizmo_rotate_originals[vertex_id]
+		var gizmo_expected_world: Vector3 = gizmo_pivot + gizmo_rotation * (gizmo_original_world - gizmo_pivot)
+		gizmo_rotate_expected[vertex_id] = gizmo_block_inverse * gizmo_expected_world
+	var gizmo_rotation_matches := true
+	var gizmo_radii_preserved := true
+	for vertex_id in block.data.vertex_positions.size():
+		gizmo_rotation_matches = gizmo_rotation_matches and block.data.vertex_positions[vertex_id].distance_to(
+				gizmo_rotate_expected[vertex_id]) <= ROTATION_EPSILON
+	for vertex_id in rotation_vertex_ids:
+		var gizmo_before_distance: float = (block.global_transform * gizmo_rotate_originals[vertex_id]).distance_to(gizmo_pivot)
+		var gizmo_after_distance: float = (block.global_transform * block.data.vertex_positions[vertex_id]).distance_to(gizmo_pivot)
+		gizmo_radii_preserved = gizmo_radii_preserved and abs(gizmo_after_distance - gizmo_before_distance) <= ROTATION_EPSILON
+	if not _check(gizmo_rotation_matches and gizmo_radii_preserved and history.get_version() == gizmo_rotate_version + 1,
+			"Ctrl-snapped Z-ring rotation did not match the closed form or one-action history."):
+		return
+	history.undo()
+	for frame in 3:
+		await get_tree().process_frame
+	if not _check(block.data.vertex_positions == gizmo_rotate_originals,
+			"Undo after ring rotation did not restore exact positions."):
+		return
+
+	# A second ring gesture cancelled with Escape restores the preview exactly
+	# and does not create a history entry.
+	gizmo_pivot = view.get_meta("_level_transform_gizmo_pivot", Vector3.ZERO)
+	gizmo_scale = float(view.get_meta("_level_transform_gizmo_scale", 0.0))
+	ring_start_world = gizmo_pivot + ring_direction * gizmo_scale * ring_radius
+	ring_start_screen = _global_screen(container, camera, ring_start_world)
+	ring_pivot_screen = _global_screen(container, camera, gizmo_pivot)
+	ring_target_screen = ring_pivot_screen + (ring_start_screen - ring_pivot_screen).rotated(deg_to_rad(17.0))
+	var gizmo_cancel_originals: PackedVector3Array = block.data.vertex_positions.duplicate()
+	var gizmo_cancel_version: int = history.get_version()
+	await _send_drag(host_viewport, ring_start_screen, ring_target_screen, false, true, true)
+	if not _check(block.data.vertex_positions == gizmo_cancel_originals and history.get_version() == gizmo_cancel_version,
+			"Escape on a ring drag changed geometry or created an undo entry."):
+		return
+	level_editor.snap_enabled = true
+
+	# A non-handle click still replaces selection through the ordinary picker,
+	# while a zero-motion click on the X arrow leaves selection and history alone.
+	await _send_key(host_viewport, KEY_1)
+	var selected_face_center := Vector3.ZERO
+	for vertex_id in rotation_vertex_ids:
+		selected_face_center += block.global_transform * block.data.vertex_positions[vertex_id]
+	selected_face_center /= float(rotation_vertex_ids.size())
+	var selected_face_center_screen := _global_screen(container, camera, selected_face_center)
+	var first_vertex_id: int = rotation_vertex_ids[0]
+	var first_vertex_screen := _global_screen(container, camera,
+			block.global_transform * block.data.vertex_positions[first_vertex_id]).lerp(selected_face_center_screen, 0.02)
+	await _send_click(host_viewport, first_vertex_screen)
+	var first_vertex_entries := _entries(view, FEATURE_VERTEX)
+	if not _check(first_vertex_entries.size() == 1, "Precondition vertex for gizmo routing was not selected."):
+		return
+	for frame in 3:
+		await get_tree().process_frame
+	var second_vertex_id := first_vertex_id
+	var second_vertex_screen := first_vertex_screen
+	var farthest_screen_distance := 0.0
+	for candidate_id in rotation_vertex_ids:
+		var candidate_screen := _global_screen(container, camera,
+				block.global_transform * block.data.vertex_positions[candidate_id]).lerp(selected_face_center_screen, 0.02)
+		var candidate_distance := candidate_screen.distance_to(first_vertex_screen)
+		if candidate_distance > farthest_screen_distance:
+			farthest_screen_distance = candidate_distance
+			second_vertex_id = candidate_id
+			second_vertex_screen = candidate_screen
+	await _send_click(host_viewport, second_vertex_screen)
+	var second_vertex_entries := _entries(view, FEATURE_VERTEX)
+	if not _check(second_vertex_id != first_vertex_id and second_vertex_entries != first_vertex_entries,
+			"A non-handle click did not replace the selected vertex normally (ids=%d->%d distance=%f entries=%s->%s)." % [
+					first_vertex_id, second_vertex_id, farthest_screen_distance, first_vertex_entries, second_vertex_entries]):
+		return
+	if second_vertex_entries.is_empty():
+		# The farthest projected corner can be outside the deformed face's pick
+		# silhouette. Clearing selection is still the expected picker result;
+		# reselect the known visible corner to exercise the handle refusal below.
+		await _send_click(host_viewport, first_vertex_screen)
+		second_vertex_entries = _entries(view, FEATURE_VERTEX)
+		if not _check(second_vertex_entries.size() == 1, "Could not restore a vertex selection for handle refusal."):
+			return
+	for frame in 3:
+		await get_tree().process_frame
+	gizmo_pivot = view.get_meta("_level_transform_gizmo_pivot", Vector3.ZERO)
+	gizmo_scale = float(view.get_meta("_level_transform_gizmo_scale", 0.0))
+	x_arrow_world = gizmo_pivot + Vector3.RIGHT * gizmo_scale * arrow_offset
+	x_arrow_screen = _global_screen(container, camera, x_arrow_world)
+	var handle_selection_before := _entries(view, FEATURE_VERTEX).duplicate(true)
+	var handle_positions_before: PackedVector3Array = block.data.vertex_positions.duplicate()
+	var handle_version_before: int = history.get_version()
+	await _send_click(host_viewport, x_arrow_screen)
+	if not _check(_entries(view, FEATURE_VERTEX) == handle_selection_before and
+			block.data.vertex_positions == handle_positions_before and history.get_version() == handle_version_before,
+			"A press on a gizmo handle changed selection, geometry, or history."):
 		return
 
 	print("TRANSFORM_EDITOR_SMOKE_OK")

@@ -154,6 +154,18 @@ void Box3DPhysics::register_project_settings() {
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_damping_ratio", PROPERTY_HINT_RANGE, U"0,10,0.01,or_greater"), 2.0f);
 }
 
+void Box3DPhysics::_ensure_surface_material_library() const {
+	if (library.is_valid()) {
+		return;
+	}
+	const String path = GLOBAL_GET("physics/box3d/surface_material_library");
+	if (!path.is_empty()) {
+		// Project libraries may subclass the native resource in GDScript or a GDExtension. Loading
+		// during module initialization is too early for those types, so resolve on first real use.
+		const_cast<Box3DPhysics *>(this)->reload_surface_material_library();
+	}
+}
+
 void Box3DPhysics::reload_surface_material_library() {
 	library.unref();
 	materials_by_name.clear();
@@ -195,16 +207,19 @@ void Box3DPhysics::reload_surface_material_library() {
 }
 
 int Box3DPhysics::get_material_id(const StringName &p_name) const {
+	_ensure_surface_material_library();
 	const Ref<Box3DSurfaceMaterial> *material = materials_by_name.getptr(p_name);
 	return material && material->is_valid() ? (*material)->get_material_id() : 0;
 }
 
 StringName Box3DPhysics::get_material_name(int p_id) const {
+	_ensure_surface_material_library();
 	const Ref<Box3DSurfaceMaterial> *material = materials_by_id.getptr(p_id);
 	return material && material->is_valid() ? (*material)->get_material_name() : StringName();
 }
 
 Ref<Box3DSurfaceMaterial> Box3DPhysics::get_material(const Variant &p_id_or_name) const {
+	_ensure_surface_material_library();
 	if (p_id_or_name.get_type() == Variant::INT) {
 		const Ref<Box3DSurfaceMaterial> *material = materials_by_id.getptr((int)p_id_or_name);
 		return material ? *material : Ref<Box3DSurfaceMaterial>();
@@ -214,6 +229,7 @@ Ref<Box3DSurfaceMaterial> Box3DPhysics::get_material(const Variant &p_id_or_name
 }
 
 int Box3DPhysics::match_texture(const String &p_texture_name) const {
+	_ensure_surface_material_library();
 	for (const KeyValue<StringName, Ref<Box3DSurfaceMaterial>> &kv : materials_by_name) {
 		PackedStringArray patterns = kv.value->get_texture_patterns();
 		for (int i = 0; i < patterns.size(); i++) {
@@ -351,6 +367,7 @@ bool Box3DPhysics::recording_validate_file(const String &p_path, int p_worker_co
 }
 
 String Box3DPhysics::get_material_name_hint() const {
+	_ensure_surface_material_library();
 	if (library.is_null()) {
 		return String();
 	}
@@ -363,6 +380,11 @@ String Box3DPhysics::get_material_name_hint() const {
 		}
 	}
 	return String(",").join(names);
+}
+
+Ref<Box3DSurfaceMaterialLibrary> Box3DPhysics::get_surface_material_library() const {
+	_ensure_surface_material_library();
+	return library;
 }
 
 void Box3DSurfaceOverride3D::_bind_methods() {

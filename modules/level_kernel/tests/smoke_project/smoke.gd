@@ -388,10 +388,12 @@ func _check_box_uvs(data: LevelMeshData) -> void:
 
 
 func _dominant_axis_tangent(normal: Vector3) -> Vector3:
+	# Deliberately amended with WP13: default frames use the Cyclops negative sign
+	# table (tools/09 §1.2) so create_box agrees with Align-to-Grid/extrude walls.
 	var absolute_normal := normal.abs()
-	var world_tangent := Vector3(0, 0, 1) if (
+	var world_tangent := Vector3(0, 0, -1) if (
 			absolute_normal.x >= absolute_normal.y and absolute_normal.x >= absolute_normal.z
-	) else Vector3(1, 0, 0)
+	) else Vector3(-1, 0, 0)
 	return (world_tangent - normal * normal.dot(world_tangent)).normalized()
 
 

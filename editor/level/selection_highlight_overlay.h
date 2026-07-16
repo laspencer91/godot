@@ -32,10 +32,13 @@ class SelectionHighlightOverlay : public Object {
 
 	Ref<StandardMaterial3D> vertex_material;
 	Ref<StandardMaterial3D> active_vertex_material;
+	Ref<StandardMaterial3D> passive_vertex_material;
 	Ref<StandardMaterial3D> edge_material;
 	Ref<StandardMaterial3D> active_edge_material;
+	Ref<StandardMaterial3D> passive_edge_material;
 	Ref<StandardMaterial3D> face_material;
 	Ref<StandardMaterial3D> active_face_material;
+	bool face_highlight_dimmed = false;
 
 	void _selection_changed(const PackedInt64Array &p_dirty_blocks);
 	void _create_block_render(ObjectID p_block_id);
@@ -49,6 +52,7 @@ class SelectionHighlightOverlay : public Object {
 public:
 	void initialize(SelectionModel *p_selection_model, const RID &p_scenario, int p_render_layer);
 	void set_view_visible(bool p_visible);
+	void set_face_highlight_dimmed(bool p_dimmed);
 	void mark_all_dirty();
 
 	SelectionHighlightOverlay();

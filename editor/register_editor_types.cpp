@@ -80,6 +80,11 @@
 #include "editor/inspector/sub_viewport_preview_editor_plugin.h"
 #include "editor/inspector/tool_button_editor_plugin.h"
 #include "editor/level/level_editor.h"
+#include "editor/level/blockout_material_registry.h"
+#include "editor/level/material_browser_dock.h"
+#include "editor/level/material_index.h"
+#include "editor/level/material_preview_generator.h"
+#include "editor/level/texel_density_scanner.h"
 #include "editor/scene/2d/camera_2d_editor_plugin.h"
 #include "editor/scene/2d/light_occluder_2d_editor_plugin.h"
 #include "editor/scene/2d/line_2d_editor_plugin.h"
@@ -196,6 +201,11 @@ void register_editor_types() {
 	GDREGISTER_ABSTRACT_CLASS(EditorUndoRedoManager);
 	GDREGISTER_CLASS(EditorContextMenuPlugin);
 	// G-Level LE0: script-visible editor-only service API used by tool smokes.
+	GDREGISTER_ABSTRACT_CLASS(MaterialIndex);
+	GDREGISTER_ABSTRACT_CLASS(TexelDensityScanner);
+	GDREGISTER_ABSTRACT_CLASS(MaterialBrowserPreviewQueue);
+	GDREGISTER_ABSTRACT_CLASS(BlockoutMaterialRegistry);
+	GDREGISTER_ABSTRACT_CLASS(MaterialBrowserDock);
 	GDREGISTER_ABSTRACT_CLASS(LevelEditor);
 
 	GDREGISTER_ABSTRACT_CLASS(FileSystemDock);

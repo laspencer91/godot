@@ -16,16 +16,31 @@ Vector3 LevelSnapService::snap_point_to_plane_grid(const Vector3 &p_point, const
 	return p_grid_transform.xform(local);
 }
 
+Vector3 LevelSnapService::snap_point_to_plane_grid(const Vector3 &p_point, const Transform3D &p_grid_transform, real_t p_step, bool p_enabled) {
+	ERR_FAIL_COND_V(!p_point.is_finite(), p_point);
+	return p_enabled ? snap_point_to_plane_grid(p_point, p_grid_transform, p_step) : p_point;
+}
+
 real_t LevelSnapService::snap_delta(real_t p_delta, real_t p_step) {
 	ERR_FAIL_COND_V(!Math::is_finite(p_delta), p_delta);
 	ERR_FAIL_COND_V(!Math::is_finite(p_step) || p_step <= CMP_EPSILON, p_delta);
 	return Math::snapped(p_delta, p_step);
 }
 
+real_t LevelSnapService::snap_delta(real_t p_delta, real_t p_step, bool p_enabled) {
+	ERR_FAIL_COND_V(!Math::is_finite(p_delta), p_delta);
+	return p_enabled ? snap_delta(p_delta, p_step) : p_delta;
+}
+
 Vector3 LevelSnapService::snap_delta(const Vector3 &p_delta, real_t p_step) {
 	ERR_FAIL_COND_V(!p_delta.is_finite(), p_delta);
 	ERR_FAIL_COND_V(!Math::is_finite(p_step) || p_step <= CMP_EPSILON, p_delta);
 	return p_delta.snappedf(p_step);
+}
+
+Vector3 LevelSnapService::snap_delta(const Vector3 &p_delta, real_t p_step, bool p_enabled) {
+	ERR_FAIL_COND_V(!p_delta.is_finite(), p_delta);
+	return p_enabled ? snap_delta(p_delta, p_step) : p_delta;
 }
 
 real_t LevelSnapService::snap_angle(real_t p_angle, real_t p_step) {

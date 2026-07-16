@@ -91,7 +91,7 @@ private:
 	static bool _contains(const Vector<Element> &p_elements, const Element &p_element, int *r_index = nullptr);
 	static void _append_dirty(Vector<ObjectID> &r_dirty, ObjectID p_block_id);
 	void _emit_changed(const Vector<ObjectID> &p_dirty_blocks);
-	void _emit_all_selected_dirty();
+	void _emit_all_tracked_dirty();
 	void _refresh_active(Feature p_feature);
 	bool _belongs_to_document(LevelBlock *p_block) const;
 	void _scan_node(Node *p_node);
@@ -126,6 +126,8 @@ public:
 	int get_count(Feature p_feature) const;
 	bool get_active(Feature p_feature, Element &r_element) const;
 	bool is_active(const Element &p_element) const;
+	bool is_block_tracked(ObjectID p_block_id) const;
+	Vector<ObjectID> get_tracked_block_ids() const;
 	bool resolve(const Element &p_element, LevelBlock *&r_block, Ref<LevelMesh> &r_mesh, int &r_slot) const;
 
 	Array get_debug_entries() const;

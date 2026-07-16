@@ -39,12 +39,11 @@ DreamUV, Zen UV, rmKit, Scythe).
 ## 1. Architecture — sorted by the workspace taxonomy
 
 ### SERVICE (one per editor): `LevelEditor` singleton
-`editor/level/level_editor.{h,cpp}`. Owns: tool-mode state (select/block/clip/…),
-selection-topology tier (polygroup vs triangle — Scythe's two-tier model), snap settings,
-`ED_SHORTCUT` registrations, the hotspot-atlas registry, the material browser dock and active
-material, and `create_editor_view(LevelDocument*)` — the factory `DocumentView` calls, exactly
-like `ShaderEditorPlugin::create_editor_view` (GS2 pattern). Holds **no render state**
-(seam rule 1).
+`editor/level/level_editor.{h,cpp}`. Owns project-shared snap settings, `ED_SHORTCUT`
+registrations, hotspot/material registries, the material index/scanner, and one shared thumbnail
+queue/cache. It mints document-bound Level and material-browser views for `DocumentView`, exactly
+like `ShaderEditorPlugin::create_editor_view` (GS2 pattern). Tool-mode commands resolve the active
+bound view; they are not broadcast to every Level document. Holds **no render state** (seam rule 1).
 
 ### VIEW STATE (one per pane): `LevelEditorView`
 `editor/level/level_editor_view.{h,cpp}`. The editor surface a `DocumentView` mints: viewport
@@ -53,7 +52,8 @@ bound to the document's `World3D`, camera (orbit-around-selection, WASD flythrou
 copied from `Node3DEditorView`), selection-highlight overlay instances (RenderingServer, on the
 document's scenario, per-world gizmo cull layer via the existing `allocate/free_gizmo_layer`
 per-scenario map), viewport input routing to the active tool, per-pane toolbar mounted into
-`DocumentView::toolbar_host`.
+`DocumentView::toolbar_host`, compact tool rail, active-material swatch, and the fixed-width,
+selection-aware texture/tool options panel.
 
 ### DOCUMENT STATE: `LevelDocument : SceneDocument`
 `editor/editor_document.h` — new type `TYPE_LEVEL` (append-only enum). The edited thing IS a
@@ -61,7 +61,9 @@ scene (e.g. `greybox_house.tscn`); opening "in Level Editor" (FileSystem context
 toolbar toggle on an open scene tab) creates a `LevelDocument` instead of a plain
 `SceneDocument`. Inherits: isolated world, per-document `EditorSelection`, per-document undo
 history id, tab persistence. Adds: level-editing session state (active block set, kernel
-transaction journal head). Two panes can show the same level; a normal 3D scene tab can sit
+transaction journal head), including active material/binding, captured Lift mapping, and hotspot
+mapping override. Drawer/filter/zoom/scroll and context-panel presentation live in the document's
+`contextual_editor_states`. Two panes can show the same level; a normal 3D scene tab can sit
 beside it — something UE/Scythe cannot do.
 
 ### KERNEL (no editor dependencies): `modules/level_kernel`
@@ -95,6 +97,8 @@ Sibling to `box3d_physics` / `horde_sim`.
   it emits diffs; the editor owns the stack.
 - Fully scriptable: classes exposed to GDScript/traits so headless checks in the game repo can
   drive every operator without the editor.
+- **LE2 UV schema delta:** projected/explicit face recipes and always-materialized loop `uv0`
+  serialize and undo together; the baker remains loop-UV-only.
 
 ### Picking
 Face/edge/vertex picking against `LevelMesh` via a per-block BVH (reuse the fork's
@@ -120,13 +124,15 @@ Polygroup expansion happens at selection level, not pick level.
 - **Texture lock ON by default** — UVs survive geometry transforms.
 - **One-stop shop**: block tools, kit placement, entity/prop placement, and light placement all
   reachable from the tab; leaving the tab for the 3D editor should be rare, not constant.
-- **Toolbar layout**: left vertical toolbar = tool modes (Scythe-style); top strip (per-pane
-  `toolbar_host`) = selection tier, grid size, texel density, snap toggle; lower-left
-  persistent **Active Material swatch**; right side = collapsible docks (material browser,
-  modify-texture panel, tool options) using the workspace's accordion dock cards.
+- **Toolbar layout**: left vertical toolbar = compact tool-mode icons plus the active-material
+  swatch (Scythe-style); top strip (per-pane `toolbar_host`) = selection tier, grid size, texel
+  density, snap toggle. A user-collapsible contextual panel between the rail and viewport shows
+  block, selection, UV, or modal-session controls without resizing itself on selection changes.
+  The material browser is a document-owned bottom drawer.
 - **Texture-alignment UI gets first-class design attention** — it's the one place Scythe's UX
-  demonstrably failed (a user shipped a replacement panel). The Modify Texture panel (numpad
-  nudge/justify/fit grid) is persistent, not modal.
+  demonstrably failed (a user shipped a replacement panel). Numpad nudge/justify/fit commands are
+  organized into semantic groups in the selection-aware contextual panel, not mixed into the
+  material gallery and not shown when the current selection cannot use them.
 
 ## 3. Hotspot system (headline feature — the differentiator)
 
@@ -150,10 +156,10 @@ Polygroup expansion happens at selection level, not pick level.
 - **Hotspot Editor** — patch annotation over the texture (draw rects on a grid, set flags).
   Implemented as a `ResourceDocument`-style workspace tab for the atlas resource: the
   workspace gives this for free and it dogfoods the document model.
-- **Material browser dock**: `EditorResourcePreview` async thumbnails (existing
-  `EditorMaterialPreviewPlugin` sphere render; add a flat/cube generator variant for trim
-  materials), filtered to `M_*` per project convention, hotspot-enabled badge, click = set
-  active material, blockout-material quick slots (`Shift+Alt+1..0`).
+- **Material browser drawer**: document-bound, horizontally virtualized flat thumbnails backed by
+  one shared async preview queue/cache; source/search/`M_*` filters, 80–160 px zoom (108 default),
+  release-to-select, resource drag, and blockout-material quick slots (`Shift+Alt+1..0`). It is
+  hosted below only the Level surface, so the right accordion remains full height.
 - **Texel density source**: read base-color texture dims from the material; recognized
   parameter names configurable in editor settings (Scythe's naming-convention lesson), default
   covering `albedo_texture`/`BaseColor`/etc. Never key caches by material *name*
@@ -179,10 +185,10 @@ DIVERGENCE-LEDGER entry for any upstream-file touch, (d) a `DECISIONS.md` note g
 - **LE1 — Selection + core edit.** All selection modes/tiers, BVH picking, flood fill,
   loop/ring, path select; move verts/edges/faces/objects; face extrude (`Shift`-drag) +
   push/pull (`Shift+Ctrl`); boundary-edge extrude; nudge; vertices-to-grid; duplicate.
-- **LE2 — Fast texturing.** Active material + material browser dock (3D thumbnails);
+- **LE2 — Fast texturing.** Document-owned active material + horizontal material drawer;
   apply (`Shift+T`), lift (`Shift+RMB`), wrap (`Alt+RMB`), wrap-to-selection, flow;
-  align-to-grid/face; texture lock; Modify Texture panel (numpad grammar: shift/scale/rotate/
-  fit/justify); Fast Texture overlay (`Shift+Q`) with unwrap modes (Use Existing / Conforming /
+  align-to-grid/face; texture lock; contextual texture controls (numpad grammar: shift/scale/
+  rotate/fit/justify); Fast Texture overlay (`Shift+Q`) with unwrap modes (Use Existing / Conforming /
   Square / Follow Quads / Planar); blockout material slots.
 - **LE3 — Hotspots.** Atlas resource + `.rect` I/O + Hotspot Editor tab + fitter + grouped
   (`Shift+H`) / individual (`Shift+F`) apply + PSX kit atlases. **End of slice-critical scope.**

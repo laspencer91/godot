@@ -2,6 +2,7 @@
 extends EditorPlugin
 
 
+const SmokeInputReady = preload("res://addons/smoke_input_ready.gd")
 const TOOL_SELECT := 0
 const MODE_VERTEX := 0
 const MODE_EDGE := 1
@@ -186,12 +187,15 @@ func _run_test() -> void:
 	undo_manager.commit_action()
 	for frame in 5:
 		await get_tree().process_frame
+	var input_ready_error: String = await SmokeInputReady.wait_for_level_view(get_tree(), view, container, scene_root)
+	if not _check(input_ready_error.is_empty(), input_ready_error):
+		return
 
 	var host_viewport := container.get_viewport()
 	var mesh_a := LevelMesh.new()
 	mesh_a.data = block_a.data
-	var face_center_a := _global_screen(container, camera, Vector3(-2, 0, 1))
 	await _send_key(host_viewport, KEY_3)
+	var face_center_a := _global_screen(container, camera, Vector3(-2, 0, 1))
 	await _send_click(host_viewport, face_center_a)
 	var face_entries := _entries(view, FEATURE_FACE)
 	if not _check(int(view.get_meta("_level_selection_mode", -1)) == MODE_FACE and
@@ -210,11 +214,13 @@ func _run_test() -> void:
 		return
 
 	await _send_key(host_viewport, KEY_2)
-	var edge_position := _global_screen(container, camera, Vector3(-2, 1, 1)) + Vector2(0, 4)
+	# Deliberately click well inside the visible +Z face. Edge mode must first
+	# resolve that face, then choose its nearest real edge without a pixel cutoff.
+	var edge_position := _global_screen(container, camera, Vector3(-2, 0.5, 1))
 	await _send_click(host_viewport, edge_position)
 	var edge_entries := _entries(view, FEATURE_EDGE)
 	if not _check(edge_entries.size() == 1 and int(edge_entries[0].handle) == mesh_a.make_edge_handle(6),
-			"8 px edge-tolerance pick did not resolve the exact top-front edge handle."):
+			"Face-local closest-edge picking did not resolve the top-front edge handle."):
 		return
 
 	await _send_key(host_viewport, KEY_1)
@@ -245,12 +251,20 @@ func _run_test() -> void:
 	for point in projected:
 		min_screen = min_screen.min(point)
 		max_screen = max_screen.max(point)
+	# The transform gizmo intentionally wins when a marquee begins over one of its
+	# handles. Clear the point selection first so this assertion exercises marquee
+	# replacement deterministically at every restored editor layout/viewport size.
+	await _send_key(host_viewport, KEY_ESCAPE)
+	if not _check(_entries(view, FEATURE_VERTEX).is_empty(),
+			"Escape did not clear the vertex selection before the marquee gesture."):
+		return
 	var marquee_from: Vector2 = container.get_global_transform_with_canvas() * (min_screen - Vector2(12, 12))
 	var marquee_to: Vector2 = container.get_global_transform_with_canvas() * (max_screen + Vector2(12, 12))
 	await _send_marquee(host_viewport, marquee_from, marquee_to)
 	vertex_entries = _entries(view, FEATURE_VERTEX)
 	if not _check(vertex_entries.size() == 8 and _all_entries_belong_to(vertex_entries, block_a),
-			"X-ray marquee did not enclose all eight vertices of only the first block."):
+			"X-ray marquee did not enclose all eight vertices of only the first block (got %d: %s)." % [
+					vertex_entries.size(), vertex_entries]):
 		return
 	await _send_key(host_viewport, KEY_I, false, true)
 	vertex_entries = _entries(view, FEATURE_VERTEX)

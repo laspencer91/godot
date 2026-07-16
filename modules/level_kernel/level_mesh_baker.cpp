@@ -6,8 +6,11 @@
 
 #include "level_mesh_data.h"
 
+#include "core/io/resource_loader.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_map.h"
+#include "scene/resources/image_texture.h"
+#include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
 
 namespace {
@@ -21,6 +24,74 @@ struct SurfaceBucket {
 };
 
 } // namespace
+
+String LevelMeshBaker::get_builtin_blockout_material_path(int p_slot) {
+	if (p_slot < 0 || p_slot >= 10) {
+		return String();
+	}
+	return "builtin://level_editor/blockout/" + itos(p_slot);
+}
+
+Ref<Material> LevelMeshBaker::resolve_material_path(const String &p_path) {
+	static const String prefix = "builtin://level_editor/blockout/";
+	if (!p_path.begins_with(prefix)) {
+		if (p_path.is_empty()) {
+			return Ref<Material>();
+		}
+		Ref<Material> material = ResourceLoader::load(p_path);
+		return material;
+	}
+
+	const String slot_string = p_path.trim_prefix(prefix);
+	if (!slot_string.is_valid_int()) {
+		return Ref<Material>();
+	}
+	const int slot = slot_string.to_int();
+	if (slot < 0 || slot >= 10 || get_builtin_blockout_material_path(slot) != p_path) {
+		return Ref<Material>();
+	}
+
+	static const Color colors[10] = {
+		Color("4a4d52"), Color("696d73"), Color("92969c"), Color("c2c5c9"),
+		Color("d46a2d"), Color("e89b3f"), Color("3f72bb"), Color("53a4cf"),
+		Color("4f9a62"), Color("78b94d")
+	};
+	static const char *names[10] = {
+		"Blockout 1 - Charcoal", "Blockout 2 - Dark Gray", "Blockout 3 - Mid Gray", "Blockout 4 - Light Gray",
+		"Blockout 5 - Orange", "Blockout 6 - Amber", "Blockout 7 - Blue", "Blockout 8 - Cyan",
+		"Blockout 9 - Green", "Blockout 0 - Lime"
+	};
+
+	const Color base = colors[slot];
+	const Color alternate = base.lerp(Color(1, 1, 1), 0.16f);
+	const Color grid = base.lerp(Color(0, 0, 0), 0.58f);
+	const Color axis = slot % 2 == 0 ? Color(1.0, 0.82, 0.22) : Color(0.95, 0.95, 0.95);
+	Ref<Image> image = Image::create_empty(64, 64, false, Image::FORMAT_RGBA8);
+	for (int y = 0; y < 64; y++) {
+		for (int x = 0; x < 64; x++) {
+			Color pixel = (((x / 8) + (y / 8)) & 1) == 0 ? base : alternate;
+			if (x % 16 == 0 || y % 16 == 0) {
+				pixel = grid;
+			}
+			if (x == 32 || y == 32) {
+				pixel = axis;
+			}
+			image->set_pixel(x, y, pixel);
+		}
+	}
+
+	Ref<ImageTexture> texture = ImageTexture::create_from_image(image);
+	texture->set_name(names[slot]);
+	Ref<StandardMaterial3D> material;
+	material.instantiate();
+	material->set_name(names[slot]);
+	material->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, texture);
+	material->set_texture_filter(BaseMaterial3D::TEXTURE_FILTER_NEAREST_WITH_MIPMAPS);
+	material->set_flag(BaseMaterial3D::FLAG_USE_TEXTURE_REPEAT, true);
+	material->set_roughness(0.9f);
+	material->set_metallic(0.0f);
+	return material;
+}
 
 Vector3 LevelMeshBaker::_face_normal(const LevelMeshData &p_data, int p_face_id) {
 	const int loop_start = p_data.face_loop_starts[p_face_id];
@@ -96,7 +167,12 @@ Ref<ArrayMesh> LevelMeshBaker::bake(const Ref<LevelMeshData> &p_data) const {
 		arrays[Mesh::ARRAY_COLOR] = bucket.colors;
 		arrays[Mesh::ARRAY_INDEX] = bucket.indices;
 		mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-		mesh->surface_set_name(mesh->get_surface_count() - 1, "Material " + itos(material_index));
+		const int surface_index = mesh->get_surface_count() - 1;
+		mesh->surface_set_name(surface_index, "Material " + itos(material_index));
+		const Ref<Material> material = resolve_material_path(p_data->get_material_path(material_index));
+		if (material.is_valid()) {
+			mesh->surface_set_material(surface_index, material);
+		}
 	}
 
 	return mesh;

@@ -40,12 +40,10 @@ void SelectionModel::_emit_changed(const Vector<ObjectID> &p_dirty_blocks) {
 	emit_signal(SNAME("selection_changed"), dirty_blocks);
 }
 
-void SelectionModel::_emit_all_selected_dirty() {
+void SelectionModel::_emit_all_tracked_dirty() {
 	Vector<ObjectID> dirty;
-	for (int feature = 0; feature < FEATURE_MAX; feature++) {
-		for (const Element &element : selected[feature]) {
-			_append_dirty(dirty, element.block_id);
-		}
+	for (const KeyValue<ObjectID, Ref<LevelMeshData>> &entry : tracked_block_data) {
+		dirty.push_back(entry.key);
 	}
 	_emit_changed(dirty);
 }
@@ -133,10 +131,14 @@ void SelectionModel::_track_block(LevelBlock *p_block) {
 		new_data->connect_changed(changed_callable);
 		new_data->connect(SNAME("mesh_diff_applied"), diff_callable);
 	}
+	Vector<ObjectID> dirty;
+	dirty.push_back(block_id);
+	_emit_changed(dirty);
 }
 
 void SelectionModel::_untrack_block(ObjectID p_block_id, bool p_drop_selection) {
 	HashMap<ObjectID, Ref<LevelMeshData>>::Iterator tracked = tracked_block_data.find(p_block_id);
+	const bool was_tracked = bool(tracked);
 	if (tracked) {
 		const int64_t bound_id = (int64_t)(uint64_t)p_block_id;
 		if (tracked->value.is_valid()) {
@@ -178,6 +180,8 @@ void SelectionModel::_untrack_block(ObjectID p_block_id, bool p_drop_selection) 
 	}
 	if (changed) {
 		revision++;
+	}
+	if (was_tracked || changed) {
 		Vector<ObjectID> dirty;
 		dirty.push_back(p_block_id);
 		_emit_changed(dirty);
@@ -282,7 +286,8 @@ void SelectionModel::set_mode_and_tier(Mode p_mode, Tier p_tier) {
 	}
 	mode = p_mode;
 	tier = p_tier;
-	_emit_all_selected_dirty();
+	revision++;
+	_emit_all_tracked_dirty();
 }
 
 void SelectionModel::apply(const SelectionOp &p_op) {
@@ -431,6 +436,19 @@ bool SelectionModel::get_active(Feature p_feature, Element &r_element) const {
 bool SelectionModel::is_active(const Element &p_element) const {
 	return p_element.feature >= FEATURE_VERTEX && p_element.feature < FEATURE_MAX &&
 			has_active[p_element.feature] && active[p_element.feature] == p_element;
+}
+
+bool SelectionModel::is_block_tracked(ObjectID p_block_id) const {
+	return tracked_block_data.has(p_block_id);
+}
+
+Vector<ObjectID> SelectionModel::get_tracked_block_ids() const {
+	Vector<ObjectID> block_ids;
+	block_ids.reserve(tracked_block_data.size());
+	for (const KeyValue<ObjectID, Ref<LevelMeshData>> &entry : tracked_block_data) {
+		block_ids.push_back(entry.key);
+	}
+	return block_ids;
 }
 
 bool SelectionModel::resolve(const Element &p_element, LevelBlock *&r_block, Ref<LevelMesh> &r_mesh, int &r_slot) const {

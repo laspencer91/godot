@@ -4,6 +4,10 @@
 
 #include "register_types.h"
 
+#include "fast_texture_session.h"
+#include "hotspot_atlas.h"
+#include "hotspot_binding.h"
+#include "hotspot_fitter.h"
 #include "level_block.h"
 #include "level_mesh.h"
 #include "level_mesh_adjacency.h"
@@ -20,10 +24,15 @@ void initialize_level_kernel_module(ModuleInitializationLevel p_level) {
 	}
 
 	GDREGISTER_CLASS(LevelMeshData);
+	GDREGISTER_CLASS(HotspotPatch);
+	GDREGISTER_CLASS(HotspotAtlas);
+	GDREGISTER_CLASS(HotspotBinding);
+	GDREGISTER_CLASS(HotspotFitter);
 	GDREGISTER_CLASS(LevelMeshDiff);
 	GDREGISTER_CLASS(LevelMeshAdjacency);
 	GDREGISTER_CLASS(LevelMeshElementBVH);
 	GDREGISTER_CLASS(LevelMesh);
+	GDREGISTER_CLASS(FastTextureSession);
 	GDREGISTER_CLASS(LevelMeshBaker);
 	GDREGISTER_CLASS(LevelBlock);
 }

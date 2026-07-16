@@ -59,7 +59,6 @@ void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
 
 	Box3DPhysics::register_project_settings();
 	box3d_physics_singleton = memnew(Box3DPhysics);
-	box3d_physics_singleton->reload_surface_material_library();
 	Engine::get_singleton()->add_singleton(Engine::Singleton("Box3DPhysics", box3d_physics_singleton));
 
 	PhysicsServer3DManager::get_singleton()->register_server("Box3D", callable_mp_static(&create_box3d_physics_server));

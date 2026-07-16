@@ -7,6 +7,7 @@
 #include "level_mesh_diff.h"
 
 #include "core/object/class_db.h"
+#include "scene/resources/material.h"
 
 #define LEVEL_MESH_DATA_ACCESSORS(m_type, m_name, m_member) \
 	void LevelMeshData::set_##m_name(const m_type &p_values) { \
@@ -23,7 +24,9 @@ void LevelMeshData::_emit_mesh_diff_applied(const Ref<LevelMeshDiff> &p_diff, bo
 
 void LevelMeshData::_emit_mesh_preview_changed() {
 	emit_signal(SNAME("mesh_preview_changed"));
-}
+	}
+
+LEVEL_MESH_DATA_ACCESSORS(PackedStringArray, material_paths, material_paths)
 
 LEVEL_MESH_DATA_ACCESSORS(PackedVector3Array, vertex_positions, vertex_positions)
 LEVEL_MESH_DATA_ACCESSORS(PackedInt32Array, free_vertex_ids, free_vertex_ids)
@@ -38,6 +41,7 @@ LEVEL_MESH_DATA_ACCESSORS(PackedInt32Array, face_uv_modes, face_uv_modes)
 LEVEL_MESH_DATA_ACCESSORS(PackedVector3Array, face_uv_origins, face_uv_origins)
 LEVEL_MESH_DATA_ACCESSORS(PackedVector3Array, face_uv_tangents, face_uv_tangents)
 LEVEL_MESH_DATA_ACCESSORS(PackedFloat32Array, face_uv_transforms, face_uv_transforms)
+LEVEL_MESH_DATA_ACCESSORS(PackedStringArray, face_hotspot_patch_names, face_hotspot_patch_names)
 LEVEL_MESH_DATA_ACCESSORS(PackedInt32Array, face_polygroup_ids, face_polygroup_ids)
 LEVEL_MESH_DATA_ACCESSORS(PackedInt32Array, face_flags, face_flags)
 LEVEL_MESH_DATA_ACCESSORS(PackedInt32Array, free_face_ids, free_face_ids)
@@ -50,6 +54,33 @@ LEVEL_MESH_DATA_ACCESSORS(PackedByteArray, loop_alive, loop_alive)
 LEVEL_MESH_DATA_ACCESSORS(PackedInt32Array, free_loop_ids, free_loop_ids)
 
 #undef LEVEL_MESH_DATA_ACCESSORS
+
+int LevelMeshData::intern_material_path(const String &p_path) {
+	if (p_path.is_empty()) {
+		return -1;
+	}
+	const int existing = material_paths.find(p_path);
+	if (existing >= 0) {
+		return existing;
+	}
+	material_paths.push_back(p_path);
+	emit_changed();
+	return material_paths.size() - 1;
+}
+
+int LevelMeshData::intern_material(const Ref<Material> &p_material) {
+	if (p_material.is_null() || p_material->get_path().is_empty()) {
+		return -1;
+	}
+	return intern_material_path(p_material->get_path());
+}
+
+String LevelMeshData::get_material_path(int p_material_index) const {
+	if (p_material_index < 0 || p_material_index >= material_paths.size()) {
+		return String();
+	}
+	return material_paths[p_material_index];
+}
 
 void LevelMeshData::set_vertex_alive(const PackedByteArray &p_values) {
 	vertex_alive = p_values;
@@ -181,6 +212,9 @@ void LevelMeshData::_ensure_generation_columns() {
 	while (face_generations.size() < face_alive.size()) {
 		face_generations.push_back((int32_t)_claim_face_generation());
 	}
+	while (face_hotspot_patch_names.size() < face_alive.size()) {
+		face_hotspot_patch_names.push_back(String());
+	}
 }
 
 int LevelMeshData::_count_alive(const PackedByteArray &p_alive) {
@@ -194,6 +228,8 @@ int LevelMeshData::_count_alive(const PackedByteArray &p_alive) {
 }
 
 void LevelMeshData::_copy_from(const LevelMeshData &p_other, bool p_emit_changed) {
+	material_paths = p_other.material_paths;
+
 	vertex_positions = p_other.vertex_positions;
 	vertex_alive = p_other.vertex_alive;
 	vertex_generations = p_other.vertex_generations;
@@ -211,6 +247,7 @@ void LevelMeshData::_copy_from(const LevelMeshData &p_other, bool p_emit_changed
 	face_uv_origins = p_other.face_uv_origins;
 	face_uv_tangents = p_other.face_uv_tangents;
 	face_uv_transforms = p_other.face_uv_transforms;
+	face_hotspot_patch_names = p_other.face_hotspot_patch_names;
 	face_polygroup_ids = p_other.face_polygroup_ids;
 	face_flags = p_other.face_flags;
 	face_alive = p_other.face_alive;
@@ -284,7 +321,72 @@ Transform2D LevelMeshData::get_face_uv_transform(int p_face_id) const {
 void LevelMeshData::set_face_uv_transform(int p_face_id, const Transform2D &p_transform) {
 	const int offset = p_face_id * 6;
 	ERR_FAIL_COND(p_face_id < 0 || offset + 5 >= face_uv_transforms.size());
+	ERR_FAIL_COND(!p_transform.is_finite());
 	_write_uv_transform(*this, p_face_id, p_transform);
+	emit_changed();
+}
+
+int LevelMeshData::get_face_uv_mode(int p_face_id) const {
+	ERR_FAIL_INDEX_V(p_face_id, face_uv_modes.size(), UV_MODE_PROJECTED);
+	return face_uv_modes[p_face_id];
+}
+
+void LevelMeshData::set_face_uv_mode(int p_face_id, int p_mode) {
+	ERR_FAIL_INDEX(p_face_id, face_uv_modes.size());
+	ERR_FAIL_COND(p_mode != UV_MODE_PROJECTED && p_mode != UV_MODE_EXPLICIT);
+	face_uv_modes.set(p_face_id, p_mode);
+	emit_changed();
+}
+
+Vector3 LevelMeshData::get_face_uv_origin(int p_face_id) const {
+	ERR_FAIL_INDEX_V(p_face_id, face_uv_origins.size(), Vector3());
+	return face_uv_origins[p_face_id];
+}
+
+void LevelMeshData::set_face_uv_origin(int p_face_id, const Vector3 &p_origin) {
+	ERR_FAIL_INDEX(p_face_id, face_uv_origins.size());
+	ERR_FAIL_COND(!p_origin.is_finite());
+	face_uv_origins.set(p_face_id, p_origin);
+	emit_changed();
+}
+
+Vector3 LevelMeshData::get_face_uv_tangent(int p_face_id) const {
+	ERR_FAIL_INDEX_V(p_face_id, face_uv_tangents.size(), Vector3());
+	return face_uv_tangents[p_face_id];
+}
+
+void LevelMeshData::set_face_uv_tangent(int p_face_id, const Vector3 &p_tangent) {
+	ERR_FAIL_INDEX(p_face_id, face_uv_tangents.size());
+	ERR_FAIL_COND(!p_tangent.is_finite());
+	face_uv_tangents.set(p_face_id, p_tangent);
+	emit_changed();
+}
+
+Vector2 LevelMeshData::get_loop_uv(int p_loop_id) const {
+	ERR_FAIL_INDEX_V(p_loop_id, loop_uv0.size(), Vector2());
+	return loop_uv0[p_loop_id];
+}
+
+void LevelMeshData::set_loop_uv(int p_loop_id, const Vector2 &p_uv) {
+	ERR_FAIL_INDEX(p_loop_id, loop_uv0.size());
+	ERR_FAIL_COND(!p_uv.is_finite());
+	loop_uv0.set(p_loop_id, p_uv);
+	emit_changed();
+}
+
+String LevelMeshData::get_face_hotspot_patch_name(int p_face_id) const {
+	ERR_FAIL_INDEX_V(p_face_id, face_hotspot_patch_names.size(), String());
+	return face_hotspot_patch_names[p_face_id];
+}
+
+void LevelMeshData::set_face_hotspot_patch_name(int p_face_id, const String &p_patch_name) {
+	ERR_FAIL_INDEX(p_face_id, face_alive.size());
+	_ensure_generation_columns();
+	ERR_FAIL_INDEX(p_face_id, face_hotspot_patch_names.size());
+	if (face_hotspot_patch_names[p_face_id] == p_patch_name) {
+		return;
+	}
+	face_hotspot_patch_names.set(p_face_id, p_patch_name);
 	emit_changed();
 }
 
@@ -363,6 +465,9 @@ bool LevelMeshData::free_face_slot(int p_face_id) {
 		return false;
 	}
 	face_alive.set(p_face_id, 0);
+	if (p_face_id < face_hotspot_patch_names.size()) {
+		face_hotspot_patch_names.set(p_face_id, String());
+	}
 	const uint32_t generation = _bump_generation(_generation_at(face_generations, p_face_id));
 	face_generations.set(p_face_id, (int32_t)generation);
 	_advance_generation_counter(generation, next_face_generation);
@@ -372,6 +477,8 @@ bool LevelMeshData::free_face_slot(int p_face_id) {
 }
 
 void LevelMeshData::clear() {
+	material_paths.clear();
+
 	vertex_positions.clear();
 	vertex_alive.clear();
 	vertex_generations.clear();
@@ -389,6 +496,7 @@ void LevelMeshData::clear() {
 	face_uv_origins.clear();
 	face_uv_tangents.clear();
 	face_uv_transforms.clear();
+	face_hotspot_patch_names.clear();
 	face_polygroup_ids.clear();
 	face_flags.clear();
 	face_alive.clear();
@@ -418,6 +526,12 @@ void LevelMeshData::copy_from(const Ref<LevelMeshData> &p_other) {
 }
 
 void LevelMeshData::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_material_paths", "values"), &LevelMeshData::set_material_paths);
+	ClassDB::bind_method(D_METHOD("get_material_paths"), &LevelMeshData::get_material_paths);
+	ClassDB::bind_method(D_METHOD("intern_material_path", "path"), &LevelMeshData::intern_material_path);
+	ClassDB::bind_method(D_METHOD("intern_material", "material"), &LevelMeshData::intern_material);
+	ClassDB::bind_method(D_METHOD("get_material_path", "material_index"), &LevelMeshData::get_material_path);
+
 	ClassDB::bind_method(D_METHOD("set_vertex_positions", "values"), &LevelMeshData::set_vertex_positions);
 	ClassDB::bind_method(D_METHOD("get_vertex_positions"), &LevelMeshData::get_vertex_positions);
 	ClassDB::bind_method(D_METHOD("set_vertex_alive", "values"), &LevelMeshData::set_vertex_alive);
@@ -450,6 +564,8 @@ void LevelMeshData::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_face_uv_tangents"), &LevelMeshData::get_face_uv_tangents);
 	ClassDB::bind_method(D_METHOD("set_face_uv_transforms", "values"), &LevelMeshData::set_face_uv_transforms);
 	ClassDB::bind_method(D_METHOD("get_face_uv_transforms"), &LevelMeshData::get_face_uv_transforms);
+	ClassDB::bind_method(D_METHOD("set_face_hotspot_patch_names", "values"), &LevelMeshData::set_face_hotspot_patch_names);
+	ClassDB::bind_method(D_METHOD("get_face_hotspot_patch_names"), &LevelMeshData::get_face_hotspot_patch_names);
 	ClassDB::bind_method(D_METHOD("set_face_polygroup_ids", "values"), &LevelMeshData::set_face_polygroup_ids);
 	ClassDB::bind_method(D_METHOD("get_face_polygroup_ids"), &LevelMeshData::get_face_polygroup_ids);
 	ClassDB::bind_method(D_METHOD("set_face_flags", "values"), &LevelMeshData::set_face_flags);
@@ -476,6 +592,16 @@ void LevelMeshData::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("get_face_uv_transform", "face_id"), &LevelMeshData::get_face_uv_transform);
 	ClassDB::bind_method(D_METHOD("set_face_uv_transform", "face_id", "transform"), &LevelMeshData::set_face_uv_transform);
+	ClassDB::bind_method(D_METHOD("get_face_hotspot_patch_name", "face_id"), &LevelMeshData::get_face_hotspot_patch_name);
+	ClassDB::bind_method(D_METHOD("set_face_hotspot_patch_name", "face_id", "patch_name"), &LevelMeshData::set_face_hotspot_patch_name);
+	ClassDB::bind_method(D_METHOD("get_face_uv_mode", "face_id"), &LevelMeshData::get_face_uv_mode);
+	ClassDB::bind_method(D_METHOD("set_face_uv_mode", "face_id", "mode"), &LevelMeshData::set_face_uv_mode);
+	ClassDB::bind_method(D_METHOD("get_face_uv_origin", "face_id"), &LevelMeshData::get_face_uv_origin);
+	ClassDB::bind_method(D_METHOD("set_face_uv_origin", "face_id", "origin"), &LevelMeshData::set_face_uv_origin);
+	ClassDB::bind_method(D_METHOD("get_face_uv_tangent", "face_id"), &LevelMeshData::get_face_uv_tangent);
+	ClassDB::bind_method(D_METHOD("set_face_uv_tangent", "face_id", "tangent"), &LevelMeshData::set_face_uv_tangent);
+	ClassDB::bind_method(D_METHOD("get_loop_uv", "loop_id"), &LevelMeshData::get_loop_uv);
+	ClassDB::bind_method(D_METHOD("set_loop_uv", "loop_id", "uv"), &LevelMeshData::set_loop_uv);
 	ClassDB::bind_method(D_METHOD("face_is_bakeable", "face_id"), &LevelMeshData::face_is_bakeable);
 	ClassDB::bind_method(D_METHOD("vertex_count"), &LevelMeshData::vertex_count);
 	ClassDB::bind_method(D_METHOD("edge_count"), &LevelMeshData::edge_count);
@@ -492,6 +618,9 @@ void LevelMeshData::_bind_methods() {
 			PropertyInfo(Variant::OBJECT, "diff", PROPERTY_HINT_RESOURCE_TYPE, "LevelMeshDiff"),
 			PropertyInfo(Variant::BOOL, "reverted")));
 	ADD_SIGNAL(MethodInfo("mesh_preview_changed"));
+
+	ADD_GROUP("Materials", "material_");
+	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "material_paths"), "set_material_paths", "get_material_paths");
 
 	ADD_GROUP("Vertices", "vertex_");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_VECTOR3_ARRAY, "vertex_positions"), "set_vertex_positions", "get_vertex_positions");
@@ -513,6 +642,7 @@ void LevelMeshData::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_VECTOR3_ARRAY, "face_uv_origins"), "set_face_uv_origins", "get_face_uv_origins");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_VECTOR3_ARRAY, "face_uv_tangents"), "set_face_uv_tangents", "get_face_uv_tangents");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_FLOAT32_ARRAY, "face_uv_transforms"), "set_face_uv_transforms", "get_face_uv_transforms");
+	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "face_hotspot_patch_names"), "set_face_hotspot_patch_names", "get_face_hotspot_patch_names");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_INT32_ARRAY, "face_polygroup_ids"), "set_face_polygroup_ids", "get_face_polygroup_ids");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_INT32_ARRAY, "face_flags"), "set_face_flags", "get_face_flags");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_BYTE_ARRAY, "face_alive"), "set_face_alive", "get_face_alive");

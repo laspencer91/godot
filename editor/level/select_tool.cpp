@@ -65,6 +65,100 @@ SelectionModel *SelectTool::get_selection_model() const {
 	return document ? document->get_selection_model() : nullptr;
 }
 
+void SelectTool::_activate() {
+	LevelEditorView *level_view = get_view();
+	LevelDocument *document = level_view ? level_view->get_level_document() : nullptr;
+	if (!level_view || !document) {
+		return;
+	}
+	transform_gizmo.set_render_layer(level_view->get_gizmo_layer());
+	transform_gizmo.set_scenario(document->get_scenario());
+	transform_gizmo.set_view_visible(level_view->is_visible_in_tree());
+}
+
+void SelectTool::_deactivate() {
+	transform_gizmo.set_requested_visible(false);
+}
+
+void SelectTool::set_transform_gizmo_view_visible(bool p_visible) {
+	transform_gizmo.set_view_visible(p_visible);
+	if (!p_visible) {
+		if (LevelEditorView *level_view = get_view()) {
+			level_view->set_meta(StringName("_level_transform_gizmo_visible"), false);
+		}
+	}
+}
+
+void SelectTool::update_transform_gizmo(Camera3D *p_camera) {
+	LevelEditorView *level_view = get_view();
+	const bool gesture_hides_gizmo = pointer_down || marquee_active || transform_active;
+	if (transform_active && p_camera) {
+		// Keep the persistent instances camera-scaled even while the active
+		// constraint guides replace them for the duration of the gesture.
+		transform_gizmo.update(p_camera, transform_pivot);
+	}
+	if (!is_active() || !level_view || !p_camera || gesture_hides_gizmo || !level_view->is_visible_in_tree()) {
+		transform_gizmo.set_requested_visible(false);
+		if (level_view) {
+			level_view->set_meta(StringName("_level_transform_gizmo_visible"), false);
+		}
+		return;
+	}
+
+	Vector<MeshDragState> gizmo_mesh_states;
+	Vector<ObjectDragState> gizmo_object_states;
+	Vector3 pivot;
+	if (!_collect_transform_selection(gizmo_mesh_states, gizmo_object_states) ||
+			!_compute_transform_pivot(gizmo_mesh_states, gizmo_object_states, pivot)) {
+		transform_gizmo.set_requested_visible(false);
+		level_view->set_meta(StringName("_level_transform_gizmo_visible"), false);
+		return;
+	}
+
+	transform_gizmo.update(p_camera, pivot);
+	transform_gizmo.set_requested_visible(true);
+	TransformGizmo::Handle hovered = TransformGizmo::HANDLE_NONE;
+	if (pointer_position_valid && p_camera->get_viewport() &&
+			p_camera->get_viewport()->get_visible_rect().has_point(pointer_position)) {
+		hovered = transform_gizmo.hit_test(p_camera, pointer_position);
+	}
+	transform_gizmo.set_hovered_handle(hovered);
+
+	level_view->set_meta(StringName("_level_transform_gizmo_visible"), transform_gizmo.is_visible());
+	level_view->set_meta(StringName("_level_transform_gizmo_pivot"), pivot);
+	level_view->set_meta(StringName("_level_transform_gizmo_scale"), transform_gizmo.get_scale());
+	level_view->set_meta(StringName("_level_transform_gizmo_arrow_offset"), TransformGizmo::get_arrow_grab_offset());
+	level_view->set_meta(StringName("_level_transform_gizmo_plane_offset"), TransformGizmo::get_plane_center_offset());
+	level_view->set_meta(StringName("_level_transform_gizmo_ring_radius"), TransformGizmo::get_ring_radius());
+}
+
+bool SelectTool::_begin_gizmo_drag(Camera3D *p_camera, TransformGizmo::Handle p_handle, const Ref<InputEventMouseButton> &p_button) {
+	ERR_FAIL_COND_V(p_button.is_null(), false);
+	const int axis = TransformGizmo::get_handle_axis(p_handle);
+	ERR_FAIL_INDEX_V(axis, 3, false);
+
+	pointer_down = true;
+	marquee_active = false;
+	transform_candidate = false;
+	transform_active = false;
+	transform_committed = false;
+	gesture_shift = false;
+	gesture_ctrl = p_button->is_ctrl_pressed();
+	press_was_double_click = false;
+	press_position = p_button->get_position();
+	current_position = press_position;
+	press_operation = SelectionModel::OP_REPLACE;
+
+	const TransformDragMode requested_mode = TransformGizmo::is_rotate_handle(p_handle) ? TRANSFORM_DRAG_ROTATE : TRANSFORM_DRAG_NONE;
+	const TransformConstraintMode constraint_mode = TransformGizmo::is_move_plane_handle(p_handle) ? TRANSFORM_CONSTRAINT_PLANE : TRANSFORM_CONSTRAINT_AXIS;
+	const bool commit_on_release = TransformGizmo::is_rotate_handle(p_handle);
+	if (!_begin_transform_drag(p_camera, requested_mode, constraint_mode, axis, commit_on_release)) {
+		_reset_gesture();
+		return false;
+	}
+	return true;
+}
+
 SelectionModel::Operation SelectTool::_operation_from_modifiers(const Ref<InputEventWithModifiers> &p_event) {
 	if (p_event.is_null()) {
 		return SelectionModel::OP_REPLACE;
@@ -267,8 +361,6 @@ Vector<SelectionModel::Element> SelectTool::_resolve_edge(Camera3D *p_camera, co
 	Vector<ScreenCandidate> candidates;
 	const Vector3 ray_origin = p_camera->project_ray_origin(p_position);
 	const Vector3 ray_direction = p_camera->project_ray_normal(p_position).normalized();
-	const real_t depth_bias = MAX((real_t)0.0001, (real_t)0.001 * p_hit.t);
-
 	auto append_candidate = [&](const SelectionModel::Element &p_element, int p_vertex_a, int p_vertex_b) {
 		if (p_vertex_a < 0 || p_vertex_a >= positions.size() || p_vertex_b < 0 || p_vertex_b >= positions.size()) {
 			return;
@@ -281,14 +373,8 @@ Vector<SelectionModel::Element> SelectTool::_resolve_edge(Camera3D *p_camera, co
 		real_t segment_t = 0.0;
 		const real_t pixel_distance = _point_segment_distance(p_position,
 				p_camera->unproject_position(world_a), p_camera->unproject_position(world_b), &segment_t);
-		if (pixel_distance > EDGE_TOLERANCE_PX) {
-			return;
-		}
 		const Vector3 world_point = world_a.lerp(world_b, segment_t);
 		const real_t depth = (world_point - ray_origin).dot(ray_direction);
-		if (!_is_xray_enabled() && depth > p_hit.t + depth_bias) {
-			return;
-		}
 		ScreenCandidate candidate;
 		candidate.element = p_element;
 		candidate.pixel_distance = pixel_distance;
@@ -297,13 +383,11 @@ Vector<SelectionModel::Element> SelectTool::_resolve_edge(Camera3D *p_camera, co
 	};
 
 	if (selection_model->get_tier() == SelectionModel::TIER_POLYGROUP) {
-		PackedInt32Array edge_ids = mesh->get_face_boundary_edge_ids(p_hit.face_id, true);
-		// A closed polygroup has no topological outer boundary (box faces are one
-		// group each, but future merge/paint ops can still close a group). Keep
-		// edge mode usable by falling back to the hit face loop in that case.
-		if (edge_ids.is_empty()) {
-			edge_ids = mesh->get_face_boundary_edge_ids(p_hit.face_id, false);
-		}
+		// Edge mode is face-local: the ray chooses the visible face, then the
+		// nearest real edge on that exact face wins. Polygroup boundaries are useful
+		// for loop operations, but substituting them here makes direct picking feel
+		// disconnected from the cursor on merged groups.
+		const PackedInt32Array edge_ids = mesh->get_face_boundary_edge_ids(p_hit.face_id, false);
 		for (const int edge_id : edge_ids) {
 			const int offset = edge_id * 2;
 			const int64_t handle = mesh->make_edge_handle(edge_id);
@@ -1010,9 +1094,13 @@ bool SelectTool::_handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_even
 	if (mouse_event.is_valid()) {
 		pointer_position = mouse_event->get_position();
 		pointer_position_valid = true;
+		update_transform_gizmo(p_camera);
 	}
 	Ref<InputEventKey> key = p_event;
 	if (key.is_valid() && key->is_pressed() && !key->is_echo()) {
+		if (!pointer_down && !transform_active && _handle_texture_key(key)) {
+			return true;
+		}
 		const Key code = key->get_keycode() != Key::NONE ? key->get_keycode() : key->get_physical_keycode();
 		const bool axis_key = code == Key::X || code == Key::Y || code == Key::Z;
 		if (transform_active && axis_key) {
@@ -1093,8 +1181,34 @@ bool SelectTool::_handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_even
 	}
 
 	Ref<InputEventMouseButton> button = p_event;
-	if (button.is_valid() && button->get_button_index() == MouseButton::RIGHT && button->is_pressed() &&
-			transform_active && _is_rotation_drag()) {
+	if (button.is_valid() && button->get_button_index() == MouseButton::RIGHT) {
+		if (texture_flow_active) {
+			if (!button->is_pressed()) {
+				if (!commit_gesture()) {
+					exit_gesture();
+				}
+			}
+			return true;
+		}
+		if (button->is_pressed() && !transform_active) {
+			const bool shift = button->is_shift_pressed();
+			const bool ctrl = button->is_ctrl_pressed();
+			const bool alt = button->is_alt_pressed();
+			if (!shift && ctrl && alt) {
+				return _begin_texture_flow(p_camera, button->get_position());
+			}
+			if (shift && !ctrl && alt) {
+				return _wrap_texture_to_selection(p_camera, button->get_position());
+			}
+			if (!shift && !ctrl && alt) {
+				return _wrap_face_texture(p_camera, button->get_position());
+			}
+			if (shift && !ctrl && !alt) {
+				return _lift_face_texture(p_camera, button->get_position());
+			}
+		}
+	}
+	if (button.is_valid() && button->get_button_index() == MouseButton::RIGHT && button->is_pressed() && transform_active) {
 		_cancel_transform_drag();
 		exit_gesture();
 		if (LevelEditorView *level_view = get_view()) {
@@ -1103,7 +1217,7 @@ bool SelectTool::_handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_even
 		return true;
 	}
 	if (button.is_valid() && button->get_button_index() == MouseButton::LEFT && button->is_pressed() &&
-			transform_active && _is_rotation_drag()) {
+			transform_active && _is_rotation_drag() && !transform_rotation_commit_on_release) {
 		current_position = button->get_position();
 		_update_transform_drag(p_camera, current_position, button->is_ctrl_pressed());
 		_commit_transform_drag();
@@ -1112,6 +1226,14 @@ bool SelectTool::_handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_even
 	}
 	if (button.is_valid() && button->get_button_index() == MouseButton::LEFT && !button->is_alt_pressed()) {
 		if (button->is_pressed()) {
+			// Shift retains its established additive-selection meaning. Gizmo
+			// gestures do not consume Shift, so let that binding fall through.
+			const TransformGizmo::Handle gizmo_handle = button->is_shift_pressed() ? TransformGizmo::HANDLE_NONE :
+					transform_gizmo.hit_test(p_camera, button->get_position());
+			if (gizmo_handle != TransformGizmo::HANDLE_NONE) {
+				_begin_gizmo_drag(p_camera, gizmo_handle, button);
+				return true;
+			}
 			pointer_down = true;
 			marquee_active = false;
 			transform_candidate = _press_hits_current_selection(p_camera, button->get_position());
@@ -1123,6 +1245,7 @@ bool SelectTool::_handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_even
 			press_position = button->get_position();
 			current_position = press_position;
 			press_operation = _operation_from_modifiers(button);
+			transform_gizmo.set_requested_visible(false);
 			return true;
 		}
 		if (!pointer_down) {
@@ -1138,10 +1261,14 @@ bool SelectTool::_handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_even
 			_pick_click(p_camera, current_position, press_operation, press_was_double_click);
 		}
 		exit_gesture();
+		update_transform_gizmo(p_camera);
 		return true;
 	}
 
 	Ref<InputEventMouseMotion> motion = p_event;
+	if (motion.is_valid() && texture_flow_active && motion->get_button_mask().has_flag(MouseButtonMask::RIGHT)) {
+		return _append_texture_flow_hover(p_camera, motion->get_position());
+	}
 	if (motion.is_valid() && transform_active && _is_rotation_drag()) {
 		current_position = motion->get_position();
 		_update_transform_drag(p_camera, current_position, motion->is_ctrl_pressed());
@@ -1184,6 +1311,10 @@ void SelectTool::_reset_gesture() {
 	_reset_transform_constraint();
 	mesh_drag_states.clear();
 	object_drag_states.clear();
+	texture_flow_active = false;
+	texture_flow_block = nullptr;
+	texture_flow_mesh.unref();
+	texture_flow_faces.clear();
 	transform_drag_plane = Plane();
 	transform_pivot = Vector3();
 	transform_axis = Vector3();
@@ -1195,6 +1326,7 @@ void SelectTool::_reset_gesture() {
 	transform_rotation_press_vector = Vector2();
 	transform_rotation_angle = 0.0;
 	transform_rotation_reference_valid = false;
+	transform_rotation_commit_on_release = false;
 	transform_snap_step = LevelEditor::DEFAULT_SNAP_STEP;
 	press_was_double_click = false;
 	press_position = Vector2();
@@ -1203,9 +1335,17 @@ void SelectTool::_reset_gesture() {
 	if (LevelEditorView *level_view = get_view()) {
 		level_view->set_marquee_rect(Rect2(), false);
 	}
+	transform_gizmo.set_requested_visible(false);
 }
 
 void SelectTool::_escape_pressed() {
+	if (texture_flow_active) {
+		exit_gesture();
+		if (LevelEditorView *level_view = get_view()) {
+			level_view->set_last_selection_action(SNAME("texture_flow_cancel"));
+		}
+		return;
+	}
 	if (pointer_down || transform_active) {
 		_cancel_transform_drag();
 		exit_gesture();

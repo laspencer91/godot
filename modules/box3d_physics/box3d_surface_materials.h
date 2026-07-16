@@ -88,6 +88,8 @@ class Box3DPhysics : public Object {
 	HashMap<StringName, Ref<Box3DSurfaceMaterial>> materials_by_name;
 	HashMap<int, Ref<Box3DSurfaceMaterial>> materials_by_id;
 
+	void _ensure_surface_material_library() const;
+
 protected:
 	static void _bind_methods();
 
@@ -99,7 +101,7 @@ public:
 	static void register_project_settings();
 
 	void reload_surface_material_library();
-	Ref<Box3DSurfaceMaterialLibrary> get_surface_material_library() const { return library; }
+	Ref<Box3DSurfaceMaterialLibrary> get_surface_material_library() const;
 	int get_material_id(const StringName &p_name) const;
 	StringName get_material_name(int p_id) const;
 	Ref<Box3DSurfaceMaterial> get_material(const Variant &p_id_or_name) const;

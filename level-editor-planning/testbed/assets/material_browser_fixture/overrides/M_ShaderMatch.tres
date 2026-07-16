@@ -1,0 +1,11 @@
+[gd_resource type="ShaderMaterial" load_steps=3 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/material_browser_fixture/textures/T_Wide.svg" id="1_wide"]
+
+[sub_resource type="Shader" id="Shader_match"]
+code = "shader_type spatial;\nuniform sampler2D albedo_texture : source_color;\nvoid fragment() {\n\tALBEDO = texture(albedo_texture, UV).rgb;\n}"
+
+[resource]
+resource_name = "M_ShaderMatch"
+shader = SubResource("Shader_match")
+shader_parameter/albedo_texture = ExtResource("1_wide")

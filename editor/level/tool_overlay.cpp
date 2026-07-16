@@ -109,23 +109,44 @@ void ToolOverlay::update_box(const Transform3D &p_frame, const Vector3 &p_size) 
 	_sync_visibility();
 }
 
+void ToolOverlay::update_footprint(const Transform3D &p_frame, const Vector2 &p_size) {
+	ERR_FAIL_COND(!p_frame.is_finite() || !p_size.is_finite());
+	ERR_FAIL_COND(p_size.x <= 0.0 || p_size.y <= 0.0);
+
+	const Vector2 half_size = p_size * (real_t)0.5;
+	const Vector3 corners[4] = {
+		Vector3(-half_size.x, 0.0, -half_size.y),
+		Vector3(half_size.x, 0.0, -half_size.y),
+		Vector3(half_size.x, 0.0, half_size.y),
+		Vector3(-half_size.x, 0.0, half_size.y),
+	};
+
+	mesh->clear_surfaces();
+	mesh->surface_begin(Mesh::PRIMITIVE_POINTS, wire_material);
+	for (const Vector3 &corner : corners) {
+		mesh->surface_add_vertex(corner);
+	}
+	mesh->surface_end();
+	mesh->surface_begin(Mesh::PRIMITIVE_LINES, wire_material);
+	for (int edge = 0; edge < 4; edge++) {
+		mesh->surface_add_vertex(corners[edge]);
+		mesh->surface_add_vertex(corners[(edge + 1) % 4]);
+	}
+	mesh->surface_end();
+
+	has_geometry = true;
+	if (instance.is_valid() && RenderingServer::get_singleton()) {
+		RenderingServer::get_singleton()->instance_set_transform(instance, p_frame);
+	}
+	_sync_visibility();
+}
+
 void ToolOverlay::_ensure_axis_materials() {
 	if (axis_materials[0].is_valid()) {
 		return;
 	}
-	Color axis_colors[3] = {
-		Color(0.96, 0.20, 0.32),
-		Color(0.53, 0.84, 0.01),
-		Color(0.16, 0.55, 0.96),
-	};
-	if (EditorNode *editor_node = EditorNode::get_singleton()) {
-		const Ref<Theme> editor_theme = editor_node->get_editor_theme();
-		if (editor_theme.is_valid()) {
-			axis_colors[0] = editor_theme->get_color(SNAME("axis_x_color"), EditorStringName(Editor));
-			axis_colors[1] = editor_theme->get_color(SNAME("axis_y_color"), EditorStringName(Editor));
-			axis_colors[2] = editor_theme->get_color(SNAME("axis_z_color"), EditorStringName(Editor));
-		}
-	}
+	Color axis_colors[3];
+	resolve_axis_colors(axis_colors);
 	for (int axis = 0; axis < 3; axis++) {
 		axis_materials[axis].instantiate();
 		axis_materials[axis]->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
@@ -133,6 +154,21 @@ void ToolOverlay::_ensure_axis_materials() {
 		axis_materials[axis]->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
 		axis_materials[axis]->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
 		axis_materials[axis]->set_albedo(axis_colors[axis]);
+	}
+}
+
+void ToolOverlay::resolve_axis_colors(Color r_colors[3]) {
+	ERR_FAIL_NULL(r_colors);
+	r_colors[0] = Color(0.96, 0.20, 0.32);
+	r_colors[1] = Color(0.53, 0.84, 0.01);
+	r_colors[2] = Color(0.16, 0.55, 0.96);
+	if (EditorNode *editor_node = EditorNode::get_singleton()) {
+		const Ref<Theme> editor_theme = editor_node->get_editor_theme();
+		if (editor_theme.is_valid()) {
+			r_colors[0] = editor_theme->get_color(SNAME("axis_x_color"), EditorStringName(Editor));
+			r_colors[1] = editor_theme->get_color(SNAME("axis_y_color"), EditorStringName(Editor));
+			r_colors[2] = editor_theme->get_color(SNAME("axis_z_color"), EditorStringName(Editor));
+		}
 	}
 }
 
@@ -162,6 +198,31 @@ void ToolOverlay::update_constraint_guides(const Vector3 &p_pivot, int p_axis, b
 	_sync_visibility();
 }
 
+void ToolOverlay::update_colored_faces(const Vector<Vector3> &p_vertices, const Vector<Color> &p_colors) {
+	ERR_FAIL_COND(p_vertices.size() != p_colors.size());
+	ERR_FAIL_COND((p_vertices.size() % 3) != 0);
+	mesh->clear_surfaces();
+	if (p_vertices.is_empty()) {
+		has_geometry = false;
+		_sync_visibility();
+		return;
+	}
+	for (const Vector3 &vertex : p_vertices) {
+		ERR_FAIL_COND(!vertex.is_finite());
+	}
+	mesh->surface_begin(Mesh::PRIMITIVE_TRIANGLES, vertex_color_material);
+	for (int i = 0; i < p_vertices.size(); i++) {
+		mesh->surface_set_color(p_colors[i]);
+		mesh->surface_add_vertex(p_vertices[i]);
+	}
+	mesh->surface_end();
+	has_geometry = true;
+	if (instance.is_valid() && RenderingServer::get_singleton()) {
+		RenderingServer::get_singleton()->instance_set_transform(instance, Transform3D());
+	}
+	_sync_visibility();
+}
+
 void ToolOverlay::clear() {
 	if (mesh.is_valid()) {
 		mesh->clear_surfaces();
@@ -181,8 +242,16 @@ ToolOverlay::ToolOverlay() {
 	wire_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
 	wire_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
 	wire_material->set_albedo(Color(0.48, 0.78, 1.0, 0.95));
+	wire_material->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
 	wire_material->set_flag(BaseMaterial3D::FLAG_USE_POINT_SIZE, true);
 	wire_material->set_point_size(7.0f);
+
+	vertex_color_material.instantiate();
+	vertex_color_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+	vertex_color_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+	vertex_color_material->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+	vertex_color_material->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
+	vertex_color_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
 
 	mesh.instantiate();
 

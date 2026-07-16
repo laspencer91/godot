@@ -1,0 +1,36 @@
+// Quoted and unquoted keys/values are deliberately mixed to exercise the
+// Source KeyValues-compatible tokenizer.
+"HotspotRect"
+{
+	width 512
+	"height" "256"
+	"subrects"
+	{
+		"primary"
+		{
+			name "hero_trim"
+			x 16
+			y "8"
+			w 128
+			h 64
+			allowrotation yes
+			mirrorhoriz 1
+			mirrorvert true
+			tile u
+			inset 2.5
+			"mallet_custom" "preserve me"
+			"custom_block"
+			{
+				mode nested
+				value "also preserved"
+			}
+		}
+		secondary
+		{
+			x 256 y 64 w 64 h 128
+			rotate 0
+			infinite v
+			border 1
+		}
+	}
+}

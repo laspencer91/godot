@@ -9,6 +9,7 @@
 #include "editor/level/level_editor.h"
 #include "editor/level/level_editor_tool.h"
 #include "editor/level/selection_model.h"
+#include "editor/level/transform_gizmo.h"
 
 class Camera3D;
 class LevelBlock;
@@ -38,7 +39,6 @@ class SelectTool : public LevelEditorTool {
 	};
 
 	static constexpr real_t VERTEX_TOLERANCE_PX = 10.0;
-	static constexpr real_t EDGE_TOLERANCE_PX = 8.0;
 
 	enum TransformDragMode {
 		TRANSFORM_DRAG_NONE,
@@ -109,7 +109,13 @@ class SelectTool : public LevelEditorTool {
 	Vector2 transform_rotation_press_vector;
 	real_t transform_rotation_angle = 0.0;
 	bool transform_rotation_reference_valid = false;
+	bool transform_rotation_commit_on_release = false;
 	real_t transform_snap_step = LevelEditor::DEFAULT_SNAP_STEP;
+	TransformGizmo transform_gizmo;
+	bool texture_flow_active = false;
+	LevelBlock *texture_flow_block = nullptr;
+	Ref<LevelMesh> texture_flow_mesh;
+	PackedInt32Array texture_flow_faces;
 
 	SelectionModel *get_selection_model() const;
 	static SelectionModel::Operation _operation_from_modifiers(const Ref<InputEventWithModifiers> &p_event);
@@ -140,7 +146,14 @@ class SelectTool : public LevelEditorTool {
 	void _apply_object_marquee(Camera3D *p_camera, const Rect2 &p_rect, const Vector<LevelBlock *> &p_blocks);
 	bool _press_hits_current_selection(Camera3D *p_camera, const Vector2 &p_position) const;
 	bool _collect_transform_selection();
-	bool _begin_transform_drag(Camera3D *p_camera, TransformDragMode p_requested_mode = TRANSFORM_DRAG_NONE);
+	bool _collect_transform_selection(Vector<MeshDragState> &r_mesh_states, Vector<ObjectDragState> &r_object_states) const;
+	bool _compute_transform_pivot(Vector3 &r_pivot) const;
+	bool _compute_transform_pivot(const Vector<MeshDragState> &p_mesh_states, const Vector<ObjectDragState> &p_object_states,
+			Vector3 &r_pivot) const;
+	bool _begin_transform_drag(Camera3D *p_camera, TransformDragMode p_requested_mode = TRANSFORM_DRAG_NONE,
+			TransformConstraintMode p_initial_constraint = TRANSFORM_CONSTRAINT_FREE, int p_initial_axis = Vector3::AXIS_X,
+			bool p_rotation_commit_on_release = false);
+	bool _begin_gizmo_drag(Camera3D *p_camera, TransformGizmo::Handle p_handle, const Ref<InputEventMouseButton> &p_button);
 	bool _update_transform_drag(Camera3D *p_camera, const Vector2 &p_position, bool p_ctrl_pressed);
 	void _cancel_transform_drag();
 	bool _commit_transform_drag();
@@ -161,14 +174,35 @@ class SelectTool : public LevelEditorTool {
 	bool _nudge(Camera3D *p_camera, Key p_key);
 	bool _vertices_to_grid();
 	bool _duplicate_objects();
+	bool _collect_face_selection(Vector<MeshDragState> &r_states, LevelBlock *p_only_block = nullptr) const;
+	bool _apply_hotspot_fit(bool p_individual);
+	bool _handle_texture_key(const Ref<InputEventKey> &p_key);
+	bool _pick_texture_face(Camera3D *p_camera, const Vector2 &p_position, LevelBlock *&r_block,
+			Ref<LevelMesh> &r_mesh, int &r_face_id) const;
+	bool _lift_face_texture(Camera3D *p_camera, const Vector2 &p_position);
+	bool _wrap_face_texture(Camera3D *p_camera, const Vector2 &p_position);
+	bool _wrap_texture_to_selection(Camera3D *p_camera, const Vector2 &p_position);
+	bool _begin_texture_flow(Camera3D *p_camera, const Vector2 &p_position);
+	bool _append_texture_flow_hover(Camera3D *p_camera, const Vector2 &p_position);
+	bool _commit_texture_flow();
+	bool _align_selected_texture(bool p_to_grid);
+	void _show_texture_status(const String &p_message, bool p_warning = false) const;
 	static Vector3 _nearest_world_axis(const Vector3 &p_direction);
 
 protected:
 	static void _bind_methods() {}
+	virtual void _activate() override;
+	virtual void _deactivate() override;
 	virtual bool _handle_input(Camera3D *p_camera, const Ref<InputEvent> &p_event) override;
-	virtual bool _commit_gesture() override { return transform_active && _commit_transform_drag(); }
-	virtual bool _has_active_gesture() const override { return pointer_down || transform_active; }
+	virtual bool _commit_gesture() override;
+	virtual bool _has_active_gesture() const override { return pointer_down || transform_active || texture_flow_active; }
 	virtual void _reset_gesture() override;
 	virtual bool _handles_idle_escape() const override { return true; }
 	virtual void _escape_pressed() override;
+
+public:
+	bool apply_active_material();
+	bool modify_selected_texture(int p_operation, const Vector2 &p_value = Vector2(1, 1));
+	void update_transform_gizmo(Camera3D *p_camera);
+	void set_transform_gizmo_view_visible(bool p_visible);
 };

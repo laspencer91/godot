@@ -1,0 +1,15 @@
+; LE2 material-browser editor-smoke project variant. run_smoke.sh copies the testbed before using it.
+config_version=5
+
+[application]
+
+config/name="material-browser-smoke"
+config/features=PackedStringArray("4.8", "Forward Plus")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/material_browser_smoke/plugin.cfg")
+
+[network]
+
+tls/certificate_bundle_override="res://ca-bundle.crt"

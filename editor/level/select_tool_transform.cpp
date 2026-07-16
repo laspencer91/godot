@@ -81,8 +81,12 @@ bool SelectTool::_press_hits_current_selection(Camera3D *p_camera, const Vector2
 }
 
 bool SelectTool::_collect_transform_selection() {
-	mesh_drag_states.clear();
-	object_drag_states.clear();
+	return _collect_transform_selection(mesh_drag_states, object_drag_states);
+}
+
+bool SelectTool::_collect_transform_selection(Vector<MeshDragState> &r_mesh_states, Vector<ObjectDragState> &r_object_states) const {
+	r_mesh_states.clear();
+	r_object_states.clear();
 	SelectionModel *selection_model = get_selection_model();
 	LevelEditorView *level_view = get_view();
 	LevelDocument *document = level_view ? level_view->get_level_document() : nullptr;
@@ -104,9 +108,9 @@ bool SelectTool::_collect_transform_selection() {
 			state.block = block;
 			state.original_transform = block->get_global_transform();
 			state.preview_transform = state.original_transform;
-			object_drag_states.push_back(state);
+			r_object_states.push_back(state);
 		}
-		return !object_drag_states.is_empty();
+		return !r_object_states.is_empty();
 	}
 
 	const SelectionModel::Feature feature = _feature_for_mode(selection_model->get_mode());
@@ -119,8 +123,8 @@ bool SelectTool::_collect_transform_selection() {
 			continue;
 		}
 		int state_index = -1;
-		for (int i = 0; i < mesh_drag_states.size(); i++) {
-			if (mesh_drag_states[i].block == block) {
+		for (int i = 0; i < r_mesh_states.size(); i++) {
+			if (r_mesh_states[i].block == block) {
 				state_index = i;
 				break;
 			}
@@ -129,10 +133,10 @@ bool SelectTool::_collect_transform_selection() {
 			MeshDragState state;
 			state.block = block;
 			state.mesh = mesh;
-			mesh_drag_states.push_back(state);
-			state_index = mesh_drag_states.size() - 1;
+			r_mesh_states.push_back(state);
+			state_index = r_mesh_states.size() - 1;
 		}
-		MeshDragState &state = mesh_drag_states.write[state_index];
+		MeshDragState &state = r_mesh_states.write[state_index];
 		auto append_vertex = [&](int p_vertex_id) {
 			if (p_vertex_id >= 0 && !packed_has(state.vertex_ids, p_vertex_id)) {
 				state.vertex_ids.push_back(p_vertex_id);
@@ -178,12 +182,49 @@ bool SelectTool::_collect_transform_selection() {
 			}
 		}
 	}
-	for (int i = mesh_drag_states.size() - 1; i >= 0; i--) {
-		if (mesh_drag_states[i].vertex_ids.is_empty()) {
-			mesh_drag_states.remove_at(i);
+	for (int i = r_mesh_states.size() - 1; i >= 0; i--) {
+		if (r_mesh_states[i].vertex_ids.is_empty()) {
+			r_mesh_states.remove_at(i);
 		}
 	}
-	return !mesh_drag_states.is_empty();
+	return !r_mesh_states.is_empty();
+}
+
+bool SelectTool::_compute_transform_pivot(Vector3 &r_pivot) const {
+	return _compute_transform_pivot(mesh_drag_states, object_drag_states, r_pivot);
+}
+
+bool SelectTool::_compute_transform_pivot(const Vector<MeshDragState> &p_mesh_states,
+		const Vector<ObjectDragState> &p_object_states, Vector3 &r_pivot) const {
+	r_pivot = Vector3();
+	int pivot_count = 0;
+	if (!p_object_states.is_empty()) {
+		for (const ObjectDragState &state : p_object_states) {
+			if (!state.block) {
+				continue;
+			}
+			r_pivot += state.original_transform.origin;
+			pivot_count++;
+		}
+	} else {
+		for (const MeshDragState &state : p_mesh_states) {
+			if (!state.block || state.block->get_data().is_null()) {
+				continue;
+			}
+			const PackedVector3Array positions = state.block->get_data()->get_vertex_positions();
+			for (const int vertex_id : state.vertex_ids) {
+				if (vertex_id >= 0 && vertex_id < positions.size()) {
+					r_pivot += state.block->get_global_transform().xform(positions[vertex_id]);
+					pivot_count++;
+				}
+			}
+		}
+	}
+	if (pivot_count == 0) {
+		return false;
+	}
+	r_pivot /= (real_t)pivot_count;
+	return r_pivot.is_finite();
 }
 
 bool SelectTool::_open_mesh_previews() {
@@ -222,6 +263,7 @@ void SelectTool::_end_transform_drag(bool p_committed) {
 	transform_active = false;
 	transform_committed = p_committed;
 	_reset_transform_constraint();
+	transform_gizmo.set_requested_visible(false);
 }
 
 bool SelectTool::_closest_axis_parameter(Camera3D *p_camera, const Vector2 &p_position, const Vector3 &p_axis, real_t &r_parameter) const {
@@ -329,12 +371,17 @@ bool SelectTool::_cycle_transform_constraint(Camera3D *p_camera, int p_axis) {
 	return true;
 }
 
-bool SelectTool::_begin_transform_drag(Camera3D *p_camera, TransformDragMode p_requested_mode) {
+bool SelectTool::_begin_transform_drag(Camera3D *p_camera, TransformDragMode p_requested_mode,
+		TransformConstraintMode p_initial_constraint, int p_initial_axis, bool p_rotation_commit_on_release) {
 	if (transform_active) {
 		return false;
 	}
 	ERR_FAIL_COND_V(p_requested_mode != TRANSFORM_DRAG_NONE && p_requested_mode != TRANSFORM_DRAG_ROTATE, false);
+	ERR_FAIL_INDEX_V(p_initial_axis, 3, false);
+	ERR_FAIL_COND_V(p_initial_constraint < TRANSFORM_CONSTRAINT_FREE || p_initial_constraint > TRANSFORM_CONSTRAINT_PLANE, false);
+	ERR_FAIL_COND_V(p_requested_mode == TRANSFORM_DRAG_ROTATE && p_initial_constraint == TRANSFORM_CONSTRAINT_PLANE, false);
 	_reset_transform_constraint();
+	transform_rotation_commit_on_release = p_rotation_commit_on_release;
 	if (!p_camera || !_collect_transform_selection()) {
 		return false;
 	}
@@ -350,29 +397,12 @@ bool SelectTool::_begin_transform_drag(Camera3D *p_camera, TransformDragMode p_r
 	} else if (!rotation_requested && selection_model->get_mode() == SelectionModel::MODE_EDGE && gesture_shift && !gesture_ctrl) {
 		transform_drag_mode = TRANSFORM_DRAG_EDGE_EXTRUDE;
 	}
+	transform_constraint_mode = p_initial_constraint;
+	transform_constraint_axis = p_initial_axis;
 
-	transform_pivot = Vector3();
-	int pivot_count = 0;
-	if (_is_object_drag()) {
-		for (const ObjectDragState &state : object_drag_states) {
-			transform_pivot += state.original_transform.origin;
-			pivot_count++;
-		}
-	} else {
-		for (MeshDragState &state : mesh_drag_states) {
-			const PackedVector3Array positions = state.block->get_data()->get_vertex_positions();
-			for (const int vertex_id : state.vertex_ids) {
-				if (vertex_id >= 0 && vertex_id < positions.size()) {
-					transform_pivot += state.block->get_global_transform().xform(positions[vertex_id]);
-					pivot_count++;
-				}
-			}
-		}
-	}
-	if (pivot_count == 0) {
+	if (!_compute_transform_pivot(transform_pivot)) {
 		return false;
 	}
-	transform_pivot /= (real_t)pivot_count;
 
 	transform_axis = Vector3();
 	if (transform_drag_mode == TRANSFORM_DRAG_FACE_EXTRUDE || transform_drag_mode == TRANSFORM_DRAG_PUSH_PULL) {
@@ -445,7 +475,13 @@ bool SelectTool::_begin_transform_drag(Camera3D *p_camera, TransformDragMode p_r
 	transform_snap_step = LevelEditor::snap_step_or_default();
 	if (_is_rotation_drag()) {
 		transform_view_axis = -p_camera->get_global_transform().basis.get_column(2).normalized();
-		transform_axis = transform_view_axis;
+		if (transform_constraint_mode == TRANSFORM_CONSTRAINT_AXIS) {
+			transform_axis = Vector3();
+			transform_axis[transform_constraint_axis] = 1.0;
+			get_overlay().update_constraint_guides(transform_pivot, transform_constraint_axis, false);
+		} else {
+			transform_axis = transform_view_axis;
+		}
 		transform_rotation_pivot_screen = p_camera->unproject_position(transform_pivot);
 		transform_rotation_press_vector = press_position - transform_rotation_pivot_screen;
 		const real_t pivot_guard = 4.0 * EDSCALE;
@@ -454,9 +490,13 @@ bool SelectTool::_begin_transform_drag(Camera3D *p_camera, TransformDragMode p_r
 	} else if (!_rederive_transform_press_reference(p_camera, transform_constraint_mode, transform_constraint_axis)) {
 		_cancel_transform_drag();
 		return false;
+	} else if (transform_constraint_mode != TRANSFORM_CONSTRAINT_FREE) {
+		get_overlay().update_constraint_guides(transform_pivot, transform_constraint_axis,
+				transform_constraint_mode == TRANSFORM_CONSTRAINT_PLANE);
 	}
 	transform_active = true;
 	transform_committed = false;
+	transform_gizmo.set_requested_visible(false);
 	return true;
 }
 
@@ -789,6 +829,7 @@ bool SelectTool::_nudge(Camera3D *p_camera, Key p_key) {
 			undo_redo->add_undo_method(state.block, SNAME("set_global_transform"), state.original_transform);
 		}
 		undo_redo->commit_action(false);
+		_reset_gesture();
 		return true;
 	}
 	transform_drag_mode = TRANSFORM_DRAG_MOVE;
@@ -797,12 +838,14 @@ bool SelectTool::_nudge(Camera3D *p_camera, Key p_key) {
 	}
 	if (!_open_mesh_previews() || !_apply_mesh_preview_delta(delta)) {
 		_cancel_transform_drag();
+		_reset_gesture();
 		return false;
 	}
 	for (MeshDragState &state : mesh_drag_states) {
 		state.geometry_diff = state.mesh->commit_transform_preview();
 	}
 	_register_mesh_undo(TTR("Nudge Level Selection"), mesh_drag_states);
+	_reset_gesture();
 	return true;
 }
 
@@ -817,6 +860,7 @@ bool SelectTool::_vertices_to_grid() {
 		state.capture_original_positions();
 		if (!state.mesh->begin_transform_preview(state.vertex_ids)) {
 			_cancel_transform_drag();
+			_reset_gesture();
 			return false;
 		}
 		PackedVector3Array snapped;
@@ -830,17 +874,20 @@ bool SelectTool::_vertices_to_grid() {
 		}
 		if (!state.mesh->preview_transform_vertices(snapped)) {
 			_cancel_transform_drag();
+			_reset_gesture();
 			return false;
 		}
 	}
 	if (!changed) {
 		_cancel_transform_drag();
+		_reset_gesture();
 		return true;
 	}
 	for (MeshDragState &state : mesh_drag_states) {
 		state.geometry_diff = state.mesh->commit_transform_preview();
 	}
 	_register_mesh_undo(TTR("Vertices to Grid"), mesh_drag_states);
+	_reset_gesture();
 	return true;
 }
 
