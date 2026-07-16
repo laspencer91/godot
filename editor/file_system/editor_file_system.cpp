@@ -1022,10 +1022,12 @@ bool EditorFileSystem::_update_scan_actions() {
 			case ItemAction::ACTION_FILE_RELOAD: {
 				int idx = ia.dir->find_file_index(ia.file);
 				ERR_CONTINUE(idx == -1);
+				const String file_path = ia.dir->get_file_path(idx);
+				EditorResourcePreview::get_singleton()->check_for_invalidation(file_path);
 
 				// Only reloads the resources that are already loaded.
-				if (ResourceCache::has(ia.dir->get_file_path(idx))) {
-					reloads.push_back(ia.dir->get_file_path(idx));
+				if (ResourceCache::has(file_path)) {
+					reloads.push_back(file_path);
 				}
 			} break;
 		}

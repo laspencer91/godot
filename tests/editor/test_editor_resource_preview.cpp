@@ -39,16 +39,29 @@ TEST_FORCE_LINK(test_editor_resource_preview)
 #include "core/io/image.h"
 #include "core/object/callable_mp.h"
 #include "editor/file_system/editor_paths.h"
+#include "scene/resources/image_texture.h"
 #include "scene/resources/texture.h"
 #include "editor/inspector/editor_resource_preview.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
+#include "scene/resources/packed_scene.h"
 #include "tests/test_utils.h"
 
 struct EditorResourcePreviewTestAccess {
-	static void cache_negative_preview(EditorResourcePreview &p_preview, const String &p_path) {
+	static void cache_negative_preview(EditorResourcePreview &p_preview, const String &p_path, uint64_t p_modified_time = 0) {
 		EditorResourcePreview::Item item;
+		item.modified_time = p_modified_time;
+		item.scene_preview_attempted = true;
 		p_preview.cache[p_path] = item;
+	}
+
+	static bool cached_preview_suppresses_scene_generation(bool p_has_preview, bool p_scene_preview_attempted) {
+		EditorResourcePreview::Item item;
+		if (p_has_preview) {
+			item.preview = ImageTexture::create_from_image(Image::create_empty(4, 4, false, Image::FORMAT_RGBA8));
+		}
+		item.scene_preview_attempted = p_scene_preview_attempted;
+		return EditorResourcePreview::_cached_preview_suppresses_scene_generation(item);
 	}
 
 	static bool has_cached_preview(EditorResourcePreview &p_preview, const String &p_path) {
@@ -70,6 +83,30 @@ struct EditorResourcePreviewTestAccess {
 	static void clear_singleton() {
 		EditorResourcePreview::singleton = nullptr;
 	}
+
+	static void enqueue_scene_preview(EditorResourcePreview &p_preview, const String &p_path, EditorResourcePreview::PreviewPriority p_priority) {
+		EditorResourcePreview::SceneQueueItem item;
+		item.path = p_path;
+		item.priority = p_priority;
+		p_preview._queue_scene_preview(item);
+	}
+
+	static String pop_scene_preview(EditorResourcePreview &p_preview) {
+		EditorResourcePreview::SceneQueueItem item;
+		return p_preview._pop_scene_preview(item) ? item.path : String();
+	}
+
+	static bool is_scene_queue_empty(const EditorResourcePreview &p_preview) {
+		return p_preview.scene_queue.is_empty();
+	}
+
+	static bool is_preview_cache_valid(int p_cached_size, int p_expected_size, bool p_outdated, uint64_t p_cached_modified_time, uint64_t p_modified_time, const String &p_cached_hash, const String &p_current_hash) {
+		return EditorResourcePreview::_is_preview_cache_valid(p_cached_size, p_expected_size, p_outdated, p_cached_modified_time, p_modified_time, p_cached_hash, p_current_hash);
+	}
+
+	static bool is_scene_node_count_within_limit(const Ref<SceneState> &p_state, int p_limit) {
+		return EditorResourcePreview::_is_scene_node_count_within_limit(p_state, p_limit);
+	}
 };
 
 namespace TestEditorResourcePreview {
@@ -82,6 +119,69 @@ struct PreviewSingletonReset {
 		EditorResourcePreviewTestAccess::clear_singleton();
 	}
 };
+
+TEST_CASE("[Editor][EditorResourcePreview] Scene requests are stable and priority ordered") {
+	PreviewSingletonReset singleton_reset;
+	EditorResourcePreview preview;
+
+	EditorResourcePreviewTestAccess::enqueue_scene_preview(preview, "low_a", EditorResourcePreview::PREVIEW_PRIORITY_LOW);
+	EditorResourcePreviewTestAccess::enqueue_scene_preview(preview, "normal", EditorResourcePreview::PREVIEW_PRIORITY_NORMAL);
+	EditorResourcePreviewTestAccess::enqueue_scene_preview(preview, "high_a", EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
+	EditorResourcePreviewTestAccess::enqueue_scene_preview(preview, "low_b", EditorResourcePreview::PREVIEW_PRIORITY_LOW);
+	EditorResourcePreviewTestAccess::enqueue_scene_preview(preview, "high_b", EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
+
+	CHECK(EditorResourcePreviewTestAccess::pop_scene_preview(preview) == "high_a");
+	CHECK(EditorResourcePreviewTestAccess::pop_scene_preview(preview) == "high_b");
+	CHECK(EditorResourcePreviewTestAccess::pop_scene_preview(preview) == "normal");
+	CHECK(EditorResourcePreviewTestAccess::pop_scene_preview(preview) == "low_a");
+	CHECK(EditorResourcePreviewTestAccess::pop_scene_preview(preview) == "low_b");
+}
+
+TEST_CASE("[Editor][EditorResourcePreview] Failed scene previews stay negatively cached") {
+	PreviewSingletonReset singleton_reset;
+	EditorResourcePreview preview;
+	const String path = "res://missing_scene_preview.tscn";
+
+	EditorResourcePreviewTestAccess::cache_negative_preview(preview, path);
+	preview.queue_scene_preview(path, callable_mp_static(_preview_ready), EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
+	preview.queue_scene_preview(path, callable_mp_static(_preview_ready), EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
+
+	CHECK(EditorResourcePreviewTestAccess::is_scene_queue_empty(preview));
+	CHECK(EditorResourcePreviewTestAccess::has_cached_preview(preview, path));
+}
+
+TEST_CASE("[Editor][EditorResourcePreview] Worker-cached null previews do not suppress scene generation") {
+	// The generic worker has no scene generator, so its null entry means "never
+	// attempted", while a scene-pipeline negative result means "do not retry".
+	CHECK_FALSE(EditorResourcePreviewTestAccess::cached_preview_suppresses_scene_generation(false, false));
+	CHECK(EditorResourcePreviewTestAccess::cached_preview_suppresses_scene_generation(false, true));
+	CHECK(EditorResourcePreviewTestAccess::cached_preview_suppresses_scene_generation(true, false));
+	CHECK(EditorResourcePreviewTestAccess::cached_preview_suppresses_scene_generation(true, true));
+}
+
+TEST_CASE("[Editor][EditorResourcePreview] Cache invalidation uses size, version, mtime, and hash") {
+	CHECK(EditorResourcePreviewTestAccess::is_preview_cache_valid(64, 64, false, 10, 10, "old", String()));
+	CHECK(EditorResourcePreviewTestAccess::is_preview_cache_valid(64, 64, false, 10, 11, "same", "same"));
+	CHECK_FALSE(EditorResourcePreviewTestAccess::is_preview_cache_valid(32, 64, false, 10, 10, "same", String()));
+	CHECK_FALSE(EditorResourcePreviewTestAccess::is_preview_cache_valid(64, 64, true, 10, 10, "same", String()));
+	CHECK_FALSE(EditorResourcePreviewTestAccess::is_preview_cache_valid(64, 64, false, 10, 11, "old", "new"));
+}
+
+TEST_CASE("[Editor][EditorResourcePreview] Scene node limit is checked before instantiation") {
+	Node *root = memnew(Node);
+	root->set_name("Root");
+	Node *child = memnew(Node);
+	child->set_name("Child");
+	root->add_child(child);
+	child->set_owner(root);
+
+	Ref<PackedScene> scene;
+	scene.instantiate();
+	REQUIRE(scene->pack(root) == OK);
+	CHECK(EditorResourcePreviewTestAccess::is_scene_node_count_within_limit(scene->get_state(), 2));
+	CHECK_FALSE(EditorResourcePreviewTestAccess::is_scene_node_count_within_limit(scene->get_state(), 1));
+	memdelete(root);
+}
 
 TEST_CASE("[Editor][EditorResourcePreview] Cache survives an mtime-only source change") {
 	PreviewSingletonReset singleton_reset;

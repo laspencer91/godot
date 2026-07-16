@@ -712,6 +712,10 @@ void FileSystemDock::_notification(int p_what) {
 			_update_responsive_layout();
 		} break;
 
+		case NOTIFICATION_VISIBILITY_CHANGED: {
+			_queue_visible_scene_previews_update();
+		} break;
+
 		case NOTIFICATION_PROCESS: {
 			if (EditorFileSystem::get_singleton()->is_scanning()) {
 				scanning_progress->set_value(EditorFileSystem::get_singleton()->get_scanning_progress() * 100.0f);
@@ -1087,6 +1091,72 @@ void FileSystemDock::_tree_thumbnail_done(const String &p_path, const Ref<Textur
 	}
 }
 
+void FileSystemDock::_cancel_visible_scene_previews() {
+	EditorResourcePreview *preview = EditorResourcePreview::get_singleton();
+	if (preview) {
+		for (const KeyValue<String, Callable> &request : visible_scene_preview_requests) {
+			preview->cancel_scene_preview(request.key, request.value);
+		}
+	}
+	visible_scene_preview_requests.clear();
+}
+
+void FileSystemDock::_queue_visible_scene_previews_update() {
+	if (scene_preview_visibility_update_queued) {
+		return;
+	}
+	scene_preview_visibility_update_queued = true;
+	callable_mp(this, &FileSystemDock::_update_visible_scene_previews).call_deferred();
+}
+
+void FileSystemDock::_file_list_scroll_changed(double) {
+	_queue_visible_scene_previews_update();
+}
+
+void FileSystemDock::_update_visible_scene_previews() {
+	scene_preview_visibility_update_queued = false;
+	if (!files->is_visible_in_tree() || !file_list_vb->is_visible_in_tree()) {
+		_cancel_visible_scene_previews();
+		return;
+	}
+
+	files->force_update_list_size();
+	VScrollBar *vertical_scroll = files->get_v_scroll_bar();
+	HScrollBar *horizontal_scroll = files->get_h_scroll_bar();
+	const Vector2 scroll_position(horizontal_scroll->get_value(), vertical_scroll->get_value());
+	const Vector2 visible_size(
+			horizontal_scroll->is_visible() ? horizontal_scroll->get_page() : files->get_size().x,
+			vertical_scroll->is_visible() ? vertical_scroll->get_page() : files->get_size().y);
+	const Rect2 visible_rect(scroll_position, visible_size);
+	HashSet<String> visible_scenes;
+
+	for (int i = 0; i < files->get_item_count(); i++) {
+		const String path = files->get_item_metadata(i);
+		if (path.ends_with("/") || EditorFileSystem::get_singleton()->get_file_type(path) != SNAME("PackedScene") || !files->get_item_rect(i).intersects(visible_rect)) {
+			continue;
+		}
+		visible_scenes.insert(path);
+		if (visible_scene_preview_requests.has(path)) {
+			continue;
+		}
+
+		const Callable callback = callable_mp(this, &FileSystemDock::_file_list_thumbnail_done).bind(i, files->get_item_text(i));
+		visible_scene_preview_requests.insert(path, callback);
+		EditorResourcePreview::get_singleton()->queue_scene_preview(path, callback, EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
+	}
+
+	Vector<String> requests_to_cancel;
+	for (const KeyValue<String, Callable> &request : visible_scene_preview_requests) {
+		if (!visible_scenes.has(request.key)) {
+			requests_to_cancel.push_back(request.key);
+		}
+	}
+	for (const String &path : requests_to_cancel) {
+		EditorResourcePreview::get_singleton()->cancel_scene_preview(path, visible_scene_preview_requests[path]);
+		visible_scene_preview_requests.erase(path);
+	}
+}
+
 Ref<Texture2D> FileSystemDock::_apply_thumbnail_filter(const Ref<Texture2D> &p_thumbnail, const String &p_file_path) const {
 	if (!p_file_path.is_empty()) {
 		int index;
@@ -1185,6 +1255,8 @@ void FileSystemDock::_search(EditorFileSystemDirectory *p_path, List<FileInfo> *
 }
 
 void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<String> &p_override_selection) {
+	_cancel_visible_scene_previews();
+
 	// Register the previously selected items.
 	Vector<String> previous_selection;
 	if (p_keep_selection) {
@@ -1461,6 +1533,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 	}
 
 	_update_category_empty_state();
+	_queue_visible_scene_previews_update();
 }
 
 HashSet<String> FileSystemDock::_get_valid_conversions_for_file_paths(const Vector<String> &p_paths) {
@@ -1780,6 +1853,14 @@ void FileSystemDock::_open_description_link() {
 }
 
 void FileSystemDock::_preview_invalidated(const String &p_path) {
+	if (Callable *callback = visible_scene_preview_requests.getptr(p_path)) {
+		EditorResourcePreview::get_singleton()->cancel_scene_preview(p_path, *callback);
+		visible_scene_preview_requests.erase(p_path);
+	}
+	if (EditorFileSystem::get_singleton()->get_file_type(p_path) == SNAME("PackedScene")) {
+		_queue_visible_scene_previews_update();
+		return;
+	}
 	if (file_list_display_mode == FILE_LIST_DISPLAY_THUMBNAILS && p_path.get_base_dir() == current_path && searched_tokens.is_empty() && file_list_vb->is_visible_in_tree()) {
 		for (int i = 0; i < files->get_item_count(); i++) {
 			if (files->get_item_metadata(i) == p_path) {
@@ -5753,6 +5834,9 @@ FileSystemDock::FileSystemDock() {
 	files->connect("multi_selected", callable_mp(this, &FileSystemDock::_file_multi_selected));
 	files->connect("empty_clicked", callable_mp(this, &FileSystemDock::_file_list_empty_clicked));
 	files->connect("item_edited", callable_mp(this, &FileSystemDock::_rename_operation_confirm));
+	files->connect(SceneStringName(resized), callable_mp(this, &FileSystemDock::_queue_visible_scene_previews_update));
+	files->get_v_scroll_bar()->connect(SceneStringName(value_changed), callable_mp(this, &FileSystemDock::_file_list_scroll_changed));
+	files->get_h_scroll_bar()->connect(SceneStringName(value_changed), callable_mp(this, &FileSystemDock::_file_list_scroll_changed));
 	files->set_custom_minimum_size(Size2(0, 15 * EDSCALE));
 	files->set_allow_rmb_select(true);
 	files_content_vb->add_child(files);
@@ -5955,5 +6039,6 @@ FileSystemDock::FileSystemDock() {
 }
 
 FileSystemDock::~FileSystemDock() {
+	_cancel_visible_scene_previews();
 	singleton = nullptr;
 }
