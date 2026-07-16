@@ -48,6 +48,17 @@
 				Returns [code]true[/code] if the filesystem is being scanned.
 			</description>
 		</method>
+		<method name="reimport_file_with_custom_parameters">
+			<return type="int" enum="Error" />
+			<param index="0" name="path" type="String" />
+			<param index="1" name="custom_options" type="Dictionary" />
+			<param index="2" name="custom_importer" type="String" default="&quot;&quot;" />
+			<description>
+				Reimports the resource at [param path] with the options in [param custom_options]. Options not specified in [param custom_options] retain their values from the existing [code].import[/code] file, or use the selected importer's defaults if no value was previously stored. Unrecognized option keys are silently ignored. If [param custom_importer] is empty, the existing importer is used; otherwise, the importer with the given name is used.
+				Returns [constant OK] on success, [constant ERR_FILE_NOT_FOUND] if the source file does not exist, [constant ERR_FILE_UNRECOGNIZED] if [param path] is not an imported resource, [constant ERR_INVALID_PARAMETER] if [param custom_importer] names an importer that is not registered, or another [enum Error] returned by the import operation.
+				[b]Note:[/b] This method is only available in editor builds.
+			</description>
+		</method>
 		<method name="reimport_files">
 			<return type="void" />
 			<param index="0" name="files" type="PackedStringArray" />

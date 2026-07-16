@@ -3219,17 +3219,39 @@ void EditorFileSystem::_find_group_files(EditorFileSystemDirectory *efd, HashMap
 	}
 }
 
-void EditorFileSystem::reimport_file_with_custom_parameters(const String &p_file, const String &p_importer, const HashMap<StringName, Variant> &p_custom_params) {
+Error EditorFileSystem::_reimport_file_with_custom_parameters(const String &p_path, const Dictionary &p_custom_options, const String &p_custom_importer) {
+	ERR_FAIL_COND_V_MSG(!FileAccess::exists(p_path), ERR_FILE_NOT_FOUND, vformat("Cannot reimport '%s': The source file does not exist.", p_path));
+
+	EditorFileSystemDirectory *fs = nullptr;
+	int file_pos = -1;
+	ERR_FAIL_COND_V_MSG(!_find_file(p_path, &fs, file_pos) || !FileAccess::exists(p_path + ".import"), ERR_FILE_UNRECOGNIZED, vformat("Cannot reimport '%s': The path is not an imported resource.", p_path));
+
+	if (!p_custom_importer.is_empty()) {
+		Ref<ResourceImporter> importer = ResourceFormatImporter::get_singleton()->get_importer_by_name(p_custom_importer);
+		ERR_FAIL_COND_V_MSG(importer.is_null(), ERR_INVALID_PARAMETER, vformat("Cannot reimport '%s': Importer '%s' is not registered.", p_path, p_custom_importer));
+	}
+
+	HashMap<StringName, Variant> custom_options;
+	for (const KeyValue<Variant, Variant> &kv : p_custom_options) {
+		custom_options.insert(kv.key, kv.value);
+	}
+
+	return reimport_file_with_custom_parameters(p_path, p_custom_importer, custom_options);
+}
+
+Error EditorFileSystem::reimport_file_with_custom_parameters(const String &p_file, const String &p_importer, const HashMap<StringName, Variant> &p_custom_params) {
 	Vector<String> reloads;
 	reloads.append(p_file);
 
 	// Emit the resource_reimporting signal for the single file before the actual importation.
 	emit_signal(SNAME("resources_reimporting"), reloads);
 
-	_reimport_file(p_file, p_custom_params, p_importer);
+	Error err = _reimport_file(p_file, p_custom_params, p_importer);
 
 	// Emit the resource_reimported signal for the single file we just reimported.
 	emit_signal(SNAME("resources_reimported"), reloads);
+
+	return err;
 }
 
 Error EditorFileSystem::_copy_file(const String &p_from, const String &p_to) {
@@ -3847,6 +3869,7 @@ void EditorFileSystem::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("update_file", "path"), &EditorFileSystem::update_file);
 	ClassDB::bind_method(D_METHOD("get_filesystem_path", "path"), &EditorFileSystem::get_filesystem_path);
 	ClassDB::bind_method(D_METHOD("get_file_type", "path"), &EditorFileSystem::get_file_type);
+	ClassDB::bind_method(D_METHOD("reimport_file_with_custom_parameters", "path", "custom_options", "custom_importer"), &EditorFileSystem::_reimport_file_with_custom_parameters, DEFVAL(String()));
 	ClassDB::bind_method(D_METHOD("reimport_files", "files"), &EditorFileSystem::reimport_files);
 
 	ADD_SIGNAL(MethodInfo("filesystem_changed")); // May only be emitted on the main thread.

@@ -284,6 +284,7 @@ class EditorFileSystem : public Node {
 
 	void _update_extensions();
 
+	Error _reimport_file_with_custom_parameters(const String &p_path, const Dictionary &p_custom_options, const String &p_custom_importer);
 	Error _reimport_file(const String &p_file, const HashMap<StringName, Variant> &p_custom_options = HashMap<StringName, Variant>(), const String &p_custom_importer = String(), Variant *generator_parameters = nullptr, bool p_update_file_system = true);
 	Error _reimport_group(const String &p_group_file, const Vector<String> &p_files);
 
@@ -421,7 +422,7 @@ public:
 	void reimport_files(const Vector<String> &p_files);
 	Error reimport_append(const String &p_file, const HashMap<StringName, Variant> &p_custom_options, const String &p_custom_importer, Variant p_generator_parameters);
 
-	void reimport_file_with_custom_parameters(const String &p_file, const String &p_importer, const HashMap<StringName, Variant> &p_custom_params);
+	Error reimport_file_with_custom_parameters(const String &p_file, const String &p_importer, const HashMap<StringName, Variant> &p_custom_params);
 
 	bool is_group_file(const String &p_path) const;
 	void move_group_file(const String &p_path, const String &p_new_path);
