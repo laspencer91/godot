@@ -135,25 +135,10 @@ class EditorWorkspace : public VBoxContainer {
 	// session; load_geometry advances it past every restored id so a post-restore split can't collide.
 	uint32_t next_pane_id = 1;
 
-	// Running counter so temporary debug placeholder panes get distinct labels.
-	int debug_pane_counter = 0;
-
 protected:
 	static void _bind_methods();
 	void _notification(int p_what);
-	virtual void unhandled_key_input(const Ref<InputEvent> &p_event) override;
 	void _on_gui_focus_changed(Control *p_control);
-
-	// TEMPORARY (G2 scaffolding): split the focused pane, dropping a labeled
-	// placeholder into the new side, so the split mechanic can be exercised
-	// before real per-pane content exists. Removed once tabs host real content.
-	void _debug_split_focused(bool p_vertical);
-
-	// TEMPORARY (G2 scaffolding): split the focused pane and drop a TabbedDocumentHost with a
-	// tab per open document into the new side, so the new pane has a working tab bar that
-	// switches which document it renders. Stand-in trigger until documents open into panes via
-	// the menu / file explorer drag-drop. Removed once that real open path exists.
-	void _debug_split_focused_with_tabs(bool p_vertical);
 
 public:
 	WorkspacePane *make_pane();

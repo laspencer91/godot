@@ -32,7 +32,6 @@
 
 #include "core/input/input_event.h"
 #include "core/object/callable_mp.h"
-#include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
@@ -41,8 +40,6 @@
 #include "editor/script/script_editor_plugin.h"
 #include "editor/shader/shader_editor_plugin.h" // G-Shader: current-shader-view sync on pane focus.
 #include "editor/themes/editor_scale.h"
-#include "scene/gui/label.h"
-#include "scene/gui/panel_container.h"
 #include "scene/gui/split_container.h"
 #include "scene/main/viewport.h"
 
@@ -254,9 +251,6 @@ WorkspacePane *EditorWorkspace::make_pane() {
 
 void EditorWorkspace::_notification(int p_what) {
 	switch (p_what) {
-		case NOTIFICATION_ENTER_TREE: {
-			set_process_unhandled_key_input(true);
-		} break;
 		case NOTIFICATION_READY: {
 			Viewport *viewport = get_viewport();
 			if (viewport) {
@@ -273,102 +267,6 @@ void EditorWorkspace::_on_gui_focus_changed(Control *p_control) {
 			set_focused_pane(pane);
 			return;
 		}
-	}
-}
-
-void EditorWorkspace::unhandled_key_input(const Ref<InputEvent> &p_event) {
-	// TEMPORARY (G2 scaffolding): Alt+Shift+Backslash splits the focused pane side
-	// by side, Alt+Shift+Minus stacks it. Handled here (unhandled input) so normal
-	// editor shortcuts always win; removed once panes host real tabbed content.
-	Ref<InputEventKey> k = p_event;
-	if (k.is_null() || !k->is_pressed() || k->is_echo()) {
-		return;
-	}
-	if (!(k->is_alt_pressed() && k->is_shift_pressed())) {
-		return;
-	}
-	if (k->get_keycode() == Key::BACKSLASH) {
-		_debug_split_focused(false);
-		accept_event();
-	} else if (k->get_keycode() == Key::MINUS) {
-		_debug_split_focused(true);
-		accept_event();
-	} else if (k->get_keycode() == Key::KEY_3) {
-		// Drop a tabbed host of all open documents into a side-by-side split.
-		_debug_split_focused_with_tabs(false);
-		accept_event();
-	}
-}
-
-void EditorWorkspace::_debug_split_focused(bool p_vertical) {
-	WorkspacePane *target = get_focused_pane();
-	if (!target || !target->is_leaf()) {
-		return;
-	}
-
-	debug_pane_counter++;
-	PanelContainer *placeholder = memnew(PanelContainer);
-	Label *label = memnew(Label);
-	label->set_text(vformat("Pane %d", debug_pane_counter));
-	label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
-	label->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
-	label->set_h_size_flags(SIZE_EXPAND_FILL);
-	label->set_v_size_flags(SIZE_EXPAND_FILL);
-	placeholder->add_child(label);
-
-	WorkspacePane *new_pane = target->split(p_vertical, placeholder);
-	if (new_pane) {
-		set_focused_pane(new_pane);
-	}
-}
-
-void EditorWorkspace::_debug_split_focused_with_tabs(bool p_vertical) {
-	WorkspacePane *target = get_focused_pane();
-	if (!target || !target->is_leaf()) {
-		return;
-	}
-	EditorNode *en = EditorNode::get_singleton();
-	if (!en) {
-		return;
-	}
-	EditorData &ed = en->get_editor_data();
-
-	// Build a tabbed host with a tab per open document, so the new pane can switch which
-	// document it renders. The active document's tab is selected first.
-	TabbedDocumentHost *host = memnew(TabbedDocumentHost);
-	EditorDocument *active = ed.get_active_document();
-	int active_tab = 0;
-	const int count = ed.get_edited_scene_count();
-	for (int i = 0; i < count; i++) {
-		EditorDocument *d = ed.get_document(i);
-		if (!d) {
-			continue;
-		}
-		const int tab = host->add_document(d, ed.get_scene_title(i));
-		if (d == active) {
-			active_tab = tab;
-		}
-	}
-
-	// G2 S4: also surface the first open script as a tab, so script-document hosting is exercisable
-	// through the debug split. The real reveal()-driven open path lands in S5/S6.
-	if (ScriptEditor *se = ScriptEditor::get_singleton()) {
-		Vector<Ref<Script>> open_scripts = se->get_open_scripts();
-		if (!open_scripts.is_empty() && open_scripts[0].is_valid()) {
-			ScriptDocument *sd = ed.get_or_create_script_document(open_scripts[0]);
-			host->add_document(sd, sd->get_title());
-		}
-	}
-
-	if (host->get_document_count() == 0) {
-		memdelete(host);
-		return;
-	}
-	host->set_current(active_tab);
-
-	WorkspacePane *new_pane = target->split(p_vertical, host);
-	if (new_pane) {
-		set_focused_pane(new_pane);
 	}
 }
 
