@@ -35,6 +35,10 @@ void HordeAgents::set_attack_seek_radius(float p_r) {
 	attack_seek_radius = Math::is_finite(p_r) ? MAX(p_r, 0.0f) : 0.0f;
 }
 
+void HordeAgents::set_attack_standoff_distance(float p_distance) {
+	attack_standoff_distance = Math::is_finite(p_distance) ? MAX(p_distance, 0.0f) : 0.0f;
+}
+
 void HordeAgents::_ensure_field_capacity(int p_field_id) {
 	const uint32_t count = (uint32_t)p_field_id + 1;
 	if (fields.size() < count) {
@@ -664,6 +668,7 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 	// set_player_positions/_assign_tiers each retarget.
 	bool close_seek = false;
 	Vector2 seek_dir;
+	float close_seek_distance = 0.0f;
 	if ((st == STATE_WAKE || st == STATE_CHASE || st == STATE_ATTACK_PLAYER) && attack_seek_radius > 0.0f &&
 			nearest_any_dist_sq[i] <= attack_seek_radius * attack_seek_radius) {
 		const int pc = (int)player_x.size();
@@ -682,7 +687,8 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 		}
 		if (best_p >= 0 && best_sq > 1e-6f) {
 			close_seek = true;
-			seek_dir = Vector2(player_x[best_p] - ax, player_z[best_p] - az) / Math::sqrt(best_sq);
+			close_seek_distance = Math::sqrt(best_sq);
+			seek_dir = Vector2(player_x[best_p] - ax, player_z[best_p] - az) / close_seek_distance;
 		}
 	}
 
@@ -792,6 +798,19 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 	// Reynolds separation, Hot tier only (R3.3 / A2.3).
 	if (t == TIER_HOT && (disp != Vector2() || mode != HordeFSMConfig::MOVE_STATIONARY)) {
 		disp += _separation_offset(i) * (separation_strength * eff_dt);
+	}
+
+	// ATTACK_PLAYER is a moving visual commitment, but it must not carry the
+	// agent through the victim. Clamp only the displacement component toward the
+	// nearest player, after crowd separation has contributed, while preserving
+	// lateral/backward avoidance. Knockback below remains a forced displacement
+	// and intentionally does not obey this locomotion constraint.
+	if (st == STATE_ATTACK_PLAYER && close_seek && attack_standoff_distance > 0.0f) {
+		const float forward = disp.dot(seek_dir);
+		const float max_forward = MAX(close_seek_distance - attack_standoff_distance, 0.0f);
+		if (forward > max_forward) {
+			disp -= seek_dir * (forward - max_forward);
+		}
 	}
 
 	// Blunt-knockback stumble (P2.4): consume up to `divisor` decay ticks this
@@ -1556,6 +1575,8 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_max_turn_rate"), &HordeAgents::get_max_turn_rate);
 	ClassDB::bind_method(D_METHOD("set_attack_seek_radius", "radius"), &HordeAgents::set_attack_seek_radius);
 	ClassDB::bind_method(D_METHOD("get_attack_seek_radius"), &HordeAgents::get_attack_seek_radius);
+	ClassDB::bind_method(D_METHOD("set_attack_standoff_distance", "distance"), &HordeAgents::set_attack_standoff_distance);
+	ClassDB::bind_method(D_METHOD("get_attack_standoff_distance"), &HordeAgents::get_attack_standoff_distance);
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &HordeAgents::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &HordeAgents::get_collision_mask);
 

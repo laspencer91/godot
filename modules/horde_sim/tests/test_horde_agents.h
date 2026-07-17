@@ -1046,6 +1046,33 @@ TEST_CASE("[HordeSim][Agents] Close-range attack seek faces and closes on the pl
 		}
 		CHECK(a->get_agent_position(id).z > 0.1f);
 	}
+
+	// G. A moving ATTACK_PLAYER commits its lunge but stops at the authored
+	// center-distance standoff instead of crossing through the victim. A second
+	// step proves the clamp holds for the remainder of the attack window.
+	{
+		Ref<HordeFSMConfig> cfg;
+		cfg.instantiate();
+		cfg->load_defaults();
+		cfg->set_rule(0, HordeAgents::STATE_ATTACK_PLAYER, 4.2f, 0.0f, 0.5f, 0.0f);
+		cfg->set_movement_mode(0, HordeAgents::STATE_ATTACK_PLAYER, HordeFSMConfig::MOVE_SEEK_TARGET);
+
+		Ref<HordeAgents> a = make_agents(4);
+		a->set_fsm_config(cfg);
+		a->set_attack_seek_radius(seek_radius);
+		a->set_attack_standoff_distance(0.8f);
+		const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_ATTACK_PLAYER);
+		const Vector3 player(0, 0, 2.0f);
+		PackedVector3Array players;
+		players.push_back(player);
+		a->set_player_positions(players);
+		a->tick(0.5);
+		CHECK(a->get_agent_position(id).z == doctest::Approx(1.2f).epsilon(0.001));
+		a->set_player_positions(players);
+		a->tick(0.25);
+		CHECK(a->get_agent_position(id).z == doctest::Approx(1.2f).epsilon(0.001));
+		CHECK(a->get_agent_yaw(id) == doctest::Approx(0.0f).epsilon(0.001));
+	}
 }
 
 // ---------------------------------------------------------------------------

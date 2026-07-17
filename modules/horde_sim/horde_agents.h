@@ -113,6 +113,11 @@ private:
 	// air. The Box3D wall sweep still bounds the override, so it never tunnels
 	// geometry. 0 disables (pure flow). Logan-tunable in the inspector.
 	float attack_seek_radius = 3.25f;
+	// Minimum planar center distance an ATTACK_PLAYER locomotion step keeps from
+	// its target. Player bodies are deliberately absent from the horde's static
+	// collision mask, so this deterministic steering constraint prevents a
+	// committed lunge from crossing through its victim. 0 disables.
+	float attack_standoff_distance = 0.8f;
 	uint32_t collision_mask = 0xFFFFFFFF; // Static layers the mover sweep tests.
 
 	// Flow-field registry indexed by the per-agent uint8_t field id. Field 0 is
@@ -302,6 +307,8 @@ public:
 	float get_max_turn_rate() const { return max_turn_rate; }
 	void set_attack_seek_radius(float p_r);
 	float get_attack_seek_radius() const { return attack_seek_radius; }
+	void set_attack_standoff_distance(float p_distance);
+	float get_attack_standoff_distance() const { return attack_standoff_distance; }
 	void set_collision_mask(int p_mask) { collision_mask = (uint32_t)p_mask; }
 	int get_collision_mask() const { return (int)collision_mask; }
 
