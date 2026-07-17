@@ -564,6 +564,10 @@ public:
 	Control *create_view_bound_to(EditorDocument *p_document);
 	Node3DEditorViewport *get_editor_viewport(int p_idx) const;
 	Node3DEditorViewport *get_last_used_viewport();
+	// Resolve the viewport a forwarded 3D input event came from. Input can originate from any
+	// live view's pane (not just main_view), and while a camera preview is active the camera
+	// handed to plugins is the previewing one — both are matched here.
+	Node3DEditorViewport *find_viewport_for_input_camera(Camera3D *p_camera) const;
 
 	// G2 M7.2a: the shared 3D toolbar follows the focused scene pane. get_shared_toolbar() is the
 	// Control the pane header reparents in; park_shared_toolbar() returns it to its stock home.

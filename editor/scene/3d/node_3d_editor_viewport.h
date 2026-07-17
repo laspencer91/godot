@@ -647,6 +647,7 @@ public:
 
 	SubViewport *get_viewport_node() { return viewport; }
 	Camera3D *get_camera_3d() { return camera; } // return the default camera object.
+	Camera3D *get_previewing_camera() { return previewing; } // camera this viewport renders from while previewing, null otherwise.
 	Control *get_surface() { return surface; }
 	Ref<View3DController> get_controller() { return view_3d_controller; }
 

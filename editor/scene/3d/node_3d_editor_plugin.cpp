@@ -2725,6 +2725,18 @@ Node3DEditorViewport *Node3DEditor::get_last_used_viewport() {
 	return main_view->get_last_used_viewport();
 }
 
+Node3DEditorViewport *Node3DEditor::find_viewport_for_input_camera(Camera3D *p_camera) const {
+	for (Node3DEditorView *view : editor_views) {
+		for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+			Node3DEditorViewport *vp = view->get_editor_viewport(i);
+			if (vp && (vp->get_camera_3d() == p_camera || vp->get_previewing_camera() == p_camera)) {
+				return vp;
+			}
+		}
+	}
+	return nullptr;
+}
+
 void Node3DEditor::set_freelook_viewport(Node3DEditorViewport *p_viewport) {
 	main_view->set_freelook_viewport(p_viewport);
 }

@@ -615,14 +615,10 @@ EditorPlugin::AfterGUIInput Path3DEditorPlugin::forward_3d_gui_input(Camera3D *p
 
 		Point2 mbpos(mb->get_position().x, mb->get_position().y);
 
-		Node3DEditorViewport *viewport = nullptr;
-		for (uint32_t i = 0; i < Node3DEditor::VIEWPORTS_COUNT; i++) {
-			Node3DEditorViewport *vp = Node3DEditor::get_singleton()->get_editor_viewport(i);
-			if (vp->get_camera_3d() == p_camera) {
-				viewport = vp;
-				break;
-			}
-		}
+		// Pre-document-context this enumerated the singleton's four viewports by editor camera;
+		// input now arrives from any live view's pane, and from the previewing camera while a
+		// camera preview is active, so resolve through the full view registry.
+		Node3DEditorViewport *viewport = Node3DEditor::get_singleton()->find_viewport_for_input_camera(p_camera);
 
 		ERR_FAIL_NULL_V(viewport, EditorPlugin::AFTER_GUI_INPUT_PASS);
 
