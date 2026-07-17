@@ -5752,7 +5752,10 @@ FileSystemDock::FileSystemDock() {
 	category_tree->set_hide_folding(true);
 	category_tree->set_columns(2);
 	category_tree->set_column_expand(0, false);
-	category_tree->set_column_custom_minimum_width(0, 24 * EDSCALE);
+	// Flat two-column rail: let the icon column hug its content and drop the
+	// Tree inner margins so rows start at the rail's edge padding.
+	category_tree->add_theme_constant_override("inner_item_margin_left", 0);
+	category_tree->add_theme_constant_override("inner_item_margin_right", 2 * EDSCALE);
 	category_tree->set_column_expand(1, true);
 	category_tree->set_column_clip_content(1, true);
 	category_tree->set_allow_reselect(true);
@@ -5823,6 +5826,8 @@ FileSystemDock::FileSystemDock() {
 
 	path_hb = memnew(HBoxContainer);
 	path_hb->set_h_size_flags(SIZE_EXPAND_FILL);
+	// When merged into toolbar_hbc beside the path bar, favor the search side.
+	path_hb->set_stretch_ratio(1.5);
 	file_list_vb->add_child(path_hb);
 
 	file_list_search_box = memnew(LineEdit);
