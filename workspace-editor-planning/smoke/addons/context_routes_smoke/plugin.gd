@@ -41,7 +41,7 @@ func _run_test() -> void:
 
 	# "Show in FileSystem" semantics: reveal the unmanaged drawer, select the requested resource, and
 	# do not redirect keyboard focus into search. The stock Alt+F action then toggles it closed/open and
-	# keyboard opening must focus the active FileSystem filter.
+	# keyboard opening must focus the active Explore filter.
 	EditorInterface.get_file_system_dock().navigate_to_path("res://test_resource.tres")
 	for frame in 3:
 		await get_tree().process_frame
@@ -49,8 +49,8 @@ func _run_test() -> void:
 		push_error("Show in FileSystem did not select test_resource.tres.")
 		return
 	var navigation_focus := EditorInterface.get_base_control().get_viewport().gui_get_focus_owner()
-	if navigation_focus is LineEdit and navigation_focus.placeholder_text == "Filter Files":
-		push_error("Show in FileSystem incorrectly focused the FileSystem filter.")
+	if navigation_focus is LineEdit and navigation_focus.placeholder_text == "Filter Assets":
+		push_error("Show in FileSystem incorrectly focused the Explore filter.")
 		return
 
 	_send_alt_f(true)
@@ -61,8 +61,8 @@ func _run_test() -> void:
 	for frame in 3:
 		await get_tree().process_frame
 	var shortcut_focus := EditorInterface.get_base_control().get_viewport().gui_get_focus_owner()
-	if not shortcut_focus is LineEdit or shortcut_focus.placeholder_text != "Filter Files":
-		push_error("Alt+F did not focus the FileSystem filter when opening the drawer.")
+	if not shortcut_focus is LineEdit or shortcut_focus.placeholder_text != "Filter Assets":
+		push_error("Alt+F did not focus the Explore filter when opening the drawer.")
 		return
 
 	print("WORKSPACE_CONTEXT_ROUTES_OK")
