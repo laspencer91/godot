@@ -120,7 +120,6 @@
 #include "editor/inspector/editor_resource_picker.h"
 #include "editor/inspector/editor_resource_preview.h"
 #include "editor/inspector/multi_node_edit.h"
-#include "editor/level/level_editor.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/plugins/editor_plugin_list.h"
 #include "editor/plugins/editor_resource_conversion_plugin.h"
@@ -1694,66 +1693,17 @@ bool EditorNode::_reload_scene_at_index(int p_idx) {
 	ERR_FAIL_INDEX_V(p_idx, editor_data.get_edited_scene_count(), false);
 
 	const String filename = editor_data.get_scene_path(p_idx);
-	EditorDocument *document = editor_data.get_document(p_idx);
-	const bool is_level_document = document && document->get_type() == EditorDocument::TYPE_LEVEL;
 
 	editor_data.set_edited_scene(p_idx);
 	_remove_edited_scene(false);
 
-	Error err = is_level_document ? open_scene_in_level_editor(filename) : open_scene(filename);
+	Error err = open_scene(filename);
 	if (err != OK) {
 		ERR_PRINT(vformat("Failed to load scene: %s", filename));
 		return false;
 	}
 	editor_data.move_edited_scene_to_index(p_idx);
 	return true;
-}
-
-void EditorNode::_process_same_path_stale_scenes() {
-	disk_changed_list->clear();
-	TreeItem *r = disk_changed_list->create_item();
-	disk_changed_list->set_hide_root(true);
-	disk_changed_scenes.clear();
-	disk_changed_project = false;
-
-	const int current_idx = editor_data.get_edited_scene();
-	const bool focus_was_pending = open_scene_focus_pending;
-	bool reloaded_scene = false;
-
-	for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
-		const String scene_path = ProjectSettings::get_singleton()->localize_path(editor_data.get_scene_path(i));
-		if (!same_path_stale_scenes.has(scene_path)) {
-			continue;
-		}
-
-		const uint64_t last_date = editor_data.get_scene_modified_time(i);
-		const uint64_t date = FileAccess::get_modified_time(scene_path);
-		if (date <= last_date) {
-			continue;
-		}
-
-		if (EditorUndoRedoManager::get_singleton()->is_history_unsaved(editor_data.get_scene_history_id(i))) {
-			TreeItem *ti = disk_changed_list->create_item(r);
-			ti->set_text(0, scene_path.get_file());
-			disk_changed_scenes.push_back(scene_path);
-			continue;
-		}
-
-		reloaded_scene |= _reload_scene_at_index(i);
-	}
-
-	open_scene_focus_pending = focus_was_pending;
-	if (reloaded_scene) {
-		_set_current_scene(current_idx);
-		scene_tabs->update_scene_tabs();
-	}
-
-	if (!disk_changed_scenes.is_empty()) {
-		callable_mp((Window *)disk_changed, &Window::popup_centered_ratio).call_deferred(0.3);
-	}
-
-	same_path_stale_scenes.clear();
-	same_path_stale_scenes_pending = false;
 }
 
 void EditorNode::_reload_modified_scenes() {
@@ -1879,11 +1829,7 @@ void EditorNode::edit_resource(const Ref<Resource> &p_resource) {
 	ERR_FAIL_COND(p_resource.is_null());
 
 	EditorDocument *document = nullptr;
-	if (p_resource->is_class("HotspotAtlas")) {
-		// G-Level WP21: mirror the shader document route so both FileSystem
-		// activation and EditorInterface.edit_resource() reveal the patch editor.
-		document = editor_data.get_or_create_hotspot_atlas_document(p_resource);
-	} else if (p_resource->is_class("Shader") || p_resource->is_class("ShaderInclude")) {
+	if (p_resource->is_class("Shader") || p_resource->is_class("ShaderInclude")) {
 		document = editor_data.get_or_create_shader_document(p_resource);
 	} else if (p_resource->is_class("Script") || p_resource->is_class("TextFile")) {
 		document = editor_data.get_or_create_script_document(p_resource);
@@ -2703,25 +2649,6 @@ void EditorNode::_save_scene(String p_file, int idx) {
 		scene->set_scene_file_path(ProjectSettings::get_singleton()->localize_path(p_file));
 		editor_data.set_scene_as_saved(idx);
 		editor_data.set_scene_modified_time(idx, FileAccess::get_modified_time(p_file));
-
-		const int saved_scene_idx = idx < 0 ? editor_data.get_edited_scene() : idx;
-		const String saved_scene_path = ProjectSettings::get_singleton()->localize_path(p_file);
-		for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
-			if (i == saved_scene_idx) {
-				continue;
-			}
-			const String other_scene_path = ProjectSettings::get_singleton()->localize_path(editor_data.get_scene_path(i));
-			if (other_scene_path != saved_scene_path) {
-				continue;
-			}
-
-			same_path_stale_scenes.insert(saved_scene_path);
-			if (!same_path_stale_scenes_pending) {
-				same_path_stale_scenes_pending = true;
-				callable_mp(this, &EditorNode::_process_same_path_stale_scenes).call_deferred();
-			}
-			break;
-		}
 
 		if (EDITOR_GET("filesystem/on_save/warn_on_saving_large_text_resources")) {
 			if (p_file.ends_with(".tscn") || p_file.ends_with(".tres")) {
@@ -5241,15 +5168,13 @@ int EditorNode::new_scene() {
 	return idx;
 }
 
-Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, bool p_set_inherited, bool p_force_open_imported, bool p_update_tabs, bool p_as_level_document) {
+Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, bool p_set_inherited, bool p_force_open_imported, bool p_update_tabs) {
 	const String lpath = ProjectSettings::get_singleton()->localize_path(ResourceUID::ensure_path(p_scene));
 	_update_prev_closed_scenes(lpath, false);
 
 	if (!p_set_inherited) {
 		for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
-			EditorDocument *document = editor_data.get_document(i);
-			const bool is_level_document = document && document->get_type() == EditorDocument::TYPE_LEVEL;
-			if (editor_data.get_scene_path(i) == lpath && is_level_document == p_as_level_document) {
+			if (editor_data.get_scene_path(i) == lpath) {
 				// Already loaded, do nothing.
 				return OK;
 			}
@@ -5330,8 +5255,8 @@ Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, b
 	}
 
 	int idx = editor_data.get_edited_scene();
-	if (p_as_level_document || idx == -1 || editor_data.get_edited_scene_root() || !editor_data.get_scene_path(idx).is_empty()) {
-		idx = editor_data.add_edited_scene(-1, p_as_level_document);
+	if (idx == -1 || editor_data.get_edited_scene_root() || !editor_data.get_scene_path(idx).is_empty()) {
+		idx = editor_data.add_edited_scene(-1);
 	}
 	editor_data.set_scene_root(idx, new_scene);
 
@@ -5353,9 +5278,8 @@ Error EditorNode::load_scene(const String &p_scene, bool p_ignore_broken_deps, b
 	return OK;
 }
 
-Error EditorNode::_open_scene_internal(const String &p_scene, bool p_ignore_broken_deps, bool p_set_inherited, bool p_force_open_imported, bool p_as_level_document) {
+Error EditorNode::_open_scene_internal(const String &p_scene, bool p_ignore_broken_deps, bool p_set_inherited, bool p_force_open_imported) {
 	if (!is_inside_tree()) {
-		ERR_FAIL_COND_V_MSG(p_as_level_document, ERR_UNAVAILABLE, "The Level Editor can only open scenes after EditorNode enters the tree.");
 		defer_load_scene = p_scene;
 		return OK;
 	}
@@ -5370,9 +5294,7 @@ Error EditorNode::_open_scene_internal(const String &p_scene, bool p_ignore_brok
 
 	if (!p_set_inherited) {
 		for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
-			EditorDocument *document = editor_data.get_document(i);
-			const bool is_level_document = document && document->get_type() == EditorDocument::TYPE_LEVEL;
-			if (editor_data.get_scene_path(i) == lpath && is_level_document == p_as_level_document) {
+			if (editor_data.get_scene_path(i) == lpath) {
 				_set_current_scene(i);
 				// _set_current_scene no-ops when i is already the edited scene, so it may not queue the
 				// pane reveal. Queue it directly so re-opening the active scene still focuses its pane
@@ -5384,7 +5306,7 @@ Error EditorNode::_open_scene_internal(const String &p_scene, bool p_ignore_brok
 		}
 	}
 
-	Error err = load_scene(p_scene, p_ignore_broken_deps, p_set_inherited, p_force_open_imported, true, p_as_level_document);
+	Error err = load_scene(p_scene, p_ignore_broken_deps, p_set_inherited, p_force_open_imported, true);
 	if (err != OK) {
 		return err;
 	}
@@ -5417,11 +5339,7 @@ Error EditorNode::_open_scene_internal(const String &p_scene, bool p_ignore_brok
 }
 
 Error EditorNode::open_scene(const String &p_scene, bool p_ignore_broken_deps, bool p_set_inherited, bool p_force_open_imported) {
-	return _open_scene_internal(p_scene, p_ignore_broken_deps, p_set_inherited, p_force_open_imported, false);
-}
-
-Error EditorNode::open_scene_in_level_editor(const String &p_scene) {
-	return _open_scene_internal(p_scene, false, false, false, true);
+	return _open_scene_internal(p_scene, p_ignore_broken_deps, p_set_inherited, p_force_open_imported);
 }
 
 HashMap<StringName, Variant> EditorNode::get_modified_properties_for_node(Node *p_node, bool p_node_references_only) {
@@ -10112,10 +10030,6 @@ EditorNode::EditorNode() {
 	project_data_missing->set_ok_button_text(TTRC("Restart"));
 
 	gui_base->add_child(project_data_missing);
-
-	// G-Level LE0 SERVICE: global tool state + view factory only; pane render state
-	// is owned by each LevelEditorView minted through DocumentView.
-	add_child(memnew(LevelEditor));
 
 	add_editor_plugin(memnew(CanvasItemEditorPlugin));
 	add_editor_plugin(memnew(Node3DEditorPlugin));

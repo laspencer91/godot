@@ -43,7 +43,6 @@ class GroupsDock;
 class HBoxContainer;
 class InspectorDock;
 class Label;
-class MaterialBrowserDock;
 class SceneTreeDock;
 class SignalsDock;
 class SubViewport;
@@ -93,7 +92,6 @@ class DocumentView : public MarginContainer {
 	HBoxContainer *toolbar_host = nullptr;
 	DocumentBottomDockHost *bottom_dock_host = nullptr;
 	AnimationPlayerEditor *animation_editor = nullptr;
-	MaterialBrowserDock *material_browser = nullptr;
 	Label *inspector_target_label = nullptr;
 	Button *inspector_lock_button = nullptr;
 	bool context_active = false;
@@ -109,11 +107,7 @@ class DocumentView : public MarginContainer {
 	void _inspector_lock_toggled(bool p_locked);
 	void _update_inspector_header();
 	void _document_bottom_dock_toggled(StringName p_id, bool p_open);
-	void _document_bottom_dock_user_toggled(StringName p_id, bool p_open);
 	void _animation_drawer_visibility_requested(bool p_open);
-	void _materials_drawer_requested(int p_request, bool p_focus_search);
-	void _store_material_drawer_state();
-	void _store_level_context_state();
 	void _store_animation_drawer_state();
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The

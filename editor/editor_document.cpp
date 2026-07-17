@@ -101,10 +101,6 @@ String SceneDocument::get_title() const {
 	return EditorDocument::get_title();
 }
 
-String LevelDocument::get_title() const {
-	return SceneDocument::get_title() + " [Level]";
-}
-
 String ResourceDocument::get_path() const {
 	return resource.is_valid() ? resource->get_path() : String();
 }

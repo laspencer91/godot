@@ -67,21 +67,14 @@ one drawer at a time.
 - The drawer toggle is named `AnimationBottomDockToggle`; the body is named
   `AnimationBottomDockPanel`. These stable names are used by the workspace smoke coverage.
 
-## Level Materials implementation notes
+## Level Materials implementation notes (REMOVED 2026-07-16)
 
-- `LevelEditor` owns the project-shared material index, scanner, blockout registry, and thumbnail
-  queue/cache. It mints one `MaterialBrowserDock` view for each live Level `DocumentView`; the class
-  name is retained only for script/smoke compatibility and it is no longer registered globally.
-- Active material/binding, captured Lift mapping, and hotspot override live on `LevelDocument`.
-  Filter/search/zoom/scroll, drawer open state, and contextual-panel expansion round-trip through
-  `EditorDocument::contextual_editor_states`.
-- The drawer toggle/body are `MaterialsBottomDockToggle` and `MaterialsBottomDockPanel`. `M` toggles
-  the active Level document. User opens focus search; programmatic reveals do not steal focus.
-- Gallery cells default to 108 logical px, reflow column-major into a horizontal shelf, and
-  virtualize visible columns plus one overscan column. Selection commits on release so a resource
-  drag never changes the active material as a side effect.
-- Face/object UV commands live in the Level view's fixed-width, selection-aware contextual panel.
-  The gallery contains material discovery/selection only.
+The Materials drawer was the second document-owned drawer, bound to the G-Level level editor's
+`LevelDocument`/`MaterialBrowserDock`. The level editor was retired in favor of a Blender-based
+workflow and stripped from master; the Materials drawer went with it. Its implementation (a useful
+reference for future `DocumentBottomDockHost` migrations: per-document view minting/release,
+`contextual_editor_states` round-tripping, virtualized horizontal shelf) is preserved on branch
+`archive/g-level-editor`. Animation remains the sole in-tree reference implementation.
 
 ## Remaining rollout
 

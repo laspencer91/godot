@@ -42,10 +42,6 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/gui/document_bottom_dock.h"
-#include "editor/level/level_editor.h"
-#include "editor/level/level_editor_view.h"
-#include "editor/level/hotspot_patch_editor.h"
-#include "editor/level/material_browser_dock.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/3d/node_3d_editor_viewport.h"
 #include "editor/scene/canvas_item_editor_plugin.h"
@@ -233,54 +229,12 @@ void DocumentView::_document_bottom_dock_toggled(StringName p_id, bool p_open) {
 	if (p_id == SNAME("Animation") && animation_editor) {
 		animation_editor->set_embedded_open(p_open);
 		_store_animation_drawer_state();
-	} else if (p_id == SNAME("Materials") && material_browser) {
-		if (p_open) {
-			material_browser->drawer_opened(false);
-		}
-		_store_material_drawer_state();
-	}
-}
-
-void DocumentView::_document_bottom_dock_user_toggled(StringName p_id, bool p_open) {
-	if (p_id == SNAME("Materials") && p_open && material_browser) {
-		material_browser->drawer_opened(true);
 	}
 }
 
 void DocumentView::_animation_drawer_visibility_requested(bool p_open) {
 	if (bottom_dock_host) {
 		bottom_dock_host->set_dock_open(SNAME("Animation"), p_open);
-	}
-}
-
-void DocumentView::_materials_drawer_requested(int p_request, bool p_focus_search) {
-	if (!bottom_dock_host || !material_browser) {
-		return;
-	}
-	const bool reveal_active = p_request == int(LevelEditorView::MATERIALS_DRAWER_REVEAL_ACTIVE);
-	const bool open = reveal_active || !bottom_dock_host->is_dock_open(SNAME("Materials"));
-	bottom_dock_host->set_dock_open(SNAME("Materials"), open);
-	if (open) {
-		material_browser->drawer_opened(p_focus_search);
-		if (reveal_active && !material_browser->get_selected_path().is_empty()) {
-			material_browser->scroll_to_material(material_browser->get_selected_path());
-		}
-	}
-}
-
-void DocumentView::_store_material_drawer_state() {
-	if (!bound_scene_document || !material_browser) {
-		return;
-	}
-	Dictionary state = material_browser->get_presentation_state();
-	state["dock_open"] = bottom_dock_host && bottom_dock_host->is_dock_open(SNAME("Materials"));
-	bound_scene_document->set_contextual_editor_state(SNAME("Materials"), state);
-}
-
-void DocumentView::_store_level_context_state() {
-	LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface);
-	if (bound_scene_document && level_view) {
-		bound_scene_document->set_contextual_editor_state(SNAME("LevelToolContext"), level_view->get_context_panel_state());
 	}
 }
 
@@ -341,22 +295,6 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			ShaderDocument *shd = static_cast<ShaderDocument *>(p_document);
 			if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
 				editor_surface = sep->create_editor_view(shd->get_shader_resource());
-			}
-		} break;
-		case EditorDocument::TYPE_LEVEL: {
-			// G-Level LE0: the singleton owns SERVICES/tool state only. It mints this pane's
-			// camera/viewport/grid surface against the LevelDocument's explicit world.
-			LevelDocument *ld = static_cast<LevelDocument *>(p_document);
-			if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
-				editor_surface = level_editor->create_editor_view(ld);
-			}
-		} break;
-		case EditorDocument::TYPE_HOTSPOT_ATLAS: {
-			// G-Level WP21: same document->services factory seam as shaders and
-			// levels; the per-pane patch editor is parented below like any surface.
-			HotspotAtlasDocument *hd = static_cast<HotspotAtlasDocument *>(p_document);
-			if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
-				editor_surface = level_editor->create_editor_view(hd);
 			}
 		} break;
 		case EditorDocument::TYPE_HELP: {
@@ -461,18 +399,6 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		// toolbar_host; it sits empty (zero height) otherwise.
 		toolbar_host = memnew(HBoxContainer);
 		toolbar_host->set_h_size_flags(SIZE_EXPAND_FILL);
-		LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface);
-		if (level_view) {
-			level_view->mount_top_strip(toolbar_host);
-			const Dictionary context_state = p_document->get_contextual_editor_state(SNAME("LevelToolContext"));
-			if (!context_state.is_empty()) {
-				level_view->set_context_panel_state(context_state);
-			}
-			level_view->connect(SNAME("materials_drawer_requested"), callable_mp(this, &DocumentView::_materials_drawer_requested));
-			if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
-				material_browser = level_editor->create_material_browser_view(static_cast<LevelDocument *>(p_document));
-			}
-		}
 		VBoxContainer *surface_vbox = memnew(VBoxContainer);
 		surface_vbox->add_theme_constant_override("separation", 0);
 		surface_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
@@ -484,36 +410,19 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		const bool supports_animation_drawer = type == EditorDocument::TYPE_SCENE_2D || type == EditorDocument::TYPE_SCENE_3D || type == EditorDocument::TYPE_SCENE_MIXED;
 		AnimationPlayerEditorPlugin *animation_plugin = supports_animation_drawer ? AnimationPlayerEditorPlugin::get_singleton() : nullptr;
 		animation_editor = animation_plugin ? animation_plugin->create_editor_view(p_document, inspector_dock) : nullptr;
-		if (animation_editor || material_browser) {
+		if (animation_editor) {
 			bottom_dock_host = memnew(DocumentBottomDockHost(toolbar_host));
 			bottom_dock_host->set_surface(document_surface);
 			bottom_dock_host->connect(SNAME("dock_toggled"), callable_mp(this, &DocumentView::_document_bottom_dock_toggled));
-			bottom_dock_host->connect(SNAME("dock_user_toggled"), callable_mp(this, &DocumentView::_document_bottom_dock_user_toggled));
-			if (animation_editor) {
-				animation_editor->connect(SNAME("drawer_visibility_requested"), callable_mp(this, &DocumentView::_animation_drawer_visibility_requested));
-				bottom_dock_host->add_dock(SNAME("Animation"), TTR("Animation"), SNAME("Animation"), animation_editor);
-			}
-			if (material_browser) {
-				bottom_dock_host->add_dock(SNAME("Materials"), TTR("Materials"), SNAME("StandardMaterial3D"), material_browser);
-			}
+			animation_editor->connect(SNAME("drawer_visibility_requested"), callable_mp(this, &DocumentView::_animation_drawer_visibility_requested));
+			bottom_dock_host->add_dock(SNAME("Animation"), TTR("Animation"), SNAME("Animation"), animation_editor);
 			surface_vbox->add_child(bottom_dock_host);
 
-			if (animation_editor) {
-				const Dictionary animation_state = p_document->get_contextual_editor_state(SNAME("Animation"));
-				if (animation_state.is_empty()) {
-					animation_editor->set_embedded_open(false);
-				} else {
-					animation_editor->set_state(animation_state);
-				}
-			}
-			if (material_browser) {
-				const Dictionary material_state = p_document->get_contextual_editor_state(SNAME("Materials"));
-				if (!material_state.is_empty()) {
-					material_browser->set_presentation_state(material_state);
-					if (bool(material_state.get("dock_open", false))) {
-						bottom_dock_host->set_dock_open(SNAME("Materials"), true);
-					}
-				}
+			const Dictionary animation_state = p_document->get_contextual_editor_state(SNAME("Animation"));
+			if (animation_state.is_empty()) {
+				animation_editor->set_embedded_open(false);
+			} else {
+				animation_editor->set_state(animation_state);
 			}
 		} else {
 			surface_vbox->add_child(document_surface);
@@ -573,9 +482,6 @@ SubViewport *DocumentView::get_scene_viewport() const {
 		Node3DEditorViewport *editor_viewport = spatial_view->get_last_used_viewport();
 		return editor_viewport ? editor_viewport->get_viewport_node() : nullptr;
 	}
-	if (LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface)) {
-		return level_view->get_level_viewport();
-	}
 	return nullptr;
 }
 
@@ -595,16 +501,6 @@ void DocumentView::set_context_active(bool p_active) {
 			_store_animation_drawer_state();
 		}
 		animation_editor->set_context_active(p_active);
-	}
-	if (LevelEditorView *level_view = Object::cast_to<LevelEditorView>(document_surface)) {
-		level_view->set_context_active(p_active);
-	}
-	if (!p_active) {
-		_store_material_drawer_state();
-		_store_level_context_state();
-	}
-	if (HotspotPatchEditor *hotspot_editor = Object::cast_to<HotspotPatchEditor>(document_surface)) {
-		hotspot_editor->set_context_active(p_active);
 	}
 }
 
@@ -626,8 +522,6 @@ void DocumentView::_notification(int p_what) {
 		return;
 	}
 	set_context_active(false);
-	_store_material_drawer_state();
-	_store_level_context_state();
 	if (scene_tree_dock) {
 		scene_tree_dock->set_bound_inspector(nullptr);
 	}
@@ -636,12 +530,6 @@ void DocumentView::_notification(int p_what) {
 		if (AnimationPlayerEditorPlugin *plugin = AnimationPlayerEditorPlugin::get_singleton()) {
 			plugin->release_editor_view(animation_editor);
 		}
-	}
-	if (material_browser) {
-		if (LevelEditor *level_editor = LevelEditor::get_singleton()) {
-			level_editor->release_material_browser_view(material_browser);
-		}
-		material_browser = nullptr;
 	}
 	// PREDELETE dispatches derived-first, so this runs BEFORE Node's handler frees the children —
 	// the last moment editor_surface is guaranteed alive (the destructor is too late: children are

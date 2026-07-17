@@ -650,7 +650,7 @@ void EditorData::instantiate_object_properties(Object *p_object) {
 	}
 }
 
-int EditorData::add_edited_scene(int p_at_pos, bool p_as_level_document) {
+int EditorData::add_edited_scene(int p_at_pos) {
 	if (p_at_pos < 0) {
 		p_at_pos = edited_scene.size();
 	}
@@ -666,13 +666,7 @@ int EditorData::add_edited_scene(int p_at_pos, bool p_as_level_document) {
 	// Each open scene gets its own SceneDocument: an isolated SubViewport with its
 	// own World3D scenario/space + World2D, so multiple scenes can render live at
 	// once. Constructed eagerly; not yet wired into the editor tree (Step B).
-	// G-Level LE0: LevelDocument takes this exact scene slot path so its world,
-	// selection, and undo identity cannot drift from ordinary scene documents.
-	if (p_as_level_document) {
-		es.document = memnew(LevelDocument);
-	} else {
-		es.document = memnew(SceneDocument);
-	}
+	es.document = memnew(SceneDocument);
 	es.document->set_history_id(es.history_id);
 	es.document->set_time_opened(es.time_opened);
 	// Parent the document's scene_root into the live tree so the scene stays alive.
@@ -758,11 +752,7 @@ void EditorData::set_scene_root(int p_idx, Node *p_root) {
 	// right per-pane editor surface (2D vs 3D).
 	if (EditorDocument *doc = scene_info.document) {
 		doc->set_root(p_root);
-		// TYPE_LEVEL is the surface-routing discriminator; its scene dimensionality
-		// remains available from the root without overwriting the document kind.
-		if (doc->get_type() != EditorDocument::TYPE_LEVEL) {
-			doc->set_type(EditorDocument::classify_scene_type(p_root));
-		}
+		doc->set_type(EditorDocument::classify_scene_type(p_root));
 		// G1: a document owns its scene root for the document's lifetime — parent it into
 		// the document's isolated SubViewport as soon as it is assigned. Upstream instead
 		// attaches on tab switch under the shared scene_root, which the workspace model
@@ -1007,28 +997,6 @@ ShaderDocument *EditorData::get_or_create_shader_document(const Ref<Resource> &p
 	return sd;
 }
 
-HotspotAtlasDocument *EditorData::get_or_create_hotspot_atlas_document(const Ref<Resource> &p_resource) {
-	// G-Level WP21: one specialized resource document per atlas. Keep the
-	// shader/resource dedup contract (same Ref first, stable non-empty path
-	// second) so FileSystem double-click and EditorInterface.edit_resource()
-	// converge on the same workspace tab.
-	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
-	const String path = p_resource->get_path();
-	for (EditorDocument *doc : aux_documents) {
-		if (doc->get_type() != EditorDocument::TYPE_HOTSPOT_ATLAS) {
-			continue;
-		}
-		HotspotAtlasDocument *hd = static_cast<HotspotAtlasDocument *>(doc);
-		if (hd->get_resource() == p_resource || (!path.is_empty() && hd->get_path() == path)) {
-			return hd;
-		}
-	}
-	HotspotAtlasDocument *hd = memnew(HotspotAtlasDocument);
-	hd->set_resource(p_resource);
-	aux_documents.push_back(hd);
-	return hd;
-}
-
 ResourceDocument *EditorData::get_or_create_resource_document(const Ref<Resource> &p_resource, EditorDocument *p_scene_context) {
 	ERR_FAIL_COND_V(p_resource.is_null(), nullptr);
 
@@ -1121,11 +1089,8 @@ EditorDocument *EditorData::get_or_create_document_for_path(const String &p_path
 	if (res.is_null()) {
 		return nullptr;
 	}
-	// Specialized text/shader/hotspot resources keep their existing view factories. Everything else
+	// Specialized text/shader resources keep their existing view factories. Everything else
 	// uses a generic Inspector-backed resource document.
-	if (res->is_class("HotspotAtlas")) {
-		return get_or_create_hotspot_atlas_document(res);
-	}
 	if (Object::cast_to<Shader>(res.ptr()) || Object::cast_to<ShaderInclude>(res.ptr())) {
 		return get_or_create_shader_document(res);
 	}

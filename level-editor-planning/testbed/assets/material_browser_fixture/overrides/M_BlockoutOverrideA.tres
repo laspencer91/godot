@@ -1,9 +1,0 @@
-[gd_resource type="StandardMaterial3D" load_steps=2 format=3]
-
-[ext_resource type="Texture2D" path="res://assets/material_browser_fixture/textures/T_Wide.svg" id="1_wide"]
-
-[resource]
-resource_name = "M_BlockoutOverrideA"
-albedo_texture = ExtResource("1_wide")
-roughness = 1.0
-texture_filter = 1

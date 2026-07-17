@@ -1,9 +1,0 @@
-[gd_resource type="StandardMaterial3D" load_steps=2 format=3]
-
-[ext_resource type="Texture2D" path="res://assets/material_browser_fixture/textures/T_Square.svg" id="1_square"]
-
-[resource]
-resource_name = "M_BrickSquare"
-albedo_texture = ExtResource("1_square")
-roughness = 0.9
-texture_filter = 1

@@ -1,8 +1,0 @@
-[gd_resource type="ShaderMaterial" load_steps=2 format=3]
-
-[sub_resource type="Shader" id="Shader_no_texture"]
-code = "shader_type spatial;\nuniform vec4 tint : source_color = vec4(0.7, 0.2, 0.3, 1.0);\nvoid fragment() {\n\tALBEDO = tint.rgb;\n}"
-
-[resource]
-resource_name = "PlainNoTexture"
-shader = SubResource("Shader_no_texture")

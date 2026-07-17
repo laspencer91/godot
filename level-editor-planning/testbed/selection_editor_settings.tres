@@ -1,4 +1,0 @@
-[gd_resource type="EditorSettings" format=3]
-
-[resource]
-network/tls/editor_tls_certificates = "res://ca-bundle.crt"

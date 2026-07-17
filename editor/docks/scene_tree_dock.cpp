@@ -1370,14 +1370,6 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			}
 			EditorNode::get_singleton()->get_editor_main_screen()->focus_editor(SNAME("Script"));
 		} break;
-		case TOOL_OPEN_IN_LEVEL_EDITOR: {
-			if (edited_scene) {
-				const String scene_path = edited_scene->get_scene_file_path();
-				if (!scene_path.is_empty()) {
-					EditorNode::get_singleton()->open_scene_in_level_editor(scene_path);
-				}
-			}
-		} break;
 		case TOOL_AUTO_EXPAND: {
 			scene_tree->set_auto_expand_selected(!EDITOR_GET("docks/scene_tree/auto_expand_to_selected"), true);
 		} break;
@@ -4305,15 +4297,6 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 
 	if (full_selection.size() == 1 && selection.front()->get()->is_instance()) {
 		menu->add_icon_shortcut(get_editor_theme_icon(SNAME("ShowInFileSystem")), ED_GET_SHORTCUT("scene_tree/show_in_file_system"), TOOL_SHOW_IN_FILE_SYSTEM);
-	}
-
-	// G-Level LE0: offer to reopen the edited scene root as a level document, mirroring the
-	// FileSystem dock's "Open in Level Editor" action (see FileSystemDock::_file_option).
-	if (full_selection.size() == 1 && scene_tree->get_selected() == edited_scene) {
-		Node3D *edited_scene_3d = Object::cast_to<Node3D>(edited_scene);
-		if (edited_scene_3d && !edited_scene_3d->get_scene_file_path().is_empty()) {
-			menu->add_icon_item(get_editor_theme_icon(SNAME("Grid")), TTRC("Open in Level Editor"), TOOL_OPEN_IN_LEVEL_EDITOR);
-		}
 	}
 
 	menu->add_icon_item(get_editor_theme_icon(SNAME("Help")), TTRC("Open Documentation"), TOOL_OPEN_DOCUMENTATION);

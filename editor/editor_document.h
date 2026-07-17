@@ -29,12 +29,10 @@
 #include "core/variant/dictionary.h"
 #include "editor/editor_data.h" // EditorSelectionHistory (value member) + EditorSelection (fwd).
 #include "scene/resources/3d/world_3d.h" // Ref<World3D> by-value getters need the complete type.
-#include "scene/resources/material.h" // LevelDocument owns its active material interaction state.
 #include "scene/resources/world_2d.h" // Ref<World2D> by-value getters need the complete type.
 
 class Control;
 class Node;
-class SelectionModel;
 class SubViewport;
 class WorkspacePane;
 
@@ -64,8 +62,6 @@ public:
 		TYPE_HELP, // G2 S3: a class-reference (help) document. Append-only — do not reorder.
 		TYPE_SCREEN_HOST, // G2 S5.5: THE one screen-host document (seam #5). Append-only.
 		TYPE_SHADER, // G-Shader: a Shader / ShaderInclude / VisualShader document. Append-only.
-		TYPE_LEVEL, // G-Level LE0: a scene opened in the level-editor workspace. Append-only.
-		TYPE_HOTSPOT_ATLAS, // G-Level WP21: HotspotAtlas resource patch-editor tab. Append-only.
 	};
 
 protected:
@@ -200,36 +196,6 @@ public:
 	virtual ~SceneDocument();
 };
 
-// G-Level LE0: the edited thing is still a scene. Inheriting SceneDocument is the
-// document seam: isolated World3D/World2D, per-document selection, undo history,
-// scene-root ownership, workspace-tab routing, and scene docks all stay identical.
-class LevelDocument : public SceneDocument {
-	SelectionModel *selection_model = nullptr;
-	// WP22: semantic material interaction state belongs to the Level document,
-	// never to the project-wide LevelEditor service. This lets two visible Level
-	// documents keep independent material/UV contexts even while one is focused.
-	Ref<Material> active_material;
-	String active_material_path;
-	String active_material_binding_path;
-	Dictionary captured_mapping;
-	int hotspot_mapping_mode_override = -1;
-	// WP21: decision diagnostics from the last committed hotspot fit. This is
-	// editor-session/document state only; it is never serialized into the scene.
-	Array last_hotspot_fit_diagnostics;
-
-	friend class LevelEditor;
-
-public:
-	SelectionModel *get_selection_model() const { return selection_model; }
-	void set_last_hotspot_fit_diagnostics(const Array &p_diagnostics) { last_hotspot_fit_diagnostics = p_diagnostics; }
-	Array get_last_hotspot_fit_diagnostics() const { return last_hotspot_fit_diagnostics; }
-	void clear_last_hotspot_fit_diagnostics() { last_hotspot_fit_diagnostics.clear(); }
-	virtual String get_title() const override;
-
-	LevelDocument();
-	virtual ~LevelDocument();
-};
-
 // A generic Resource edited as a first-class workspace tab. It keeps the exact Ref passed to
 // EditorInterface::edit_resource(), so embedded resources are edited live rather than reloaded.
 class ResourceDocument : public EditorDocument {
@@ -251,18 +217,6 @@ public:
 
 	ResourceDocument() { type = TYPE_RESOURCE; }
 	virtual ~ResourceDocument() {}
-};
-
-// G-Level WP21: a HotspotAtlas is still resource document state, but its
-// append-only type discriminator lets DocumentView route it through the
-// LevelEditor factory instead of the generic Inspector surface. This mirrors
-// ShaderDocument while retaining ResourceDocument's exact Ref/path/history.
-class HotspotAtlasDocument : public ResourceDocument {
-public:
-	virtual String get_title() const override { return ResourceDocument::get_title() + " [Hotspot]"; }
-
-	HotspotAtlasDocument() { type = TYPE_HOTSPOT_ATLAS; }
-	virtual ~HotspotAtlasDocument() {}
 };
 
 // G2 S3: a script (or text) document opened as a workspace tab. No render world — the view

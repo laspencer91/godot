@@ -316,8 +316,7 @@ void TabbedDocumentHost::_on_tab_close(int p_idx) {
 		switch (doc->get_type()) {
 			case EditorDocument::TYPE_SCENE_2D:
 			case EditorDocument::TYPE_SCENE_3D:
-			case EditorDocument::TYPE_SCENE_MIXED:
-			case EditorDocument::TYPE_LEVEL: {
+			case EditorDocument::TYPE_SCENE_MIXED: {
 				EditorNode *en = EditorNode::get_singleton();
 				const int scene_idx = en ? en->get_editor_data().find_document_index(doc) : -1;
 				if (scene_idx >= 0) {

@@ -732,33 +732,6 @@ void EditorSettings::_load_defaults(Ref<ConfigFile> p_extra_config) {
 	_initial_set("docks/filesystem/automatically_open_created_scripts", true);
 	_initial_set("docks/filesystem/ask_before_moving_files", true);
 
-	// G-Level material browser.
-	EDITOR_SETTING(Variant::STRING, PROPERTY_HINT_NONE, "level_editor/material_browser/name_filter_prefix", "M_", "")
-	PackedStringArray texel_density_param_names;
-	texel_density_param_names.push_back("albedo");
-	texel_density_param_names.push_back("albedo_texture");
-	texel_density_param_names.push_back("basecolor");
-	texel_density_param_names.push_back("base_color");
-	texel_density_param_names.push_back("base_color_texture");
-	texel_density_param_names.push_back("texture_albedo");
-	texel_density_param_names.push_back("diffuse");
-	texel_density_param_names.push_back("diffuse_texture");
-	texel_density_param_names.push_back("color_texture");
-	EDITOR_SETTING(Variant::PACKED_STRING_ARRAY, PROPERTY_HINT_NONE, "level_editor/material_browser/texel_density_param_names", texel_density_param_names, "")
-	EDITOR_SETTING(Variant::STRING, PROPERTY_HINT_DIR, "level_editor/material_browser/blockout_override_folder", "", "")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/modify_texture/shift_step", 0.125, "0.001,4,0.001,or_greater")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/modify_texture/rotation_step_degrees", 15.0, "1,180,1,suffix:°")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/modify_texture/scale_step", 1.189207115, "1.001,4,0.001,or_greater")
-	EDITOR_SETTING(Variant::STRING, PROPERTY_HINT_FILE, "level_editor/hotspot/bindings_path", "res://levels/hotspot_bindings.tres", "*.tres,*.res")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/density_margin_octaves", 0.35, "0,8,0.01,suffix: octaves")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/aspect_margin_octaves", 0.20, "0,8,0.01,suffix: octaves")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/cos_coplanar", 0.9998, "-1,1,0.0001")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/cos_collinear", 0.9998, "-1,1,0.0001")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/horizontal_bias_degrees", 15.0, "0,90,0.1,suffix:°")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/inset_mip_bleed_texels_per_level", 1.0, "0,64,0.1,suffix:px/level")
-	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "level_editor/hotspot/automatic_distortion_threshold_degrees", 180.0, "0,360,1,suffix:°")
-	EDITOR_SETTING(Variant::INT, PROPERTY_HINT_RANGE, "level_editor/hotspot/random_seed", 0, "0,2147483647,1")
-
 	// Property editor
 	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "docks/property_editor/auto_refresh_interval", 0.2, "0.01,1,0.001"); // Update 5 times per second by default.
 	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "docks/property_editor/subresource_hue_tint", 0.75, "0,1,0.01")

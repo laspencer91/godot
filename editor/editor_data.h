@@ -105,7 +105,6 @@ class EditorDocument;
 class ResourceDocument;
 class ScriptDocument;
 class HelpDocument;
-class HotspotAtlasDocument;
 class ShaderDocument;
 
 class EditorData {
@@ -218,9 +217,7 @@ public:
 
 	void instantiate_object_properties(Object *p_object);
 
-	// G-Level LE0: p_as_level_document changes only the document subclass; loading,
-	// root ownership, history, selection, and scene bookkeeping remain the scene path.
-	int add_edited_scene(int p_at_pos, bool p_as_level_document = false);
+	int add_edited_scene(int p_at_pos);
 	void remove_scene(int p_idx);
 	void set_scene_root(int p_idx, Node *p_root);
 	void set_edited_scene(int p_idx);
@@ -242,7 +239,6 @@ public:
 	// find_aux_document_by_path resolves a stored path (resource path, or "help://<class>").
 	ScriptDocument *get_or_create_script_document(const Ref<Resource> &p_resource);
 	ShaderDocument *get_or_create_shader_document(const Ref<Resource> &p_resource);
-	HotspotAtlasDocument *get_or_create_hotspot_atlas_document(const Ref<Resource> &p_resource);
 	ResourceDocument *get_or_create_resource_document(const Ref<Resource> &p_resource, EditorDocument *p_scene_context = nullptr);
 	HelpDocument *get_or_create_help_document(const String &p_class);
 	EditorDocument *find_aux_document_by_path(const String &p_path) const;
