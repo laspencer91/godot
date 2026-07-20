@@ -142,6 +142,23 @@ private:
 	// each way and separation spreads them. 0 => the ring clamps approach but adds
 	// no active strafe. Logan-tunable via the profile.
 	float engage_drift_speed = 0.0f;
+	// Momentum locomotion (PLAN_horde_feel_and_interior_nav F2). MASTER SENTINEL:
+	// move_acceleration <= 0 => the mover keeps the legacy instant-disp path,
+	// byte-identical to a build without momentum (fail-safe polarity: an unwritten
+	// knob changes nothing). When > 0 (and the agent is not Cold, and the branch is
+	// disp-producing -- not the LINK/GOAL direct writes), the per-tick steering
+	// displacement is treated as a DESIRED velocity; the per-agent velocity (vel_x/
+	// vel_z) accelerates toward it at this rate (m/s^2) and the realized disp is
+	// velocity * eff_dt. Logan-tunable via the profile.
+	float move_acceleration = 0.0f;
+	// Max rate (rad/s) the momentum velocity's heading may rotate toward the desired
+	// heading per step. <= 0 with acceleration on => no heading cap (velocity heading
+	// snaps to desired, magnitude still accel-limited). Ignored when momentum is off.
+	float move_turn_rate = 0.0f;
+	// Scales the ATTACK_PLAYER facing-slew rate (F3). 1.0 = legacy (byte-identical);
+	// 0.0 freezes facing at the windup-entry heading, agreeing with the game-side
+	// frozen strike arc so a strafing victim can be whiffed. Clamped to [0, 1].
+	float windup_facing_scale = 1.0f;
 	uint32_t collision_mask = 0xFFFFFFFF; // Static layers the mover sweep tests.
 
 	// Flow-field registry indexed by the per-agent uint8_t field id. Field 0 is
@@ -222,6 +239,13 @@ private:
 	// set_speed_jitter() changes the knob so the value stays coherent regardless of
 	// call order. speed_jitter == 0 => exactly 1.0 for every slot.
 	LocalVector<float> speed_scale;
+	// Per-agent planar momentum velocity (m/s), integrated by _move_agent when
+	// move_acceleration > 0. Zeroed in _init_slot, on _rebuild_storage, and on
+	// demotion to TIER_COLD (Cold never sweeps -- stored velocity would tunnel).
+	// Unused (stays 0) when momentum is off. Host-sim-only, never replicated:
+	// only the position it produces rides the wire.
+	LocalVector<float> vel_x;
+	LocalVector<float> vel_z;
 	// Attack-token flag (PLAN_horde_attack_shaping). 1 = the game granted this agent
 	// leave to close to attack_standoff_distance; 0 = hold the engagement ring.
 	// Fail-safe polarity: default 0, so an agent the game never touched holds the
@@ -363,6 +387,12 @@ public:
 	float get_engage_ring_distance() const { return engage_ring_distance; }
 	void set_engage_drift_speed(float p_speed);
 	float get_engage_drift_speed() const { return engage_drift_speed; }
+	void set_move_acceleration(float p_accel);
+	float get_move_acceleration() const { return move_acceleration; }
+	void set_move_turn_rate(float p_rate);
+	float get_move_turn_rate() const { return move_turn_rate; }
+	void set_windup_facing_scale(float p_scale);
+	float get_windup_facing_scale() const { return windup_facing_scale; }
 	void set_collision_mask(int p_mask) { collision_mask = (uint32_t)p_mask; }
 	int get_collision_mask() const { return (int)collision_mask; }
 

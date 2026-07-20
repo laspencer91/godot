@@ -1396,4 +1396,157 @@ TEST_CASE("[HordeSim][Agents] Jitter makes a fast agent outrun a slow one on the
 	CHECK(a->get_agent_position(fast_slot).x > a->get_agent_position(slow_slot).x);
 }
 
+// ---------------------------------------------------------------------------
+// Momentum locomotion (PLAN_horde_feel_and_interior_nav F2/F3). No fsm config:
+// STATE_CHASE falls back to DEFAULT_STATE_SPEED (2.4 m/s) + MOVE_SEEK_TARGET, so
+// a far target gives a clean straight-line desired velocity. make_agents() zeroes
+// attack_seek_radius, so close_seek stays off and the seek is pure.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Agents] Momentum ramps speed monotonically to the state speed without overshoot") {
+	Ref<HordeAgents> a = make_agents(4);
+	a->set_move_acceleration(6.0f); // m/s^2
+	const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+	a->set_agent_target(id, Vector3(1000, 0, 0));
+	PackedVector3Array players;
+	players.push_back(Vector3(0, 0, 0)); // Keep the agent Hot (momentum + sweep run).
+	a->set_player_positions(players);
+
+	const float dt = 1.0f / 128.0f;
+	const float state_speed = 2.4f; // DEFAULT_STATE_SPEED[CHASE], jitter 0 -> scale 1.
+	Vector3 prev = a->get_agent_position(id);
+	float prev_speed = 0.0f;
+	float first_speed = -1.0f;
+	float max_speed = 0.0f;
+	bool monotone = true;
+	for (int t = 0; t < 80; t++) {
+		a->tick(dt);
+		const Vector3 p = a->get_agent_position(id);
+		const float step_speed = Vector2(p.x - prev.x, p.z - prev.z).length() / dt;
+		if (first_speed < 0.0f) {
+			first_speed = step_speed;
+		}
+		if (step_speed + 1e-4f < prev_speed) {
+			monotone = false; // Speed must never drop while accelerating to a fixed goal.
+		}
+		max_speed = MAX(max_speed, step_speed);
+		prev_speed = step_speed;
+		prev = p;
+	}
+	CHECK(monotone);
+	CHECK(max_speed <= state_speed + 1e-3f); // Never exceeds the state speed.
+	CHECK(prev_speed > state_speed - 0.05f); // Reached (near) the state speed.
+	// The first step is accel-limited (6 * 1/128 ~= 0.047 m/s), far below one full
+	// legacy step (2.4 * 1/128 ~= 0.019 m ... i.e. 2.4 m/s), so ramp-in is real.
+	CHECK(first_speed < state_speed * 0.5f);
+}
+
+TEST_CASE("[HordeSim][Agents] Momentum turn-rate caps heading change on a 180-degree goal flip") {
+	Ref<HordeAgents> a = make_agents(4);
+	a->set_move_acceleration(50.0f); // High accel: magnitude is not the limiter.
+	a->set_move_turn_rate(4.0f); // rad/s
+	const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+	a->set_agent_target(id, Vector3(1000, 0, 0));
+	PackedVector3Array players;
+	players.push_back(Vector3(0, 0, 0));
+	a->set_player_positions(players);
+
+	const float dt = 1.0f / 128.0f;
+	for (int t = 0; t < 20; t++) {
+		a->tick(dt); // Spin up to full speed along +X.
+	}
+	a->set_agent_target(id, Vector3(-1000, 0, 0)); // Flip the goal 180 degrees.
+
+	const float max_dh = 4.0f * dt;
+	Vector3 prev = a->get_agent_position(id);
+	a->tick(dt); // Establish a moving baseline delta.
+	Vector3 cur = a->get_agent_position(id);
+	float prev_ang = Math::atan2(cur.z - prev.z, cur.x - prev.x);
+	prev = cur;
+	bool capped = true;
+	float total_turn = 0.0f;
+	for (int t = 0; t < 120; t++) {
+		a->tick(dt);
+		cur = a->get_agent_position(id);
+		const Vector2 d(cur.x - prev.x, cur.z - prev.z);
+		if (d.length() < 1e-5f) {
+			prev = cur;
+			continue;
+		}
+		const float ang = Math::atan2(d.y, d.x);
+		float dd = Math::fposmod(ang - prev_ang + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+		dd = Math::abs(dd);
+		if (dd > max_dh + 2e-3f) {
+			capped = false; // Per-tick heading rotation must respect the cap.
+		}
+		total_turn += dd;
+		prev_ang = ang;
+		prev = cur;
+	}
+	CHECK(capped);
+	CHECK(total_turn > 2.0f); // It did substantially reverse (~PI of accumulated turn).
+}
+
+TEST_CASE("[HordeSim][Agents] Momentum sentinel off keeps the legacy instant straight-line disp") {
+	// move_acceleration defaults to 0 (off) -> the exact legacy instant path.
+	Ref<HordeAgents> a = make_agents(4);
+	CHECK(a->get_move_acceleration() == 0.0f);
+	const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+	a->set_agent_target(id, Vector3(1000, 0, 0));
+	PackedVector3Array players;
+	players.push_back(Vector3(0, 0, 0));
+	a->set_player_positions(players);
+	const float dt = 1.0f / 128.0f;
+	const float expect = 2.4f * dt; // Full state-speed step on tick one (no ramp).
+	a->tick(dt);
+	const Vector3 p = a->get_agent_position(id);
+	CHECK(p.x == doctest::Approx(expect));
+	CHECK(p.z == doctest::Approx(0.0f));
+
+	// The same scenario with momentum on takes a strictly smaller (accel-limited)
+	// first step -- the sentinel is what preserves the legacy magnitude.
+	Ref<HordeAgents> b = make_agents(4);
+	b->set_move_acceleration(6.0f);
+	const int idb = b->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+	b->set_agent_target(idb, Vector3(1000, 0, 0));
+	b->set_player_positions(players);
+	b->tick(dt);
+	CHECK(b->get_agent_position(idb).x < p.x);
+}
+
+TEST_CASE("[HordeSim][Agents] Momentum agent halts at a wall and does not slingshot or tunnel") {
+	TestWorld tw;
+	// Thin tall wall at x = 2 (face at x = 1.8); agent capsule radius 0.35.
+	tw.add_wall(2.0f, 1.0f, 0.0f, 0.2f, 2.0f, 5.0f);
+	tw.finalize();
+
+	Ref<HordeAgents> a = make_agents(4);
+	a->set_collision_world_packed(tw.packed());
+	a->set_move_acceleration(6.0f);
+	a->set_move_turn_rate(4.0f);
+	const int id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_CHASE);
+	a->set_agent_target(id, Vector3(6, 0, 0)); // Push straight through the wall.
+	PackedVector3Array players;
+	players.push_back(Vector3(0, 0, 0)); // Keep it Hot so the sweep runs every tick.
+	a->set_player_positions(players);
+	const float dt = 1.0f / 128.0f;
+
+	for (int t = 0; t < 400; t++) {
+		a->tick(dt);
+	}
+	const float x_settled = a->get_agent_position(id).x;
+	CHECK(x_settled < 1.9f); // Stopped in front of the wall face, never crossed it.
+	CHECK(x_settled > 1.0f); // Actually reached the wall (not stalled at the start).
+
+	// Momentum velocity is bounded by the desired (state) speed, so a pressed agent
+	// keeps stepping at full width and the sweep truncates it to rest every tick:
+	// 200 more ticks stay pinned at the contact distance (no oscillation, no tunnel).
+	const float x_before = a->get_agent_position(id).x;
+	for (int t = 0; t < 200; t++) {
+		a->tick(dt);
+	}
+	const float x_after = a->get_agent_position(id).x;
+	CHECK(Math::abs(x_after - x_before) < 0.05f);
+	CHECK(x_after < 1.9f);
+}
+
 } // namespace TestHordeSim

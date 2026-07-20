@@ -47,6 +47,21 @@ void HordeAgents::set_engage_drift_speed(float p_speed) {
 	engage_drift_speed = Math::is_finite(p_speed) ? MAX(p_speed, 0.0f) : 0.0f;
 }
 
+void HordeAgents::set_move_acceleration(float p_accel) {
+	// <= 0 is the master sentinel (legacy instant path); a non-finite write also
+	// fails safe to 0 (momentum off) rather than to garbage.
+	move_acceleration = Math::is_finite(p_accel) ? MAX(p_accel, 0.0f) : 0.0f;
+}
+
+void HordeAgents::set_move_turn_rate(float p_rate) {
+	move_turn_rate = Math::is_finite(p_rate) ? MAX(p_rate, 0.0f) : 0.0f;
+}
+
+void HordeAgents::set_windup_facing_scale(float p_scale) {
+	// Default 1.0 = legacy facing; a non-finite write fails safe to 1.0 (no change).
+	windup_facing_scale = Math::is_finite(p_scale) ? CLAMP(p_scale, 0.0f, 1.0f) : 1.0f;
+}
+
 void HordeAgents::_ensure_field_capacity(int p_field_id) {
 	const uint32_t count = (uint32_t)p_field_id + 1;
 	if (fields.size() < count) {
@@ -147,6 +162,8 @@ void HordeAgents::_rebuild_storage() {
 	archetype.resize(cap);
 	field_id.resize(cap);
 	speed_scale.resize(cap);
+	vel_x.resize(cap);
+	vel_z.resize(cap);
 	engage_token.resize(cap);
 	active.resize(cap);
 	pending_reason.resize(cap);
@@ -157,6 +174,8 @@ void HordeAgents::_rebuild_storage() {
 	for (uint32_t i = 0; i < cap; i++) {
 		active[i] = 0;
 		epoch[i] = 0;
+		vel_x[i] = 0.0f;
+		vel_z[i] = 0.0f;
 	}
 
 	// Open-addressed spatial hash table: power of two, load factor <= 0.5 even
@@ -271,6 +290,9 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	// Spawn-fixed speed identity: pure hash of (slot, current epoch). The epoch
 	// bump on despawn re-rolls a recycled slot for free.
 	speed_scale[p_slot] = _speed_scale_for_slot(p_slot);
+	// Momentum starts at rest; only integrated once move_acceleration > 0.
+	vel_x[p_slot] = 0.0f;
+	vel_z[p_slot] = 0.0f;
 	// Fail-safe: a fresh agent holds the ring until the game grants it a token.
 	engage_token[p_slot] = 0;
 	active[p_slot] = 1;
@@ -395,6 +417,14 @@ void HordeAgents::_assign_tiers() {
 			t = (uint8_t)TIER_WARM;
 		} else {
 			t = (uint8_t)TIER_COLD;
+		}
+		// Cold advances on the legacy instant path and never runs the wall sweep;
+		// any stored momentum would carry the agent through corners at range, so
+		// zero it here (the tier transition site). Held at zero every Cold tick, so
+		// re-promotion to Warm/Hot starts from rest -- no slingshot on the seam.
+		if (t == (uint8_t)TIER_COLD) {
+			vel_x[i] = 0.0f;
+			vel_z[i] = 0.0f;
 		}
 		tier[i] = t;
 		tier_count[t]++;
@@ -849,10 +879,84 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 		const float target_yaw = Math::atan2(desired_dir.x, desired_dir.y);
 		// Shortest-arc signed delta in [-PI, PI], then clamp to this tick's cap.
 		float d = Math::fposmod(target_yaw - yaw[i] + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
-		const float max_step = max_turn_rate * eff_dt;
+		// Windup facing gate (F3): ATTACK_PLAYER has zero locomotion, so this slew is
+		// the only tracking that exists. windup_facing_scale scales the cap while
+		// attacking -- 1.0 = legacy (byte-identical), 0.0 freezes the entry heading so
+		// a strafing victim leaves the frozen strike arc and the swing whiffs.
+		float max_step = max_turn_rate * eff_dt;
+		if (st == STATE_ATTACK_PLAYER) {
+			max_step *= windup_facing_scale;
+		}
 		d = CLAMP(d, -max_step, max_step);
 		yaw[i] = Math::fposmod(yaw[i] + d + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
 	}
+
+	// Momentum integration (PLAN_horde_feel_and_interior_nav F2). MASTER SENTINEL:
+	// move_acceleration <= 0 skips this entirely, so `disp` stays the exact legacy
+	// steering displacement (byte-identical). Cold stays on the legacy instant path
+	// too (velocity was zeroed on its demotion). The LINK/GOAL direct-write branches
+	// already returned above (moved_link), so they never reach here.
+	//
+	// The steering `disp` computed above is the DESIRED velocity * eff_dt (speed
+	// already folds in speed_scale), so desired_vel = disp / eff_dt. Velocity
+	// magnitude accelerates toward the desired magnitude capped by
+	// move_acceleration*eff_dt, and its heading rotates toward the desired heading
+	// capped by move_turn_rate*eff_dt (uncapped when move_turn_rate <= 0). The
+	// realized disp is velocity * eff_dt; the rest of the pipeline (ring/standoff
+	// clamps, separation, knockback, sweep) then applies to it unchanged, with each
+	// disp-shortening stage writing its correction back into velocity below so
+	// stored momentum can't pile against a clamp and slingshot on release.
+	const bool momentum = move_acceleration > 0.0f && t != TIER_COLD;
+	if (momentum && eff_dt > 1e-8f) {
+		const Vector2 desired_vel = disp / eff_dt;
+		const float desired_speed = desired_vel.length();
+		Vector2 vel(vel_x[i], vel_z[i]);
+		const float cur_speed = vel.length();
+
+		// Heading: adopt the desired heading immediately from rest, else slew the
+		// current heading toward it at the capped rate. move_turn_rate <= 0 snaps.
+		// The snap/coast branches reuse the unit vectors already in hand; only the
+		// capped slew needs polar math.
+		Vector2 new_dir;
+		if (desired_speed <= 1e-6f) {
+			// No desired direction (decelerating to a stop): keep the current heading
+			// so the coast-out stays collinear and just loses magnitude.
+			new_dir = cur_speed > 1e-6f ? vel / cur_speed : Vector2(1.0f, 0.0f);
+		} else if (cur_speed <= 1e-6f || move_turn_rate <= 0.0f) {
+			new_dir = desired_vel / desired_speed;
+		} else {
+			const float cur_h = Math::atan2(vel.y, vel.x);
+			const float des_h = Math::atan2(desired_vel.y, desired_vel.x);
+			float dh = Math::fposmod(des_h - cur_h + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+			const float max_dh = move_turn_rate * eff_dt;
+			dh = CLAMP(dh, -max_dh, max_dh);
+			const float new_heading = cur_h + dh;
+			new_dir = Vector2(Math::cos(new_heading), Math::sin(new_heading));
+		}
+
+		// Magnitude: accelerate toward the desired speed, capped per step. Monotone
+		// toward desired_speed and never overshoots it (the ramp check relies on this).
+		const float new_speed = Math::move_toward(cur_speed, desired_speed, move_acceleration * eff_dt);
+
+		vel = new_dir * new_speed;
+		vel_x[i] = vel.x;
+		vel_z[i] = vel.y;
+		disp = vel * eff_dt;
+	}
+
+	// Momentum write-back (F2, decision #4 / D-141): shared by every clamp that
+	// shortens player-ward disp — strip the same component from velocity so stored
+	// momentum can't pile against the clamp and slingshot on release.
+	auto strip_velocity_toward = [&](const Vector2 &p_dir) {
+		if (!momentum) {
+			return;
+		}
+		const float v_forward = Vector2(vel_x[i], vel_z[i]).dot(p_dir);
+		if (v_forward > 0.0f) {
+			vel_x[i] -= p_dir.x * v_forward;
+			vel_z[i] -= p_dir.y * v_forward;
+		}
+	};
 
 	// Hold-ring steering (PLAN_horde_attack_shaping N1): a CHASE agent inside the
 	// close-seek envelope that holds no attack token stops at engage_ring_distance
@@ -869,6 +973,8 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 		const float max_forward = MAX(close_seek_distance - engage_ring_distance, 0.0f);
 		if (forward > max_forward) {
 			disp -= seek_dir * (forward - max_forward);
+			// Lateral drift is preserved; only the player-ward component is stripped.
+			strip_velocity_toward(seek_dir);
 		}
 		if (engage_drift_speed > 0.0f) {
 			// Perpendicular to seek_dir (player-ward); sign is the agent's fixed hash.
@@ -892,6 +998,8 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 		const float max_forward = MAX(close_seek_distance - attack_standoff_distance, 0.0f);
 		if (forward > max_forward) {
 			disp -= seek_dir * (forward - max_forward);
+			// The whiff carry (leftover CHASE velocity) comes to rest at the standoff.
+			strip_velocity_toward(seek_dir);
 		}
 	}
 
@@ -927,6 +1035,18 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 			// wall would let the next tick tunnel through; the skin keeps every cast
 			// starting clear.
 			const float len = disp.length();
+			// Momentum + wall contact (F2, decision #4 -- deviation, justified): the plan
+			// proposed zeroing the into-wall velocity component here. That is unsafe with
+			// this mover: CONTACT_SKIN + the cast's ignore-initial-overlap rule assume the
+			// agent always steps at least a skin's width, which the legacy full-speed disp
+			// guarantees. Zeroing velocity makes a momentum agent re-accelerate from rest
+			// while pressed on the wall, producing sub-skin steps the cast reports as
+			// no-contact (frac == 1); those creep the capsule into overlap and then tunnel.
+			// Leaving velocity untouched keeps it at the desired magnitude (bounded by the
+			// state speed), so disp stays full-width and is truncated to rest every tick --
+			// stable, exactly like the legacy path, and no slingshot on release (velocity
+			// never exceeds the desired). The tunnel-on-Cold case the plan cites is already
+			// covered by zeroing velocity on demotion to Cold (_assign_tiers).
 			const float safe = MAX(0.0f, frac * len - CONTACT_SKIN);
 			disp = len > 1e-6f ? disp * (safe / len) : Vector2();
 			// Deterministic (the sweep fraction is deterministic): record the
@@ -1731,6 +1851,12 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_engage_ring_distance"), &HordeAgents::get_engage_ring_distance);
 	ClassDB::bind_method(D_METHOD("set_engage_drift_speed", "speed"), &HordeAgents::set_engage_drift_speed);
 	ClassDB::bind_method(D_METHOD("get_engage_drift_speed"), &HordeAgents::get_engage_drift_speed);
+	ClassDB::bind_method(D_METHOD("set_move_acceleration", "accel"), &HordeAgents::set_move_acceleration);
+	ClassDB::bind_method(D_METHOD("get_move_acceleration"), &HordeAgents::get_move_acceleration);
+	ClassDB::bind_method(D_METHOD("set_move_turn_rate", "rate"), &HordeAgents::set_move_turn_rate);
+	ClassDB::bind_method(D_METHOD("get_move_turn_rate"), &HordeAgents::get_move_turn_rate);
+	ClassDB::bind_method(D_METHOD("set_windup_facing_scale", "scale"), &HordeAgents::set_windup_facing_scale);
+	ClassDB::bind_method(D_METHOD("get_windup_facing_scale"), &HordeAgents::get_windup_facing_scale);
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &HordeAgents::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &HordeAgents::get_collision_mask);
 
