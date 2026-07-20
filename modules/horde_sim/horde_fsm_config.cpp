@@ -22,6 +22,8 @@ HordeFSMConfig::MovementMode HordeFSMConfig::default_movement_mode(int p_state) 
 		MOVE_STATIONARY, // Scream
 		MOVE_FLOW, // Crawl
 		MOVE_STATIONARY, // Dead
+		MOVE_STATIONARY, // Knockdown
+		MOVE_STATIONARY, // GetUp
 	};
 	ERR_FAIL_INDEX_V(p_state, STATE_COUNT, MOVE_STATIONARY);
 	return DEFAULTS[p_state];
@@ -45,12 +47,13 @@ void HordeFSMConfig::configure(int p_archetype_count) {
 	}
 }
 
-void HordeFSMConfig::set_combat_rule(int p_archetype, float p_max_hp, float p_stagger_damage_frac, int p_stagger_duration_ticks, float p_knockback_distance_cap, int p_knockback_duration_ticks) {
+void HordeFSMConfig::set_combat_rule(int p_archetype, float p_max_hp, float p_stagger_damage_frac, int p_stagger_duration_ticks, float p_knockdown_damage_frac, float p_knockback_distance_cap, int p_knockback_duration_ticks) {
 	ERR_FAIL_INDEX(p_archetype, archetype_count);
 	CombatRule &c = combat_rules[p_archetype];
 	c.max_hp = p_max_hp;
 	c.stagger_damage_frac = p_stagger_damage_frac;
 	c.stagger_duration_ticks = p_stagger_duration_ticks;
+	c.knockdown_damage_frac = p_knockdown_damage_frac;
 	c.knockback_distance_cap = p_knockback_distance_cap;
 	c.knockback_duration_ticks = p_knockback_duration_ticks;
 }
@@ -68,6 +71,11 @@ float HordeFSMConfig::get_stagger_damage_frac(int p_archetype) const {
 int HordeFSMConfig::get_stagger_duration_ticks(int p_archetype) const {
 	ERR_FAIL_INDEX_V(p_archetype, archetype_count, DEFAULT_COMBAT.stagger_duration_ticks);
 	return combat_rules[p_archetype].stagger_duration_ticks;
+}
+
+float HordeFSMConfig::get_knockdown_damage_frac(int p_archetype) const {
+	ERR_FAIL_INDEX_V(p_archetype, archetype_count, DEFAULT_COMBAT.knockdown_damage_frac);
+	return combat_rules[p_archetype].knockdown_damage_frac;
 }
 
 float HordeFSMConfig::get_knockback_distance_cap(int p_archetype) const {
@@ -141,6 +149,8 @@ void HordeFSMConfig::load_defaults() {
 		S_SCREAM,
 		S_CRAWL,
 		S_DEAD,
+		S_KNOCKDOWN,
+		S_GET_UP,
 	};
 
 	configure(2);
@@ -158,6 +168,10 @@ void HordeFSMConfig::load_defaults() {
 	set_rule(0, S_SCREAM, 0.0f, 0.0f, 0.0f, 0.0f); // Shamblers do not scream.
 	set_rule(0, S_CRAWL, 0.6f, 0.0f, 0.0f, 1.0f); // Low, slow crawler (A3.7).
 	set_rule(0, S_DEAD, 0.0f, 0.0f, 0.0f, 0.0f);
+	// Pose-matched source cuts: 2.033 s / 1.5x = 1.356 s fall, then a short
+	// grounded hold; 2.367 s / 1.5x = 1.578 s rise.
+	set_rule(0, S_KNOCKDOWN, 0.0f, 0.0f, 1.75f, 0.0f);
+	set_rule(0, S_GET_UP, 0.0f, 0.0f, 1.60f, 0.0f);
 
 	// --- Archetype 1: Screamer (design section 4). Placeholder tuning. ---
 	set_rule(1, S_DORMANT, 0.0f, 0.0f, 0.0f, 12.0f); // Detects at longer range.
@@ -173,10 +187,12 @@ void HordeFSMConfig::load_defaults() {
 	set_rule(1, S_SCREAM, 0.0f, 2.0f, 2.0f, 0.0f); // 2.0 s wind-up (A4.3).
 	set_rule(1, S_CRAWL, 0.6f, 0.0f, 0.0f, 1.0f);
 	set_rule(1, S_DEAD, 0.0f, 0.0f, 0.0f, 0.0f);
+	set_rule(1, S_KNOCKDOWN, 0.0f, 0.0f, 1.75f, 0.0f);
+	set_rule(1, S_GET_UP, 0.0f, 0.0f, 1.60f, 0.0f);
 
 	// Combat-ingress rows (P2.4): both archetypes keep the CombatRule member
-	// defaults seeded by configure() -- 100 HP, single-hit stagger at >= 35% of
-	// max HP, 0.7 s stagger, 0.6 m knockback cap over 16 ticks. Archetype
+	// defaults seeded by configure() -- 100 HP, single-hit stagger at >= 35% or
+	// knockdown at >= 50% of max HP, 0.7 s stagger, 0.6 m knockback cap over 16 ticks. Archetype
 	// variety is out of scope for the slice; Logan owns the finals (D5.9).
 }
 
@@ -190,10 +206,11 @@ void HordeFSMConfig::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_exit_range", "archetype", "state"), &HordeFSMConfig::get_exit_range);
 	ClassDB::bind_method(D_METHOD("set_movement_mode", "archetype", "state", "mode"), &HordeFSMConfig::set_movement_mode);
 	ClassDB::bind_method(D_METHOD("get_movement_mode", "archetype", "state"), &HordeFSMConfig::get_movement_mode);
-	ClassDB::bind_method(D_METHOD("set_combat_rule", "archetype", "max_hp", "stagger_damage_frac", "stagger_duration_ticks", "knockback_distance_cap", "knockback_duration_ticks"), &HordeFSMConfig::set_combat_rule);
+	ClassDB::bind_method(D_METHOD("set_combat_rule", "archetype", "max_hp", "stagger_damage_frac", "stagger_duration_ticks", "knockdown_damage_frac", "knockback_distance_cap", "knockback_duration_ticks"), &HordeFSMConfig::set_combat_rule);
 	ClassDB::bind_method(D_METHOD("get_max_hp", "archetype"), &HordeFSMConfig::get_max_hp);
 	ClassDB::bind_method(D_METHOD("get_stagger_damage_frac", "archetype"), &HordeFSMConfig::get_stagger_damage_frac);
 	ClassDB::bind_method(D_METHOD("get_stagger_duration_ticks", "archetype"), &HordeFSMConfig::get_stagger_duration_ticks);
+	ClassDB::bind_method(D_METHOD("get_knockdown_damage_frac", "archetype"), &HordeFSMConfig::get_knockdown_damage_frac);
 	ClassDB::bind_method(D_METHOD("get_knockback_distance_cap", "archetype"), &HordeFSMConfig::get_knockback_distance_cap);
 	ClassDB::bind_method(D_METHOD("get_knockback_duration_ticks", "archetype"), &HordeFSMConfig::get_knockback_duration_ticks);
 	ClassDB::bind_method(D_METHOD("load_defaults"), &HordeFSMConfig::load_defaults);

@@ -39,6 +39,14 @@ void HordeAgents::set_attack_standoff_distance(float p_distance) {
 	attack_standoff_distance = Math::is_finite(p_distance) ? MAX(p_distance, 0.0f) : 0.0f;
 }
 
+void HordeAgents::set_engage_ring_distance(float p_distance) {
+	engage_ring_distance = Math::is_finite(p_distance) ? MAX(p_distance, 0.0f) : 0.0f;
+}
+
+void HordeAgents::set_engage_drift_speed(float p_speed) {
+	engage_drift_speed = Math::is_finite(p_speed) ? MAX(p_speed, 0.0f) : 0.0f;
+}
+
 void HordeAgents::_ensure_field_capacity(int p_field_id) {
 	const uint32_t count = (uint32_t)p_field_id + 1;
 	if (fields.size() < count) {
@@ -104,6 +112,8 @@ static const float DEFAULT_STATE_SPEED[HordeAgents::STATE_MAX] = {
 	0.0f, // SCREAM
 	0.6f, // CRAWL
 	0.0f, // DEAD
+	0.0f, // KNOCKDOWN
+	0.0f, // GET_UP
 };
 
 HordeAgents::HordeAgents() {
@@ -136,6 +146,8 @@ void HordeAgents::_rebuild_storage() {
 	tier.resize(cap);
 	archetype.resize(cap);
 	field_id.resize(cap);
+	speed_scale.resize(cap);
+	engage_token.resize(cap);
 	active.resize(cap);
 	pending_reason.resize(cap);
 	blocked_contact.resize(cap);
@@ -256,6 +268,11 @@ void HordeAgents::_init_slot(int p_slot, int p_archetype, const Vector3 &p_pos, 
 	tier[p_slot] = (uint8_t)TIER_COLD;
 	archetype[p_slot] = (uint8_t)p_archetype;
 	field_id[p_slot] = (uint8_t)p_field_id;
+	// Spawn-fixed speed identity: pure hash of (slot, current epoch). The epoch
+	// bump on despawn re-rolls a recycled slot for free.
+	speed_scale[p_slot] = _speed_scale_for_slot(p_slot);
+	// Fail-safe: a fresh agent holds the ring until the game grants it a token.
+	engage_token[p_slot] = 0;
 	active[p_slot] = 1;
 	pending_reason[p_slot] = (uint8_t)REASON_NONE;
 	blocked_contact[p_slot] = 0;
@@ -501,6 +518,45 @@ float HordeAgents::_wander_angle(int p_slot) const {
 	return (float)((double)h * (Math::TAU / 4294967296.0));
 }
 
+float HordeAgents::_speed_scale_for_slot(int p_slot) const {
+	// jitter == 0 -> exactly 1.0 (byte-identical to a no-jitter build). No
+	// dependence on `wander`, so the multiplier is spawn-fixed, not per-state.
+	if (speed_jitter <= 0.0f) {
+		return 1.0f;
+	}
+	uint32_t h = (uint32_t)p_slot * 0x9E3779B9u;
+	h ^= (uint32_t)epoch[p_slot] * 0x85EBCA6Bu;
+	h ^= 0x517CC1B7u; // Domain separator: decorrelate speed from _wander_angle.
+	h = hash_fmix32(h);
+	// Map the 32-bit hash to [-1, 1), then into [1 - jitter, 1 + jitter).
+	const double unit01 = (double)h / 4294967296.0;
+	const float centered = (float)(unit01 * 2.0 - 1.0);
+	return 1.0f + centered * speed_jitter;
+}
+
+float HordeAgents::_engage_drift_sign(int p_slot) const {
+	// Pure hash of (slot, epoch) with its own domain separator so the circling
+	// direction is a stable per-agent identity, uncorrelated with wander/speed, and
+	// re-rolls for free when a slot is recycled (epoch bump). RNG-free (L6).
+	uint32_t h = (uint32_t)p_slot * 0x9E3779B9u;
+	h ^= (uint32_t)epoch[p_slot] * 0x85EBCA6Bu;
+	h ^= 0x27D4EB2Fu; // Domain separator: decorrelate drift sign from speed/wander.
+	h = hash_fmix32(h);
+	return (h & 1u) ? 1.0f : -1.0f;
+}
+
+void HordeAgents::set_speed_jitter(float p_jitter) {
+	speed_jitter = Math::is_finite(p_jitter) ? MAX(p_jitter, 0.0f) : 0.0f;
+	// Re-seed every live slot so the knob is coherent regardless of whether it is
+	// set before or after spawns. Pure hash of (slot, epoch): a live agent's scale
+	// is stable for its lifetime once jitter is fixed.
+	for (int i = 0; i < capacity; i++) {
+		if (active[i] != 0) {
+			speed_scale[i] = _speed_scale_for_slot(i);
+		}
+	}
+}
+
 float HordeAgents::_sweep_fraction(int p_slot, const Vector2 &p_disp) const {
 	if (collision_world_id == 0) {
 		return 1.0f;
@@ -643,7 +699,10 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 	}
 
 	const int st = state[i];
-	const float speed = _state_speed(archetype[i], st);
+	// Single locomotion speed choke point: the spawn-fixed per-agent multiplier
+	// scales every downstream branch (flow / seek / patrol / link / goal settle)
+	// uniformly. speed_scale is exactly 1.0 for every slot when speed_jitter == 0.
+	const float speed = _state_speed(archetype[i], st) * speed_scale[i];
 	const int mode = _movement_mode(archetype[i], st);
 	const bool have_field = field != nullptr && grid != nullptr;
 	Vector2 disp; // Planar displacement this step.
@@ -793,6 +852,29 @@ void HordeAgents::_move_agent(int i, double p_delta, HordeFlowField *field, Hord
 		const float max_step = max_turn_rate * eff_dt;
 		d = CLAMP(d, -max_step, max_step);
 		yaw[i] = Math::fposmod(yaw[i] + d + (float)Math::PI, (float)Math::TAU) - (float)Math::PI;
+	}
+
+	// Hold-ring steering (PLAN_horde_attack_shaping N1): a CHASE agent inside the
+	// close-seek envelope that holds no attack token stops at engage_ring_distance
+	// instead of closing to attack_standoff_distance, and drifts tangentially so the
+	// pack encircles the player rather than stacking at the standoff. Clamps the
+	// player-ward component of disp (mirroring the ATTACK_PLAYER standoff clamp below)
+	// and adds a per-agent-signed strafe. Layered BEFORE Reynolds separation on
+	// purpose: separation (immediately below) is what fans the drifters apart around
+	// the arc; facing (slewed above off seek_dir) is untouched, so ring-holders keep
+	// looking at the player while they circle. Token holders skip this and close via
+	// the ordinary ATTACK ladder. engage_ring_distance == 0 disables it (legacy).
+	if (st == STATE_CHASE && close_seek && engage_ring_distance > 0.0f && engage_token[i] == 0) {
+		const float forward = disp.dot(seek_dir);
+		const float max_forward = MAX(close_seek_distance - engage_ring_distance, 0.0f);
+		if (forward > max_forward) {
+			disp -= seek_dir * (forward - max_forward);
+		}
+		if (engage_drift_speed > 0.0f) {
+			// Perpendicular to seek_dir (player-ward); sign is the agent's fixed hash.
+			const Vector2 tangent(-seek_dir.y, seek_dir.x);
+			disp += tangent * (_engage_drift_sign(i) * engage_drift_speed * eff_dt);
+		}
 	}
 
 	// Reynolds separation, Hot tier only (R3.3 / A2.3).
@@ -1273,10 +1355,23 @@ int HordeAgents::apply_damage(int p_id, float p_amount, const Vector3 &p_impulse
 		}
 	}
 
-	// Server-confirmed stagger (COMBAT_FEEL section 3 tier B): one hit at
-	// >= stagger_damage_frac of max HP halts the agent for the requested weapon
-	// override, or the archetype config window when no override was supplied.
-	// The damage threshold always remains archetype-owned.
+	// Server-confirmed heavy reaction ladder. Knockdown is checked first and uses
+	// ordinary timed FSM states; stagger retains its compact native countdown.
+	// Re-hitting an already downed agent damages it without restarting the fall.
+	if (state[slot] == (uint8_t)STATE_KNOCKDOWN) {
+		return STATE_KNOCKDOWN; // Damage lands, but the fall timer and pose do not restart.
+	}
+	const bool interrupted_get_up = state[slot] == (uint8_t)STATE_GET_UP &&
+			p_amount >= cr.stagger_damage_frac * cr.max_hp;
+	if (p_amount >= cr.knockdown_damage_frac * cr.max_hp || interrupted_get_up) {
+		if (state[slot] != (uint8_t)STATE_KNOCKDOWN) {
+			_enter_state(slot, STATE_KNOCKDOWN);
+		}
+		return STATE_KNOCKDOWN;
+	}
+
+	// A lighter qualifying hit halts the agent for the requested weapon override,
+	// or the archetype config window when no override was supplied.
 	const int stagger_duration_ticks = p_stagger_duration_ticks >= 0 ? p_stagger_duration_ticks : cr.stagger_duration_ticks;
 	if (p_amount >= cr.stagger_damage_frac * cr.max_hp && stagger_duration_ticks > 0) {
 		if (state[slot] != (uint8_t)STATE_STAGGER) {
@@ -1319,6 +1414,59 @@ int HordeAgents::get_agent_archetype(int p_id) const {
 int HordeAgents::get_agent_field_id(int p_id) const {
 	int slot;
 	return _resolve(p_id, slot) ? (int)field_id[slot] : -1;
+}
+
+bool HordeAgents::set_agent_field(int p_id, int p_field) {
+	if (p_field < 0 || p_field >= MAX_FIELDS) {
+		return false;
+	}
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return false;
+	}
+	field_id[slot] = (uint8_t)p_field;
+	// The cached flow octant belongs to the old field; clear it so the next
+	// movement step resamples and _evaluate_exits() cannot arm a stale AT_GOAL
+	// (mirrors the domain handoff at _update_field_handoff).
+	flow_octant[slot] = (uint8_t)HordeFlowField::OCTANT_NONE;
+	return true;
+}
+
+void HordeAgents::set_agent_fields(const PackedInt32Array &p_pairs) {
+	const int n = p_pairs.size();
+	ERR_FAIL_COND_MSG((n & 1) != 0, "set_agent_fields expects flat [id, field, ...] pairs.");
+	const int *r = p_pairs.ptr();
+	for (int i = 0; i + 1 < n; i += 2) {
+		set_agent_field(r[i], r[i + 1]); // Invalid entries are skipped, not fatal.
+	}
+}
+
+bool HordeAgents::set_agent_engage_token(int p_id, bool p_granted) {
+	int slot;
+	if (!_resolve(p_id, slot)) {
+		return false;
+	}
+	engage_token[slot] = p_granted ? 1 : 0;
+	return true;
+}
+
+void HordeAgents::set_agent_engage_tokens(const PackedInt32Array &p_pairs) {
+	const int n = p_pairs.size();
+	ERR_FAIL_COND_MSG((n & 1) != 0, "set_agent_engage_tokens expects flat [id, 0|1, ...] pairs.");
+	const int *r = p_pairs.ptr();
+	for (int i = 0; i + 1 < n; i += 2) {
+		set_agent_engage_token(r[i], r[i + 1] != 0); // Stale ids are skipped, not fatal.
+	}
+}
+
+int HordeAgents::get_agent_engage_token(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? (int)engage_token[slot] : -1;
+}
+
+float HordeAgents::get_agent_speed_scale(int p_id) const {
+	int slot;
+	return _resolve(p_id, slot) ? speed_scale[slot] : -1.0f;
 }
 
 Vector3 HordeAgents::get_agent_position(int p_id) const {
@@ -1573,10 +1721,16 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_separation_strength"), &HordeAgents::get_separation_strength);
 	ClassDB::bind_method(D_METHOD("set_max_turn_rate", "rate"), &HordeAgents::set_max_turn_rate);
 	ClassDB::bind_method(D_METHOD("get_max_turn_rate"), &HordeAgents::get_max_turn_rate);
+	ClassDB::bind_method(D_METHOD("set_speed_jitter", "jitter"), &HordeAgents::set_speed_jitter);
+	ClassDB::bind_method(D_METHOD("get_speed_jitter"), &HordeAgents::get_speed_jitter);
 	ClassDB::bind_method(D_METHOD("set_attack_seek_radius", "radius"), &HordeAgents::set_attack_seek_radius);
 	ClassDB::bind_method(D_METHOD("get_attack_seek_radius"), &HordeAgents::get_attack_seek_radius);
 	ClassDB::bind_method(D_METHOD("set_attack_standoff_distance", "distance"), &HordeAgents::set_attack_standoff_distance);
 	ClassDB::bind_method(D_METHOD("get_attack_standoff_distance"), &HordeAgents::get_attack_standoff_distance);
+	ClassDB::bind_method(D_METHOD("set_engage_ring_distance", "distance"), &HordeAgents::set_engage_ring_distance);
+	ClassDB::bind_method(D_METHOD("get_engage_ring_distance"), &HordeAgents::get_engage_ring_distance);
+	ClassDB::bind_method(D_METHOD("set_engage_drift_speed", "speed"), &HordeAgents::set_engage_drift_speed);
+	ClassDB::bind_method(D_METHOD("get_engage_drift_speed"), &HordeAgents::get_engage_drift_speed);
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &HordeAgents::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &HordeAgents::get_collision_mask);
 
@@ -1622,6 +1776,12 @@ void HordeAgents::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_agent_tier", "id"), &HordeAgents::get_agent_tier);
 	ClassDB::bind_method(D_METHOD("get_agent_archetype", "id"), &HordeAgents::get_agent_archetype);
 	ClassDB::bind_method(D_METHOD("get_agent_field_id", "id"), &HordeAgents::get_agent_field_id);
+	ClassDB::bind_method(D_METHOD("set_agent_field", "id", "field"), &HordeAgents::set_agent_field);
+	ClassDB::bind_method(D_METHOD("set_agent_fields", "pairs"), &HordeAgents::set_agent_fields);
+	ClassDB::bind_method(D_METHOD("set_agent_engage_token", "id", "granted"), &HordeAgents::set_agent_engage_token);
+	ClassDB::bind_method(D_METHOD("set_agent_engage_tokens", "pairs"), &HordeAgents::set_agent_engage_tokens);
+	ClassDB::bind_method(D_METHOD("get_agent_engage_token", "id"), &HordeAgents::get_agent_engage_token);
+	ClassDB::bind_method(D_METHOD("get_agent_speed_scale", "id"), &HordeAgents::get_agent_speed_scale);
 	ClassDB::bind_method(D_METHOD("get_agent_position", "id"), &HordeAgents::get_agent_position);
 	ClassDB::bind_method(D_METHOD("get_agent_yaw", "id"), &HordeAgents::get_agent_yaw);
 	ClassDB::bind_method(D_METHOD("set_agent_yaw", "id", "yaw"), &HordeAgents::set_agent_yaw);
@@ -1656,6 +1816,8 @@ void HordeAgents::_bind_methods() {
 	BIND_ENUM_CONSTANT(STATE_SCREAM);
 	BIND_ENUM_CONSTANT(STATE_CRAWL);
 	BIND_ENUM_CONSTANT(STATE_DEAD);
+	BIND_ENUM_CONSTANT(STATE_KNOCKDOWN);
+	BIND_ENUM_CONSTANT(STATE_GET_UP);
 	BIND_ENUM_CONSTANT(STATE_MAX);
 
 	BIND_ENUM_CONSTANT(TIER_HOT);

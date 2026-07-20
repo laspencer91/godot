@@ -50,6 +50,9 @@ public:
 		STATE_SCREAM,
 		STATE_CRAWL,
 		STATE_DEAD,
+		// Appended so every established wire ordinal, especially DEAD=10, remains stable.
+		STATE_KNOCKDOWN,
+		STATE_GET_UP,
 		STATE_MAX,
 	};
 
@@ -104,6 +107,13 @@ private:
 	// (pre-separation) heading at most this fast per tick, killing the dense-clump
 	// heading flicker that raw atan2(disp) produced. Logan-tunable in the inspector.
 	float max_turn_rate = 9.0f;
+	// Per-agent walk-speed variation knob (0..0.5). Each live agent carries a
+	// spawn-fixed speed_scale in [1 - speed_jitter, 1 + speed_jitter), rolled from
+	// a pure hash of (slot, epoch) so it is a stable "this zombie is fast/slow"
+	// identity, deterministic and RNG-free (L6). 0.0 => every speed_scale is
+	// exactly 1.0 (byte-identical to a build without jitter). Global for v1, not
+	// per-archetype. Logan-tunable via the profile.
+	float speed_jitter = 0.0f;
 	// Close-range attack seek (COMBAT_FEEL). Once an aware agent (WAKE / CHASE /
 	// ATTACK_PLAYER) is within this planar radius of a player it steers and FACES
 	// the player's real position directly, bypassing the shared flow field. The
@@ -118,6 +128,20 @@ private:
 	// collision mask, so this deterministic steering constraint prevents a
 	// committed lunge from crossing through its victim. 0 disables.
 	float attack_standoff_distance = 0.8f;
+	// Hold-ring engagement band (PLAN_horde_attack_shaping N1). A CHASE agent
+	// inside the close-seek envelope that holds NO attack token (engage_token == 0)
+	// stops at this planar distance from the nearest player instead of pushing to
+	// attack_standoff_distance, and drifts tangentially so crowd separation fans the
+	// pack around the arc (encircle, don't stack). Must sit inside attack_seek_radius
+	// (the outer envelope) to have any effect. 0 disables the ring entirely ->
+	// byte-identical to a build without it (a tokenless agent then closes as today).
+	// Logan-tunable via the profile.
+	float engage_ring_distance = 0.0f;
+	// Tangential drift speed (m/s) applied to a ring-holding agent inside the
+	// envelope; its sign is a spawn-fixed per-agent hash so half the pack circles
+	// each way and separation spreads them. 0 => the ring clamps approach but adds
+	// no active strafe. Logan-tunable via the profile.
+	float engage_drift_speed = 0.0f;
 	uint32_t collision_mask = 0xFFFFFFFF; // Static layers the mover sweep tests.
 
 	// Flow-field registry indexed by the per-agent uint8_t field id. Field 0 is
@@ -192,6 +216,18 @@ private:
 	LocalVector<uint8_t> tier;
 	LocalVector<uint8_t> archetype;
 	LocalVector<uint8_t> field_id;
+	// Spawn-fixed per-agent locomotion multiplier applied at the single _move_agent
+	// speed choke point (covers flow/seek/patrol/link/goal uniformly). Seeded in
+	// _init_slot from _speed_scale_for_slot(); re-seeded for every live slot when
+	// set_speed_jitter() changes the knob so the value stays coherent regardless of
+	// call order. speed_jitter == 0 => exactly 1.0 for every slot.
+	LocalVector<float> speed_scale;
+	// Attack-token flag (PLAN_horde_attack_shaping). 1 = the game granted this agent
+	// leave to close to attack_standoff_distance; 0 = hold the engagement ring.
+	// Fail-safe polarity: default 0, so an agent the game never touched holds the
+	// ring rather than face-tanking a player. Host-sim-only, never replicated (ring
+	// strafing rides ordinary position deltas). Zeroed in _init_slot.
+	LocalVector<uint8_t> engage_token;
 	LocalVector<uint8_t> active; // 1 if slot holds a live agent.
 	LocalVector<uint8_t> pending_reason; // TransitionReason armed this tick.
 	// 1 if this slot's most recent movement sweep (Hot/Warm only) was clamped
@@ -280,6 +316,15 @@ private:
 	float _state_speed(int p_archetype, int p_state) const;
 	int _movement_mode(int p_archetype, int p_state) const;
 	float _wander_angle(int p_slot) const;
+	// Spawn-fixed per-agent speed multiplier from a pure hash of (slot, epoch),
+	// mapped into [1 - speed_jitter, 1 + speed_jitter). Returns exactly 1.0 when
+	// speed_jitter == 0. Domain-separated from _wander_angle so speed and wander
+	// heading do not correlate.
+	float _speed_scale_for_slot(int p_slot) const;
+	// Spawn-fixed tangential drift sign (+1 / -1) for the hold ring, from a pure
+	// hash of (slot, epoch). Domain-separated from _wander_angle / _speed_scale so a
+	// zombie's circling direction does not correlate with its wander or speed.
+	float _engage_drift_sign(int p_slot) const;
 	float _sweep_fraction(int p_slot, const Vector2 &p_disp) const;
 	int32_t _hash_lookup(int64_t p_key) const;
 
@@ -305,10 +350,19 @@ public:
 	float get_separation_strength() const { return separation_strength; }
 	void set_max_turn_rate(float p_r) { max_turn_rate = p_r; }
 	float get_max_turn_rate() const { return max_turn_rate; }
+	// Sets the global speed-jitter knob and re-seeds every live agent's
+	// speed_scale so the change is coherent whether it lands before or after
+	// spawns. Clamped to >= 0; non-finite treated as 0.
+	void set_speed_jitter(float p_jitter);
+	float get_speed_jitter() const { return speed_jitter; }
 	void set_attack_seek_radius(float p_r);
 	float get_attack_seek_radius() const { return attack_seek_radius; }
 	void set_attack_standoff_distance(float p_distance);
 	float get_attack_standoff_distance() const { return attack_standoff_distance; }
+	void set_engage_ring_distance(float p_distance);
+	float get_engage_ring_distance() const { return engage_ring_distance; }
+	void set_engage_drift_speed(float p_speed);
+	float get_engage_drift_speed() const { return engage_drift_speed; }
 	void set_collision_mask(int p_mask) { collision_mask = (uint32_t)p_mask; }
 	int get_collision_mask() const { return (int)collision_mask; }
 
@@ -400,9 +454,11 @@ public:
 	// Damage ingress; returns the resulting state (-1 on a stale id). The game
 	// sends FINAL damage -- headshot multipliers are game-side. At <= 0 HP the
 	// DEAD transition applies natively and is reported once as a REASON_DIED
-	// quad (see TransitionReason). A surviving hit at >= stagger_damage_frac of
-	// the archetype max HP enters STAGGER for stagger_duration_ticks, then the
-	// prior state (and its movement mode) resumes natively. p_knockback > 0
+	// quad (see TransitionReason). A surviving hit at >= knockdown_damage_frac
+	// enters KNOCKDOWN; otherwise one at >= stagger_damage_frac enters STAGGER
+	// for stagger_duration_ticks, then the prior state resumes natively. The
+	// KNOCKDOWN -> GET_UP -> pursuit ladder is driven by the ordinary timed FSM
+	// rules, so its animation-sized windows stay data-authored. p_knockback > 0
 	// requests a horizontal stumble along p_impulse_dir: distance capped by
 	// knockback_distance_cap, decaying over knockback_duration_ticks, moved
 	// through the CastMover + skin path (never through walls).
@@ -421,6 +477,27 @@ public:
 	int get_agent_tier(int p_id) const;
 	int get_agent_archetype(int p_id) const;
 	int get_agent_field_id(int p_id) const;
+	// Runtime per-agent field reassignment (the objective/threat split, PLAN_
+	// horde_two_field_nav). Resolves the epoch-bearing id, validates
+	// 0 <= field < MAX_FIELDS, writes field_id and clears the cached flow octant
+	// (the old sample belongs to the old field) exactly as the domain handoff
+	// does. Returns false on a stale id or out-of-range field. The batched form
+	// takes flat [id, field, ...] pairs and skips any invalid entry -- the game
+	// reassigns many agents per tick and marshaling cost matters at 200 agents.
+	bool set_agent_field(int p_id, int p_field);
+	void set_agent_fields(const PackedInt32Array &p_pairs);
+	// Attack-token grant/revoke (PLAN_horde_attack_shaping). Resolves the
+	// epoch-bearing id and writes engage_token; 1 lets the agent close past the hold
+	// ring to attack_standoff_distance, 0 sends it back to the ring. The batched form
+	// takes flat [id, 0|1, ...] pairs and skips any stale id (the game grants/releases
+	// several agents per tick). get_agent_engage_token is a debug/verification read;
+	// -1 on a stale id. Host-sim-only, no wire effect.
+	bool set_agent_engage_token(int p_id, bool p_granted);
+	void set_agent_engage_tokens(const PackedInt32Array &p_pairs);
+	int get_agent_engage_token(int p_id) const;
+	// Debug/verification read of the spawn-fixed locomotion multiplier; -1 on a
+	// stale id.
+	float get_agent_speed_scale(int p_id) const;
 	Vector3 get_agent_position(int p_id) const;
 	float get_agent_yaw(int p_id) const;
 	bool set_agent_yaw(int p_id, float p_yaw);

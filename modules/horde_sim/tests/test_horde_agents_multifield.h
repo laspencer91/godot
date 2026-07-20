@@ -157,6 +157,112 @@ TEST_CASE("[HordeSim][Agents][MultiField] Overlapping domains choose the lowest 
 	CHECK(agents->get_agent_field_id(id) == 2);
 }
 
+TEST_CASE("[HordeSim][Agents][MultiField] Runtime set_agent_field switches the followed field next tick") {
+	Ref<HordeNavGrid> east_grid = make_grid(16, 8);
+	Ref<HordeNavGrid> west_grid = make_grid(16, 8);
+	const Vector3 start = east_grid->cell_to_world(7, 3, 0);
+	Ref<HordeFlowField> east_field = make_phase_a_field(east_grid, east_grid->cell_to_world(14, 3, 0));
+	Ref<HordeFlowField> west_field = make_phase_a_field(west_grid, west_grid->cell_to_world(1, 3, 0));
+
+	Ref<HordeAgents> agents = make_agents(2);
+	agents->set_field(0, east_field);
+	agents->set_field(1, west_field);
+	CHECK(agents->has_method(StringName("set_agent_field")));
+	CHECK(agents->has_method(StringName("set_agent_fields")));
+
+	const int id = agents->spawn(0, start, HordeAgents::STATE_ADVANCE); // Field 0 by default.
+	PackedVector3Array players;
+	players.push_back(start);
+	agents->set_player_positions(players);
+
+	agents->tick(0.25);
+	const float x_after_east = agents->get_agent_position(id).x;
+	CHECK(x_after_east > start.x); // Followed field 0 (east goal) -> +x.
+
+	// Reassign to field 1 mid-life; the west goal pulls -x on the next tick.
+	CHECK(agents->set_agent_field(id, 1));
+	CHECK(agents->get_agent_field_id(id) == 1);
+	agents->tick(0.25);
+	CHECK(agents->get_agent_position(id).x < x_after_east); // Now steering west.
+
+	// Invalid id and out-of-range field are rejected without mutating state.
+	CHECK_FALSE(agents->set_agent_field(0x3FF, 0)); // Never-spawned slot id.
+	CHECK_FALSE(agents->set_agent_field(id, -1));
+	CHECK_FALSE(agents->set_agent_field(id, HordeAgents::MAX_FIELDS));
+	CHECK(agents->get_agent_field_id(id) == 1); // Unchanged by the rejected calls.
+}
+
+TEST_CASE("[HordeSim][Agents][MultiField] set_agent_field clears the stale AT_GOAL octant") {
+	Ref<HordeNavGrid> grid0 = make_phase_a_domain_grid();
+	Ref<HordeNavGrid> grid1 = make_phase_a_domain_grid();
+	const Vector3 spot(0.25f, 0.0f, 0.25f);
+	// Field 0 steers away (+x). Field 1 reports GOAL exactly at the spawn -- a
+	// switch to it must NOT arm REASON_AT_GOAL from the old (field 0) sample, and
+	// must resample GOAL for field 1 so the agent settles rather than advancing.
+	Ref<HordeFlowField> field0 = make_phase_a_field(grid0, Vector3(4.25f, 0.0f, 0.25f));
+	Ref<HordeFlowField> field1 = make_phase_a_field(grid1, spot);
+
+	Ref<HordeAgents> agents = make_agents(1);
+	agents->set_field(0, field0);
+	agents->set_field(1, field1);
+	const int id = agents->spawn(0, spot, HordeAgents::STATE_ADVANCE);
+	PackedVector3Array players;
+	players.push_back(spot);
+	agents->set_player_positions(players);
+
+	agents->tick(0.125);
+	CHECK(agents->get_agent_position(id).x > spot.x); // Field 0 advanced it.
+	CHECK(agents->query_transitions().is_empty()); // Field 0 goal is far; no AT_GOAL.
+
+	CHECK(agents->set_agent_field(id, 1));
+	// The very next tick the cached octant is gone: the agent resamples field 1
+	// (GOAL at its cell) and settles onto the cell center instead of arming a
+	// stale exit or advancing off the old field.
+	agents->tick(0.125);
+	const int f1_state = agents->get_agent_state(id);
+	CHECK(f1_state == HordeAgents::STATE_ADVANCE); // No spurious transition applied.
+}
+
+TEST_CASE("[HordeSim][Agents][MultiField] Batched set_agent_fields reassigns many agents and skips bad pairs") {
+	Ref<HordeNavGrid> east_grid = make_grid(16, 8);
+	Ref<HordeNavGrid> west_grid = make_grid(16, 8);
+	const Vector3 start = east_grid->cell_to_world(7, 3, 0);
+	Ref<HordeFlowField> east_field = make_phase_a_field(east_grid, east_grid->cell_to_world(14, 3, 0));
+	Ref<HordeFlowField> west_field = make_phase_a_field(west_grid, west_grid->cell_to_world(1, 3, 0));
+
+	Ref<HordeAgents> agents = make_agents(4);
+	agents->set_field(0, east_field);
+	agents->set_field(1, west_field);
+	const int a = agents->spawn(0, start, HordeAgents::STATE_ADVANCE);
+	const int b = agents->spawn(0, start, HordeAgents::STATE_ADVANCE);
+	const int c = agents->spawn(0, start, HordeAgents::STATE_ADVANCE);
+
+	// Move a and c to field 1; leave b on field 0; include a bad field (skipped)
+	// and a stale id (skipped) to prove the batch tolerates junk entries.
+	PackedInt32Array pairs;
+	pairs.push_back(a);
+	pairs.push_back(1);
+	pairs.push_back(c);
+	pairs.push_back(1);
+	pairs.push_back(b);
+	pairs.push_back(HordeAgents::MAX_FIELDS + 5); // Out of range -> skipped.
+	pairs.push_back(0x3FF); // Never spawned -> skipped.
+	pairs.push_back(1);
+	agents->set_agent_fields(pairs);
+
+	CHECK(agents->get_agent_field_id(a) == 1);
+	CHECK(agents->get_agent_field_id(c) == 1);
+	CHECK(agents->get_agent_field_id(b) == 0); // The bad-field pair left it alone.
+
+	PackedVector3Array players;
+	players.push_back(start);
+	agents->set_player_positions(players);
+	agents->tick(0.25);
+	CHECK(agents->get_agent_position(a).x < start.x); // West.
+	CHECK(agents->get_agent_position(c).x < start.x); // West.
+	CHECK(agents->get_agent_position(b).x > start.x); // East.
+}
+
 TEST_CASE("[HordeSim][Agents][MultiField] 250-agent eight-domain handoff stays within the dev budget") {
 	Ref<HordeNavGrid> grid = make_grid(64, 64);
 	Ref<HordeFlowField> field = make_phase_a_field(grid, grid->cell_to_world(63, 63, 0));

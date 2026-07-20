@@ -28,7 +28,7 @@ class HordeFSMConfig : public Resource {
 
 public:
 	// Kept in lockstep with HordeAgents::State (checked in horde_agents.cpp).
-	static constexpr int STATE_COUNT = 11;
+	static constexpr int STATE_COUNT = 13;
 
 	// How an agent moves while in a state. Data-driven per (archetype, state) so
 	// e.g. the screamer's Advance patrols off the flow field (DES A4.1) while
@@ -63,10 +63,13 @@ public:
 	struct CombatRule {
 		float max_hp = 100.0f; // Spawn HP when spawn() is not given an override.
 		// A single hit at >= this fraction of max_hp staggers a survivor. 0.35
-		// encodes "not every hit staggers" (COMBAT_FEEL section 3): the rifle
-		// (55) and melee (100) stagger a 100 HP shambler, the pistol (34) not.
+		// encodes "not every hit staggers" (COMBAT_FEEL section 3): the bat (36)
+		// staggers a 100 HP shambler while the pistol body hit (34) does not.
 		float stagger_damage_frac = 0.35f;
 		int stagger_duration_ticks = 90; // ~0.7 s at 128 Hz (A3.6).
+		// A heavier surviving hit enters the authored knockdown/get-up ladder.
+		// Kept above stagger so pistol body < bat stagger < rifle knockdown.
+		float knockdown_damage_frac = 0.50f;
 		float knockback_distance_cap = 0.6f; // Blunt-knockback displacement ceiling (m).
 		int knockback_duration_ticks = 16; // Knockback decay window (~0.125 s at 128 Hz).
 	};
@@ -95,7 +98,7 @@ public:
 
 	void set_rule(int p_archetype, int p_state, float p_move_speed, float p_min_time, float p_max_time, float p_exit_range);
 	void set_movement_mode(int p_archetype, int p_state, MovementMode p_mode);
-	void set_combat_rule(int p_archetype, float p_max_hp, float p_stagger_damage_frac, int p_stagger_duration_ticks, float p_knockback_distance_cap, int p_knockback_duration_ticks);
+	void set_combat_rule(int p_archetype, float p_max_hp, float p_stagger_damage_frac, int p_stagger_duration_ticks, float p_knockdown_damage_frac, float p_knockback_distance_cap, int p_knockback_duration_ticks);
 
 	float get_move_speed(int p_archetype, int p_state) const;
 	float get_min_time(int p_archetype, int p_state) const;
@@ -106,6 +109,7 @@ public:
 	float get_max_hp(int p_archetype) const;
 	float get_stagger_damage_frac(int p_archetype) const;
 	int get_stagger_duration_ticks(int p_archetype) const;
+	float get_knockdown_damage_frac(int p_archetype) const;
 	float get_knockback_distance_cap(int p_archetype) const;
 	int get_knockback_duration_ticks(int p_archetype) const;
 

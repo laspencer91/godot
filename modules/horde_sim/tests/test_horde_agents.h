@@ -586,7 +586,7 @@ TEST_CASE("[HordeSim][Combat] Threshold hit staggers, halts, then resumes the pr
 
 	// Config plumbing: a retuned row (frac 0.10, 30 ticks) staggers a 12-damage
 	// hit, and a re-stagger mid-window refreshes it but still resumes CHASE.
-	cfg->set_combat_rule(0, 100.0f, 0.10f, 30, 0.6f, 16);
+	cfg->set_combat_rule(0, 100.0f, 0.10f, 30, 0.50f, 0.6f, 16);
 	CHECK(a->apply_damage(id, 12.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_STAGGER);
 	for (int t = 0; t < 10; t++) {
 		a->tick(1.0 / 128.0);
@@ -598,6 +598,51 @@ TEST_CASE("[HordeSim][Combat] Threshold hit staggers, halts, then resumes the pr
 	CHECK(a->get_agent_state(id) == HordeAgents::STATE_STAGGER);
 	a->tick(1.0 / 128.0);
 	CHECK(a->get_agent_state(id) == HordeAgents::STATE_CHASE); // Original prior state, not STAGGER.
+}
+
+TEST_CASE("[HordeSim][Combat] Heavy surviving hit enters timed knockdown and get-up states") {
+	Ref<HordeFSMConfig> cfg;
+	cfg.instantiate();
+	cfg->load_defaults();
+	CHECK(cfg->get_knockdown_damage_frac(0) == doctest::Approx(0.50f));
+
+	Ref<HordeAgents> a = make_agents(8);
+	a->set_fsm_config(cfg);
+	const int id = a->spawn(0, Vector3(), HordeAgents::STATE_ATTACK_PLAYER, 100.0f);
+	PackedVector3Array players;
+	players.push_back(Vector3());
+	a->set_player_positions(players); // Keep the timer test at Hot-tier cadence.
+
+	CHECK(a->apply_damage(id, 55.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_KNOCKDOWN);
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_KNOCKDOWN);
+	for (int t = 0; t < 10; t++) {
+		a->tick(0.1);
+	}
+	// Small follow-up damage while down neither pops to STAGGER nor restarts the fall timer.
+	CHECK(a->apply_damage(id, 5.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_KNOCKDOWN);
+	for (int t = 0; t < 7; t++) {
+		a->tick(0.1);
+	}
+	CHECK(a->query_transitions().is_empty());
+	a->tick(0.1);
+	PackedInt32Array down_exit = a->query_transitions();
+	REQUIRE(down_exit.size() == 4);
+	CHECK(down_exit[2] == HordeAgents::STATE_KNOCKDOWN);
+	CHECK(down_exit[3] == HordeAgents::REASON_TIMER);
+	CHECK(a->apply_transition(id, HordeAgents::STATE_GET_UP));
+	CHECK(a->apply_damage(id, 35.0f, Vector3(0, 0, -1), 0) == HordeAgents::STATE_KNOCKDOWN);
+	CHECK(a->get_agent_state(id) == HordeAgents::STATE_KNOCKDOWN); // Qualifying rise interrupt.
+	CHECK(a->apply_transition(id, HordeAgents::STATE_GET_UP));
+
+	for (int t = 0; t < 15; t++) {
+		a->tick(0.1);
+	}
+	CHECK(a->query_transitions().is_empty());
+	a->tick(0.1);
+	PackedInt32Array rise_exit = a->query_transitions();
+	REQUIRE(rise_exit.size() == 4);
+	CHECK(rise_exit[2] == HordeAgents::STATE_GET_UP);
+	CHECK(rise_exit[3] == HordeAgents::REASON_TIMER);
 }
 
 TEST_CASE("[HordeSim][Combat] Per-hit stagger duration overrides the window but not the damage gate") {
@@ -634,8 +679,8 @@ TEST_CASE("[HordeSim][Combat] Lethal damage emits the death quad and carries the
 	a->set_fsm_config(cfg);
 	const int id = a->spawn(0, Vector3(5, 0, 0), HordeAgents::STATE_CHASE);
 
-	// First hit staggers (55 >= 35); the second kills through the stagger.
-	CHECK(a->apply_damage(id, 55.0f, Vector3(1, 0, 0), 7) == HordeAgents::STATE_STAGGER);
+	// First hit knocks down (55 >= 50); the second kills through the knockdown.
+	CHECK(a->apply_damage(id, 55.0f, Vector3(1, 0, 0), 7) == HordeAgents::STATE_KNOCKDOWN);
 	CHECK(a->apply_damage(id, 60.0f, Vector3(0.6f, 0.2f, 0.3f), 2) == HordeAgents::STATE_DEAD);
 	CHECK(a->get_agent_state(id) == HordeAgents::STATE_DEAD);
 	CHECK(a->get_agent_hp(id) == 0.0f); // Clamped, never negative.
@@ -1225,6 +1270,130 @@ TEST_CASE("[HordeSim][Combat] 250-agent overlap stays within the per-swing budge
 	// Dictionaries. This deliberately generous dev-build ceiling is tightened
 	// only from measured headroom, not release-build intuition.
 	CHECK(id_per_call < 500.0);
+}
+
+// ---------------------------------------------------------------------------
+// Per-agent speed jitter (PLAN_horde_two_field_nav N2): spawn-fixed locomotion
+// identity; jitter 0 is byte-identical to today; deterministic across sims.
+// ---------------------------------------------------------------------------
+TEST_CASE("[HordeSim][Agents] Speed jitter 0 leaves every scale exactly 1.0") {
+	Ref<HordeAgents> a = make_agents(64);
+	CHECK(a->has_method(StringName("set_speed_jitter")));
+	CHECK(a->has_method(StringName("get_agent_speed_scale")));
+	CHECK(a->get_speed_jitter() == 0.0f); // Default.
+
+	Vector<int> ids;
+	for (int i = 0; i < 32; i++) {
+		ids.push_back(a->spawn(i & 1, Vector3(0.5f * i, 0, 0), HordeAgents::STATE_ADVANCE));
+	}
+	for (int i = 0; i < ids.size(); i++) {
+		// Exact 1.0, not approximate: this is the byte-identical guarantee.
+		CHECK(a->get_agent_speed_scale(ids[i]) == 1.0f);
+	}
+
+	// Setting jitter back to 0 after it was nonzero must restore exact 1.0.
+	a->set_speed_jitter(0.2f);
+	a->set_speed_jitter(0.0f);
+	for (int i = 0; i < ids.size(); i++) {
+		CHECK(a->get_agent_speed_scale(ids[i]) == 1.0f);
+	}
+}
+
+TEST_CASE("[HordeSim][Agents] Speed jitter rolls in range, varies, and is deterministic across sims") {
+	auto build = [](float p_jitter) {
+		Ref<HordeAgents> a = make_agents(128);
+		a->set_speed_jitter(p_jitter);
+		for (int i = 0; i < 64; i++) {
+			a->spawn(i & 1, Vector3(0.5f * i, 0, 0), HordeAgents::STATE_ADVANCE);
+		}
+		return a;
+	};
+
+	Ref<HordeAgents> a = build(0.2f);
+	Ref<HordeAgents> b = build(0.2f);
+	PackedInt32Array ids = a->get_active_ids();
+	REQUIRE(ids.size() == 64);
+
+	bool all_equal = true;
+	const float first = a->get_agent_speed_scale(ids[0]);
+	for (int i = 0; i < ids.size(); i++) {
+		const float sa = a->get_agent_speed_scale(ids[i]);
+		const float sb = b->get_agent_speed_scale(ids[i]);
+		// In [1 - jitter, 1 + jitter].
+		CHECK(sa >= 0.8f - 1e-6f);
+		CHECK(sa <= 1.2f + 1e-6f);
+		// Two identically-seeded sims roll bit-identical scales.
+		CHECK(sa == sb);
+		if (sa != first) {
+			all_equal = false;
+		}
+	}
+	CHECK_FALSE(all_equal); // The jitter actually varies agents apart.
+}
+
+TEST_CASE("[HordeSim][Agents] Speed jitter re-rolls a recycled slot via the epoch bump") {
+	Ref<HordeAgents> a = make_agents(4);
+	a->set_speed_jitter(0.3f);
+	// Fill every slot, record scales, then despawn and respawn one slot: the
+	// epoch bump must change that slot's rolled scale (with overwhelming odds),
+	// proving recycle re-rolls the identity for free.
+	int first_id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_ADVANCE);
+	const float first_scale = a->get_agent_speed_scale(first_id);
+	CHECK(a->despawn(first_id));
+	int reused_id = a->spawn(0, Vector3(0, 0, 0), HordeAgents::STATE_ADVANCE);
+	CHECK((reused_id & HordeAgents::ID_SLOT_MASK) == (first_id & HordeAgents::ID_SLOT_MASK)); // Same slot.
+	CHECK(reused_id != first_id); // Epoch flipped.
+	// Different epoch feeds the hash -> a different (still in-range) scale.
+	const float reused_scale = a->get_agent_speed_scale(reused_id);
+	CHECK(reused_scale >= 0.7f - 1e-6f);
+	CHECK(reused_scale <= 1.3f + 1e-6f);
+	CHECK(reused_scale != first_scale);
+}
+
+TEST_CASE("[HordeSim][Agents] Jitter makes a fast agent outrun a slow one on the same field") {
+	// Two agents, same flow field and start row, different rolled speeds -> the
+	// faster one leads. Proves the scale reaches locomotion, not just the getter.
+	Ref<HordeNavGrid> grid = make_grid(64, 8);
+	const Vector3 goal = grid->cell_to_world(60, 3, 0);
+	Ref<HordeFlowField> field;
+	field.instantiate();
+	field->set_grid(grid);
+	const Vector3i g = grid->world_to_cell(goal);
+	field->add_goal(g.x, g.y, g.z);
+	field->recompute_sync();
+
+	Ref<HordeAgents> a = make_agents(256);
+	a->set_speed_jitter(0.3f);
+	a->set_field(0, field);
+	// Scan slots for one clearly-fast and one clearly-slow rolled scale.
+	int fast_slot = -1;
+	int slow_slot = -1;
+	for (int probe = 0; probe < 200; probe++) {
+		const Vector3 start = grid->cell_to_world(2, 3, 0);
+		const int id = a->spawn(0, start, HordeAgents::STATE_ADVANCE);
+		const float s = a->get_agent_speed_scale(id);
+		if (s > 1.15f && fast_slot < 0) {
+			fast_slot = id;
+		} else if (s < 0.85f && slow_slot < 0) {
+			slow_slot = id;
+		} else {
+			a->despawn(id);
+		}
+		if (fast_slot >= 0 && slow_slot >= 0) {
+			break;
+		}
+	}
+	REQUIRE(fast_slot >= 0);
+	REQUIRE(slow_slot >= 0);
+	PackedVector3Array players;
+	players.push_back(grid->cell_to_world(2, 3, 0)); // Keep both Hot every tick.
+	a->set_player_positions(players);
+	for (int t = 0; t < 40; t++) {
+		players.set(0, a->get_agent_position(fast_slot));
+		a->set_player_positions(players);
+		a->tick(1.0 / 32.0);
+	}
+	CHECK(a->get_agent_position(fast_slot).x > a->get_agent_position(slow_slot).x);
 }
 
 } // namespace TestHordeSim
