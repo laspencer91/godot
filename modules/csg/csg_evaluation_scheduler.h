@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  csg_debug_counters.h                                                  */
+/*  csg_evaluation_scheduler.h                                            */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,45 +30,61 @@
 
 #pragma once
 
-#ifdef DEV_ENABLED
+#include "csg_evaluation.h"
 
-#include "core/typedefs.h"
+#include "core/object/worker_thread_pool.h"
+#include "core/os/mutex.h"
 
-struct CSGDebugCounters {
-	uint64_t local_primitive_brush_packs = 0;
-	uint64_t leaf_manifold_repacks = 0;
-	uint64_t transformed_wrapper_constructions = 0;
-	uint64_t expression_node_reconstructions = 0;
-	uint64_t batch_boolean_calls = 0;
-	uint64_t operation_switch_flushes = 0;
-	uint64_t root_materializations = 0;
-	uint64_t non_root_materializations = 0;
-	uint64_t uv_finalizations = 0;
-	uint64_t tangent_finalizations = 0;
-	uint64_t collision_rebuilds = 0;
-	uint64_t scheduler_requests = 0;
-	uint64_t scheduler_completions = 0;
-	uint64_t scheduler_coalesces = 0;
-	uint64_t scheduler_stale_drops = 0;
+// Per-root owner for detached CSG evaluation. All methods except _run() are
+// called on the main thread; the worker receives only its Job value.
+class CSGEvaluationScheduler {
+	struct Job {
+		CSGEvaluationInputs inputs;
+		CSGEvaluationSnapshot result;
+		SafeFlag done;
 
-	static void reset();
-	static CSGDebugCounters get();
+		explicit Job(CSGEvaluationInputs &&p_inputs) :
+				inputs(std::move(p_inputs)) {}
+	};
 
-	static void count_local_primitive_brush_pack();
-	static void count_leaf_manifold_repack();
-	static void count_transformed_wrapper_construction();
-	static void count_expression_node_reconstruction();
-	static void count_batch_boolean_call();
-	static void count_operation_switch_flush();
-	static void count_root_materialization();
-	static void count_non_root_materialization();
-	static void count_uv_finalization();
-	static void count_tangent_finalization();
-	static void count_collision_rebuild();
-	static void count_scheduler_request();
-	static void count_scheduler_completion();
-	static void count_scheduler_coalesce();
-	static void count_scheduler_stale_drop();
+	uint64_t requested_generation = 0;
+	uint64_t published_generation = 0;
+	WorkerThreadPool::TaskID running_task = WorkerThreadPool::INVALID_TASK_ID;
+	Job *running_job = nullptr;
+
+	bool has_pending = false;
+	CSGEvaluationInputs pending_inputs;
+	CSGEvalQuality pending_quality = CSGEvalQuality::INTERACTIVE;
+
+	mutable Mutex mutex;
+
+	static SafeFlag force_synchronous;
+
+	static void _run(void *p_job);
+	static void _apply_quality(CSGEvaluationInputs &r_inputs, CSGEvalQuality p_quality);
+	void _launch_locked(CSGEvaluationInputs &&p_inputs);
+	void _advance_requested_generation_locked();
+
+public:
+	void request(CSGEvaluationInputs &&p_inputs, CSGEvalQuality p_quality);
+	bool try_take_completed(CSGEvaluationSnapshot &r_snapshot);
+	void launch_pending();
+	bool has_work() const;
+	void cancel_and_flush();
+
+	// A synchronous update must finish any worker first, then advances the
+	// request epoch so its completed snapshot cannot overwrite the sync result.
+	void prepare_for_synchronous_evaluation();
+	void invalidate_requests();
+
+	uint64_t get_requested_generation() const;
+	uint64_t get_published_generation() const;
+	bool is_requested_generation(uint64_t p_generation) const;
+	void mark_published(uint64_t p_generation);
+	void mark_stale_drop();
+
+	static void set_force_synchronous(bool p_force);
+	static bool is_force_synchronous();
+
+	~CSGEvaluationScheduler();
 };
-
-#endif // DEV_ENABLED

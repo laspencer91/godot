@@ -638,6 +638,7 @@ CSGEvaluationSnapshot csg_build_snapshot(const CSGEvaluationInputs &p_inputs) {
 	if (p_inputs.settings.want_collision) {
 		csg_extract_collision_faces(snapshot.brush, snapshot.collision_faces);
 	}
+	snapshot.collision_built = p_inputs.settings.want_collision;
 
 	return snapshot;
 }

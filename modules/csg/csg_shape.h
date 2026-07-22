@@ -46,6 +46,12 @@ class NavigationMeshSourceGeometryData3D;
 struct CSGEvaluationInputs;
 struct CSGEvaluationSnapshot;
 struct CSGRenderSurface;
+class CSGEvaluationScheduler;
+
+enum class CSGEvalQuality {
+	INTERACTIVE,
+	FINAL,
+};
 
 using CSGOriginToken = uint32_t;
 
@@ -89,6 +95,10 @@ private:
 	uint32_t surface_schema_generation = 1;
 	uint32_t cached_surface_schema_size = UINT32_MAX;
 	uint64_t result_generation = 0;
+	CSGEvaluationScheduler *evaluation_scheduler = nullptr;
+	bool scheduler_poll_queued = false;
+	uint32_t root_update_deferred_count = 0;
+	uint32_t async_suppressed_deferred_count = 0;
 
 	CSGBrush *brush = nullptr;
 
@@ -125,6 +135,7 @@ private:
 #endif // PHYSICS_3D_DISABLED
 
 	void _queue_root_update(bool p_force = false);
+	void _update_shape_deferred();
 	void _invalidate_subtree_and_ancestors();
 	void _invalidate_materialization_and_ancestors();
 	void _make_transform_dirty();
@@ -136,6 +147,8 @@ private:
 	void _gather_manifold_surface_records(HashMap<CSGOriginToken, Ref<Material>> &r_mesh_materials, HashMap<CSGOriginToken, CSGSurfaceKey> &r_surface_keys);
 	CSGEvaluationInputs _gather_evaluation_inputs(bool p_want_render, bool p_want_collision);
 	void _publish_snapshot(CSGEvaluationSnapshot &p_snapshot);
+	void _queue_scheduler_poll(bool p_next_frame = false);
+	void _poll_scheduler();
 	void _update_cached_aabb_from_manifold();
 	void _update_child_manifold_aabbs();
 
@@ -152,13 +165,16 @@ protected:
 	static void _bind_methods();
 
 	friend class CSGCombiner3D;
-	CSGBrush *_get_brush();
+	CSGBrush *_get_brush(bool p_scheduler_prepared = false);
 
 	void _validate_property(PropertyInfo &p_property) const;
 
 public:
 	Array get_meshes() const;
 	void update_shape();
+	void request_async_evaluation(CSGEvalQuality p_quality);
+	void request_final_async_evaluation();
+	static void set_async_evaluation_force_synchronous(bool p_force);
 
 	void set_operation(Operation p_operation);
 	Operation get_operation() const;

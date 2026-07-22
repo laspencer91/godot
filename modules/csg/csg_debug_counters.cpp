@@ -48,6 +48,10 @@ struct CSGDebugCounterStorage {
 	SafeNumeric<uint64_t> uv_finalizations;
 	SafeNumeric<uint64_t> tangent_finalizations;
 	SafeNumeric<uint64_t> collision_rebuilds;
+	SafeNumeric<uint64_t> scheduler_requests;
+	SafeNumeric<uint64_t> scheduler_completions;
+	SafeNumeric<uint64_t> scheduler_coalesces;
+	SafeNumeric<uint64_t> scheduler_stale_drops;
 };
 
 CSGDebugCounterStorage counters;
@@ -66,6 +70,10 @@ void CSGDebugCounters::reset() {
 	counters.uv_finalizations.set(0);
 	counters.tangent_finalizations.set(0);
 	counters.collision_rebuilds.set(0);
+	counters.scheduler_requests.set(0);
+	counters.scheduler_completions.set(0);
+	counters.scheduler_coalesces.set(0);
+	counters.scheduler_stale_drops.set(0);
 }
 
 CSGDebugCounters CSGDebugCounters::get() {
@@ -81,6 +89,10 @@ CSGDebugCounters CSGDebugCounters::get() {
 	result.uv_finalizations = counters.uv_finalizations.get();
 	result.tangent_finalizations = counters.tangent_finalizations.get();
 	result.collision_rebuilds = counters.collision_rebuilds.get();
+	result.scheduler_requests = counters.scheduler_requests.get();
+	result.scheduler_completions = counters.scheduler_completions.get();
+	result.scheduler_coalesces = counters.scheduler_coalesces.get();
+	result.scheduler_stale_drops = counters.scheduler_stale_drops.get();
 	return result;
 }
 
@@ -126,6 +138,22 @@ void CSGDebugCounters::count_tangent_finalization() {
 
 void CSGDebugCounters::count_collision_rebuild() {
 	counters.collision_rebuilds.increment();
+}
+
+void CSGDebugCounters::count_scheduler_request() {
+	counters.scheduler_requests.increment();
+}
+
+void CSGDebugCounters::count_scheduler_completion() {
+	counters.scheduler_completions.increment();
+}
+
+void CSGDebugCounters::count_scheduler_coalesce() {
+	counters.scheduler_coalesces.increment();
+}
+
+void CSGDebugCounters::count_scheduler_stale_drop() {
+	counters.scheduler_stale_drops.increment();
 }
 
 #endif // DEV_ENABLED

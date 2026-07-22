@@ -35,7 +35,13 @@
 #include "core/object/class_db.h"
 
 #ifdef TOOLS_ENABLED
+#include "editor/csg_edit_domain.h"
 #include "editor/csg_gizmos.h"
+#include "editor/gui/editor_edit_domain.h"
+#endif
+
+#ifdef TOOLS_ENABLED
+static CSGEditDomainProvider *csg_edit_domain_provider = nullptr;
 #endif
 
 void initialize_csg_module(ModuleInitializationLevel p_level) {
@@ -56,11 +62,32 @@ void initialize_csg_module(ModuleInitializationLevel p_level) {
 #ifdef TOOLS_ENABLED
 	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
 		EditorPlugins::add_by_type<EditorPluginCSG>();
+		EditorEditDomainRegistry *registry = EditorEditDomainRegistry::get_singleton();
+		ERR_FAIL_NULL(registry);
+		ERR_FAIL_COND(csg_edit_domain_provider != nullptr);
+		csg_edit_domain_provider = memnew(CSGEditDomainProvider);
+		if (!registry->register_provider(csg_edit_domain_provider)) {
+			memdelete(csg_edit_domain_provider);
+			csg_edit_domain_provider = nullptr;
+			ERR_FAIL_MSG("Failed to register the CSG edit domain provider.");
+		}
 	}
 #endif
 }
 
 void uninitialize_csg_module(ModuleInitializationLevel p_level) {
+#ifdef TOOLS_ENABLED
+	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
+		if (csg_edit_domain_provider) {
+			if (EditorEditDomainRegistry *registry = EditorEditDomainRegistry::get_singleton()) {
+				registry->unregister_provider(csg_edit_domain_provider->get_domain_id(), csg_edit_domain_provider);
+			}
+			memdelete(csg_edit_domain_provider);
+			csg_edit_domain_provider = nullptr;
+		}
+		return;
+	}
+#endif
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}

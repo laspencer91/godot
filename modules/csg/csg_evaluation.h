@@ -111,6 +111,7 @@ struct CSGEvaluationSnapshot {
 	Vector<Vector3> collision_faces;
 	bool built_render = false;
 	bool built_tangents = false;
+	bool collision_built = false;
 
 	ObjectID root_id;
 	uint32_t schema_generation = 0;
@@ -141,6 +142,7 @@ struct CSGEvaluationSnapshot {
 		collision_faces = std::move(p_other.collision_faces);
 		built_render = p_other.built_render;
 		built_tangents = p_other.built_tangents;
+		collision_built = p_other.collision_built;
 		root_id = p_other.root_id;
 		schema_generation = p_other.schema_generation;
 		request_generation = p_other.request_generation;

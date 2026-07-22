@@ -31,6 +31,7 @@
 #include "csg_shape.h"
 
 #include "csg_evaluation.h"
+#include "csg_evaluation_scheduler.h"
 #include "csg_manifold_cache.h"
 
 #include "core/config/engine.h"
@@ -323,11 +324,34 @@ void CSGShape3D::_queue_root_update(bool p_force) {
 	while (root->parent_shape) {
 		root = root->parent_shape;
 	}
+	if (root->evaluation_scheduler) {
+		// Invalidate at mutation time, before a next-frame poll can publish a
+		// snapshot that predates this model change. Because that async result can
+		// no longer publish, drop any suppression it was holding over a queued
+		// synchronous update so this edit is still materialized.
+		root->evaluation_scheduler->invalidate_requests();
+		root->async_suppressed_deferred_count = 0;
+	}
 
 	if (p_force || !root->dirty) {
-		callable_mp(root, &CSGShape3D::update_shape).call_deferred();
+		root->root_update_deferred_count++;
+		callable_mp(root, &CSGShape3D::_update_shape_deferred).call_deferred();
 	}
 	root->dirty = true;
+}
+
+void CSGShape3D::_update_shape_deferred() {
+	if (root_update_deferred_count > 0) {
+		root_update_deferred_count--;
+	}
+	if (async_suppressed_deferred_count > 0) {
+		async_suppressed_deferred_count--;
+		// The async snapshot still owns publication, but allow a later model edit
+		// to enqueue a new synchronous update while that worker is running.
+		dirty = false;
+		return;
+	}
+	update_shape();
 }
 
 void CSGShape3D::_invalidate_subtree_and_ancestors() {
@@ -582,7 +606,10 @@ void CSGShape3D::_update_child_manifold_aabbs() {
 	}
 }
 
-CSGBrush *CSGShape3D::_get_brush() {
+CSGBrush *CSGShape3D::_get_brush(bool p_scheduler_prepared) {
+	if (!p_scheduler_prepared && is_root_shape() && evaluation_scheduler && (manifold_cache->materialization_dirty || !brush)) {
+		evaluation_scheduler->prepare_for_synchronous_evaluation();
+	}
 	if (!manifold_cache->materialization_dirty && brush) {
 		dirty = false;
 		return brush;
@@ -635,8 +662,11 @@ void CSGShape3D::update_shape() {
 	if (!is_root_shape()) {
 		return;
 	}
+	if (evaluation_scheduler) {
+		evaluation_scheduler->prepare_for_synchronous_evaluation();
+	}
 
-	CSGBrush *n = _get_brush();
+	CSGBrush *n = _get_brush(true);
 	ERR_FAIL_NULL_MSG(n, "Cannot get CSGBrush.");
 
 	CSGEvaluationSettings settings;
@@ -661,7 +691,80 @@ void CSGShape3D::update_shape() {
 		csg_extract_collision_faces(n, snapshot.collision_faces);
 	}
 #endif // PHYSICS_3D_DISABLED
+	snapshot.collision_built = settings.want_collision;
 	_publish_snapshot(snapshot);
+}
+
+void CSGShape3D::request_async_evaluation(CSGEvalQuality p_quality) {
+	ERR_FAIL_COND_MSG(!is_root_shape(), "Asynchronous CSG evaluation can only be requested on a root shape.");
+
+	if (!Engine::get_singleton()->is_editor_hint() && !CSGEvaluationScheduler::is_force_synchronous()) {
+		update_shape();
+		return;
+	}
+
+	bool want_collision = false;
+#ifndef PHYSICS_3D_DISABLED
+	want_collision = use_collision && root_collision_shape.is_valid();
+#endif // PHYSICS_3D_DISABLED
+	CSGEvaluationInputs inputs = _gather_evaluation_inputs(true, want_collision);
+	if (!evaluation_scheduler) {
+		evaluation_scheduler = memnew(CSGEvaluationScheduler);
+	}
+	evaluation_scheduler->request(std::move(inputs), p_quality);
+	async_suppressed_deferred_count = root_update_deferred_count;
+	_queue_scheduler_poll();
+}
+
+void CSGShape3D::request_final_async_evaluation() {
+	request_async_evaluation(CSGEvalQuality::FINAL);
+}
+
+void CSGShape3D::set_async_evaluation_force_synchronous(bool p_force) {
+	CSGEvaluationScheduler::set_force_synchronous(p_force);
+}
+
+void CSGShape3D::_queue_scheduler_poll(bool p_next_frame) {
+	if (scheduler_poll_queued) {
+		return;
+	}
+	scheduler_poll_queued = true;
+	if (p_next_frame) {
+		SceneTree *scene_tree = SceneTree::get_singleton();
+		if (scene_tree) {
+			scene_tree->connect(SNAME("process_frame"), callable_mp(this, &CSGShape3D::_poll_scheduler), CONNECT_ONE_SHOT);
+			return;
+		}
+	}
+	callable_mp(this, &CSGShape3D::_poll_scheduler).call_deferred();
+}
+
+void CSGShape3D::_poll_scheduler() {
+	scheduler_poll_queued = false;
+	if (!evaluation_scheduler) {
+		return;
+	}
+
+	CSGEvaluationSnapshot snapshot;
+	while (evaluation_scheduler->try_take_completed(snapshot)) {
+		const bool is_current = evaluation_scheduler->is_requested_generation(snapshot.request_generation) &&
+				snapshot.root_id == get_instance_id() && snapshot.schema_generation == surface_schema_generation;
+		if (is_current) {
+			evaluation_scheduler->mark_published(snapshot.request_generation);
+			_publish_snapshot(snapshot);
+		} else {
+			evaluation_scheduler->mark_stale_drop();
+		}
+		// Publishing refreshes child AABBs from copied Manifold handles. Only
+		// launch the next job after that main-thread evaluation has finished.
+		evaluation_scheduler->launch_pending();
+	}
+
+	if (evaluation_scheduler->has_work()) {
+		// A deferred call queued from inside MessageQueue::flush() is processed by
+		// that same flush. Rearm on the next frame to avoid a main-thread spin.
+		_queue_scheduler_poll(true);
+	}
 }
 
 void CSGShape3D::_publish_snapshot(CSGEvaluationSnapshot &p_snapshot) {
@@ -727,7 +830,7 @@ void CSGShape3D::_publish_snapshot(CSGEvaluationSnapshot &p_snapshot) {
 	}
 
 #ifndef PHYSICS_3D_DISABLED
-	if (use_collision && is_root_shape() && root_collision_shape.is_valid()) {
+	if (p_snapshot.collision_built && use_collision && is_root_shape() && root_collision_shape.is_valid()) {
 #ifdef DEV_ENABLED
 		CSGDebugCounters::count_collision_rebuild();
 #endif // DEV_ENABLED
@@ -1001,6 +1104,7 @@ void CSGShape3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_operation", "operation"), &CSGShape3D::set_operation);
 	ClassDB::bind_method(D_METHOD("get_operation"), &CSGShape3D::get_operation);
+	ClassDB::bind_method(D_METHOD("_request_final_async_evaluation"), &CSGShape3D::request_final_async_evaluation);
 
 #ifndef DISABLE_DEPRECATED
 	ClassDB::bind_method(D_METHOD("_update_shape"), &CSGShape3D::update_shape);
@@ -1073,6 +1177,11 @@ CSGShape3D::CSGShape3D() {
 }
 
 CSGShape3D::~CSGShape3D() {
+	if (evaluation_scheduler) {
+		evaluation_scheduler->cancel_and_flush();
+		memdelete(evaluation_scheduler);
+		evaluation_scheduler = nullptr;
+	}
 	if (brush) {
 		memdelete(brush);
 		brush = nullptr;

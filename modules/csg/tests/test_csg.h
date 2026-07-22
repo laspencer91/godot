@@ -35,6 +35,7 @@
 #include "../csg_debug_counters.h"
 #endif // DEV_ENABLED
 
+#include "core/object/message_queue.h"
 #include "core/templates/hash_set.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
@@ -75,6 +76,29 @@ static void _reset_csg_counters() {
 	CSGDebugCounters::reset();
 #endif // DEV_ENABLED
 }
+
+struct CSGSynchronousSchedulerScope {
+	CSGSynchronousSchedulerScope() {
+		CSGShape3D::set_async_evaluation_force_synchronous(true);
+	}
+
+	~CSGSynchronousSchedulerScope() {
+		CSGShape3D::set_async_evaluation_force_synchronous(false);
+	}
+};
+
+#ifndef PHYSICS_3D_DISABLED
+static CSGBox3D *_make_collision_box_root() {
+	CSGBox3D *root = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->set_use_collision(true);
+	root->update_shape();
+	// Drain the output update queued by set_use_collision() before counters are
+	// reset for scheduler assertions.
+	MessageQueue::get_singleton()->flush();
+	return root;
+}
+#endif // PHYSICS_3D_DISABLED
 
 static Ref<ArrayMesh> _make_two_surface_box_mesh() {
 	Ref<BoxMesh> box;
@@ -787,6 +811,201 @@ TEST_CASE("[SceneTree][CSG] Phase 2 provenance material resolution avoids boolea
 #endif // DEV_ENABLED
 
 	root->queue_free();
+}
+
+#ifndef PHYSICS_3D_DISABLED
+TEST_CASE("[SceneTree][CSG] Phase 4 scheduler coalesces with final quality") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = _make_collision_box_root();
+	const uint64_t generation_before = root->get_result_generation();
+
+	_reset_csg_counters();
+	root->request_async_evaluation(CSGEvalQuality::INTERACTIVE);
+	root->request_async_evaluation(CSGEvalQuality::FINAL);
+#ifdef DEV_ENABLED
+	CSGDebugCounters before_landing = CSGDebugCounters::get();
+	CHECK_EQ(before_landing.scheduler_requests, 2);
+	CHECK_EQ(before_landing.scheduler_completions, 0);
+	CHECK_EQ(before_landing.scheduler_coalesces, 1);
+#endif // DEV_ENABLED
+
+	MessageQueue::get_singleton()->flush();
+	CHECK_EQ(root->get_result_generation(), generation_before + 1);
+	Ref<ConcavePolygonShape3D> collision = root->bake_collision_shape();
+	REQUIRE(collision.is_valid());
+	CHECK_EQ(collision->get_faces().size(), 36);
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_requests, 2);
+	CHECK_EQ(counters.scheduler_completions, 2);
+	CHECK_EQ(counters.scheduler_coalesces, 1);
+	CHECK_EQ(counters.scheduler_stale_drops, 1);
+	CHECK_EQ(counters.collision_rebuilds, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 4 interactive skips collision and tangents") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = _make_collision_box_root();
+	Ref<ConcavePolygonShape3D> collision_before = root->bake_collision_shape();
+	REQUIRE(collision_before.is_valid());
+	const Vector<Vector3> faces_before = collision_before->get_faces();
+
+	_reset_csg_counters();
+	root->request_async_evaluation(CSGEvalQuality::INTERACTIVE);
+	MessageQueue::get_singleton()->flush();
+	Ref<ConcavePolygonShape3D> collision_interactive = root->bake_collision_shape();
+	REQUIRE(collision_interactive.is_valid());
+	CHECK_EQ(collision_interactive->get_faces(), faces_before);
+#ifdef DEV_ENABLED
+	CSGDebugCounters interactive_counters = CSGDebugCounters::get();
+	CHECK_EQ(interactive_counters.collision_rebuilds, 0);
+	CHECK_EQ(interactive_counters.tangent_finalizations, 0);
+	CHECK_EQ(interactive_counters.scheduler_completions, 1);
+#endif // DEV_ENABLED
+
+	root->request_async_evaluation(CSGEvalQuality::FINAL);
+	MessageQueue::get_singleton()->flush();
+	Ref<ConcavePolygonShape3D> collision_final = root->bake_collision_shape();
+	REQUIRE(collision_final.is_valid());
+	CHECK_EQ(collision_final->get_faces(), faces_before);
+#ifdef DEV_ENABLED
+	CSGDebugCounters final_counters = CSGDebugCounters::get();
+	CHECK_EQ(final_counters.collision_rebuilds, 1);
+	CHECK_EQ(final_counters.tangent_finalizations, 1);
+	CHECK_EQ(final_counters.scheduler_completions, 2);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 4 scheduler publishes only the latest of 100 requests") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = _make_collision_box_root();
+	const uint64_t generation_before = root->get_result_generation();
+
+	_reset_csg_counters();
+	for (int request_i = 0; request_i < 100; request_i++) {
+		const CSGEvalQuality quality = request_i == 50 ? CSGEvalQuality::FINAL : CSGEvalQuality::INTERACTIVE;
+		root->request_async_evaluation(quality);
+	}
+	MessageQueue::get_singleton()->flush();
+	CHECK_EQ(root->get_result_generation(), generation_before + 1);
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_requests, 100);
+	CHECK_EQ(counters.scheduler_completions, 2);
+	CHECK_EQ(counters.scheduler_coalesces, 99);
+	CHECK_EQ(counters.scheduler_stale_drops, 1);
+	// The FINAL request cannot be downgraded by the 49 newer interactive ones.
+	CHECK_EQ(counters.collision_rebuilds, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+#endif // PHYSICS_3D_DISABLED
+
+TEST_CASE("[SceneTree][CSG] Phase 4 synchronous update rejects an in-flight snapshot") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+	MessageQueue::get_singleton()->flush();
+
+	_reset_csg_counters();
+	root->request_async_evaluation(CSGEvalQuality::FINAL);
+	root->set_size(Vector3(2, 3, 4));
+	root->update_shape();
+	const uint64_t synchronous_generation = root->get_result_generation();
+	MessageQueue::get_singleton()->flush();
+	CHECK_EQ(root->get_result_generation(), synchronous_generation);
+	CHECK(root->get_aabb().is_equal_approx(AABB(Vector3(-1, -1.5, -2), Vector3(2, 3, 4))));
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_requests, 1);
+	CHECK_EQ(counters.scheduler_completions, 1);
+	CHECK_EQ(counters.scheduler_stale_drops, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 4 async final supersedes its queued synchronous update") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+	MessageQueue::get_singleton()->flush();
+	const uint64_t generation_before = root->get_result_generation();
+
+	_reset_csg_counters();
+	root->set_size(Vector3(2, 3, 4));
+	root->request_final_async_evaluation();
+	MessageQueue::get_singleton()->flush();
+	CHECK_EQ(root->get_result_generation(), generation_before + 1);
+	CHECK(root->get_aabb().is_equal_approx(AABB(Vector3(-1, -1.5, -2), Vector3(2, 3, 4))));
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_requests, 1);
+	CHECK_EQ(counters.scheduler_completions, 1);
+	CHECK_EQ(counters.scheduler_stale_drops, 0);
+	CHECK_EQ(counters.root_materializations, 0);
+	CHECK_EQ(counters.uv_finalizations, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 4 model edit after async request is not wrongly suppressed") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+	MessageQueue::get_singleton()->flush();
+	// A prior async cycle creates the scheduler so later edits invalidate it.
+	root->request_async_evaluation(CSGEvalQuality::FINAL);
+	MessageQueue::get_singleton()->flush();
+
+	_reset_csg_counters();
+	// A queued (unflushed) synchronous update exists when the async request
+	// captures its suppression count.
+	root->set_size(Vector3(2, 3, 4));
+	root->request_final_async_evaluation();
+	// A second model edit invalidates the in-flight async; its queued synchronous
+	// update must still run so the newest size is not lost to stale geometry.
+	root->set_size(Vector3(5, 6, 7));
+	MessageQueue::get_singleton()->flush();
+	CHECK(root->get_aabb().is_equal_approx(AABB(Vector3(-2.5, -3, -3.5), Vector3(5, 6, 7))));
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_stale_drops, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 4 root deletion flushes queued evaluation") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = memnew(CSGBox3D);
+
+	_reset_csg_counters();
+	root->request_async_evaluation(CSGEvalQuality::FINAL);
+	memdelete(root);
+	MessageQueue::get_singleton()->flush();
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_requests, 1);
+	CHECK_EQ(counters.scheduler_completions, 0);
+	CHECK_EQ(counters.scheduler_stale_drops, 0);
+#endif // DEV_ENABLED
 }
 
 TEST_CASE("[SceneTree][CSG] CSGPolygon3D") {
