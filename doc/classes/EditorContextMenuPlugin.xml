@@ -5,7 +5,7 @@
 	</brief_description>
 	<description>
 		[EditorContextMenuPlugin] allows for the addition of custom options in the editor's context menu.
-		Currently, context menus are supported for three commonly used areas: the file system, scene tree, and editor script list panel.
+		Context menus are supported throughout the editor, including the file system, scene tree, script editor, scene tabs, inspector, and 2D and 3D viewports.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -23,7 +23,7 @@
 			<param index="1" name="callback" type="Callable" />
 			<param index="2" name="icon" type="Texture2D" default="null" />
 			<description>
-				Add custom option to the context menu of the plugin's specified slot. When the option is activated, [param callback] will be called. Callback should take single [Array] argument; array contents depend on context menu slot.
+				Add custom option to the context menu of the plugin's specified slot. When the option is activated, [param callback] will be called. The callback should take a single argument; its type and contents depend on the context menu slot.
 				[codeblock]
 				func _popup_menu(paths):
 					add_context_menu_item("File Custom options", handle, ICON)
@@ -70,11 +70,17 @@
 			<param index="0" name="shortcut" type="Shortcut" />
 			<param index="1" name="callback" type="Callable" />
 			<description>
-				Registers a shortcut associated with the plugin's context menu. This method should be called once (e.g. in plugin's [method Object._init]). [param callback] will be called when user presses the specified [param shortcut] while the menu's context is in effect (e.g. FileSystem dock is focused). Callback should take single [Array] argument; array contents depend on context menu slot.
+				Registers a shortcut associated with the plugin's context menu. This method should be called once (e.g. in plugin's [method Object._init]). [param callback] will be called when user presses the specified [param shortcut] while the menu's context is in effect (e.g. FileSystem dock is focused). The callback should take a single argument; its type and contents depend on the context menu slot.
 				[codeblock]
 				func _init():
 					add_menu_shortcut(SHORTCUT, handle)
 				[/codeblock]
+			</description>
+		</method>
+		<method name="get_context" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns additional data for the context menu currently being built. Most slots return an empty dictionary. For [constant CONTEXT_SLOT_3D_EDITOR], this contains the clicked viewport, camera, scene root, nodes under the cursor, ray information, and the resolved world-space placement position. The snapshot remains available while handling a submenu created for that popup.
 			</description>
 		</method>
 	</methods>
@@ -119,6 +125,21 @@
 		</constant>
 		<constant name="CONTEXT_SLOT_INSPECTOR_PROPERTY" value="7" enum="ContextMenuSlot">
 			Context menu of the inspectors right-click menu. [method _popup_menu] will be called with an array of two items: The first will be the object's ID, the second will be the property name. An object can be retrieved from its ID via [method @GlobalScope.instance_from_id] after converting it to an int. The option callback will receive the EditorProperty directly.
+		</constant>
+		<constant name="CONTEXT_SLOT_3D_EDITOR" value="8" enum="ContextMenuSlot">
+			Context menu opened by an unmodified right-click in the 3D editor viewport. The clicked document is activated before the menu is built. [kbd]Ctrl + Right Mouse Button[/kbd] controls freelook, while [kbd]Alt + Right Mouse Button[/kbd] keeps the overlapping-node selection menu.
+			[method _popup_menu] receives paths to all editable [Node3D] nodes under the cursor. [method get_context] provides the click snapshot. A normal option callback receives the same [Dictionary].
+			The dictionary contains [code]viewport[/code], [code]viewport_index[/code], [code]camera[/code], [code]scene_root[/code], [code]document_path[/code], [code]document_history_id[/code], [code]nodes[/code], [code]selected_nodes[/code], [code]viewport_position[/code], [code]screen_position[/code], [code]ray_origin[/code], [code]ray_direction[/code], [code]placement_position[/code], [code]placement_source[/code], and [code]physics_hit[/code]. When [code]physics_hit[/code] is [code]true[/code], it also contains [code]hit_position[/code], [code]hit_normal[/code], [code]collider[/code], [code]collider_id[/code], [code]collider_rid[/code], [code]shape[/code], and [code]face_index[/code].
+			[code]placement_source[/code] is [code]&amp;"physics"[/code], [code]&amp;"ground_plane"[/code], or [code]&amp;"view_plane"[/code].
+			[codeblock]
+			func _popup_menu(paths):
+			    var context := get_context()
+			    if context.scene_root:
+			        add_context_menu_item("Print Click Position", _print_click_position)
+
+			func _print_click_position(context):
+			    print(context.placement_position)
+			[/codeblock]
 		</constant>
 	</constants>
 </class>

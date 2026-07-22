@@ -2824,9 +2824,9 @@ Node3DEditorView::~Node3DEditorView() {
 void Node3DEditor::_build_view_viewports(Node3DEditorView *p_view) {
 	Node3DEditorViewportContainer *vp_base = p_view->get_viewport_base();
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
-		Node3DEditorViewport *vp = memnew(Node3DEditorViewport(this, i));
+		Node3DEditorViewport *vp = memnew(Node3DEditorViewport(this, p_view, i));
 		vp->connect("toggle_maximize_view", callable_mp(this, &Node3DEditor::_toggle_maximize_view));
-		vp->connect("clicked", callable_mp(this, &Node3DEditor::_viewport_clicked).bind(i));
+		vp->connect("clicked", callable_mp(this, &Node3DEditor::_viewport_clicked).bind(p_view, i));
 		vp->assign_pending_data_pointers(preview_node, &preview_bounds, accept);
 		vp->set_h_size_flags(SIZE_EXPAND_FILL);
 		vp->set_v_size_flags(SIZE_EXPAND_FILL);
@@ -3060,8 +3060,9 @@ void Node3DEditor::_toggle_maximize_view(Object *p_viewport) {
 	}
 }
 
-void Node3DEditor::_viewport_clicked(int p_viewport_idx) {
-	main_view->set_last_used_viewport_index(p_viewport_idx);
+void Node3DEditor::_viewport_clicked(Node3DEditorView *p_view, int p_viewport_idx) {
+	ERR_FAIL_NULL(p_view);
+	p_view->set_last_used_viewport_index(p_viewport_idx);
 }
 
 void Node3DEditor::_node_added(Node *p_node) {

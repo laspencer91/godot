@@ -47,6 +47,7 @@ class ImmediateMesh;
 class MenuButton;
 class MeshInstance3D;
 class Node3DEditor;
+class Node3DEditorView;
 class Node3DEditorViewport;
 class OptionButton;
 class PanelContainer;
@@ -382,6 +383,8 @@ private:
 	void _select_clicked(bool p_allow_locked);
 	ObjectID _select_ray(const Point2 &p_pos) const;
 	void _find_items_at_pos(const Point2 &p_pos, Vector<_RayResult> &r_results, bool p_include_locked);
+	Node *_get_edited_scene_root() const;
+	void _find_editable_items_at_pos(const Point2 &p_pos, Vector<Node3D *> &r_results, bool p_include_locked);
 
 	float _min_screen_dist_to_aabb(const AABB &p_aabb, const Transform3D &p_transform, const Point2 &p_cursor) const;
 	bool _find_closest_vertex_on_node(const Point2 &p_screen_pos, Node3D *p_node, float &r_closest_screen_dist, Vector3 &r_vertex_world) const;
@@ -424,6 +427,21 @@ private:
 	bool movement_threshold_passed = false;
 
 	PopupMenu *selection_menu = nullptr;
+	PopupMenu *context_menu = nullptr;
+	Dictionary context_menu_context;
+
+	enum ContextMenuOption {
+		CONTEXT_MENU_PLAY_SCENE = 1,
+		CONTEXT_MENU_STOP_SCENE,
+		CONTEXT_MENU_CREATE_CSG_BOX,
+	};
+
+	Dictionary _build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths);
+	void _popup_context_menu(const Point2 &p_position);
+	void _context_menu_hide();
+	void _context_menu_option(int p_option);
+	void _context_create_option(int p_option);
+	void _create_csg_box_at_context();
 
 	enum TransformMode {
 		TRANSFORM_NONE,
@@ -536,6 +554,7 @@ private:
 	void input(const Ref<InputEvent> &p_event) override;
 	void _sinput(const Ref<InputEvent> &p_event);
 	Node3DEditor *spatial_editor = nullptr;
+	Node3DEditorView *editor_view = nullptr;
 
 	Camera3D *previewing = nullptr;
 	Camera3D *preview = nullptr;
@@ -651,7 +670,7 @@ public:
 	Control *get_surface() { return surface; }
 	Ref<View3DController> get_controller() { return view_3d_controller; }
 
-	Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p_index);
+	Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3DEditorView *p_editor_view, int p_index);
 	~Node3DEditorViewport();
 };
 

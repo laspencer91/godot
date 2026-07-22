@@ -55,11 +55,13 @@ public:
 		CONTEXT_SLOT_SCENE_TABS,
 		CONTEXT_SLOT_2D_EDITOR,
 		CONTEXT_SLOT_INSPECTOR_PROPERTY,
+		CONTEXT_SLOT_3D_EDITOR,
 	};
 	static constexpr int BASE_ID = 2000;
 
 private:
 	int slot = -1;
+	Dictionary context;
 
 public:
 	struct ContextMenuItem {
@@ -80,6 +82,7 @@ protected:
 
 public:
 	virtual void get_options(const Vector<String> &p_paths);
+	Dictionary get_context() const { return context.duplicate(true); }
 
 	void add_menu_shortcut(const Ref<Shortcut> &p_shortcut, const Callable &p_callable);
 	void add_context_menu_item(const String &p_name, const Callable &p_callable, const Ref<Texture2D> &p_texture);
@@ -104,7 +107,7 @@ public:
 	void remove_plugin(const Ref<EditorContextMenuPlugin> &p_plugin);
 
 	bool has_plugins_for_slot(ContextMenuSlot p_slot);
-	void add_options_from_plugins(PopupMenu *p_popup, ContextMenuSlot p_slot, const Vector<String> &p_paths, int p_id_offset = 0);
+	void add_options_from_plugins(PopupMenu *p_popup, ContextMenuSlot p_slot, const Vector<String> &p_paths, int p_id_offset = 0, const Dictionary &p_context = Dictionary());
 	Callable match_custom_shortcut(ContextMenuSlot p_slot, const Ref<InputEvent> &p_event);
 	bool activate_custom_option(ContextMenuSlot p_slot, int p_option, const Variant &p_arg);
 

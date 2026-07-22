@@ -78,6 +78,7 @@ void EditorContextMenuPlugin::add_context_submenu_item(const String &p_name, Pop
 }
 
 void EditorContextMenuPlugin::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_context"), &EditorContextMenuPlugin::get_context);
 	ClassDB::bind_method(D_METHOD("add_menu_shortcut", "shortcut", "callback"), &EditorContextMenuPlugin::add_menu_shortcut);
 	ClassDB::bind_method(D_METHOD("add_context_menu_item", "name", "callback", "icon"), &EditorContextMenuPlugin::add_context_menu_item, DEFVAL(Ref<Texture2D>()));
 	ClassDB::bind_method(D_METHOD("add_context_menu_item_from_shortcut", "name", "shortcut", "icon"), &EditorContextMenuPlugin::add_context_menu_item_from_shortcut, DEFVAL(Ref<Texture2D>()));
@@ -93,6 +94,7 @@ void EditorContextMenuPlugin::_bind_methods() {
 	BIND_ENUM_CONSTANT(CONTEXT_SLOT_SCENE_TABS);
 	BIND_ENUM_CONSTANT(CONTEXT_SLOT_2D_EDITOR);
 	BIND_ENUM_CONSTANT(CONTEXT_SLOT_INSPECTOR_PROPERTY);
+	BIND_ENUM_CONSTANT(CONTEXT_SLOT_3D_EDITOR);
 }
 
 void EditorContextMenuPluginManager::add_plugin(EditorContextMenuPlugin::ContextMenuSlot p_slot, const Ref<EditorContextMenuPlugin> &p_plugin) {
@@ -119,7 +121,7 @@ bool EditorContextMenuPluginManager::has_plugins_for_slot(ContextMenuSlot p_slot
 	return false;
 }
 
-void EditorContextMenuPluginManager::add_options_from_plugins(PopupMenu *p_popup, ContextMenuSlot p_slot, const Vector<String> &p_paths, int p_id_offset) {
+void EditorContextMenuPluginManager::add_options_from_plugins(PopupMenu *p_popup, ContextMenuSlot p_slot, const Vector<String> &p_paths, int p_id_offset, const Dictionary &p_context) {
 	bool separator_added = false;
 	const int icon_size = p_popup->get_theme_constant(SNAME("class_icon_size"), EditorStringName(Editor));
 	int id = EditorContextMenuPlugin::BASE_ID + p_id_offset;
@@ -129,6 +131,7 @@ void EditorContextMenuPluginManager::add_options_from_plugins(PopupMenu *p_popup
 			continue;
 		}
 		plugin->context_menu_items.clear();
+		plugin->context = p_context;
 		plugin->get_options(p_paths);
 
 		HashMap<String, EditorContextMenuPlugin::ContextMenuItem> &items = plugin->context_menu_items;

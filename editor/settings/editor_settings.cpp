@@ -999,7 +999,7 @@ void EditorSettings::_load_defaults(Ref<ConfigFile> p_extra_config) {
 	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "editors/3d/freelook/freelook_sensitivity", 0.25, "0.01,2,0.001")
 	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "editors/3d/freelook/freelook_inertia", 0.0, "0,1,0.001")
 	EDITOR_SETTING_BASIC(Variant::FLOAT, PROPERTY_HINT_RANGE, "editors/3d/freelook/freelook_base_speed", 5.0, "0,10,0.01,or_greater")
-	EDITOR_SETTING_BASIC(Variant::INT, PROPERTY_HINT_ENUM, "editors/3d/freelook/freelook_activation_modifier", 0, "None,Shift,Alt,Meta,Ctrl")
+	EDITOR_SETTING_BASIC(Variant::INT, PROPERTY_HINT_ENUM, "editors/3d/freelook/freelook_activation_modifier", 4, "Ctrl:4,Shift:1,Alt:2,Meta:3")
 	_initial_set("editors/3d/freelook/freelook_invert_y_axis", false);
 	_initial_set("editors/3d/freelook/freelook_speed_zoom_link", false);
 
@@ -1451,6 +1451,11 @@ void EditorSettings::create() {
 #ifndef DISABLE_DEPRECATED
 		singleton->_handle_setting_compatibility();
 #endif
+		// Unmodified right-click is reserved for the 3D viewport context menu.
+		// Migrate profiles created before Ctrl became the default freelook modifier.
+		if (singleton->get_setting("editors/3d/freelook/freelook_activation_modifier").operator int() == 0) {
+			singleton->set_setting("editors/3d/freelook/freelook_activation_modifier", 4);
+		}
 
 		return;
 	}

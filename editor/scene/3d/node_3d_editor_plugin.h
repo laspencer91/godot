@@ -297,7 +297,7 @@ private:
 	void _finish_indicators();
 
 	void _toggle_maximize_view(Object *p_viewport);
-	void _viewport_clicked(int p_viewport_idx);
+	void _viewport_clicked(Node3DEditorView *p_view, int p_viewport_idx);
 
 	// Build this view's quad of viewports (wire signals, inject the ctor-scoped preview/accept
 	// pointers, register into the view). Shared by the ctor's main_view and create_secondary_debug_view.
@@ -666,6 +666,7 @@ public:
 	PhysicsDirectSpaceState3D *get_editor_space_state() const;
 	void bind_document(EditorDocument *p_document);
 	void set_active_world(const Ref<World3D> &p_world);
+	EditorDocument *get_document() const { return document; }
 
 	void init_decorations();
 	void finish_decorations();

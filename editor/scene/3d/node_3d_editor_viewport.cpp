@@ -45,11 +45,13 @@
 #include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/docks/scene_tree_dock.h"
+#include "editor/editor_document.h"
 #include "editor/editor_main_screen.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/gui/editor_workspace.h"
+#include "editor/inspector/editor_context_menu_plugin.h"
 #include "editor/plugins/editor_plugin_list.h"
 #include "editor/run/editor_run_bar.h"
 #include "editor/scene/3d/node_3d_editor_constants.h"
@@ -71,15 +73,16 @@
 #include "scene/gui/label.h"
 #include "scene/gui/option_button.h"
 #include "scene/gui/panel_container.h"
+#include "scene/gui/popup_menu.h"
 #include "scene/gui/rich_text_label.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/subviewport_container.h"
 #include "scene/main/scene_tree.h"
 #include "scene/resources/3d/world_3d.h"
 #include "scene/resources/gradient.h"
-#include "scene/resources/style_box_flat.h"
 #include "scene/resources/immediate_mesh.h"
 #include "scene/resources/packed_scene.h"
+#include "scene/resources/style_box_flat.h"
 #include "servers/physics_3d/physics_server_3d_types.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -1434,10 +1437,12 @@ void Node3DEditorViewport::_vertex_snap_update_source(const Point2 &p_screen_pos
 }
 
 void Node3DEditorViewport::_find_items_at_pos(const Point2 &p_pos, Vector<_RayResult> &r_results, bool p_include_locked_nodes) {
-	Vector3 ray = get_ray(p_pos);
-	Vector3 pos = get_ray_pos(p_pos);
+	Camera3D *input_camera = previewing ? previewing : camera;
+	Vector3 ray = input_camera->project_ray_normal(p_pos);
+	Vector3 pos = input_camera->project_ray_origin(p_pos);
+	Ref<World3D> world = editor_view ? editor_view->get_editor_world_3d() : viewport->find_world_3d();
 
-	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(pos, pos + ray * camera->get_far(), viewport->find_world_3d());
+	Vector<Node3D *> nodes_with_gizmos = Node3DEditor::get_singleton()->gizmo_bvh_ray_query(pos, pos + ray * input_camera->get_far(), world);
 
 	HashSet<Node3D *> found_nodes;
 
@@ -1465,7 +1470,7 @@ void Node3DEditorViewport::_find_items_at_pos(const Point2 &p_pos, Vector<_RayRe
 			Vector3 point;
 			Vector3 normal;
 
-			bool inters = seg->intersect_ray(camera, p_pos, point, normal);
+			bool inters = seg->intersect_ray(input_camera, p_pos, point, normal);
 
 			if (!inters) {
 				continue;
@@ -2225,43 +2230,59 @@ bool Node3DEditorViewport::_is_node_locked(const Node *p_node) const {
 	return p_node->get_meta("_edit_lock_", false);
 }
 
+Node *Node3DEditorViewport::_get_edited_scene_root() const {
+	if (editor_view && editor_view->get_document()) {
+		return editor_view->get_document()->get_root();
+	}
+	return get_tree()->get_edited_scene_root();
+}
+
 bool Node3DEditorViewport::_is_node_in_edited_scene(const Node3D *p_node) const {
 	// World scoping is done by the gizmo BVH query wrappers; this applies the active-scene
 	// rule, including to stale `clicked` nodes, which reach selection without a BVH query.
 	if (!p_node) {
 		return false;
 	}
-	Node *edited_scene = get_tree()->get_edited_scene_root();
+	Node *edited_scene = _get_edited_scene_root();
 	if (!edited_scene) {
 		return false;
 	}
 	return p_node == edited_scene || edited_scene->is_ancestor_of(p_node);
 }
 
-void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
+void Node3DEditorViewport::_find_editable_items_at_pos(const Point2 &p_pos, Vector<Node3D *> &r_results, bool p_include_locked) {
 	Vector<_RayResult> potential_selection_results;
-	_find_items_at_pos(b->get_position(), potential_selection_results, b->is_alt_pressed());
+	_find_items_at_pos(p_pos, potential_selection_results, p_include_locked);
 
-	Node *edited_scene = EditorNode::get_singleton()->get_edited_scene();
+	Node *edited_scene = _get_edited_scene_root();
+	if (!edited_scene) {
+		return;
+	}
 
 	// Filter to a list of nodes which include either the edited scene or nodes directly owned by the edited scene.
 	// If a node has an invalid owner, recursively check their parents until a valid node is found.
 	for (int i = 0; i < potential_selection_results.size(); i++) {
 		Node3D *node = potential_selection_results[i].item;
-		while (true) {
-			if (node == nullptr || node == edited_scene->get_parent()) {
-				break;
-			} else {
-				Node *node_owner = node->get_owner();
-				if (node == edited_scene || node_owner == edited_scene || (node_owner != nullptr && edited_scene->is_editable_instance(node_owner))) {
-					if (!selection_results.has(node)) {
-						selection_results.append(node);
-					}
-					break;
+		while (node) {
+			Node *node_owner = node->get_owner();
+			if (node == edited_scene || node_owner == edited_scene || (node_owner != nullptr && edited_scene->is_editable_instance(node_owner))) {
+				if (!r_results.has(node)) {
+					r_results.append(node);
 				}
+				break;
 			}
 			node = Object::cast_to<Node3D>(node->get_parent());
 		}
+	}
+}
+
+void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
+	selection_results.clear();
+	_find_editable_items_at_pos(b->get_position(), selection_results, b->is_alt_pressed());
+
+	Node *edited_scene = _get_edited_scene_root();
+	if (!edited_scene) {
+		return;
 	}
 
 	clicked_wants_append = b->is_shift_pressed();
@@ -2274,7 +2295,7 @@ void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
 			_select_clicked(b->is_alt_pressed());
 		}
 	} else if (!selection_results.is_empty()) {
-		NodePath root_path = get_tree()->get_edited_scene_root()->get_path();
+		NodePath root_path = edited_scene->get_path();
 		StringName root_name = root_path.get_name(root_path.get_name_count() - 1);
 		int icon_max_width = EditorNode::get_singleton()->get_editor_theme()->get_constant(SNAME("class_icon_size"), EditorStringName(Editor));
 
@@ -2289,7 +2310,7 @@ void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
 			if (_is_node_locked(spat)) {
 				locked = 1;
 			} else {
-				Node *ed_scene = EditorNode::get_singleton()->get_edited_scene();
+				Node *ed_scene = edited_scene;
 				Node *node = spat;
 
 				while (node && node != ed_scene->get_parent()) {
@@ -2318,6 +2339,245 @@ void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
 		selection_menu->set_position(get_screen_position() + b->get_position());
 		selection_menu->reset_size();
 		selection_menu->popup();
+	}
+}
+
+Dictionary Node3DEditorViewport::_build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths) {
+	static constexpr real_t MAX_GROUND_DISTANCE = 50.0;
+	static constexpr real_t FALLBACK_DISTANCE = 5.0;
+
+	Dictionary context;
+	Camera3D *input_camera = previewing ? previewing : camera;
+	Node *scene_root = _get_edited_scene_root();
+	Ref<World3D> world = editor_view ? editor_view->get_editor_world_3d() : viewport->find_world_3d();
+
+	context["viewport"] = viewport;
+	context["camera"] = input_camera;
+	context["scene_root"] = scene_root;
+	context["viewport_index"] = index;
+	context["viewport_position"] = p_position;
+	context["screen_position"] = surface->get_screen_transform().xform(p_position);
+
+	EditorDocument *document = editor_view ? editor_view->get_document() : nullptr;
+	if (!document) {
+		document = EditorNode::get_singleton()->get_editor_data().get_active_document();
+	}
+	if (document && document->get_root() == scene_root) {
+		context["document_path"] = document->get_path();
+		context["document_history_id"] = document->get_history_id();
+	}
+
+	TypedArray<Node3D> nodes;
+	TypedArray<Node3D> selected_nodes;
+	if (EditorContextMenuPluginManager::get_singleton()->has_plugins_for_slot(EditorContextMenuPlugin::CONTEXT_SLOT_3D_EDITOR)) {
+		Vector<Node3D *> nodes_under_cursor;
+		_find_editable_items_at_pos(p_position, nodes_under_cursor, true);
+		nodes.resize(nodes_under_cursor.size());
+		for (int i = 0; i < nodes_under_cursor.size(); i++) {
+			nodes[i] = nodes_under_cursor[i];
+			r_paths.push_back(String(nodes_under_cursor[i]->get_path()));
+		}
+
+		for (Node *selected_node : editor_selection->get_top_selected_node_list()) {
+			Node3D *selected_node_3d = Object::cast_to<Node3D>(selected_node);
+			if (_is_node_in_edited_scene(selected_node_3d)) {
+				selected_nodes.push_back(selected_node_3d);
+			}
+		}
+	}
+	context["nodes"] = nodes;
+	context["selected_nodes"] = selected_nodes;
+
+	const Vector3 ray_origin = input_camera->project_ray_origin(p_position);
+	const Vector3 ray_direction = input_camera->project_ray_normal(p_position);
+	context["ray_origin"] = ray_origin;
+	context["ray_direction"] = ray_direction;
+	context["physics_hit"] = false;
+
+	Vector3 placement_position;
+	StringName placement_source;
+	PhysicsDirectSpaceState3D *space_state = editor_view ? editor_view->get_editor_space_state() : (world.is_valid() ? world->get_direct_space_state() : nullptr);
+	if (space_state) {
+		PS3DT::RayParameters ray_parameters;
+		ray_parameters.from = ray_origin;
+		ray_parameters.to = ray_origin + ray_direction * input_camera->get_far();
+
+		PS3DT::RayResult result;
+		if (space_state->intersect_ray(ray_parameters, result)) {
+			context["physics_hit"] = true;
+			context["hit_position"] = result.position;
+			context["hit_normal"] = result.normal;
+			context["collider"] = result.collider;
+			context["collider_id"] = uint64_t(result.collider_id);
+			context["collider_rid"] = result.rid;
+			context["shape"] = result.shape;
+			context["face_index"] = result.face_index;
+			placement_position = result.position;
+			placement_source = SNAME("physics");
+		}
+	}
+
+	if (placement_source.is_empty()) {
+		Vector3 intersection;
+		const bool is_orthogonal = input_camera->get_projection() == Camera3D::PROJECTION_ORTHOGONAL;
+		const Plane ground_plane(Vector3(0, 1, 0));
+		if (ground_plane.intersects_ray(ray_origin, ray_direction, &intersection) && (is_orthogonal || ray_origin.distance_to(intersection) <= MAX_GROUND_DISTANCE)) {
+			placement_position = intersection;
+			placement_source = SNAME("ground_plane");
+		} else {
+			const Plane view_plane(ray_direction, ray_origin + ray_direction * FALLBACK_DISTANCE);
+			if (!view_plane.intersects_ray(ray_origin, ray_direction, &placement_position)) {
+				placement_position = ray_origin + ray_direction * FALLBACK_DISTANCE;
+			}
+			placement_source = SNAME("view_plane");
+		}
+	}
+
+	context["placement_position"] = placement_position;
+	context["placement_source"] = placement_source;
+	return context;
+}
+
+void Node3DEditorViewport::_popup_context_menu(const Point2 &p_position) {
+	// Dictionary assignment shares storage, so clearing this also releases the previous
+	// snapshot held by context-menu plugins before a new one is assigned.
+	context_menu_context.clear();
+	Vector<String> paths;
+	context_menu_context = _build_context_menu_context(p_position, paths);
+
+	context_menu->clear();
+
+	if (_get_edited_scene_root() && ClassDB::class_exists(SNAME("CSGBox3D"))) {
+		PopupMenu *create_menu = memnew(PopupMenu);
+		create_menu->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditorViewport::_context_create_option));
+		create_menu->add_icon_item(get_editor_theme_icon(SNAME("CSGBox3D")), TTRC("CSG Box"), CONTEXT_MENU_CREATE_CSG_BOX);
+		context_menu->add_submenu_node_item(TTRC("Create"), create_menu);
+	}
+
+	EditorRunBar *run_bar = EditorRunBar::get_singleton();
+	if (run_bar) {
+		if (context_menu->get_item_count() > 0) {
+			context_menu->add_separator();
+		}
+		if (run_bar->is_playing()) {
+			context_menu->add_icon_item(get_editor_theme_icon(SNAME("Stop")), TTRC("Stop Running Scene"), CONTEXT_MENU_STOP_SCENE);
+		} else {
+			context_menu->add_icon_item(get_editor_theme_icon(SNAME("PlayScene")), TTRC("Play This Scene"), CONTEXT_MENU_PLAY_SCENE);
+		}
+	}
+
+	EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(
+			context_menu,
+			EditorContextMenuPlugin::CONTEXT_SLOT_3D_EDITOR,
+			paths,
+			0,
+			context_menu_context);
+
+	context_menu->reset_size();
+	context_menu->set_position(surface->get_screen_transform().xform(p_position));
+	context_menu->popup();
+}
+
+void Node3DEditorViewport::_context_menu_hide() {
+	// PopupMenu hides before emitting id_pressed. This connection is deferred so built-in
+	// and plugin callbacks can consume the snapshot first.
+	if (!context_menu->is_visible()) {
+		context_menu_context.clear();
+	}
+}
+
+void Node3DEditorViewport::_context_menu_option(int p_option) {
+	if (p_option >= EditorContextMenuPlugin::BASE_ID) {
+		EditorContextMenuPluginManager::get_singleton()->activate_custom_option(
+				EditorContextMenuPlugin::CONTEXT_SLOT_3D_EDITOR,
+				p_option,
+				context_menu_context.duplicate(true));
+		return;
+	}
+
+	EditorRunBar *run_bar = EditorRunBar::get_singleton();
+	if (!run_bar) {
+		return;
+	}
+
+	switch (p_option) {
+		case CONTEXT_MENU_PLAY_SCENE:
+			run_bar->play_current_scene();
+			break;
+		case CONTEXT_MENU_STOP_SCENE:
+			run_bar->stop_playing();
+			break;
+	}
+}
+
+void Node3DEditorViewport::_context_create_option(int p_option) {
+	if (p_option == CONTEXT_MENU_CREATE_CSG_BOX) {
+		_create_csg_box_at_context();
+	}
+}
+
+void Node3DEditorViewport::_create_csg_box_at_context() {
+	Variant root_value = context_menu_context.get("scene_root", Variant());
+	Node *scene_root = Object::cast_to<Node>(root_value.get_validated_object());
+	if (!scene_root || !scene_root->is_inside_tree()) {
+		return;
+	}
+
+	Object *instance = ClassDB::instantiate(SNAME("CSGBox3D"));
+	Node3D *box = Object::cast_to<Node3D>(instance);
+	if (!box) {
+		if (instance) {
+			memdelete(instance);
+		}
+		return;
+	}
+
+	EditorNode::get_singleton()->get_editor_data().instantiate_object_properties(box);
+	String node_name = scene_root->validate_child_name(box);
+	if (GLOBAL_GET("editor/naming/node_name_casing").operator int() != NAME_CASING_PASCAL_CASE) {
+		node_name = Node::adjust_name_casing(node_name);
+	}
+	box->set_name(node_name);
+
+	Vector3 placement_position = context_menu_context.get("placement_position", Vector3());
+	if (context_menu_context.get("physics_hit", false)) {
+		Vector3 hit_normal = context_menu_context.get("hit_normal", Vector3());
+		hit_normal.normalize();
+		const Variant size_value = box->get("size");
+		if (size_value.get_type() == Variant::VECTOR3 && !hit_normal.is_zero_approx()) {
+			Vector3 half_size = size_value;
+			half_size *= 0.5;
+			Basis world_basis = box->get_transform().basis;
+			if (Node3D *parent_3d = Object::cast_to<Node3D>(scene_root)) {
+				world_basis = parent_3d->get_global_transform().basis * world_basis;
+			}
+			const real_t surface_offset =
+					Math::abs(hit_normal.dot(world_basis.get_column(0))) * half_size.x +
+					Math::abs(hit_normal.dot(world_basis.get_column(1))) * half_size.y +
+					Math::abs(hit_normal.dot(world_basis.get_column(2))) * half_size.z;
+			placement_position += hit_normal * surface_offset;
+		}
+	}
+	placement_position = spatial_editor->snap_point(placement_position);
+
+	int history_id = EditorNode::get_editor_data().get_current_edited_scene_history_id();
+	if (context_menu_context.has("document_history_id")) {
+		history_id = context_menu_context["document_history_id"];
+	}
+
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	undo_redo->create_action_for_history(TTR("Create CSG Box"), history_id);
+	undo_redo->add_do_method(scene_root, "add_child", box, true);
+	undo_redo->add_do_method(box, "set_owner", scene_root);
+	undo_redo->add_do_method(box, "set_global_position", placement_position);
+	undo_redo->add_do_reference(box);
+	undo_redo->add_undo_method(scene_root, "remove_child", box);
+	undo_redo->commit_action();
+
+	EditorDocument *active_document = EditorNode::get_singleton()->get_editor_data().get_active_document();
+	if (!active_document || active_document->get_root() == scene_root) {
+		editor_selection->clear();
+		editor_selection->add_node(box);
 	}
 }
 
@@ -2504,6 +2764,20 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 		}
 	}
 
+	// Unmodified RMB belongs to the shared context menu. Modified RMB events continue
+	// through the existing navigation and overlapping-node selection paths below.
+	Ref<InputEventMouseButton> context_button = p_event;
+	const bool is_plain_context_click = context_button.is_valid() &&
+			context_button->is_pressed() &&
+			context_button->get_button_index() == MouseButton::RIGHT &&
+			_get_key_modifier(context_button) == Key::NONE;
+	if (is_plain_context_click) {
+		emit_signal(SNAME("clicked"));
+		if (!surface->has_focus()) {
+			surface->grab_focus();
+		}
+	}
+
 	EditorPlugin::AfterGUIInput after = EditorPlugin::AFTER_GUI_INPUT_PASS;
 	{
 		EditorNode *en = EditorNode::get_singleton();
@@ -2538,6 +2812,21 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 				after = EditorPlugin::AFTER_GUI_INPUT_CUSTOM;
 			} break;
 		}
+	}
+
+	if (is_plain_context_click) {
+		if (_edit.gizmo.is_valid()) {
+			_edit.gizmo->commit_handle(_edit.gizmo_handle, _edit.gizmo_handle_secondary, _edit.gizmo_initial_value, true);
+			_edit.gizmo = Ref<EditorNode3DGizmo>();
+			set_message("");
+		}
+		if (_edit.mode != TRANSFORM_NONE) {
+			cancel_transform();
+			return;
+		}
+
+		_popup_context_menu(context_button->get_position());
+		return;
 	}
 
 	// Several parts of the 3D navigation are handled here.
@@ -2587,8 +2876,14 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 					}
 
 					const Key mod = _get_key_modifier(b);
+					Key freelook_modifier = _get_key_modifier_setting("editors/3d/freelook/freelook_activation_modifier");
+					// Older editor settings may still contain the previous unmodified-RMB value.
+					// Plain RMB now belongs to the context menu, so treat that legacy value as Ctrl.
+					if (freelook_modifier == Key::NONE) {
+						freelook_modifier = Key::CTRL;
+					}
 					if (!view_3d_controller->is_orthogonal() && !(previewing && !pilot_preview_enabled)) {
-						if (mod == _get_key_modifier_setting("editors/3d/freelook/freelook_activation_modifier")) {
+						if (mod == freelook_modifier) {
 							view_3d_controller->set_freelook_enabled(true);
 						}
 					}
@@ -7145,7 +7440,7 @@ void Node3DEditorViewport::_load_viewport_inputs() {
 	register_shortcut_action("spatial_editor/freelook_slow_modifier", TTRC("Freelook Slow Modifier"), Key::ALT);
 }
 
-Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p_index) {
+Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3DEditorView *p_editor_view, int p_index) {
 	cpu_time_history_index = 0;
 	gpu_time_history_index = 0;
 
@@ -7164,6 +7459,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	zoom_indicator_delay = 0.0;
 
 	spatial_editor = p_spatial_editor;
+	editor_view = p_editor_view;
 	// G2: the transform-gizmo cull-mask layer is claimed from the bound world's freelist in
 	// set_editor_world (not here), so the 5-layer budget is per-document. Until this viewport
 	// binds a world it keeps the default GIZMO_BASE_LAYER (no gizmos render without a scene).
@@ -7506,6 +7802,11 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	selection_menu->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditorViewport::_selection_result_pressed));
 	selection_menu->connect("popup_hide", callable_mp(this, &Node3DEditorViewport::_selection_menu_hide));
 
+	context_menu = memnew(PopupMenu);
+	add_child(context_menu);
+	context_menu->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditorViewport::_context_menu_option));
+	context_menu->connect("popup_hide", callable_mp(this, &Node3DEditorViewport::_context_menu_hide), CONNECT_DEFERRED);
+
 	if (p_index == 0) {
 		view_display_menu->get_popup()->set_item_checked(view_display_menu->get_popup()->get_item_index(VIEW_AUDIO_LISTENER), true);
 		viewport->set_as_audio_listener_3d(true);
@@ -7613,6 +7914,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 }
 
 Node3DEditorViewport::~Node3DEditorViewport() {
+	context_menu_context.clear();
 	if (gizmo_instances_initialized) {
 		// Freed here rather than on EXIT_TREE so instances survive reparenting between panes.
 		_finish_gizmo_instances();
