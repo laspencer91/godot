@@ -953,9 +953,12 @@ def prepare_purge(env):
     def purge_flaky_files():
         paths_to_keep = [env["ninja_file"]]
         for build_failure in GetBuildFailures():
-            path = build_failure.node.path
-            if os.path.isfile(path) and path not in paths_to_keep:
-                os.remove(path)
+            # BuildError.node is a single node or a list of nodes.
+            nodes = build_failure.node if isinstance(build_failure.node, list) else [build_failure.node]
+            for node in nodes:
+                path = node.path
+                if os.path.isfile(path) and path not in paths_to_keep:
+                    os.remove(path)
 
     atexit.register(purge_flaky_files)
 
