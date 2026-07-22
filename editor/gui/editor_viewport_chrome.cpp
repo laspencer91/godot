@@ -202,6 +202,12 @@ void EditorViewportChrome::_layout_slots() {
 			case SLOT_BOTTOM_RIGHT:
 				position = Vector2(available_size.x - safe_area[SIDE_RIGHT] - minimum_size.x, available_size.y - safe_area[SIDE_BOTTOM] - minimum_size.y);
 				break;
+			case SLOT_CENTER_LEFT:
+				position = Vector2(safe_area[SIDE_LEFT], (available_size.y - minimum_size.y) * 0.5);
+				break;
+			case SLOT_CENTER_RIGHT:
+				position = Vector2(available_size.x - safe_area[SIDE_RIGHT] - minimum_size.x, (available_size.y - minimum_size.y) * 0.5);
+				break;
 			default:
 				break;
 		}

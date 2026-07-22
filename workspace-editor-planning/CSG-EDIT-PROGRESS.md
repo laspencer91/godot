@@ -30,7 +30,7 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 | 1 | Persistent Manifold cache graph | DONE — committed 95e5716225 (simplify: one hidden-constraint comment added; code judged minimal) |
 | 2 | Semantic provenance (schemas, origin tokens, faceID) | DONE — committed 9c24baed23 (simplify: tagging helper + hidden-constraint comments) |
 | 3A | Document surface registry | DONE — committed (simplify pass clean: no changes needed) |
-| 3B | Edit-domain host + chrome (center slots, dummy domain) | PLANNING (Opus) |
+| 3B | Edit-domain host + chrome (center slots, dummy domain) | DONE — committed (simplify: minimal, 2 constraint comments) |
 | 4 | Evaluation scheduler + box Surface tool (push/pull) | pre-step DONE (committed; simplify: minimal, zero edits); scheduler pending |
 | 5 | Shift-drag box extrusion | pending |
 | 6 | Surface materials + planar UVs + Paint tool | pending |
@@ -43,8 +43,9 @@ As of 2026-07-22 ~19:30Z:
 - Phase 3A COMMITTED (simplify pass green, zero source changes; all milestone tags preserved; migration fidelity verified vs HEAD).
 - Phase 4 pre-step plan SAVED at CSG-PHASE4-PRESTEP-PLAN.md (Opus planner done). Handed to Codex (module tree modules/csg/** disjoint from 3B editor work — interleaving approved by orchestrator). Codex must serialize dev builds: check `Get-Process python` for a running scons before every build.
 - Phase 3B plan SAVED at CSG-PHASE3B-PLAN.md (Opus planner done; line refs re-verified against live tree; typed EditorEditDomainContext mirrors 3A idiom; two-scope suppression: per-viewport domain_blocks_native + global is_edit_domain_active_anywhere; DEV-only dummy domain; headless test plan).
-- Phase 4 pre-step COMMITTED (Codex task-mrwfaikf-69b7f9; simplify minimal/zero edits; 18/18, 912).
-- RUNNING: Codex implementing Phase 3B per CSG-PHASE3B-PLAN.md (editor/** only; owns the .dev. build namespace while running). On completion: review diff → Opus /simplify → verify (*EditorEditDomain*, *EditorDocumentSurface*, *ResponsiveLayout*, plus *CSG* regression) → commit → then plan/launch Phase 4 scheduler.
+- Phase 4 pre-step COMMITTED ea4759315f (Codex task-mrwfaikf-69b7f9; simplify minimal/zero edits; 18/18, 912).
+- Phase 3B COMMITTED (Codex task-mrwgvqk4-2me7zl; simplify minimal + 2 comments; all four suites green). MANUAL FOLLOW-UP for user: live two-pane visual checklist via DEV dummy domain (double-click enter, Tab, Escape, chrome mount, gizmo suppression across panes) — not automatable headlessly.
+- NEXT: Phase 4 proper (scheduler + box Surface tool). Flow: Opus Plan agent drafts CSG-PHASE4-PLAN.md (inputs: plan §14/§15/§16/§28 Phase 4, the pre-step seam in modules/csg/csg_evaluation.h, the 3B domain seam in editor/gui/editor_edit_domain.h, deferred-decisions notes incl. collision-payload-built flag) → Codex implements → review → simplify → verify → commit.
 - Orchestration flow (user-directed): Opus agents plan structural goals → Codex agents implement → Opus /simplify after each phase → verify → commit per phase. Codex launch = Agent(subagent_type codex:codex-rescue); job state JSON at C:\Users\laspe\.claude\plugins\data\codex-openai-codex\state\godot-683f4ee0b87eee85\jobs\<task-id>.json; watcher pattern = background bash until-loop on '"status": "running"'.
 - Remaining phases after 3A: 3B (edit-domain host + chrome, scout: CSG-3B-INPUT-SCOUT.md; gizmo-suppression decision = suppress globally while domain active, MVP), 4 (pre-step then scheduler + Surface tool), 5 (extrusion), 6 (materials/UVs/Paint), 7 (Draw), 8 (long tail).
 
@@ -100,6 +101,15 @@ As of 2026-07-22 ~19:30Z:
   - Invariants audited by Codex + orchestrator review: subtree-copy-before-evaluate (with comments), _get_brush early-out + metadata/generation responsibilities intact, counter sites per plan §6, …w scratch pointers cleared, clear-then-rebuild deferred to _publish_snapshot.
   - Noted coupling: csg_manifold_cache.h includes csg_evaluation.h (cache retains Vector<CSGManifoldResultTriangle>). Phase 4 finding recorded in deferred decisions (collision-payload-built flag).
 - Opus /simplify pass: DONE — verdict MINIMAL, zero edits. Every moved function diffed vs HEAD (only permitted renames/settings-parameterization); no double generation bump (sync path leaves snapshot.brush null so _publish_snapshot's brush branch is dormant); csg_build_snapshot coherent though unused by sync path (intentional Phase 4 seam); subtree-copy comments at all four sites; no dangling symbols. Noted-not-applied: update_shape re-assembles CSGEvaluationSettings that _get_brush's gather already built — fixing requires returning inputs from _get_brush, a seam change deferred to Phase 4. Re-verified 18/18 (912). Committed with this ledger update.
+
+### Phase 3B — started 2026-07-22
+
+- Scope: per CSG-PHASE3B-PLAN.md — generic edit-domain layer (Registry/Provider/Session/Host, tri-state input, typed context), single _sinput arbitration hook, five suppression guards (two scopes), SLOT_CENTER_LEFT/RIGHT chrome, DEV dummy domain, headless tests. editor/** + tests/editor/** only.
+- Codex result (task-mrwgvqk4-2me7zl): DONE, verified. All 6 steps built; *EditorEditDomain* 6/6 (85), *EditorDocumentSurface* 2/2 (33), *ResponsiveLayout* 2/2 (26), *CSG* 18/18 (912).
+  - New: editor_edit_domain.h (152), editor_edit_domain.cpp (378), test_editor_edit_domain.cpp (392). Modified: viewport_chrome (+8), plugin (+32), viewport (+70/-7), register_editor_types (+9).
+  - Hook at _sinput:2843 (after global plugins, before RMB/nav); guards at :3040 (gizmo pick), :3071 (transform select), :3076 (subgizmo), :3162/:3211 (begin_transform), :3337 (gizmo hover), :3371 (transform hover); helpers _domain_pane_accepts_input:2231, _neutralize_click_state:2248; draw forward :4712.
+  - Deviations: dummy passes all RMB/modifier-LMB (superset of required pass list); manual two-pane visual checklist deferred (no interactive driver — dummy ready for manual verification); freelook bookkeeping still main_view-backed (future per-view ownership coupling noted); provider hot-unregistration requires owner to call notify_provider_unregistered (registry does not enumerate hosts; shutdown order safe).
+- Opus /simplify pass: DONE — verdict minimal; 2 constraint comments added (hazard-8 rationale on _neutralize_click_state; global-vs-per-view suppression scope on is_edit_domain_active_anywhere). Inert-when-inactive PASS at all 8 sites (domain_blocks_native reset per event, cannot leak); _select_ray is const, no viewport-state mutation — declined double-click activation falls through cleanly (benign redundant BVH query per focused-pane LMB double-click; guarding it away would need speculative registry API, left as-is). Idiom matches 3A; chrome corner slots byte-identical; DEV gating symmetric. Re-verified all four suites green. Committed with this ledger update.
 
 ### Phase 3A — started 2026-07-22
 

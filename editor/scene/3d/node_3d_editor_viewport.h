@@ -337,6 +337,7 @@ private:
 	Camera3D *camera = nullptr;
 	bool transforming = false;
 	bool transform_gizmo_visible = true;
+	bool domain_blocks_native = false;
 	bool collision_reposition = false;
 	real_t gizmo_scale;
 
@@ -552,6 +553,8 @@ private:
 	void _surface_mouse_exit();
 	void _surface_focus_enter();
 	void _surface_focus_exit();
+	bool _domain_pane_accepts_input() const;
+	void _neutralize_click_state();
 
 	void input(const Ref<InputEvent> &p_event) override;
 	void _sinput(const Ref<InputEvent> &p_event);

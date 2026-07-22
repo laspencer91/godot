@@ -50,6 +50,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/editor_edit_domain.h"
 #include "editor/gui/editor_viewport_chrome.h"
 #include "editor/gui/editor_workspace.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
@@ -2227,6 +2228,33 @@ void Node3DEditorViewport::_surface_focus_exit() {
 	view_display_menu->set_disable_shortcuts(true);
 }
 
+bool Node3DEditorViewport::_domain_pane_accepts_input() const {
+	if (WorkspacePane *pane = WorkspacePane::of(surface)) {
+		EditorWorkspace *workspace = pane->get_workspace();
+		if (workspace && workspace->get_focused_pane() != pane) {
+			return false;
+		}
+	}
+
+	if (view_3d_controller->is_freelook_enabled()) {
+		return false;
+	}
+	if (editor_view && editor_view->get_freelook_viewport() && editor_view->get_freelook_viewport() != this) {
+		return false;
+	}
+	return true;
+}
+
+// CSG-3B (hazard 8): a domain that consumes a press must clear the cross-event
+// press/selection/region state, or a later native release/motion would act on a
+// press the domain already claimed.
+void Node3DEditorViewport::_neutralize_click_state() {
+	clicked = ObjectID();
+	selection_in_progress = false;
+	view_3d_controller->cursor.region_select = false;
+	movement_threshold_passed = false;
+}
+
 bool Node3DEditorViewport::_is_node_locked(const Node *p_node) const {
 	return p_node->get_meta("_edit_lock_", false);
 }
@@ -2815,6 +2843,38 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 		}
 	}
 
+	// CSG-3B: Edit-domain arbitration runs after global plugin forwarding and
+	// before native context-menu, navigation, gizmo, and selection handling.
+	domain_blocks_native = false;
+	EditorEditDomainHost *domain_host = editor_view ? editor_view->get_edit_domain_host() : nullptr;
+	if (domain_host && _domain_pane_accepts_input()) {
+		if (domain_host->is_active()) {
+			switch (domain_host->route_input(this, camera, p_event)) {
+				case EditorEditDomainInput::CONSUMED: {
+					_neutralize_click_state();
+					accept_event();
+					return;
+				} break;
+				case EditorEditDomainInput::BLOCK_NATIVE_EDIT: {
+					domain_blocks_native = true;
+					after = EditorPlugin::AFTER_GUI_INPUT_CUSTOM;
+				} break;
+				case EditorEditDomainInput::PASS_TO_VIEWPORT:
+					break;
+			}
+		} else {
+			Ref<InputEventMouseButton> double_click = p_event;
+			if (double_click.is_valid() && double_click->is_pressed() && double_click->get_button_index() == MouseButton::LEFT && double_click->is_double_click()) {
+				ObjectID hit = _select_ray(double_click->get_position());
+				if (domain_host->try_activate_from_double_click(this, hit)) {
+					_neutralize_click_state();
+					accept_event();
+					return;
+				}
+			}
+		}
+	}
+
 	if (is_plain_context_click) {
 		if (_edit.gizmo.is_valid()) {
 			_edit.gizmo->commit_handle(_edit.gizmo_handle, _edit.gizmo_handle_secondary, _edit.gizmo_initial_value, true);
@@ -2980,7 +3040,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 					}
 
 					// Gizmo handles
-					if (can_select_gizmos) {
+					if (can_select_gizmos && !spatial_editor->is_edit_domain_active_anywhere()) {
 						Vector<Ref<Node3DGizmo>> gizmos = spatial_editor->get_single_selected_node()->get_gizmos();
 
 						bool intersected_handle = false;
@@ -3011,12 +3071,12 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 					}
 
 					// Transform gizmo
-					if (transform_gizmo_visible && _transform_gizmo_select(_edit.mouse_pos)) {
+					if (transform_gizmo_visible && !domain_blocks_native && _transform_gizmo_select(_edit.mouse_pos)) {
 						break;
 					}
 
 					// Subgizmos
-					if (can_select_gizmos) {
+					if (can_select_gizmos && !spatial_editor->is_edit_domain_active_anywhere()) {
 						Node3DEditorSelectedItem *se = editor_selection->get_node_editor_data<Node3DEditorSelectedItem>(spatial_editor->get_single_selected_node());
 						Vector<Ref<Node3DGizmo>> gizmos = spatial_editor->get_single_selected_node()->get_gizmos();
 
@@ -3102,7 +3162,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 									}
 								}
 
-								if (mode != TRANSFORM_NONE) {
+								if (mode != TRANSFORM_NONE && !domain_blocks_native) {
 									begin_transform(mode, false);
 									break;
 								}
@@ -3151,7 +3211,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 								break;
 						}
 
-						if (mode != TRANSFORM_NONE) {
+						if (mode != TRANSFORM_NONE && !domain_blocks_native) {
 							begin_transform(mode, false);
 							break;
 						}
@@ -3277,7 +3337,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 			return;
 		}
 
-		if (!view_3d_controller->is_freelook_enabled() && spatial_editor->get_single_selected_node()) {
+		if (!view_3d_controller->is_freelook_enabled() && spatial_editor->get_single_selected_node() && !spatial_editor->is_edit_domain_active_anywhere()) {
 			Vector<Ref<Node3DGizmo>> gizmos = spatial_editor->get_single_selected_node()->get_gizmos();
 
 			Ref<EditorNode3DGizmo> found_gizmo;
@@ -3311,7 +3371,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 			}
 		}
 
-		if (!view_3d_controller->is_freelook_enabled() && transform_gizmo_visible && spatial_editor->get_current_hover_gizmo().is_null() && !m->get_button_mask().has_flag(MouseButtonMask::LEFT) && _edit.gizmo.is_null()) {
+		if (!view_3d_controller->is_freelook_enabled() && transform_gizmo_visible && !domain_blocks_native && spatial_editor->get_current_hover_gizmo().is_null() && !m->get_button_mask().has_flag(MouseButtonMask::LEFT) && _edit.gizmo.is_null()) {
 			_transform_gizmo_select(_edit.mouse_pos, true);
 		}
 
@@ -4654,6 +4714,9 @@ static void draw_indicator_bar(Control &p_surface, real_t p_fill, const Ref<Text
 void Node3DEditorViewport::_draw() {
 	EditorNode::get_singleton()->get_editor_plugins_over()->forward_3d_draw_over_viewport(surface);
 	EditorNode::get_singleton()->get_editor_plugins_force_over()->forward_3d_force_draw_over_viewport(surface);
+	if (editor_view && editor_view->get_edit_domain_host() && editor_view->get_edit_domain_host()->is_active()) {
+		editor_view->get_edit_domain_host()->route_draw(this);
+	}
 
 	if (surface->has_focus() || rotation_control->has_focus()) {
 		Size2 size = surface->get_size();

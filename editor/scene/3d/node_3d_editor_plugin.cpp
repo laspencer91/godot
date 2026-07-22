@@ -46,6 +46,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/editor_edit_domain.h"
 #include "editor/gui/editor_spin_slider.h"
 #include "editor/gui/editor_viewport_chrome.h"
 #include "editor/plugins/editor_plugin_list.h"
@@ -1099,6 +1100,12 @@ void Node3DEditorView::_ensure_active() {
 
 void Node3DEditorView::bind_document(EditorDocument *p_document) {
 	document = p_document;
+	if (edit_domain_host) {
+		EditorEditDomainContext context;
+		context.view = this;
+		context.document = document;
+		edit_domain_host->set_context(context);
+	}
 	set_process_input(document != nullptr);
 }
 
@@ -2722,6 +2729,19 @@ Node3DEditorViewport *Node3DEditor::find_viewport_for_input_camera(Camera3D *p_c
 	return nullptr;
 }
 
+// CSG-3B: global suppression aggregate. Node-attached gizmos render in the shared
+// World3D and are pickable from every pane, so they need a global gate; the per-view
+// transform manipulator instead uses the per-viewport domain_blocks_native flag.
+bool Node3DEditor::is_edit_domain_active_anywhere() const {
+	for (Node3DEditorView *view : editor_views) {
+		EditorEditDomainHost *host = view->get_edit_domain_host();
+		if (host && host->is_active()) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void Node3DEditor::set_freelook_viewport(Node3DEditorViewport *p_viewport) {
 	main_view->set_freelook_viewport(p_viewport);
 }
@@ -2798,9 +2818,20 @@ Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 	chrome_context["view"] = this;
 	viewport_chrome = memnew(EditorViewportChrome(SNAME("3d"), EditorViewportChrome::SCOPE_VIEW, chrome_context));
 	add_child(viewport_chrome);
+
+	edit_domain_host = memnew(EditorEditDomainHost);
+	EditorEditDomainContext domain_context;
+	domain_context.view = this;
+	domain_context.document = document;
+	edit_domain_host->set_context(domain_context);
+	edit_domain_host->set_chrome_host(viewport_chrome);
 }
 
 Node3DEditorView::~Node3DEditorView() {
+	if (edit_domain_host) {
+		memdelete(edit_domain_host);
+		edit_domain_host = nullptr;
+	}
 	if (editor) {
 		editor->editor_views.erase(this); // G2 M7.2: leave the gizmo-render fan-out.
 	}

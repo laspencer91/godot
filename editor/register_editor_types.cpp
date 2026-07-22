@@ -56,6 +56,7 @@
 #include "editor/file_system/editor_file_system.h"
 #include "editor/file_system/editor_paths.h"
 #include "editor/gui/editor_document_surface.h"
+#include "editor/gui/editor_edit_domain.h"
 #include "editor/gui/editor_file_dialog.h"
 #include "editor/gui/editor_responsive_row.h"
 #include "editor/gui/editor_spin_slider.h"
@@ -159,6 +160,10 @@ void register_editor_types() {
 	EditorDocumentSurfaceRegistry::create();
 	register_editor_document_surface_providers();
 	EditorViewportChromeRegistry::create();
+	EditorEditDomainRegistry::create();
+#ifdef DEV_ENABLED
+	register_editor_edit_domain_dev_providers();
+#endif
 
 	GDREGISTER_CLASS(EditorPaths);
 	GDREGISTER_ABSTRACT_CLASS(ScenePaint2DEditor);
@@ -360,6 +365,10 @@ void unregister_editor_types() {
 	EditorNode::cleanup();
 	unregister_editor_document_surface_providers();
 	EditorDocumentSurfaceRegistry::free();
+#ifdef DEV_ENABLED
+	unregister_editor_edit_domain_dev_providers();
+#endif
+	EditorEditDomainRegistry::free();
 	EditorViewportChromeRegistry::free();
 	EditorInterface::free();
 

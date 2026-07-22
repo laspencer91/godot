@@ -45,6 +45,7 @@ class ColorPickerButton;
 class ConfirmationDialog;
 class DirectionalLight3D;
 class EditorDocument;
+class EditorEditDomainHost;
 class EditorSelection;
 class EditorSpinSlider;
 class EditorViewportChrome;
@@ -568,6 +569,7 @@ public:
 	// live view's pane (not just main_view), and while a camera preview is active the camera
 	// handed to plugins is the previewing one — both are matched here.
 	Node3DEditorViewport *find_viewport_for_input_camera(Camera3D *p_camera) const;
+	bool is_edit_domain_active_anywhere() const;
 
 	// G2 M7.2a: the shared 3D toolbar follows the focused scene pane. get_shared_toolbar() is the
 	// Control the pane header reparents in; park_shared_toolbar() returns it to its stock home.
@@ -610,6 +612,7 @@ class Node3DEditorView : public MarginContainer {
 	Node3DEditor *editor = nullptr; // Services singleton this view belongs to.
 	Node3DEditorViewportContainer *viewport_base = nullptr;
 	EditorViewportChrome *viewport_chrome = nullptr;
+	EditorEditDomainHost *edit_domain_host = nullptr;
 	Node3DEditorViewport *viewports[Node3DEditor::VIEWPORTS_COUNT] = {};
 	int last_used_viewport = 0;
 	Node3DEditorViewport *freelook_viewport = nullptr;
@@ -672,6 +675,7 @@ public:
 
 	Node3DEditorViewportContainer *get_viewport_base() const { return viewport_base; }
 	void activate_viewport_chrome();
+	EditorEditDomainHost *get_edit_domain_host() const { return edit_domain_host; }
 
 	// Store a viewport built by the editor (which has the ctor-scoped preview/accept
 	// pointers) into this view's slot; the view owns the quad from then on.
