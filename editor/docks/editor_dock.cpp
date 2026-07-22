@@ -45,6 +45,16 @@ void EditorDock::_emit_changed() {
 	emit_signal(SNAME("_tab_style_changed"));
 }
 
+void EditorDock::_set_layout_context(DockLayout p_layout, int p_slot) {
+	current_layout = p_layout;
+	if (p_layout != DOCK_LAYOUT_FLOATING) {
+		dock_slot_index = p_slot;
+	}
+
+	update_layout(p_layout, p_slot);
+	emit_signal(SNAME("layout_changed"), p_layout, p_slot);
+}
+
 void EditorDock::_validate_property(PropertyInfo &p_property) const {
 	if (p_property.name == "accessibility_name") {
 		p_property.usage = PROPERTY_USAGE_NONE;
@@ -70,7 +80,10 @@ void EditorDock::_notification(int p_what) {
 void EditorDock::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("open"), &EditorDock::open);
 	ClassDB::bind_method(D_METHOD("make_visible"), &EditorDock::make_visible);
+	ClassDB::bind_method(D_METHOD("make_floating"), &EditorDock::make_floating);
 	ClassDB::bind_method(D_METHOD("close"), &EditorDock::close);
+	ClassDB::bind_method(D_METHOD("get_current_layout"), &EditorDock::get_current_layout);
+	ClassDB::bind_method(D_METHOD("get_current_slot"), &EditorDock::get_current_slot);
 
 	ClassDB::bind_method(D_METHOD("set_title", "title"), &EditorDock::set_title);
 	ClassDB::bind_method(D_METHOD("get_title"), &EditorDock::get_title);
@@ -122,6 +135,7 @@ void EditorDock::_bind_methods() {
 
 	ADD_SIGNAL(MethodInfo("opened"));
 	ADD_SIGNAL(MethodInfo("closed"));
+	ADD_SIGNAL(MethodInfo("layout_changed", PropertyInfo(Variant::INT, "layout"), PropertyInfo(Variant::INT, "slot")));
 	ADD_SIGNAL(MethodInfo("_tab_style_changed"));
 
 	BIND_BITFIELD_FLAG(DOCK_LAYOUT_VERTICAL);

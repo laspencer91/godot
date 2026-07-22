@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorResponsiveRow" inherits="HFlowContainer" api_type="editor" experimental="This editor composition component may change as more editor hosts adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A responsive row for editor controls and control groups.
+	</brief_description>
+	<description>
+		[EditorResponsiveRow] lays out its direct children horizontally while they fit, then wraps complete children onto additional lines as the available width decreases. Its minimum width is therefore the width of its widest child rather than the sum of every child.
+		Treat each direct child as an indivisible semantic group. For example, place a field label and its input in an [HBoxContainer], then add that group to this row. The pair stays together while neighboring field groups can move to another line. Add action buttons directly when each button may wrap independently.
+		Use [member Control.size_flags_horizontal] on the children to control how remaining space on each line is shared. This component is intended for editor plugins and editor UI that may move between narrow side docks, wide bottom docks, and floating windows.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="is_wrapped" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the row currently occupies more than one line. The value is updated when the container sorts its children.
+			</description>
+		</method>
+	</methods>
+	<signals>
+		<signal name="layout_changed">
+			<param index="0" name="line_count" type="int" />
+			<description>
+				Emitted when the number of occupied lines changes. This can be used to shorten secondary labels or adjust nearby editor chrome after the row wraps or unwraps.
+			</description>
+		</signal>
+	</signals>
+</class>

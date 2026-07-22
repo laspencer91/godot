@@ -294,8 +294,7 @@ void EditorDockManager::_open_dock_in_window(EditorDock *p_dock, bool p_show_win
 	EditorNode::get_singleton()->get_gui_base()->add_child(wrapper);
 
 	_move_dock(p_dock, nullptr);
-	p_dock->update_layout(EditorDock::DOCK_LAYOUT_FLOATING, EditorDock::DOCK_SLOT_NONE);
-	p_dock->current_layout = EditorDock::DOCK_LAYOUT_FLOATING;
+	p_dock->_set_layout_context(EditorDock::DOCK_LAYOUT_FLOATING, EditorDock::DOCK_SLOT_NONE);
 	wrapper->set_wrapped_control(p_dock);
 
 	p_dock->dock_window = wrapper;
@@ -375,9 +374,7 @@ void EditorDockManager::_move_dock(EditorDock *p_dock, Control *p_target, int p_
 
 	DockTabContainer *dock_tab_container = Object::cast_to<DockTabContainer>(p_target);
 	if (p_target != closed_dock_parent && (dock_tab_container->layout != p_dock->current_layout || dock_tab_container->dock_slot != p_dock->dock_slot_index)) {
-		p_dock->update_layout(dock_tab_container->layout, dock_tab_container->dock_slot);
-		p_dock->current_layout = dock_tab_container->layout;
-		p_dock->dock_slot_index = dock_tab_container->dock_slot;
+		p_dock->_set_layout_context(dock_tab_container->layout, dock_tab_container->dock_slot);
 	}
 
 	// Add dock to its new parent, at the given tab index.

@@ -68,6 +68,24 @@
 				Closes the dock, making its tab hidden.
 			</description>
 		</method>
+		<method name="get_current_layout" qualifiers="const">
+			<return type="int" enum="EditorDock.DockLayout" />
+			<description>
+				Returns the dock's current host layout. Returns [code]0[/code] before the dock has been added with [method EditorPlugin.add_dock].
+			</description>
+		</method>
+		<method name="get_current_slot" qualifiers="const">
+			<return type="int" enum="EditorDock.DockSlot" />
+			<description>
+				Returns the dock's current slot, or [constant DOCK_SLOT_NONE] while it is floating or has not been assigned to a slot.
+			</description>
+		</method>
+		<method name="make_floating">
+			<return type="void" />
+			<description>
+				Moves the dock into a floating editor window.
+			</description>
+		</method>
 		<method name="make_visible">
 			<return type="void" />
 			<description>
@@ -126,6 +144,13 @@
 		<signal name="closed">
 			<description>
 				Emitted when the dock is closed with the Close button in the context popup, before it's removed from its parent. See [member closable].
+			</description>
+		</signal>
+		<signal name="layout_changed">
+			<param index="0" name="layout" type="int" enum="EditorDock.DockLayout" />
+			<param index="1" name="slot" type="int" enum="EditorDock.DockSlot" />
+			<description>
+				Emitted after the dock moves between vertical, horizontal, or floating hosts. [param slot] is [constant DOCK_SLOT_NONE] for a floating dock. Descendant controls can connect to this signal and query [method get_current_layout] when their composition depends on the host.
 			</description>
 		</signal>
 		<signal name="opened">

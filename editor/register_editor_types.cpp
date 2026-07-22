@@ -56,6 +56,7 @@
 #include "editor/file_system/editor_file_system.h"
 #include "editor/file_system/editor_paths.h"
 #include "editor/gui/editor_file_dialog.h"
+#include "editor/gui/editor_responsive_row.h"
 #include "editor/gui/editor_spin_slider.h"
 #include "editor/gui/editor_toaster.h"
 #include "editor/import/3d/resource_importer_obj.h"
@@ -164,6 +165,7 @@ void register_editor_types() {
 	GDREGISTER_CLASS(EditorDock);
 	GDREGISTER_CLASS(EditorSelection);
 	GDREGISTER_CLASS(EditorFileDialog);
+	GDREGISTER_CLASS(EditorResponsiveRow);
 	GDREGISTER_VIRTUAL_CLASS(EditorSettings);
 	GDREGISTER_ABSTRACT_CLASS(EditorToaster);
 	GDREGISTER_ABSTRACT_CLASS(EditorResourcePreview);
