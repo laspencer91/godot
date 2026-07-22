@@ -55,6 +55,7 @@
 #include "editor/file_system/editor_external_file_drop_request.h"
 #include "editor/file_system/editor_file_system.h"
 #include "editor/file_system/editor_paths.h"
+#include "editor/gui/editor_document_surface.h"
 #include "editor/gui/editor_file_dialog.h"
 #include "editor/gui/editor_responsive_row.h"
 #include "editor/gui/editor_spin_slider.h"
@@ -155,6 +156,8 @@ void register_editor_types() {
 	ResourceSaver::set_timestamp_on_save(true);
 
 	EditorStringNames::create();
+	EditorDocumentSurfaceRegistry::create();
+	register_editor_document_surface_providers();
 	EditorViewportChromeRegistry::create();
 
 	GDREGISTER_CLASS(EditorPaths);
@@ -355,6 +358,8 @@ void unregister_editor_types() {
 
 	EditorInspector::set_property_clipboard(EditorInspector::PropertyClipboard::Type::EMPTY, Variant());
 	EditorNode::cleanup();
+	unregister_editor_document_surface_providers();
+	EditorDocumentSurfaceRegistry::free();
 	EditorViewportChromeRegistry::free();
 	EditorInterface::free();
 

@@ -28,14 +28,32 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 |---|---|---|
 | 0 | Characterization tests + dev counters (no behavior change) | DONE — committed 4261ae84e1 (simplify pass: one test-helper consolidation) |
 | 1 | Persistent Manifold cache graph | DONE — committed 95e5716225 (simplify: one hidden-constraint comment added; code judged minimal) |
-| 2 | Semantic provenance (schemas, origin tokens, faceID) | implemented+verified (18/18 cases, 912/912 asserts); simplify pass running |
-| 3A | Document surface registry | pending |
-| 3B | Edit-domain host + chrome (center slots, dummy domain) | pending |
-| 4 | Evaluation scheduler + box Surface tool (push/pull) | pending |
+| 2 | Semantic provenance (schemas, origin tokens, faceID) | DONE — committed 9c24baed23 (simplify: tagging helper + hidden-constraint comments) |
+| 3A | Document surface registry | DONE — committed (simplify pass clean: no changes needed) |
+| 3B | Edit-domain host + chrome (center slots, dummy domain) | PLANNING (Opus) |
+| 4 | Evaluation scheduler + box Surface tool (push/pull) | pre-step IN PROGRESS (Codex, plan: CSG-PHASE4-PRESTEP-PLAN.md) |
 | 5 | Shift-drag box extrusion | pending |
 | 6 | Surface materials + planar UVs + Paint tool | pending |
 | 7 | Draw tool | pending |
 | 8 | Long tail | pending |
+
+## LIVE STATE (update before any compaction; read first on resume)
+
+As of 2026-07-22 ~19:30Z:
+- Phase 3A COMMITTED (simplify pass green, zero source changes; all milestone tags preserved; migration fidelity verified vs HEAD).
+- Phase 4 pre-step plan SAVED at CSG-PHASE4-PRESTEP-PLAN.md (Opus planner done). Handed to Codex (module tree modules/csg/** disjoint from 3B editor work — interleaving approved by orchestrator). Codex must serialize dev builds: check `Get-Process python` for a running scons before every build.
+- RUNNING background agents (harness will notify on completion):
+  1. Opus Plan agent drafting Phase 3B plan (edit-domain host + chrome; inputs: CSG-3B-INPUT-SCOUT.md, plan §5/§6/§8; gizmo suppression = global-while-domain-active MVP; context carrier = reuse EditorDocumentSurfaceContext, no parallel Dictionary shapes). On completion: save to CSG-PHASE3B-PLAN.md, then hand to Codex (wait for pre-step Codex to finish its builds first, or stagger builds).
+  2. Codex implementing the Phase 4 pre-step per CSG-PHASE4-PRESTEP-PLAN.md. On completion: review diff → Opus /simplify → verify (18/18, 912 + counter pins) → commit.
+- Orchestration flow (user-directed): Opus agents plan structural goals → Codex agents implement → Opus /simplify after each phase → verify → commit per phase. Codex launch = Agent(subagent_type codex:codex-rescue); job state JSON at C:\Users\laspe\.claude\plugins\data\codex-openai-codex\state\godot-683f4ee0b87eee85\jobs\<task-id>.json; watcher pattern = background bash until-loop on '"status": "running"'.
+- Remaining phases after 3A: 3B (edit-domain host + chrome, scout: CSG-3B-INPUT-SCOUT.md; gizmo-suppression decision = suppress globally while domain active, MVP), 4 (pre-step then scheduler + Surface tool), 5 (extrusion), 6 (materials/UVs/Paint), 7 (Draw), 8 (long tail).
+
+## Deferred decisions / phase-prompt notes
+
+- Phase 4 pre-step (user-approved flow: Opus plans → Codex implements): split evaluation machinery out of csg_shape.cpp (csg_manifold_cache/csg_evaluation files) + detachable evaluation-snapshot object built by workers, published by main thread. Plan DRAFTED → CSG-PHASE4-PRESTEP-PLAN.md (6-step migration, each step green; zero behavior change; counter-pin table; …w scratch-pointer hazard; subtree-copy invariant).
+- Phase 6 prompt: add a get_material() virtual on CSGPrimitive3D to replace the 7-way cast chain in _resolve_manifold_material (flagged by Phase 1 simplify) before layering surface-override resolution on top.
+- Phase 3B prompt + 3A review: ONE context carrier — surface instance context, domain session context, and chrome context should hand around the same object (view or domain host; 3A introduced typed EditorDocumentSurfaceContext). No parallel divergent Dictionary shapes.
+- Phase 7 prompt: decide use_collision default for Draw-tool-created standalone roots (new roots default off today; drawing under an existing root inherits root collision automatically). Also: mid-drag collision intentionally lags until final publish (§14/§30) — expected, documented.
 
 ## Phase log
 
@@ -71,4 +89,12 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
   - Token ranges: ManifoldCache stores origin_base/count/schema_generation; ReserveIDs(schema_size) once per schema generation; retained across geometry rebuilds; new range on mesh surface-count change.
   - Snapshot per root: HashMap<token, CSGSurfaceKey> + Vector<{token,faceID}> per output triangle (2×u32/tri) + result_generation u64. resolve_result_triangle(triangle, generation, &key, &face_id) validates generation, live ObjectID, schema generation, range. connected_fragment deferred to editor phase.
   - Inter-surface triangle order changes for interleaved primitives (cylinder) — render-surface grouping and geometry identical, pins passed.
-- Opus /simplify pass over the four files: launched, pending.
+- Opus /simplify pass: DONE — _tag_faces_single_surface helper (sphere/torus dedup), box-loop hoist, hidden-constraint comments (cylinder face layout dependency; polygon fixed 3-slot rationale). Re-verified 18/18, 912/912. Committed 9c24baed23.
+
+### Phase 3A — started 2026-07-22
+
+- Scope: EditorDocumentSurfaceRegistry/Provider/Instance per plan §4/§28 Phase 3A, migrating the DocumentView construction switch. Strict behavior preservation of the six lifecycle seams documented in CSG-3A-SURFACE-SCOUT.md. New files editor/gui/editor_document_surface.{h,cpp}; registry test in tests/editor/.
+- Codex result (task-mrwdx47m-j0nn86): DONE, verified. *CSG* 18/18 (912), *EditorDocumentSurface* 2/2 (33), *ResponsiveLayout* 2/2 (26).
+  - Files: editor/gui/editor_document_surface.{h,cpp} (new: Context/Provider/Instance/Registry + six built-in providers), document_view.{h,cpp} (construction switch removed, ~-650 lines, delegates to instance), tabbed_document_host.cpp (user-close → instance hook), register_editor_types.cpp (registry create/register before EditorViewportChromeRegistry; symmetric shutdown), tests/editor/test_editor_document_surface.cpp (new, 2 cases/33 asserts).
+  - Context is a typed 4-field struct (document, document_view, host_view, chrome_host) — no capabilities Dictionary. Default resolution: resource/script/shader/help/screen_host/scene; unknown → scene (selection present: composite; else bare-3D fallback). Providers borrowed, never retained by instances.
+- Opus /simplify pass: DONE — verdict "already minimal and faithful", zero source changes. Migration fidelity diffed block-by-block vs HEAD (only receiver renames/enum qualifications/context renames); all six lifecycle seams verified (set_context_active guard, screen-host re-park+null, PREDELETE ordering incl. unconditional _park_script_chrome, two close paths); all milestone comment tags preserved, new seams tagged CSG-3A; registry idiom matches EditorViewportChromeRegistry; scene virtuals defaulting on base judged the minimal option. Re-verified all three filters green. Committed with this ledger update.

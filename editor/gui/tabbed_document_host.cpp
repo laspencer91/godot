@@ -34,12 +34,12 @@
 #include "editor/editor_data.h"
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
+#include "editor/editor_string_names.h"
 #include "editor/gui/document_view.h"
 #include "editor/gui/editor_workspace.h" // G2 S8: pane split/close from the tab bar.
 #include "editor/gui/pane_drop_overlay.h" // G6: drag-to-split compass.
 #include "editor/script/script_editor_plugin.h" // G2 S6a: current-script-view sync.
 #include "editor/shader/shader_editor_plugin.h" // G-Shader: current-shader-view sync.
-#include "editor/editor_string_names.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/margin_container.h"
 #include "scene/gui/panel_container.h"
@@ -354,9 +354,8 @@ void TabbedDocumentHost::_drop_tab_at(int p_idx) {
 	// G2 S7: single choke point for script/help close side effects (state cache,
 	// previous-scripts, notify_script_close) — must run while the surface is still alive.
 	if (views[p_idx]) {
-		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
-			se->notify_surface_closing(views[p_idx]->get_editor_surface());
-		}
+		// CSG-3A: user-close belongs to the live surface instance; detach/adopt still skips it.
+		views[p_idx]->notify_surface_closing();
 	}
 	if (views[p_idx]) {
 		// Child of content_host: memdelete removes it from the tree and frees it (with
