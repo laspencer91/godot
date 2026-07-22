@@ -447,9 +447,13 @@ void EditorNode::shortcut_input(const Ref<InputEvent> &p_event) {
 				FileSystemDock::get_singleton()->focus_on_filter();
 			}
 		} else if (ED_IS_SHORTCUT("editor/editor_2d", p_event)) {
-			editor_main_screen->select(EditorMainScreen::EDITOR_2D);
+			if (!set_active_scene_view_2d(true)) {
+				editor_main_screen->select(EditorMainScreen::EDITOR_2D);
+			}
 		} else if (ED_IS_SHORTCUT("editor/editor_3d", p_event)) {
-			editor_main_screen->select(EditorMainScreen::EDITOR_3D);
+			if (!set_active_scene_view_2d(false)) {
+				editor_main_screen->select(EditorMainScreen::EDITOR_3D);
+			}
 		} else if (ED_IS_SHORTCUT("editor/editor_script", p_event)) {
 			editor_main_screen->focus_editor(SNAME("Script"));
 		} else if (ED_IS_SHORTCUT("editor/editor_game", p_event)) {
@@ -4784,18 +4788,22 @@ void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 	Node3DEditor *spatial = Node3DEditor::get_singleton();
 	CanvasItemEditor *canvas = CanvasItemEditor::get_singleton();
 
-	EditorDocument::Type type = EditorDocument::TYPE_UNKNOWN;
 	Control *host = nullptr;
+	bool is_scene = false;
+	bool is_2d = false;
 	if (p_view) {
 		host = p_view->get_toolbar_host();
-		if (EditorDocumentView *dv = p_view->get_document_view()) {
-			if (EditorDocument *doc = dv->get_document()) {
-				type = doc->get_type();
-			}
-		}
+		is_scene = p_view->is_scene_view();
+		is_2d = p_view->is_scene_view_2d();
 	}
-	const bool is_2d = type == EditorDocument::TYPE_SCENE_2D;
-	const bool is_3d = type == EditorDocument::TYPE_SCENE_3D || type == EditorDocument::TYPE_SCENE_MIXED;
+	const bool is_3d = is_scene && !is_2d;
+	scene_toolbar_view_id = is_scene ? p_view->get_instance_id() : ObjectID();
+	if (spatial) {
+		spatial->set_scene_view_button_state(is_2d);
+	}
+	if (canvas) {
+		canvas->set_scene_view_button_state(is_2d);
+	}
 
 	if (host && is_3d && spatial) {
 		Control *tb = spatial->get_shared_toolbar();
@@ -4825,6 +4833,20 @@ void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 			canvas->park_shared_toolbar();
 		}
 	}
+}
+
+bool EditorNode::set_active_scene_view_2d(bool p_2d) {
+	DocumentView *view = Object::cast_to<DocumentView>(ObjectDB::get_instance(scene_toolbar_view_id));
+	if (!view || !view->is_scene_view()) {
+		scene_toolbar_view_id = ObjectID();
+		return false;
+	}
+	const bool switched = view->set_scene_view_2d(p_2d);
+	if (!switched) {
+		// Restore the shared buttons if the requested editor surface could not be minted.
+		update_scene_pane_toolbar(view);
+	}
+	return switched;
 }
 
 void EditorNode::drop_workspace_tabs_for_document(EditorDocument *p_document) {

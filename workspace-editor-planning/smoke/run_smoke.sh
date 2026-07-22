@@ -129,6 +129,18 @@ echo
 run_case "open_3d" -e "res://test_3d.tscn"
 run_case "open_2d" -e "res://test_2d.tscn"
 
+# A 3D-root scene can still contain CanvasItems. Exercise the pane-local selector in both directions,
+# assert the matching shared toolbar follows it, and verify each lazily-created surface is retained.
+cp "$SMOKE_DIR/scene_view_toggle_project.godot" "$WORK/project.godot"
+run_case "scene_view_toggle" -e "res://test_3d.tscn"
+if grep -q 'SCENE_VIEW_TOGGLE_OK' "$WORK/scene_view_toggle.log"; then
+	echo "  PASS  scene_view_toggle_assertions (2D/3D surfaces + toolbar state verified)"
+else
+	echo "  FAIL  scene_view_toggle_assertions (toggle sequence did not reach its success marker)"
+	fail=1
+fi
+cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
+
 # Restore case: seed the editor layout with 3 open scenes, then launch with no
 # explicit scene so the editor restores them.
 mkdir -p "$WORK/.godot/editor"

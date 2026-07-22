@@ -356,6 +356,9 @@ private:
 
 	Button *group_button = nullptr;
 	Button *ungroup_button = nullptr;
+	Button *scene_view_button_2d = nullptr;
+	Button *scene_view_button_3d = nullptr;
+	void _scene_view_button_pressed(bool p_2d);
 
 	MenuButton *view_menu = nullptr;
 	PopupMenu *grid_menu = nullptr;
@@ -547,6 +550,7 @@ public:
 	void park_shared_toolbar();
 	// G2 M7.2a-fix: re-point the toolbar's shortcut contexts at the focused pane (null resets to this).
 	void set_toolbar_shortcut_context(Node *p_context);
+	void set_scene_view_button_state(bool p_2d);
 
 	// ⑤c: bind the main view to p_document (the active document) so it renders + edits that
 	// document through its own world-bound viewport. Called by EditorNode on every scene switch.

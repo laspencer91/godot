@@ -236,6 +236,9 @@ private:
 
 	Button *tool_button[TOOL_MAX];
 	Button *tool_option_button[TOOL_OPT_MAX];
+	Button *scene_view_button_2d = nullptr;
+	Button *scene_view_button_3d = nullptr;
+	void _scene_view_button_pressed(bool p_2d);
 
 	MenuButton *transform_menu = nullptr;
 	PopupMenu *gizmos_menu = nullptr;
@@ -576,6 +579,7 @@ public:
 	// G2 M7.2a-fix: re-point the toolbar's shortcut contexts (tool Q/W/E/R, snap, view menu) at the
 	// focused pane so its keyboard shortcuts fire there; null resets to this singleton.
 	void set_toolbar_shortcut_context(Node *p_context);
+	void set_scene_view_button_state(bool p_2d);
 
 	void set_freelook_viewport(Node3DEditorViewport *p_viewport);
 	Node3DEditorViewport *get_freelook_viewport() const;

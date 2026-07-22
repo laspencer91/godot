@@ -485,6 +485,9 @@ private:
 
 	SubViewport *scene_root = nullptr; // Root of the scene being edited.
 	Node *documents_holder = nullptr; // Persistent in-tree parent for every open document's scene_root, so all stay live.
+	// The scene DocumentView currently carrying the shared 2D/3D toolbar. Stored as an ObjectID so
+	// closing a pane cannot leave the toolbar buttons with a dangling raw view pointer.
+	ObjectID scene_toolbar_view_id;
 
 	Ref<Resource> saving_resource;
 	HashSet<Ref<Resource>> saving_resources_in_path;
@@ -927,6 +930,9 @@ public:
 	// both toolbars home when the current surface is not a scene pane. Pushed from the same tab-select
 	// / pane-focus points that drive ScriptEditor::set_current_surface.
 	void update_scene_pane_toolbar(DocumentView *p_view);
+	// Route the shared toolbar's 2D/3D selector (and the legacy editor shortcuts) to the pane-local
+	// scene surface. Returns false when no scene DocumentView currently owns the toolbar.
+	bool set_active_scene_view_2d(bool p_2d);
 
 	// G2: make the open scene at p_idx the active edited scene (same path the stock scene-tab
 	// bar uses). Lets a workspace pane's tab selection drive which document the editor edits.

@@ -245,6 +245,19 @@ void DocumentView::_store_animation_drawer_state() {
 	bound_scene_document->set_contextual_editor_state(SNAME("Animation"), animation_editor->get_state());
 }
 
+Control *DocumentView::_create_scene_surface(bool p_2d) {
+	EditorDocument *document = doc_view ? doc_view->get_document() : nullptr;
+	if (!document) {
+		return nullptr;
+	}
+	if (p_2d) {
+		CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton();
+		return canvas_editor ? canvas_editor->create_view_bound_to(document) : nullptr;
+	}
+	Node3DEditor *spatial_editor = Node3DEditor::get_singleton();
+	return spatial_editor ? spatial_editor->create_view_bound_to(document) : nullptr;
+}
+
 DocumentView::DocumentView(EditorDocument *p_document) {
 	set_h_size_flags(SIZE_EXPAND_FILL);
 	set_v_size_flags(SIZE_EXPAND_FILL);
@@ -267,9 +280,9 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 
 	// Host the editor surface for this document's kind, pointed at THIS document's isolated
 	// world so the pane renders p_document's scene independently of the globally-active one.
-	// 2D scenes get a CanvasItemEditorView (the real 2D editor view, minted per-document); 3D (and
-	// mixed/unknown, until the ⑤b 2D/3D toggle) get a Node3DEditorView. Script/help documents get a
-	// ScriptTextEditor/EditorHelp view. Symmetric factory calls per kind.
+	// 2D scenes initially get a CanvasItemEditorView; 3D and mixed scenes initially get a
+	// Node3DEditorView. The other scene surface is minted lazily by the pane's 2D/3D selector.
+	// Script/help documents get a ScriptTextEditor/EditorHelp view. Symmetric factory calls per kind.
 	const EditorDocument::Type type = p_document ? p_document->get_type() : EditorDocument::TYPE_UNKNOWN;
 	switch (type) {
 		case EditorDocument::TYPE_RESOURCE: {
@@ -322,14 +335,19 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 			}
 		} break;
 		case EditorDocument::TYPE_SCENE_2D: {
-			if (CanvasItemEditor *canvas_editor = CanvasItemEditor::get_singleton()) {
-				editor_surface = canvas_editor->create_view_bound_to(p_document);
-			}
+			scene_view_2d = true;
+			editor_surface = _create_scene_surface(true);
+		} break;
+		case EditorDocument::TYPE_SCENE_3D:
+		case EditorDocument::TYPE_SCENE_MIXED: {
+			scene_view_2d = false;
+			editor_surface = _create_scene_surface(false);
 		} break;
 		default: {
-			if (Node3DEditor *spatial = Node3DEditor::get_singleton()) {
-				editor_surface = spatial->create_view_bound_to(p_document);
-			}
+			// An unclassified SceneDocument can be revealed before its root is assigned. It still gets
+			// the scene switching surface; non-scene unknown documents retain the old 3D fallback.
+			editor_surface = p_document && p_document->get_selection() ? _create_scene_surface(false) :
+					(Node3DEditor::get_singleton() ? Node3DEditor::get_singleton()->create_view_bound_to(p_document) : nullptr);
 		} break;
 	}
 	document_surface = editor_surface;
@@ -341,6 +359,12 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 	// generic parent/stretch below adds to content_vbox.
 	if (editor_surface && p_document && p_document->get_selection()) {
 		bound_scene_document = p_document;
+		if (scene_view_2d) {
+			scene_surface_2d = document_surface;
+		} else {
+			scene_surface_3d = document_surface;
+		}
+		doc_view->get_editor_states()[SNAME("scene_view_2d")] = scene_view_2d;
 		EditorData &ed = EditorNode::get_editor_data();
 
 		// D7b: the per-pane dock column — a vertical accordion of FoldableContainer sections
@@ -406,13 +430,18 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		surface_vbox->add_child(toolbar_host);
 		document_surface->set_h_size_flags(SIZE_EXPAND_FILL);
 		document_surface->set_v_size_flags(SIZE_EXPAND_FILL);
+		scene_surface_stack = memnew(MarginContainer);
+		scene_surface_stack->set_name("SceneSurfaceStack");
+		scene_surface_stack->set_h_size_flags(SIZE_EXPAND_FILL);
+		scene_surface_stack->set_v_size_flags(SIZE_EXPAND_FILL);
+		scene_surface_stack->add_child(document_surface);
 
 		const bool supports_animation_drawer = type == EditorDocument::TYPE_SCENE_2D || type == EditorDocument::TYPE_SCENE_3D || type == EditorDocument::TYPE_SCENE_MIXED;
 		AnimationPlayerEditorPlugin *animation_plugin = supports_animation_drawer ? AnimationPlayerEditorPlugin::get_singleton() : nullptr;
 		animation_editor = animation_plugin ? animation_plugin->create_editor_view(p_document, inspector_dock) : nullptr;
 		if (animation_editor) {
 			bottom_dock_host = memnew(DocumentBottomDockHost(toolbar_host));
-			bottom_dock_host->set_surface(document_surface);
+			bottom_dock_host->set_surface(scene_surface_stack);
 			bottom_dock_host->connect(SNAME("dock_toggled"), callable_mp(this, &DocumentView::_document_bottom_dock_toggled));
 			animation_editor->connect(SNAME("drawer_visibility_requested"), callable_mp(this, &DocumentView::_animation_drawer_visibility_requested));
 			bottom_dock_host->add_dock(SNAME("Animation"), TTR("Animation"), SNAME("Animation"), animation_editor);
@@ -425,7 +454,7 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 				animation_editor->set_state(animation_state);
 			}
 		} else {
-			surface_vbox->add_child(document_surface);
+			surface_vbox->add_child(scene_surface_stack);
 		}
 
 		// Compose: [toolbar|viewport] | dock column (docks on the right, per the design). The accordion
@@ -483,6 +512,44 @@ SubViewport *DocumentView::get_scene_viewport() const {
 		return editor_viewport ? editor_viewport->get_viewport_node() : nullptr;
 	}
 	return nullptr;
+}
+
+bool DocumentView::set_scene_view_2d(bool p_2d) {
+	if (!is_scene_view() || !scene_surface_stack) {
+		return false;
+	}
+	if (scene_view_2d == p_2d) {
+		return true;
+	}
+
+	Control *&next_surface = p_2d ? scene_surface_2d : scene_surface_3d;
+	if (!next_surface) {
+		next_surface = _create_scene_surface(p_2d);
+		if (!next_surface) {
+			return false;
+		}
+		next_surface->set_h_size_flags(SIZE_EXPAND_FILL);
+		next_surface->set_v_size_flags(SIZE_EXPAND_FILL);
+		next_surface->hide();
+		scene_surface_stack->add_child(next_surface);
+	}
+
+	if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {
+		canvas_view->set_context_active(false);
+	}
+	document_surface->hide();
+	document_surface = next_surface;
+	scene_view_2d = p_2d;
+	doc_view->get_editor_states()[SNAME("scene_view_2d")] = scene_view_2d;
+	document_surface->show();
+	if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {
+		canvas_view->set_context_active(context_active);
+	}
+
+	if (context_active) {
+		EditorNode::get_singleton()->update_scene_pane_toolbar(this);
+	}
+	return true;
 }
 
 void DocumentView::set_context_active(bool p_active) {

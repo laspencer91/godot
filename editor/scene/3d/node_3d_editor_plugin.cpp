@@ -2777,6 +2777,23 @@ void Node3DEditor::set_toolbar_shortcut_context(Node *p_context) {
 	}
 }
 
+void Node3DEditor::_scene_view_button_pressed(bool p_2d) {
+	if (EditorNode *editor_node = EditorNode::get_singleton()) {
+		// Switching reparents the shared toolbar, so defer until the emitting button has finished its
+		// GUI callback.
+		callable_mp(editor_node, &EditorNode::set_active_scene_view_2d).call_deferred(p_2d);
+	}
+}
+
+void Node3DEditor::set_scene_view_button_state(bool p_2d) {
+	if (scene_view_button_2d) {
+		scene_view_button_2d->set_pressed_no_signal(p_2d);
+	}
+	if (scene_view_button_3d) {
+		scene_view_button_3d->set_pressed_no_signal(!p_2d);
+	}
+}
+
 Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 	editor = p_editor;
 	editor->editor_views.push_back(this); // G2 M7.2: join the gizmo-render fan-out (see editor_views).
@@ -3746,6 +3763,33 @@ Node3DEditor::Node3DEditor() {
 	sun_environ_settings->connect(SceneStringName(pressed), callable_mp(this, &Node3DEditor::_sun_environ_settings_pressed));
 
 	main_menu_hbox->add_child(sun_environ_settings);
+
+	main_menu_hbox->add_child(memnew(VSeparator));
+
+	// Scene documents can contain both 2D canvas content and a 3D world. Keep this selector beside
+	// the view menus so it changes the pane's presentation, not the document or selected node.
+	Ref<ButtonGroup> scene_view_button_group;
+	scene_view_button_group.instantiate();
+	scene_view_button_2d = memnew(Button);
+	scene_view_button_2d->set_text(TTRC("2D"));
+	scene_view_button_2d->set_toggle_mode(true);
+	scene_view_button_2d->set_button_group(scene_view_button_group);
+	scene_view_button_2d->set_theme_type_variation(SceneStringName(FlatButton));
+	scene_view_button_2d->set_tooltip_text(TTRC("Edit the scene's 2D canvas."));
+	scene_view_button_2d->set_accessibility_name(TTRC("2D Scene View"));
+	scene_view_button_2d->connect(SceneStringName(pressed), callable_mp(this, &Node3DEditor::_scene_view_button_pressed).bind(true));
+	main_menu_hbox->add_child(scene_view_button_2d);
+
+	scene_view_button_3d = memnew(Button);
+	scene_view_button_3d->set_text(TTRC("3D"));
+	scene_view_button_3d->set_toggle_mode(true);
+	scene_view_button_3d->set_button_group(scene_view_button_group);
+	scene_view_button_3d->set_theme_type_variation(SceneStringName(FlatButton));
+	scene_view_button_3d->set_tooltip_text(TTRC("Edit the scene's 3D world."));
+	scene_view_button_3d->set_accessibility_name(TTRC("3D Scene View"));
+	scene_view_button_3d->connect(SceneStringName(pressed), callable_mp(this, &Node3DEditor::_scene_view_button_pressed).bind(false));
+	main_menu_hbox->add_child(scene_view_button_3d);
+	scene_view_button_3d->set_pressed(true);
 
 	main_menu_hbox->add_child(memnew(VSeparator));
 

@@ -76,6 +76,13 @@ class DocumentView : public MarginContainer {
 	// editor_surface becomes the outer viewport/right-dock composite while this keeps addressing
 	// the actual 2D/3D surface for lifecycle and context routing.
 	Control *document_surface = nullptr;
+	// Scene documents can be viewed through either editor without changing the document model.
+	// Both surfaces are created lazily and retained after first use so each keeps its own camera or
+	// pan/zoom state; only the selected surface is visible and rendering.
+	Control *scene_surface_stack = nullptr;
+	Control *scene_surface_2d = nullptr;
+	Control *scene_surface_3d = nullptr;
+	bool scene_view_2d = false;
 
 	// G2 D7a: for a scene document, its own Scene Tree dock embedded to the left of the surface,
 	// bound to this document. Null for non-scene (script/help/resource) views. bound_scene_document
@@ -109,6 +116,7 @@ class DocumentView : public MarginContainer {
 	void _document_bottom_dock_toggled(StringName p_id, bool p_open);
 	void _animation_drawer_visibility_requested(bool p_open);
 	void _store_animation_drawer_state();
+	Control *_create_scene_surface(bool p_2d);
 
 	// G2 S7 (seam #8): the vertical stack hosting [shared chrome | surface | find bar]. The
 	// ScriptEditor mounts its menu strip / find bar here while this view's tab is current.
@@ -129,6 +137,9 @@ public:
 
 	// G2 M7.2a: the header slot above the viewport where the focused pane's 2D/3D toolbar mounts.
 	Control *get_toolbar_host() const { return toolbar_host; }
+	bool is_scene_view() const { return bound_scene_document != nullptr; }
+	bool is_scene_view_2d() const { return is_scene_view() && scene_view_2d; }
+	bool set_scene_view_2d(bool p_2d);
 	void set_context_active(bool p_active);
 
 	DocumentView(EditorDocument *p_document);
