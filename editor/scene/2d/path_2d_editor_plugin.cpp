@@ -74,7 +74,7 @@ bool Path2DEditor::forward_gui_input(const Ref<InputEvent> &p_event) {
 	}
 
 	Viewport *vp = node->get_viewport();
-	if (vp && !vp->is_visible_subviewport()) {
+	if (!canvas_item_editor->is_viewport_visible_for_editing(vp)) {
 		return false;
 	}
 
@@ -427,7 +427,7 @@ void Path2DEditor::forward_canvas_draw_over_viewport(Control *p_overlay) {
 	}
 
 	Viewport *vp = node->get_viewport();
-	if (vp && !vp->is_visible_subviewport()) {
+	if (!canvas_item_editor->is_viewport_visible_for_editing(vp)) {
 		return;
 	}
 

@@ -1,9 +1,8 @@
 /**************************************************************************/
-/*  line_2d_editor_plugin.cpp                                             */
+/*  test_item_list.cpp                                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
-/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -28,49 +27,28 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "line_2d_editor_plugin.h"
+#include "tests/test_macros.h"
 
-#include "core/object/callable_mp.h"
-#include "editor/editor_undo_redo_manager.h"
-#include "editor/scene/canvas_item_editor_plugin.h"
+TEST_FORCE_LINK(test_item_list)
 
-Node2D *Line2DEditor::_get_node() const {
-	return node;
+#include "scene/gui/item_list.h"
+#include "scene/main/scene_tree.h"
+#include "scene/main/window.h"
+
+namespace TestItemList {
+
+TEST_CASE("[SceneTree][ItemList] Expanded item rect remains normalized at narrow sizes") {
+	ItemList *item_list = memnew(ItemList);
+	SceneTree::get_singleton()->get_root()->add_child(item_list);
+	item_list->set_size(Size2(1, 1));
+	item_list->add_item("Item wider than the list");
+	item_list->force_update_list_size();
+
+	const Rect2 item_rect = item_list->get_item_rect(0);
+	CHECK(item_rect.size.x >= 0.0f);
+	CHECK(item_rect.size.y >= 0.0f);
+
+	memdelete(item_list);
 }
 
-void Line2DEditor::_set_node(Node *p_line) {
-	CanvasItemEditor *canvas_item_editor = CanvasItemEditor::get_singleton();
-
-	if (node) {
-		node->disconnect(SceneStringName(draw), callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport));
-	}
-
-	node = Object::cast_to<Line2D>(p_line);
-	if (node) {
-		// Update the canvas overlay.
-		node->connect(SceneStringName(draw), callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport));
-	}
-}
-
-bool Line2DEditor::_is_line() const {
-	return true;
-}
-
-Variant Line2DEditor::_get_polygon(int p_idx) const {
-	return _get_node()->get("points");
-}
-
-void Line2DEditor::_set_polygon(int p_idx, const Variant &p_polygon) const {
-	_get_node()->set("points", p_polygon);
-}
-
-void Line2DEditor::_action_set_polygon(int p_idx, const Variant &p_previous, const Variant &p_polygon) {
-	Node2D *_node = _get_node();
-	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->add_do_method(_node, "set_points", p_polygon);
-	undo_redo->add_undo_method(_node, "set_points", p_previous);
-}
-
-Line2DEditorPlugin::Line2DEditorPlugin() :
-		AbstractPolygon2DEditorPlugin(memnew(Line2DEditor), "Line2D") {
-}
+} // namespace TestItemList

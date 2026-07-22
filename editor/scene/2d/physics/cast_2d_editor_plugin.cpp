@@ -63,7 +63,7 @@ bool Cast2DEditor::forward_canvas_gui_input(const Ref<InputEvent> &p_event) {
 	}
 
 	Viewport *vp = node->get_viewport();
-	if (vp && !vp->is_visible_subviewport()) {
+	if (!canvas_item_editor->is_viewport_visible_for_editing(vp)) {
 		return false;
 	}
 
@@ -123,7 +123,7 @@ void Cast2DEditor::forward_canvas_draw_over_viewport(Control *p_overlay) {
 	}
 
 	Viewport *vp = node->get_viewport();
-	if (vp && !vp->is_visible_subviewport()) {
+	if (!canvas_item_editor->is_viewport_visible_for_editing(vp)) {
 		return;
 	}
 
@@ -139,13 +139,13 @@ void Cast2DEditor::edit(Node2D *p_node) {
 	}
 
 	if (node) {
-		node->disconnect(SceneStringName(draw), callable_mp((CanvasItem *)canvas_item_editor->get_viewport_control(), &CanvasItem::queue_redraw));
+		node->disconnect(SceneStringName(draw), callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport));
 	}
 
 	if (Object::cast_to<RayCast2D>(p_node) || Object::cast_to<ShapeCast2D>(p_node)) {
 		node = p_node;
 		// Update the canvas overlay.
-		node->connect(SceneStringName(draw), callable_mp((CanvasItem *)canvas_item_editor->get_viewport_control(), &CanvasItem::queue_redraw));
+		node->connect(SceneStringName(draw), callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport));
 	} else {
 		node = nullptr;
 	}

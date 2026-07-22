@@ -412,7 +412,8 @@ DocumentView::DocumentView(EditorDocument *p_document) {
 		_add_accordion_section(dock_column, groups_dock, TTR("Groups"), SNAME("Groups"), false);
 
 		// SceneTreeDock owns Inspector selection timing so a pressed node can be dragged into a property
-		// of the previously inspected node. This connection only keeps Signals and Groups synchronized.
+		// of the previously inspected node. This connection keeps the pane's other selection presentation
+		// synchronized without changing that Inspector timing.
 		p_document->get_selection()->connect("selection_changed", callable_mp(this, &DocumentView::_bound_selection_changed));
 		List<Node *> initial_nodes = p_document->get_selection()->get_top_selected_node_list();
 		inspector_dock->edit_bound(initial_nodes.is_empty() ? nullptr : initial_nodes.front()->get());
@@ -497,6 +498,45 @@ void DocumentView::_bound_selection_changed() {
 		groups_dock->set_selection(node_vec);
 	}
 	_update_inspector_header();
+	_queue_bound_scene_tree_selection_sync();
+}
+
+void DocumentView::_queue_bound_scene_tree_selection_sync() {
+	if (!scene_tree_dock || !bound_scene_document || scene_tree_selection_sync_pending) {
+		return;
+	}
+
+	scene_tree_selection_sync_pending = true;
+	if (is_inside_tree()) {
+		callable_mp(this, &DocumentView::_sync_bound_scene_tree_selection).call_deferred();
+	}
+}
+
+void DocumentView::_sync_bound_scene_tree_selection() {
+	if (!scene_tree_selection_sync_pending || !is_inside_tree()) {
+		return;
+	}
+	scene_tree_selection_sync_pending = false;
+
+	if (!scene_tree_dock || !bound_scene_document) {
+		return;
+	}
+	EditorSelection *selection = bound_scene_document->get_selection();
+	if (!selection) {
+		return;
+	}
+
+	const List<Node *> nodes = selection->get_top_selected_node_list();
+	Node *reveal = nodes.is_empty() ? nullptr : nodes.back()->get();
+	Node *root = bound_scene_document->get_root();
+	if (reveal && (!root || (reveal != root && !root->is_ancestor_of(reveal)))) {
+		reveal = nullptr;
+	}
+
+	// The EditorSelection signal updates row flags, while set_selected also updates SceneTreeEditor's
+	// cursor and reveal state. Keep the last selected node as the active row for multi-selection, matching
+	// the 3D viewport's active-node convention.
+	scene_tree_dock->set_selected(reveal);
 }
 
 Control *DocumentView::get_chrome_host() const {
@@ -560,6 +600,9 @@ void DocumentView::set_context_active(bool p_active) {
 	if (doc_view) {
 		doc_view->set_active(p_active);
 	}
+	if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {
+		canvas_view->set_context_active(p_active);
+	}
 	if (inspector_dock) {
 		inspector_dock->set_context_active(p_active);
 	}
@@ -572,6 +615,12 @@ void DocumentView::set_context_active(bool p_active) {
 }
 
 void DocumentView::_notification(int p_what) {
+	if (p_what == NOTIFICATION_ENTER_TREE) {
+		if (scene_tree_selection_sync_pending) {
+			callable_mp(this, &DocumentView::_sync_bound_scene_tree_selection).call_deferred();
+		}
+		return;
+	}
 	if (p_what == NOTIFICATION_THEME_CHANGED) {
 		_update_inspector_header();
 		return;

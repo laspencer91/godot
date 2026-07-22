@@ -7,6 +7,7 @@
 		[Box3DCharacterMover] exposes Box3D's geometric capsule mover to scripts. It is a query-only mover, not a simulated body. Call [method setup] with a Box3D space [RID], configure the capsule and collision mask, then drive it from fixed-tick movement code.
 		The mover origin is at the character's feet. [method set_capsule] takes Godot-style total capsule height and radius, but [method move], [method cast_motion], and [method collide] expect [param position] to be the feet position, not the capsule center.
 		[method move] runs the Box3D mover loop using 5 iterations and a 1 cm delta tolerance. The returned [code]cast_fraction[/code] is the last iteration's cast fraction and is intended for diagnostics.
+		When [member step_height] is greater than zero, [method move] also performs capsule-safe stair stepping: a stalled lateral move triggers an up/forward/down sweep, and the landing is classified by downward ray probes (under the capsule axis, then just past the support contact) instead of the capsule contact normal — a capsule resting on a step lip reports a tilted hemisphere normal that would otherwise fail the [member floor_max_angle] test. The same probes keep [code]on_floor[/code] true while the capsule rides a step lip across ticks. Stepping is skipped while moving upward (jumps). Surfaces steeper than [member floor_max_angle] and thin lips (fence rails) are still rejected.
 		Plane dictionaries returned by [method collide] contain [code]normal[/code], [code]offset[/code], and [code]local_point[/code] in the frame of the position passed to [method collide]. [code]point[/code] is world-space. Feed planes back to [method solve_planes] and [method clip_velocity] unchanged for the same position.
 	</description>
 	<tutorials>
@@ -53,7 +54,7 @@
 			<param index="1" name="velocity" type="Vector3" />
 			<param index="2" name="delta" type="float" />
 			<description>
-				Moves from feet [param position] by [param velocity] over [param delta]. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]floor_material_id[/code], [code]floor_material_name[/code], [code]floor_material[/code], [code]planes[/code], [code]cast_fraction[/code], and [code]iterations[/code]. Floor material fields are probe-derived.
+				Moves from feet [param position] by [param velocity] over [param delta]. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]floor_material_id[/code], [code]floor_material_name[/code], [code]floor_material[/code], [code]planes[/code], [code]cast_fraction[/code], [code]iterations[/code], and [code]stepped[/code] ([code]true[/code] when a [member step_height] stair step was performed this call). Floor material fields are probe-derived.
 			</description>
 		</method>
 		<method name="set_capsule">
@@ -107,6 +108,9 @@
 		</member>
 		<member name="floor_max_angle" type="float" setter="set_floor_max_angle" getter="get_floor_max_angle" default="0.7853981633974483">
 			Maximum floor angle in radians. Defaults to 45 degrees.
+		</member>
+		<member name="step_height" type="float" setter="set_step_height" getter="get_step_height" default="0.0">
+			Maximum stair riser height [method move] can climb, in meters. [code]0.0[/code] disables stepping and probe-based grounding entirely, preserving the plain mover loop.
 		</member>
 	</members>
 </class>

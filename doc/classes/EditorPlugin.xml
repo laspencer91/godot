@@ -460,6 +460,20 @@
 				When your plugin is deactivated, make sure to remove your custom control with [method remove_control_from_container] and free it with [method Node.queue_free].
 			</description>
 		</method>
+		<method name="add_control_to_viewport_chrome">
+			<return type="EditorViewportChromeRegistration" />
+			<param index="0" name="editor_id" type="StringName" />
+			<param index="1" name="slot" type="int" enum="EditorPlugin.ViewportChromeSlot" />
+			<param index="2" name="factory" type="Callable" />
+			<param index="3" name="order" type="int" default="0" />
+			<param index="4" name="scope" type="int" enum="EditorPlugin.ViewportChromeScope" default="0" />
+			<description>
+				Registers screen-space editor UI in a standardized viewport chrome slot. [param editor_id] is currently [code]&amp;"2d"[/code] or [code]&amp;"3d"[/code]. Lower [param order] values are placed before higher values in the same slot. Plugin order values must be non-negative; negative values are reserved for built-in editor controls.
+				[param factory] is called once for every matching view with a context [Dictionary] and must return a new, unparented [Control]. The dictionary always contains [code]editor_id[/code], [code]scope[/code], and the owning [code]view[/code]. A 3D subviewport context also contains [code]viewport[/code] and [code]viewport_index[/code]. A 2D view context contains [code]overlay_control[/code].
+				The returned registration owns the controls produced by [param factory]. They are freed when the registration is removed, when a matching view is destroyed, or when this plugin is destroyed. Use the [code]ViewportButton[/code], [code]ViewportMenuButton[/code], [code]ViewportCheckBox[/code], [code]ViewportPanel[/code], [code]ViewportToolbar[/code], or [code]ViewportChromeGroup[/code] theme type variations to match built-in viewport controls.
+				[b]Note:[/b] This API is for editor UI drawn over a viewport. Use [EditorNode3DGizmoPlugin], [method _forward_canvas_draw_over_viewport], or [method _forward_3d_draw_over_viewport] for scene-space drawing and handles.
+			</description>
+		</method>
 		<method name="add_control_to_dock" deprecated="Use [method add_dock] instead.">
 			<return type="void" />
 			<param index="0" name="slot" type="int" enum="EditorPlugin.DockSlot" />
@@ -693,6 +707,13 @@
 				Removes the control from the specified container. You have to manually [method Node.queue_free] the control.
 			</description>
 		</method>
+		<method name="remove_control_from_viewport_chrome">
+			<return type="void" />
+			<param index="0" name="registration" type="EditorViewportChromeRegistration" />
+			<description>
+				Unregisters viewport chrome controls previously added with [method add_control_to_viewport_chrome]. The controls returned by the registration's factory are removed and freed.
+			</description>
+		</method>
 		<method name="remove_control_from_docks" deprecated="Use [method remove_dock] instead.">
 			<return type="void" />
 			<param index="0" name="control" type="Control" />
@@ -898,6 +919,30 @@
 		</constant>
 		<constant name="CONTAINER_PROJECT_SETTING_TAB_RIGHT" value="11" enum="CustomControlContainer">
 			Tab of Project Settings dialog, to the right of other tabs.
+		</constant>
+		<constant name="VIEWPORT_CHROME_TOP_LEFT" value="0" enum="ViewportChromeSlot">
+			Top-left viewport chrome slot.
+		</constant>
+		<constant name="VIEWPORT_CHROME_TOP_CENTER" value="1" enum="ViewportChromeSlot">
+			Top-center viewport chrome slot.
+		</constant>
+		<constant name="VIEWPORT_CHROME_TOP_RIGHT" value="2" enum="ViewportChromeSlot">
+			Top-right viewport chrome slot.
+		</constant>
+		<constant name="VIEWPORT_CHROME_BOTTOM_LEFT" value="3" enum="ViewportChromeSlot">
+			Bottom-left viewport chrome slot.
+		</constant>
+		<constant name="VIEWPORT_CHROME_BOTTOM_CENTER" value="4" enum="ViewportChromeSlot">
+			Bottom-center viewport chrome slot.
+		</constant>
+		<constant name="VIEWPORT_CHROME_BOTTOM_RIGHT" value="5" enum="ViewportChromeSlot">
+			Bottom-right viewport chrome slot.
+		</constant>
+		<constant name="VIEWPORT_CHROME_SCOPE_VIEW" value="0" enum="ViewportChromeScope">
+			Creates one control for each matching 2D or 3D editor view. In 3D this is outside the optional multi-viewport camera layout.
+		</constant>
+		<constant name="VIEWPORT_CHROME_SCOPE_SUBVIEWPORT" value="1" enum="ViewportChromeScope">
+			Creates one control for each matching rendered subviewport. Currently this scope is available for the 3D editor and can create up to four controls per view.
 		</constant>
 		<constant name="DOCK_SLOT_NONE" value="-1" enum="DockSlot">
 			The dock is closed.

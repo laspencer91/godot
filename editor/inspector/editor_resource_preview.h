@@ -105,6 +105,8 @@ private:
 		String path;
 		Callable callback;
 		PreviewPriority priority = PREVIEW_PRIORITY_NORMAL;
+		// Set once the worker probed the disk cache, so the main thread does not probe again.
+		bool cache_probed = false;
 	};
 
 	enum ScenePreviewPhase {
@@ -117,12 +119,18 @@ private:
 		SubViewport *viewport = nullptr;
 		ScenePreviewPhase phase = SCENE_PREVIEW_PHASE_SETUP;
 		uint64_t source_modified_time = 0;
-		String source_hash;
 	};
 
 	List<QueueItem> queue;
 	List<SceneQueueItem> scene_queue;
+	// Scene items whose disk-cache probe missed on the worker; only the main thread may generate these.
+	List<SceneQueueItem> scene_generate_queue;
+	// The item currently being probed on the worker, so cancellation can reach mid-probe requests.
+	SceneQueueItem scene_probe_item;
+	bool scene_probe_active = false;
 	ActiveScenePreview active_scene_preview;
+	// Main-thread only. Scene generation must not start before this deadline (drawer animations).
+	uint64_t scene_preview_defer_until_ms = 0;
 
 	Mutex preview_mutex;
 	Semaphore preview_sem;
@@ -157,6 +165,7 @@ private:
 	static void _idle_callback(); // For other rendering drivers (i.e., OpenGL).
 	void _iterate();
 	void _process_scene_preview();
+	void _probe_scene_preview();
 	void _queue_scene_preview(const SceneQueueItem &p_item);
 	bool _pop_scene_preview(SceneQueueItem &r_item);
 	void _begin_scene_preview(const SceneQueueItem &p_item);
@@ -200,6 +209,9 @@ public:
 	void queue_edited_resource_preview(const Ref<Resource> &p_res, const Callable &p_callback);
 	void queue_scene_preview(const String &p_path, const Callable &p_callback, PreviewPriority p_priority = PREVIEW_PRIORITY_NORMAL);
 	void cancel_scene_preview(const String &p_path, const Callable &p_callback);
+	// Hold off starting new scene generations for p_seconds, so UI animations keep their frames.
+	// The deadline self-expires; in-flight render phases still complete.
+	void defer_scene_preview_generation(double p_seconds);
 	const Dictionary get_preview_metadata(const String &p_path) const;
 
 	PreviewItem get_resource_preview_if_available(const String &p_path);

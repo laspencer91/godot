@@ -17,6 +17,13 @@ func _set_selection(node: Node) -> void:
 	selection.add_node(node)
 
 
+func _has_selected_gizmo(node: Node3D) -> bool:
+	for gizmo in node.get_gizmos():
+		if gizmo.is_selected():
+			return true
+	return false
+
+
 func _send_button(viewport: Viewport, position: Vector2, pressed: bool) -> void:
 	var event := InputEventMouseButton.new()
 	event.position = position
@@ -88,10 +95,86 @@ func _run_test() -> void:
 		push_error("Scene Tree drag smoke fixtures are missing.")
 		return
 
+	# SceneTreeDock's paste path adds the duplicate, assigns its edited-scene owner, and then changes
+	# EditorSelection. In the pane workspace the document view remains active while the shared 3D
+	# main surface stays hidden, so guard changes that never pass through the retired screen switcher.
+	var pasted := dragged.duplicate() as Node3D
+	pasted.name = "PastedCamera3D"
+	root.add_child(pasted)
+	pasted.owner = root
+	_set_selection(pasted)
+	for frame in 3:
+		await get_tree().process_frame
+	if pasted.get_gizmos().is_empty() or not _has_selected_gizmo(pasted):
+		push_error("Pasted Node3D did not receive a selected gizmo in the active 3D pane.")
+		return
+	_set_selection(original)
+	root.remove_child(pasted)
+	pasted.queue_free()
+	await get_tree().process_frame
+
 	var tree := _find_scene_tree(dragged)
 	if tree == null:
 		push_error("Could not find the visible pane-hosted SceneTree.")
 		return
+
+	# Viewport picking changes EditorSelection directly. The pane-hosted SceneTree must promote that
+	# model change to its own cursor/reveal state as well: otherwise a collapsed node stays hidden and
+	# Add Child / Instantiate still use whichever row the user last clicked in the tree.
+	var reveal_parent := Node3D.new()
+	reveal_parent.name = "SelectionRevealParent"
+	root.add_child(reveal_parent)
+	reveal_parent.owner = root
+	for index in 20:
+		var filler := Node3D.new()
+		filler.name = "RevealFiller%02d" % index
+		reveal_parent.add_child(filler)
+		filler.owner = root
+	var reveal_target := Node3D.new()
+	reveal_target.name = "SelectionRevealTarget"
+	reveal_parent.add_child(reveal_target)
+	reveal_target.owner = root
+	for frame in 3:
+		await get_tree().process_frame
+
+	var reveal_parent_item := _find_item(tree, reveal_parent.get_path())
+	var reveal_target_item := _find_item(tree, reveal_target.get_path())
+	if reveal_parent_item == null or reveal_target_item == null:
+		push_error("Scene Tree did not display the nested selection-reveal fixtures.")
+		return
+	reveal_parent_item.set_collapsed(true)
+	tree.scroll_to_item(tree.get_root(), true)
+	await get_tree().process_frame
+
+	_set_selection(reveal_target)
+	for frame in 3:
+		await get_tree().process_frame
+	reveal_parent_item = _find_item(tree, reveal_parent.get_path())
+	reveal_target_item = _find_item(tree, reveal_target.get_path())
+	if reveal_parent_item == null or reveal_target_item == null:
+		push_error("Scene Tree lost the nested selection-reveal fixtures after selection.")
+		return
+	if reveal_parent_item.is_collapsed():
+		push_error("Viewport-style selection did not expand the selected node's Scene Tree ancestors.")
+		return
+	if not reveal_target_item.is_selected(0):
+		push_error("Viewport-style selection did not highlight the selected Scene Tree row.")
+		return
+	if tree.get_selected() != reveal_target_item:
+		push_error("Pane SceneTree cursor did not follow viewport-style selection; child creation would use a stale parent.")
+		return
+	var reveal_rect := tree.get_item_area_rect(reveal_target_item, 0)
+	if reveal_rect.position.y < 0.0 or reveal_rect.end.y > tree.size.y:
+		push_error("Viewport-style selection did not scroll the selected Scene Tree row into view.")
+		return
+
+	_set_selection(original)
+	for frame in 2:
+		await get_tree().process_frame
+	root.remove_child(reveal_parent)
+	reveal_parent.queue_free()
+	for frame in 2:
+		await get_tree().process_frame
 
 	# Establish the Inspector's starting object before deriving click geometry. Selecting it can
 	# auto-scroll or re-layout a short pane-hosted Tree, invalidating coordinates captured earlier.

@@ -64,13 +64,13 @@ Node2D *Polygon2DEditor::_get_node() const {
 }
 
 void Polygon2DEditor::_set_node(Node *p_polygon) {
-	CanvasItem *ci_editor_control = CanvasItemEditor::get_singleton()->get_viewport_control();
+	CanvasItemEditor *canvas_item_editor = CanvasItemEditor::get_singleton();
 
 	CanvasItem *draw = Object::cast_to<CanvasItem>(canvas);
 	if (node) {
 		node->disconnect(SceneStringName(draw), callable_mp(draw, &CanvasItem::queue_redraw));
 		node->disconnect(SceneStringName(draw), callable_mp(this, &Polygon2DEditor::_update_available_modes));
-		node->disconnect(SceneStringName(draw), callable_mp(ci_editor_control, &CanvasItem::queue_redraw));
+		node->disconnect(SceneStringName(draw), callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport));
 	}
 
 	node = Object::cast_to<Polygon2D>(p_polygon);
@@ -93,7 +93,7 @@ void Polygon2DEditor::_set_node(Node *p_polygon) {
 		node->connect(SceneStringName(draw), callable_mp(draw, &CanvasItem::queue_redraw));
 		node->connect(SceneStringName(draw), callable_mp(this, &Polygon2DEditor::_update_available_modes));
 		// Update the canvas overlay.
-		node->connect(SceneStringName(draw), callable_mp(ci_editor_control, &CanvasItem::queue_redraw));
+		node->connect(SceneStringName(draw), callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport));
 	}
 }
 

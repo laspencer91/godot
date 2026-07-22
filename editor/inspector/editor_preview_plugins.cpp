@@ -35,7 +35,6 @@
 #include "core/io/resource_loader.h"
 #include "core/object/class_db.h"
 #include "core/object/script_language.h"
-#include "editor/file_system/editor_paths.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/resources/atlas_texture.h"
@@ -296,29 +295,10 @@ Ref<Texture2D> EditorPackedScenePreviewPlugin::generate(const Ref<Resource> &p_f
 	return generate_from_path(p_from->get_path(), p_size, p_metadata);
 }
 
-Ref<Texture2D> EditorPackedScenePreviewPlugin::generate_from_path(const String &p_path, const Size2 &p_size, Dictionary &p_metadata) const {
-	String temp_path = EditorPaths::get_singleton()->get_cache_dir();
-	String cache_base = ProjectSettings::get_singleton()->globalize_path(p_path).md5_text();
-	cache_base = temp_path.path_join("resthumb-" + cache_base);
-
-	//does not have it, try to load a cached thumbnail
-
-	String path = cache_base + ".png";
-
-	if (!FileAccess::exists(path)) {
-		return Ref<Texture2D>();
-	}
-
-	Ref<Image> img;
-	img.instantiate();
-	Error err = img->load(path);
-	if (err == OK) {
-		post_process_preview(img);
-		return ImageTexture::create_from_image(img);
-
-	} else {
-		return Ref<Texture2D>();
-	}
+Ref<Texture2D> EditorPackedScenePreviewPlugin::generate_from_path(const String &, const Size2 &, Dictionary &) const {
+	// The generic worker already serves a validated disk cache before generators run; returning the raw PNG here would
+	// re-bless a stale thumbnail with fresh metadata and block the scene-preview pipeline from regenerating it.
+	return Ref<Texture2D>();
 }
 
 //////////////////////////////////////////////////////////////////

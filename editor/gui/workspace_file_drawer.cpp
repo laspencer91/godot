@@ -33,6 +33,7 @@
 #include "core/io/config_file.h"
 #include "core/object/callable_mp.h"
 #include "editor/editor_string_names.h"
+#include "editor/inspector/editor_resource_preview.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/animation/tween.h"
 #include "scene/gui/box_container.h"
@@ -216,6 +217,11 @@ void WorkspaceFileDrawer::set_open(bool p_open, bool p_animate) {
 			set_visible(false);
 		}
 	} else {
+		// Keep the slide animation's frames free of scene-preview generation; the deadline
+		// self-expires shortly after the 0.18s tween, so a killed tween cannot leave it stuck.
+		if (EditorResourcePreview::get_singleton()) {
+			EditorResourcePreview::get_singleton()->defer_scene_preview_generation(0.25);
+		}
 		tween = create_tween();
 		tween->tween_method(callable_mp(this, &WorkspaceFileDrawer::_set_shown_amount), shown_amount, target, 0.18)
 				->set_trans(Tween::TRANS_CUBIC)

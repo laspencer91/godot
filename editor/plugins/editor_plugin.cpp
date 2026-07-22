@@ -238,6 +238,22 @@ void EditorPlugin::remove_control_from_container(CustomControlContainer p_locati
 	}
 }
 
+Ref<EditorViewportChromeRegistration> EditorPlugin::add_control_to_viewport_chrome(const StringName &p_editor_id, ViewportChromeSlot p_slot, const Callable &p_factory, int p_order, ViewportChromeScope p_scope) {
+	ERR_FAIL_NULL_V(EditorViewportChromeRegistry::get_singleton(), Ref<EditorViewportChromeRegistration>());
+	Ref<EditorViewportChromeRegistration> registration = EditorViewportChromeRegistry::get_singleton()->register_control_factory(p_editor_id, int(p_scope), int(p_slot), p_factory, p_order);
+	if (registration.is_valid()) {
+		viewport_chrome_registrations.push_back(registration);
+	}
+	return registration;
+}
+
+void EditorPlugin::remove_control_from_viewport_chrome(const Ref<EditorViewportChromeRegistration> &p_registration) {
+	ERR_FAIL_COND(p_registration.is_null());
+	ERR_FAIL_COND_MSG(viewport_chrome_registrations.find(p_registration) < 0, "Viewport chrome registration does not belong to this plugin.");
+	p_registration->unregister();
+	viewport_chrome_registrations.erase(p_registration);
+}
+
 void EditorPlugin::add_tool_menu_item(const String &p_name, const Callable &p_callable) {
 	EditorNode::get_singleton()->add_tool_menu_item(p_name, p_callable);
 }
@@ -652,6 +668,8 @@ void EditorPlugin::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("remove_dock", "dock"), &EditorPlugin::remove_dock);
 	ClassDB::bind_method(D_METHOD("add_control_to_container", "container", "control"), &EditorPlugin::add_control_to_container);
 	ClassDB::bind_method(D_METHOD("remove_control_from_container", "container", "control"), &EditorPlugin::remove_control_from_container);
+	ClassDB::bind_method(D_METHOD("add_control_to_viewport_chrome", "editor_id", "slot", "factory", "order", "scope"), &EditorPlugin::add_control_to_viewport_chrome, DEFVAL(0), DEFVAL(VIEWPORT_CHROME_SCOPE_VIEW));
+	ClassDB::bind_method(D_METHOD("remove_control_from_viewport_chrome", "registration"), &EditorPlugin::remove_control_from_viewport_chrome);
 	ClassDB::bind_method(D_METHOD("add_tool_menu_item", "name", "callable"), &EditorPlugin::add_tool_menu_item);
 	ClassDB::bind_method(D_METHOD("add_tool_submenu_item", "name", "submenu"), &EditorPlugin::add_tool_submenu_item);
 	ClassDB::bind_method(D_METHOD("remove_tool_menu_item", "name"), &EditorPlugin::remove_tool_menu_item);
@@ -757,6 +775,16 @@ void EditorPlugin::_bind_methods() {
 	BIND_ENUM_CONSTANT(CONTAINER_PROJECT_SETTING_TAB_LEFT);
 	BIND_ENUM_CONSTANT(CONTAINER_PROJECT_SETTING_TAB_RIGHT);
 
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_TOP_LEFT);
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_TOP_CENTER);
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_TOP_RIGHT);
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_BOTTOM_LEFT);
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_BOTTOM_CENTER);
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_BOTTOM_RIGHT);
+
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_SCOPE_VIEW);
+	BIND_ENUM_CONSTANT(VIEWPORT_CHROME_SCOPE_SUBVIEWPORT);
+
 #ifndef DISABLE_DEPRECATED
 	BIND_ENUM_CONSTANT(DOCK_SLOT_NONE);
 	BIND_ENUM_CONSTANT(DOCK_SLOT_LEFT_UL);
@@ -777,6 +805,15 @@ void EditorPlugin::_bind_methods() {
 
 	BIND_ENUM_CONSTANT(EXTERNAL_FILE_DROP_PASS);
 	BIND_ENUM_CONSTANT(EXTERNAL_FILE_DROP_CLAIM);
+}
+
+EditorPlugin::~EditorPlugin() {
+	for (const Ref<EditorViewportChromeRegistration> &registration : viewport_chrome_registrations) {
+		if (registration.is_valid()) {
+			registration->unregister();
+		}
+	}
+	viewport_chrome_registrations.clear();
 }
 
 EditorUndoRedoManager *EditorPlugin::get_undo_redo() {

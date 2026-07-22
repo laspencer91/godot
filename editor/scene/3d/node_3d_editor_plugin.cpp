@@ -47,6 +47,7 @@
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/gui/editor_spin_slider.h"
+#include "editor/gui/editor_viewport_chrome.h"
 #include "editor/plugins/editor_plugin_list.h"
 #include "editor/run/editor_run_bar.h"
 #include "editor/scene/3d/gizmos/audio_listener_3d_gizmo_plugin.h"
@@ -2157,26 +2158,9 @@ void Node3DEditor::_selection_changed() {
 		selected = nullptr;
 	}
 
-	// Ensure gizmo updates are performed when the selection changes
-	// outside of the 3D view (see GH-106713).
-	if (!is_visible()) {
-		const List<Node *> &top_selected = editor_selection->get_top_selected_node_list();
-		if (top_selected.size() == 1) {
-			Node3D *new_selected = Object::cast_to<Node3D>(top_selected.back()->get());
-			if (new_selected != selected) {
-				gizmos_dirty = true;
-			}
-		}
-	}
-
-	update_transform_gizmo();
-}
-
-void Node3DEditor::refresh_dirty_gizmos() {
-	if (!gizmos_dirty) {
-		return;
-	}
-
+	// Keep the gizmo selection cache in sync with EditorSelection. The stock main-screen flow calls
+	// edit() separately while the 3D editor is visible, but pane-hosted 3D views stay visible and do
+	// not pass through that flow (notably after SceneTreeDock paste/duplicate).
 	const List<Node *> &top_selected = editor_selection->get_top_selected_node_list();
 	if (top_selected.size() == 1) {
 		Node3D *new_selected = Object::cast_to<Node3D>(top_selected.back()->get());
@@ -2184,7 +2168,8 @@ void Node3DEditor::refresh_dirty_gizmos() {
 			edit(new_selected);
 		}
 	}
-	gizmos_dirty = false;
+
+	update_transform_gizmo();
 }
 
 void Node3DEditor::_refresh_menu_icons() {
@@ -2808,6 +2793,11 @@ Node3DEditorView::Node3DEditorView(Node3DEditor *p_editor) {
 	viewport_base = memnew(Node3DEditorViewportContainer);
 	viewport_base->set_v_size_flags(SIZE_EXPAND_FILL);
 	add_child(viewport_base);
+
+	Dictionary chrome_context;
+	chrome_context["view"] = this;
+	viewport_chrome = memnew(EditorViewportChrome(SNAME("3d"), EditorViewportChrome::SCOPE_VIEW, chrome_context));
+	add_child(viewport_chrome);
 }
 
 Node3DEditorView::~Node3DEditorView() {
@@ -2819,6 +2809,10 @@ Node3DEditorView::~Node3DEditorView() {
 	if (decorations_initialized) {
 		finish_decorations();
 	}
+}
+
+void Node3DEditorView::activate_viewport_chrome() {
+	viewport_chrome->activate();
 }
 
 void Node3DEditor::_build_view_viewports(Node3DEditorView *p_view) {
@@ -2834,6 +2828,7 @@ void Node3DEditor::_build_view_viewports(Node3DEditorView *p_view) {
 		vp_base->add_viewport(vp, i);
 		p_view->register_viewport(i, vp);
 	}
+	p_view->activate_viewport_chrome();
 }
 
 Control *Node3DEditor::create_view_bound_to(EditorDocument *p_document) {
@@ -4312,12 +4307,11 @@ void Node3DEditorPlugin::make_visible(bool p_visible) {
 	// are untouched. set_process()/set_physics_process() gate only the singleton's own callbacks (it has
 	// no NOTIFICATION_PROCESS and only a snap-to-floor one-shot in physics-process); each
 	// Node3DEditorViewport self-drives its own process from NOTIFICATION_VISIBILITY_CHANGED, so pane
-	// viewports keep rendering regardless. refresh_dirty_gizmos() is an additive shared-services refresh.
+	// viewports keep rendering regardless.
 	if (p_visible) {
 		spatial_editor->show();
 		spatial_editor->set_process(true);
 		spatial_editor->set_physics_process(true);
-		spatial_editor->refresh_dirty_gizmos();
 	} else {
 		spatial_editor->hide();
 		spatial_editor->set_process(false);

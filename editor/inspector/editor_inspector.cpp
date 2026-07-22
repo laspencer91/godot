@@ -2740,12 +2740,21 @@ void EditorInspectorSection::set_checkable(const String &p_related_check_propert
 	checked = p_checked;
 	related_enable_property = p_related_check_property;
 
-	if (InspectorDock::get_singleton()) {
-		if (checkable) {
-			InspectorDock::get_inspector_singleton()->connect("property_edited", callable_mp(this, &EditorInspectorSection::_property_edited));
-		} else {
-			InspectorDock::get_inspector_singleton()->disconnect("property_edited", callable_mp(this, &EditorInspectorSection::_property_edited));
+	// G2 M7.2a-fix: track edits in *this section's own* inspector, not the active-pane InspectorDock
+	// singleton (which flips between panes). Connect to the containing EditorInspector (already our
+	// ancestor by the time set_checkable runs from update_tree), and remember it by ObjectID so the
+	// disconnect below (and in the destructor) targets the same object even after the tree is torn down.
+	if (checkable) {
+		EditorInspector *inspector = _get_parent_inspector();
+		if (inspector) {
+			inspector->connect("property_edited", callable_mp(this, &EditorInspectorSection::_property_edited));
+			checkable_connected_inspector = inspector->get_instance_id();
 		}
+	} else {
+		if (EditorInspector *inspector = Object::cast_to<EditorInspector>(ObjectDB::get_instance(checkable_connected_inspector))) {
+			inspector->disconnect("property_edited", callable_mp(this, &EditorInspectorSection::_property_edited));
+		}
+		checkable_connected_inspector = ObjectID();
 	}
 
 	if (!checkbox_only && checkable && !checked) {
@@ -2884,8 +2893,10 @@ EditorInspectorSection::~EditorInspectorSection() {
 		memdelete(vbox);
 	}
 
-	if (checkable && InspectorDock::get_singleton()) {
-		InspectorDock::get_inspector_singleton()->disconnect("property_edited", callable_mp(this, &EditorInspectorSection::_property_edited));
+	// G2 M7.2a-fix: disconnect from the inspector we actually connected to (by ObjectID), not the
+	// current active-pane singleton — see set_checkable.
+	if (EditorInspector *inspector = Object::cast_to<EditorInspector>(ObjectDB::get_instance(checkable_connected_inspector))) {
+		inspector->disconnect("property_edited", callable_mp(this, &EditorInspectorSection::_property_edited));
 	}
 }
 

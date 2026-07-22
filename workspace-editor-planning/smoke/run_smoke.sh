@@ -141,6 +141,19 @@ else
 fi
 cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
 
+# Standardized viewport chrome: register controls at both the view and 3D-subviewport tiers,
+# verify deterministic slot ordering and theme variations, then unregister one factory and
+# require all of its generated Controls to be freed.
+cp "$SMOKE_DIR/viewport_chrome_project.godot" "$WORK/project.godot"
+run_case "viewport_chrome" -e "res://test_3d.tscn"
+if grep -q 'VIEWPORT_CHROME_OK' "$WORK/viewport_chrome.log"; then
+	echo "  PASS  viewport_chrome_assertions (factories + slots + cleanup verified)"
+else
+	echo "  FAIL  viewport_chrome_assertions (registration test did not reach its success marker)"
+	fail=1
+fi
+cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
+
 # Restore case: seed the editor layout with 3 open scenes, then launch with no
 # explicit scene so the editor restores them.
 mkdir -p "$WORK/.godot/editor"

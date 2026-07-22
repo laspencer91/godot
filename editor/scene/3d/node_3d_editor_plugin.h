@@ -47,6 +47,7 @@ class DirectionalLight3D;
 class EditorDocument;
 class EditorSelection;
 class EditorSpinSlider;
+class EditorViewportChrome;
 class HSplitContainer;
 class LineEdit;
 class MenuButton;
@@ -316,8 +317,6 @@ private:
 	void _set_subgizmo_selection(Object *p_obj, Ref<Node3DGizmo> p_gizmo, int p_id, Transform3D p_transform = Transform3D());
 	void _clear_subgizmo_selection(Object *p_obj = nullptr);
 
-	bool gizmos_dirty = false;
-
 	static Node3DEditor *singleton;
 
 	void _node_added(Node *p_node);
@@ -529,8 +528,6 @@ public:
 	bool is_subgizmo_selected(int p_id);
 	Vector<int> get_subgizmo_selection();
 	void clear_subgizmo_selection(Object *p_obj = nullptr);
-	void refresh_dirty_gizmos();
-
 	Ref<EditorNode3DGizmo> get_current_hover_gizmo() const { return current_hover_gizmo; }
 	void set_current_hover_gizmo(Ref<EditorNode3DGizmo> p_gizmo) { current_hover_gizmo = p_gizmo; }
 
@@ -612,6 +609,7 @@ class Node3DEditorView : public MarginContainer {
 
 	Node3DEditor *editor = nullptr; // Services singleton this view belongs to.
 	Node3DEditorViewportContainer *viewport_base = nullptr;
+	EditorViewportChrome *viewport_chrome = nullptr;
 	Node3DEditorViewport *viewports[Node3DEditor::VIEWPORTS_COUNT] = {};
 	int last_used_viewport = 0;
 	Node3DEditorViewport *freelook_viewport = nullptr;
@@ -673,6 +671,7 @@ public:
 	void update_grid();
 
 	Node3DEditorViewportContainer *get_viewport_base() const { return viewport_base; }
+	void activate_viewport_chrome();
 
 	// Store a viewport built by the editor (which has the ctor-scoped preview/accept
 	// pointers) into this view's slot; the view owns the quad from then on.

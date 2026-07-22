@@ -50,6 +50,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/editor_viewport_chrome.h"
 #include "editor/gui/editor_workspace.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
 #include "editor/plugins/editor_plugin_list.h"
@@ -3804,23 +3805,6 @@ static void override_label_colors(Control *p_control, Control *p_theme_source) {
 	p_control->end_bulk_theme_override();
 }
 
-static void override_button_stylebox(Button *p_button, const Ref<StyleBox> p_stylebox) {
-	p_button->begin_bulk_theme_override();
-	p_button->add_theme_style_override(CoreStringName(normal), p_stylebox);
-	p_button->add_theme_style_override("normal_mirrored", p_stylebox);
-	p_button->add_theme_style_override(SceneStringName(hover), p_stylebox);
-	p_button->add_theme_style_override("hover_mirrored", p_stylebox);
-	p_button->add_theme_style_override("hover_pressed", p_stylebox);
-	p_button->add_theme_style_override("hover_pressed_mirrored", p_stylebox);
-	p_button->add_theme_style_override(SceneStringName(pressed), p_stylebox);
-	p_button->add_theme_style_override("pressed_mirrored", p_stylebox);
-	p_button->add_theme_style_override("focus", p_stylebox);
-	p_button->add_theme_style_override("focus_mirrored", p_stylebox);
-	p_button->add_theme_style_override("disabled", p_stylebox);
-	p_button->add_theme_style_override("disabled_mirrored", p_stylebox);
-	p_button->end_bulk_theme_override();
-}
-
 void Node3DEditorViewport::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_TRANSLATION_CHANGED: {
@@ -4526,30 +4510,13 @@ void Node3DEditorViewport::_notification(int p_what) {
 
 			const Ref<StyleBox> &information_3d_stylebox = gui_base->get_theme_stylebox(SNAME("Information3dViewport"), EditorStringName(EditorStyles));
 
-			// Pane viewports are minted before they enter the editor's themed tree. Always
-			// resolve editor-only theme items from gui_base so an early theme notification
-			// cannot cache fallback values (notably black overlay text) as explicit overrides.
-			override_button_stylebox(view_display_menu, information_3d_stylebox);
-			override_label_colors(view_display_menu, gui_base);
-			override_button_stylebox(translation_preview_button, information_3d_stylebox);
-			override_label_colors(translation_preview_button, gui_base);
-			override_button_stylebox(follow_mode, information_3d_stylebox);
-			override_label_colors(follow_mode, gui_base);
-			override_button_stylebox(preview_camera, information_3d_stylebox);
-			override_label_colors(preview_camera, gui_base);
-
 			frame_time_gradient->set_color(0, gui_base->get_theme_color(SNAME("success_color_dark_background"), EditorStringName(Editor)));
 			frame_time_gradient->set_color(1, gui_base->get_theme_color(SNAME("warning_color_dark_background"), EditorStringName(Editor)));
 			frame_time_gradient->set_color(2, gui_base->get_theme_color(SNAME("error_color_dark_background"), EditorStringName(Editor)));
 
-			override_button_stylebox(pilot_camera, information_3d_stylebox);
-			override_label_colors(pilot_camera, gui_base);
-
-			info_panel->add_theme_style_override(SceneStringName(panel), information_3d_stylebox);
 			override_label_colors(info_label, gui_base);
 			tooltip_panel->add_theme_style_override(CoreStringName(normal), information_3d_stylebox);
 
-			frame_time_panel->add_theme_style_override(SceneStringName(panel), information_3d_stylebox);
 			// Set a minimum width to prevent the width from changing all the time
 			// when numbers vary rapidly. This minimum width is set based on a
 			// GPU time of 999.99 ms in the current editor language.
@@ -7484,16 +7451,26 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	camera->make_current();
 	surface->set_focus_mode(FOCUS_ALL);
 
+	Dictionary chrome_context;
+	chrome_context["view"] = p_editor_view;
+	chrome_context["viewport"] = viewport;
+	chrome_context["viewport_index"] = p_index;
+	viewport_chrome = memnew(EditorViewportChrome(SNAME("3d"), EditorViewportChrome::SCOPE_SUBVIEWPORT, chrome_context));
+	surface->add_child(viewport_chrome);
+
 	VBoxContainer *vbox = memnew(VBoxContainer);
-	surface->add_child(vbox);
-	vbox->set_offset(SIDE_LEFT, 10 * EDSCALE);
-	vbox->set_offset(SIDE_TOP, 10 * EDSCALE);
+	vbox->set_mouse_filter(MOUSE_FILTER_IGNORE);
+	vbox->set_theme_type_variation("ViewportChromeGroup");
+	viewport_chrome->add_control(EditorViewportChrome::SLOT_TOP_LEFT, vbox, -1000);
 
 	HBoxContainer *hbox = memnew(HBoxContainer);
+	hbox->set_mouse_filter(MOUSE_FILTER_IGNORE);
+	hbox->set_theme_type_variation("ViewportToolbar");
 	vbox->add_child(hbox);
 
 	view_display_menu = memnew(MenuButton);
 	view_display_menu->set_flat(false);
+	view_display_menu->set_theme_type_variation("ViewportMenuButton");
 	view_display_menu->set_h_size_flags(0);
 	view_display_menu->set_shortcut_context(this);
 	view_display_menu->set_accessibility_name(TTRC("View"));
@@ -7637,9 +7614,11 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	ED_SHORTCUT("spatial_editor/reset_transform_scale", TTRC("Reset Scale"), KeyModifierMask::ALT + Key::R);
 
 	translation_preview_button = memnew(EditorTranslationPreviewButton);
+	translation_preview_button->set_theme_type_variation("ViewportButton");
 	hbox->add_child(translation_preview_button);
 
 	follow_mode = memnew(Button);
+	follow_mode->set_theme_type_variation("ViewportButton");
 	follow_mode->set_tooltip_text(TTR("Click to stop following this node as it moves."));
 	follow_mode->hide();
 	vbox->add_child(follow_mode);
@@ -7652,7 +7631,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	preview_camera->set_shortcut(ED_SHORTCUT("spatial_editor/toggle_camera_preview", TTRC("Toggle Camera Preview"), KeyModifierMask::CTRL | Key::P));
 	vbox->add_child(preview_camera);
 	preview_camera->set_h_size_flags(0);
-	preview_camera->set_theme_type_variation("CheckBoxNoIconTint");
+	preview_camera->set_theme_type_variation("ViewportCheckBox");
 	preview_camera->hide();
 	preview_camera->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditorViewport::_toggle_camera_preview));
 
@@ -7662,7 +7641,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	pilot_camera->set_shortcut(ED_SHORTCUT("spatial_editor/toggle_pilot_preview", TTRC("Toggle Pilot Mode in Preview")));
 	vbox->add_child(pilot_camera);
 	pilot_camera->set_h_size_flags(0);
-	pilot_camera->set_theme_type_variation("CheckBoxNoIconTint");
+	pilot_camera->set_theme_type_variation("ViewportCheckBox");
 	pilot_camera->hide();
 	pilot_camera->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditorViewport::_toggle_pilot_preview));
 	previewing = nullptr;
@@ -7671,14 +7650,12 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	preview_node = nullptr;
 
 	bottom_center_vbox = memnew(VBoxContainer);
-	bottom_center_vbox->set_anchors_preset(LayoutPreset::PRESET_CENTER);
-	bottom_center_vbox->set_anchor_and_offset(SIDE_TOP, ANCHOR_END, -20 * EDSCALE);
-	bottom_center_vbox->set_anchor_and_offset(SIDE_BOTTOM, ANCHOR_END, -10 * EDSCALE);
-	bottom_center_vbox->set_h_grow_direction(GROW_DIRECTION_BOTH);
-	bottom_center_vbox->set_v_grow_direction(GROW_DIRECTION_BEGIN);
-	surface->add_child(bottom_center_vbox);
+	bottom_center_vbox->set_mouse_filter(MOUSE_FILTER_IGNORE);
+	bottom_center_vbox->set_theme_type_variation("ViewportChromeGroup");
+	viewport_chrome->add_control(EditorViewportChrome::SLOT_BOTTOM_CENTER, bottom_center_vbox, -1000);
 
 	info_panel = memnew(PanelContainer);
+	info_panel->set_theme_type_variation("ViewportPanel");
 	info_panel->set_anchor_and_offset(SIDE_LEFT, ANCHOR_END, -90 * EDSCALE);
 	info_panel->set_anchor_and_offset(SIDE_TOP, ANCHOR_END, -90 * EDSCALE);
 	info_panel->set_anchor_and_offset(SIDE_RIGHT, ANCHOR_END, -10 * EDSCALE);
@@ -7739,9 +7716,8 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	frame_time_gradient->add_point(0.5, Color());
 
 	top_right_vbox = memnew(VBoxContainer);
-	top_right_vbox->add_theme_constant_override("separation", 10.0 * EDSCALE);
-	top_right_vbox->set_anchors_and_offsets_preset(PRESET_TOP_RIGHT, PRESET_MODE_MINSIZE, 10.0 * EDSCALE);
-	top_right_vbox->set_h_grow_direction(GROW_DIRECTION_BEGIN);
+	top_right_vbox->set_mouse_filter(MOUSE_FILTER_IGNORE);
+	top_right_vbox->set_theme_type_variation("ViewportChromeGroup");
 
 	const int navigation_control_size = 150;
 
@@ -7775,6 +7751,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	top_right_vbox->add_child(rotation_control);
 
 	frame_time_panel = memnew(PanelContainer);
+	frame_time_panel->set_theme_type_variation("ViewportPanel");
 	frame_time_panel->set_mouse_filter(MOUSE_FILTER_IGNORE);
 	top_right_vbox->add_child(frame_time_panel);
 	frame_time_panel->hide();
@@ -7792,7 +7769,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	fps_label = memnew(Label);
 	frame_time_vbox->add_child(fps_label);
 
-	surface->add_child(top_right_vbox);
+	viewport_chrome->add_control(EditorViewportChrome::SLOT_TOP_RIGHT, top_right_vbox, -1000);
 
 	accept = nullptr;
 
@@ -7909,6 +7886,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	_update_view_3d_controller(true);
 
 	_update_name();
+	viewport_chrome->activate();
 
 	EditorNode::get_singleton()->register_hdr_viewport(viewport);
 }

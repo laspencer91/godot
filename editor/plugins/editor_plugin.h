@@ -32,6 +32,7 @@
 
 #include "core/io/config_file.h"
 #include "editor/file_system/editor_external_file_drop_request.h"
+#include "editor/gui/editor_viewport_chrome.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/gui/control.h"
@@ -66,6 +67,7 @@ class EditorPlugin : public Node {
 
 	String last_main_screen_name;
 	String plugin_version;
+	Vector<Ref<EditorViewportChromeRegistration>> viewport_chrome_registrations;
 
 #ifndef DISABLE_DEPRECATED
 	static inline HashMap<Control *, EditorDock *> legacy_docks;
@@ -87,6 +89,20 @@ public:
 		CONTAINER_INSPECTOR_BOTTOM,
 		CONTAINER_PROJECT_SETTING_TAB_LEFT,
 		CONTAINER_PROJECT_SETTING_TAB_RIGHT,
+	};
+
+	enum ViewportChromeSlot {
+		VIEWPORT_CHROME_TOP_LEFT,
+		VIEWPORT_CHROME_TOP_CENTER,
+		VIEWPORT_CHROME_TOP_RIGHT,
+		VIEWPORT_CHROME_BOTTOM_LEFT,
+		VIEWPORT_CHROME_BOTTOM_CENTER,
+		VIEWPORT_CHROME_BOTTOM_RIGHT,
+	};
+
+	enum ViewportChromeScope {
+		VIEWPORT_CHROME_SCOPE_VIEW,
+		VIEWPORT_CHROME_SCOPE_SUBVIEWPORT,
 	};
 
 #ifndef DISABLE_DEPRECATED
@@ -171,6 +187,8 @@ public:
 
 	void add_control_to_container(CustomControlContainer p_location, Control *p_control);
 	void remove_control_from_container(CustomControlContainer p_location, Control *p_control);
+	Ref<EditorViewportChromeRegistration> add_control_to_viewport_chrome(const StringName &p_editor_id, ViewportChromeSlot p_slot, const Callable &p_factory, int p_order = 0, ViewportChromeScope p_scope = VIEWPORT_CHROME_SCOPE_VIEW);
+	void remove_control_from_viewport_chrome(const Ref<EditorViewportChromeRegistration> &p_registration);
 
 	void add_dock(EditorDock *p_dock);
 	void remove_dock(EditorDock *p_dock);
@@ -279,12 +297,16 @@ public:
 
 	void enable_plugin();
 	void disable_plugin();
+
+	~EditorPlugin() override;
 };
 
 #ifndef DISABLE_DEPRECATED
 VARIANT_ENUM_CAST(EditorPlugin::DockSlot);
 #endif
 VARIANT_ENUM_CAST(EditorPlugin::CustomControlContainer);
+VARIANT_ENUM_CAST(EditorPlugin::ViewportChromeSlot);
+VARIANT_ENUM_CAST(EditorPlugin::ViewportChromeScope);
 VARIANT_ENUM_CAST(EditorPlugin::AfterGUIInput);
 VARIANT_ENUM_CAST(EditorPlugin::ExternalFileDropClaim);
 

@@ -59,6 +59,7 @@
 #include "editor/gui/editor_responsive_row.h"
 #include "editor/gui/editor_spin_slider.h"
 #include "editor/gui/editor_toaster.h"
+#include "editor/gui/editor_viewport_chrome.h"
 #include "editor/import/3d/resource_importer_obj.h"
 #include "editor/import/3d/resource_importer_scene.h"
 #include "editor/import/editor_import_plugin.h"
@@ -154,11 +155,13 @@ void register_editor_types() {
 	ResourceSaver::set_timestamp_on_save(true);
 
 	EditorStringNames::create();
+	EditorViewportChromeRegistry::create();
 
 	GDREGISTER_CLASS(EditorPaths);
 	GDREGISTER_ABSTRACT_CLASS(ScenePaint2DEditor);
 	GDREGISTER_ABSTRACT_CLASS(EditorExternalFileDropRequest);
 	GDREGISTER_VIRTUAL_CLASS(EditorPlugin);
+	GDREGISTER_ABSTRACT_CLASS(EditorViewportChromeRegistration);
 	GDREGISTER_CLASS(EditorTranslationParserPlugin);
 	GDREGISTER_CLASS(EditorImportPlugin);
 	GDREGISTER_CLASS(EditorScript);
@@ -352,6 +355,7 @@ void unregister_editor_types() {
 
 	EditorInspector::set_property_clipboard(EditorInspector::PropertyClipboard::Type::EMPTY, Variant());
 	EditorNode::cleanup();
+	EditorViewportChromeRegistry::free();
 	EditorInterface::free();
 
 	if (EditorPaths::get_singleton()) {

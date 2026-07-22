@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorViewportChromeRegistration" inherits="RefCounted" api_type="editor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Represents controls registered in editor viewport chrome slots.
+	</brief_description>
+	<description>
+		Returned by [method EditorPlugin.add_control_to_viewport_chrome]. The registration creates one control for every matching editor view and removes those controls when it is unregistered.
+		This class cannot be instantiated directly. The [EditorPlugin] that created it retains the registration until [method EditorPlugin.remove_control_from_viewport_chrome] is called or the plugin is destroyed.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="is_registered" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] while the registration is active.
+			</description>
+		</method>
+		<method name="unregister">
+			<return type="void" />
+			<description>
+				Removes and frees every control created by this registration. Calling this method more than once has no effect.
+				Prefer [method EditorPlugin.remove_control_from_viewport_chrome] when the owning plugin is still available, so it can also discard its reference to this registration.
+			</description>
+		</method>
+	</methods>
+</class>

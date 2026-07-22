@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/templates/local_vector.h"
 #include "editor/plugins/editor_plugin.h"
 #include "scene/gui/box_container.h"
 
@@ -42,6 +43,7 @@ class ConfirmationDialog;
 class EditorData;
 class EditorDocument;
 class EditorSelection;
+class EditorViewportChrome;
 class EditorZoomWidget;
 class HScrollBar;
 class SubViewport;
@@ -212,10 +214,12 @@ private:
 
 	// Step⑤b.4a: the instanceable 2D VIEW (display stack + pan/zoom) is owned by this separate
 	// class, mirroring Node3DEditor/Node3DEditorView. CanvasItemEditor keeps the shared SERVICES
-	// (tool state, snap engine, toolbar, dialogs). v1: exactly one view, created in the ctor.
-	// _get_active_view() is the single choke point every editor->view reach goes through.
+	// (tool state, snap engine, toolbar, dialogs). main_view is the legacy main-screen surface;
+	// active_view is the focused pane surface (falling back to main_view when no 2D pane is active).
 	CanvasItemEditorView *main_view = nullptr;
-	CanvasItemEditorView *_get_active_view() const { return main_view; }
+	CanvasItemEditorView *active_view = nullptr;
+	LocalVector<CanvasItemEditorView *> editor_views;
+	CanvasItemEditorView *_get_active_view() const { return active_view ? active_view : main_view; }
 
 	// G2 M7.2a: the full toolbar flow, reparented into the focused 2D scene pane's header
 	// (get_shared_toolbar/park_shared_toolbar). toolbar_home is its stock parent.
@@ -539,6 +543,10 @@ public:
 	VSplitContainer *get_bottom_split();
 
 	Control *get_viewport_control();
+	// A document scene_root stays parked under DocumentsHolder while pane viewports render its
+	// World2D. Treat that source viewport as visible to editor overlays, while retaining the stock
+	// visibility rule for nested SubViewports.
+	bool is_viewport_visible_for_editing(const Viewport *p_viewport) const;
 
 	// Step⑤b.4d: mint a per-pane 2D view bound to p_document's isolated World2D (the 2D analog of
 	// Node3DEditor::create_view_bound_to). DocumentView hosts the returned Control; it renders
@@ -560,6 +568,8 @@ public:
 
 	void find_canvas_items_at_pos(const Point2 &p_pos, Node *p_node, Vector<SelectResult> &r_items, const Transform2D &p_parent_xform = Transform2D(), const Transform2D &p_canvas_xform = Transform2D());
 
+	// Redraw every live 2D view. Hidden/background views self-gate their edit overlays; fan-out keeps
+	// tree-driven selection and node changes synchronized with the focused pane.
 	void update_viewport();
 
 	Tool get_current_tool() { return tool; }
@@ -601,6 +611,7 @@ class CanvasItemEditorView : public Control {
 	SubViewport *view_viewport = nullptr; // Child viewport bound to document's World2D (document != null).
 
 	Control *viewport = nullptr;
+	EditorViewportChrome *viewport_chrome = nullptr;
 	Control *viewport_scrollable = nullptr;
 	SubViewportContainer *scene_view_container = nullptr; // Displays the active document's scene_root SubViewport.
 
@@ -742,6 +753,7 @@ public:
 	// Node3DEditorView::set_active_world). Called by create_view_bound_to() before the view enters
 	// the tree; main_view stays unbound (document == null).
 	void bind_document(EditorDocument *p_document);
+	void set_context_active(bool p_active);
 
 	void update_viewport();
 	Transform2D get_canvas_transform() const { return transform; }
@@ -757,6 +769,7 @@ public:
 	virtual CursorShape get_cursor_shape(const Point2 &p_pos) const override;
 
 	CanvasItemEditorView(CanvasItemEditor *p_editor);
+	~CanvasItemEditorView();
 };
 
 class CanvasItemEditorPlugin : public EditorPlugin {
@@ -829,6 +842,6 @@ public:
 	virtual bool can_drop_data(const Point2 &p_point, const Variant &p_data) const override;
 	virtual void drop_data(const Point2 &p_point, const Variant &p_data) override;
 
-	CanvasItemEditorViewport(CanvasItemEditor *p_canvas_item_editor);
+	CanvasItemEditorViewport(CanvasItemEditor *p_canvas_item_editor, Control *p_controls_container);
 	~CanvasItemEditorViewport();
 };

@@ -1,0 +1,11 @@
+; Variant used by the viewport chrome registration smoke case.
+config_version=5
+
+[application]
+
+config/name="viewport-chrome-smoke"
+config/features=PackedStringArray("4.8")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/viewport_chrome_smoke/plugin.cfg")

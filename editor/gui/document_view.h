@@ -102,8 +102,11 @@ class DocumentView : public MarginContainer {
 	Label *inspector_target_label = nullptr;
 	Button *inspector_lock_button = nullptr;
 	bool context_active = false;
+	bool scene_tree_selection_sync_pending = false;
 
 	void _bound_selection_changed();
+	void _queue_bound_scene_tree_selection_sync();
+	void _sync_bound_scene_tree_selection();
 
 	// G2 styling: build one accordion dock "card" for p_dock — a styled FoldableContainer (rounded
 	// header + leading icon), initial fold state, the fold→expand-flag binding — and add it to p_column.

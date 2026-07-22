@@ -19,6 +19,10 @@
 
 static constexpr uint64_t BOX3D_MOVER_QUERY_FILTER_BIT = UINT64_C(1) << 63;
 
+// Minimum upward normal component for a contact to count as (partial) support — e.g. a capsule
+// hemisphere riding a step lip — as opposed to a pure wall.
+static constexpr real_t BOX3D_MOVER_SUPPORT_MIN_NY = 0.05;
+
 struct Box3DMoverFilterContext {
 	const HashSet<RID> *exclusions = nullptr;
 };
@@ -92,6 +96,34 @@ static bool _mover_plane_callback(b3ShapeId p_shape_id, const b3PlaneResult *p_p
 	return true;
 }
 
+// Box3D reports material ids as uint64_t; the mover result exposes them as int. Clamp
+// out-of-range ids to 0 (the default material) rather than truncating to a negative id.
+static int _mover_user_material_id(uint64_t p_user_material_id) {
+	return p_user_material_id <= (uint64_t)INT_MAX ? (int)p_user_material_id : 0;
+}
+
+struct Box3DMoverRayProbeContext {
+	const HashSet<RID> *exclusions = nullptr;
+	Vector3 normal;
+	float fraction = 1.0f;
+	int material_id = 0;
+	bool hit = false;
+};
+
+static float _mover_ray_probe_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, uint64_t p_user_material_id, int p_triangle_index, int p_child_index, void *p_context) {
+	Box3DMoverRayProbeContext *ctx = static_cast<Box3DMoverRayProbeContext *>(p_context);
+	Box3DBody3D *body = Box3DDirectSpaceState3D::_get_body(p_shape_id);
+	if (body == nullptr || (ctx->exclusions != nullptr && ctx->exclusions->has(body->get_rid()))) {
+		return -1.0f;
+	}
+
+	ctx->hit = true;
+	ctx->normal = to_godot(p_normal);
+	ctx->fraction = p_fraction;
+	ctx->material_id = _mover_user_material_id(p_user_material_id);
+	return p_fraction;
+}
+
 static float _mover_floor_probe_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, uint64_t p_user_material_id, int p_triangle_index, int p_child_index, void *p_context) {
 	Box3DMoverFloorProbeContext *ctx = static_cast<Box3DMoverFloorProbeContext *>(p_context);
 	Box3DBody3D *body = Box3DDirectSpaceState3D::_get_body(p_shape_id);
@@ -105,7 +137,7 @@ static float _mover_floor_probe_callback(b3ShapeId p_shape_id, b3Pos p_point, b3
 		return -1.0f;
 	}
 
-	ctx->material_id = p_user_material_id <= (uint64_t)INT_MAX ? (int)p_user_material_id : 0;
+	ctx->material_id = _mover_user_material_id(p_user_material_id);
 	ctx->hit = true;
 	return p_fraction;
 }
@@ -140,6 +172,8 @@ void Box3DCharacterMover::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_floor_max_angle"), &Box3DCharacterMover::get_floor_max_angle);
 	ClassDB::bind_method(D_METHOD("set_push_strength", "strength"), &Box3DCharacterMover::set_push_strength);
 	ClassDB::bind_method(D_METHOD("get_push_strength"), &Box3DCharacterMover::get_push_strength);
+	ClassDB::bind_method(D_METHOD("set_step_height", "height"), &Box3DCharacterMover::set_step_height);
+	ClassDB::bind_method(D_METHOD("get_step_height"), &Box3DCharacterMover::get_step_height);
 	ClassDB::bind_method(D_METHOD("set_exclusions", "bodies"), &Box3DCharacterMover::set_exclusions);
 	ClassDB::bind_method(D_METHOD("cast_motion", "position", "translation"), &Box3DCharacterMover::cast_motion);
 	ClassDB::bind_method(D_METHOD("collide", "position"), &Box3DCharacterMover::collide);
@@ -150,6 +184,7 @@ void Box3DCharacterMover::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "floor_max_angle", PROPERTY_HINT_RANGE, "0,1.5707963267949,0.001,radians"), "set_floor_max_angle", "get_floor_max_angle");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "push_strength", PROPERTY_HINT_RANGE, "0,10,0.01,or_greater"), "set_push_strength", "get_push_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "step_height", PROPERTY_HINT_RANGE, "0,1,0.01,or_greater,suffix:m"), "set_step_height", "get_step_height");
 }
 
 Box3DCharacterMover::Box3DCharacterMover() {
@@ -204,6 +239,10 @@ void Box3DCharacterMover::set_floor_max_angle(real_t p_angle) {
 
 void Box3DCharacterMover::set_push_strength(real_t p_strength) {
 	push_strength = MAX((real_t)0.0, p_strength);
+}
+
+void Box3DCharacterMover::set_step_height(real_t p_height) {
+	step_height = MAX((real_t)0.0, p_height);
 }
 
 void Box3DCharacterMover::set_exclusions(const TypedArray<RID> &p_bodies) {
@@ -268,6 +307,132 @@ Vector3 Box3DCharacterMover::clip_velocity(const Vector3 &p_velocity, const Arra
 	return to_godot(b3ClipVector(to_box3d(p_velocity), planes.size() > 0 ? planes.ptr() : nullptr, planes.size()));
 }
 
+bool Box3DCharacterMover::_probe_walkable(const Vector3 &p_from, real_t p_length, Vector3 &r_normal, real_t &r_hit_y, int &r_material_id) const {
+	Box3DSpace3D *query_space = _get_space();
+	if (query_space == nullptr) {
+		return false;
+	}
+
+	Box3DMoverRayProbeContext ctx;
+	ctx.exclusions = &exclusions;
+	b3World_CastRay(query_space->get_world(), to_box3d(p_from), to_box3d(Vector3(0.0, -p_length, 0.0)), _make_filter(), _mover_ray_probe_callback, &ctx);
+	if (!ctx.hit) {
+		return false;
+	}
+
+	r_normal = ctx.normal;
+	r_hit_y = p_from.y - p_length * ctx.fraction;
+	r_material_id = ctx.material_id;
+	return true;
+}
+
+// Capsule-safe ground classification. A capsule climbing a step rides the lip on its bottom
+// hemisphere, so the contact normal is tilted and fails the floor_max_angle test even though the
+// character is standing on walkable ground. Classify support with downward ray probes instead of
+// the contact normal: first under the capsule axis, then just past the support contact point (the
+// stair tread). Slopes steeper than floor_max_angle still reject because the probes hit the sloped
+// surface itself; thin lips (fence rails) reject because the tread probe overshoots them.
+bool Box3DCharacterMover::_ground_probe(const Vector3 &p_feet, const Array &p_planes, Vector3 &r_normal, int &r_material_id) const {
+	const real_t PROBE_UP = 0.05;
+	const real_t CENTER_PROBE_DEPTH = 0.12;
+	const real_t TREAD_AHEAD = 0.04;
+	const real_t floor_threshold = Math::cos(floor_max_angle);
+
+	Vector3 support_point;
+	bool has_support = false;
+	real_t best_support_y = BOX3D_MOVER_SUPPORT_MIN_NY;
+	for (int i = 0; i < p_planes.size(); i++) {
+		Dictionary plane = p_planes[i];
+		const Vector3 normal = plane["normal"];
+		if (normal.y > best_support_y && plane.has("point")) {
+			best_support_y = normal.y;
+			support_point = plane["point"];
+			has_support = true;
+		}
+	}
+	if (!has_support) {
+		return false;
+	}
+
+	// The step_height cap binds against the support contact, and must be checked before any
+	// acceptance: a capsule can wedge onto the lip of an over-tall obstacle (a 0.3 m fence with
+	// step_height 0.25) while its axis is still over low walkable ground, so the center probe
+	// alone would let it inch over height limits.
+	if (support_point.y - p_feet.y > step_height + 0.01) {
+		return false;
+	}
+
+	Vector3 probe_normal;
+	real_t hit_y = 0.0;
+	int material_id = 0;
+	if (_probe_walkable(p_feet + Vector3(0.0, PROBE_UP, 0.0), PROBE_UP + CENTER_PROBE_DEPTH, probe_normal, hit_y, material_id) && probe_normal.y > floor_threshold) {
+		r_normal = probe_normal;
+		r_material_id = material_id;
+		return true;
+	}
+
+	Vector3 lip_direction = support_point - p_feet;
+	lip_direction.y = 0.0;
+	if (lip_direction.length_squared() < 1e-8) {
+		return false;
+	}
+	lip_direction = lip_direction.normalized();
+
+	const Vector3 tread_from = support_point + lip_direction * TREAD_AHEAD + Vector3(0.0, PROBE_UP, 0.0);
+	if (_probe_walkable(tread_from, PROBE_UP + MAX(step_height, CENTER_PROBE_DEPTH), probe_normal, hit_y, material_id) && probe_normal.y > floor_threshold && hit_y - p_feet.y <= step_height + 0.01) {
+		r_normal = probe_normal;
+		r_material_id = material_id;
+		return true;
+	}
+	return false;
+}
+
+// Unreal Engine 1 style up/forward/down step sweep, but with the landing classified by
+// _ground_probe rather than by the sweep contact normal — the fork's CharacterBody3D step-up
+// classifies via the capsule contact normal, which reports tilted edge normals on a hemisphere
+// and only works reliably with flat-bottomed cylinders.
+bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Vector3 &r_floor_normal, int &r_material_id) const {
+	const real_t STEP_MIN_CLEARANCE = 0.01;
+	// Low enough that acceleration-limited approach ticks (~1 mm advances after a velocity clip)
+	// can still ride a step lip upward; nonzero so flat forward motion never counts as a step.
+	const real_t STEP_MIN_RISE = 0.002;
+
+	Vector3 horizontal = p_target - p_start;
+	horizontal.y = 0.0;
+	if (horizontal.length_squared() < 1e-8) {
+		return false;
+	}
+
+	const float up_fraction = cast_motion(p_start, Vector3(0.0, step_height, 0.0));
+	const real_t clearance = step_height * up_fraction;
+	if (clearance < STEP_MIN_CLEARANCE) {
+		return false;
+	}
+	const Vector3 raised = p_start + Vector3(0.0, clearance, 0.0);
+
+	const float forward_fraction = cast_motion(raised, horizontal);
+	const Vector3 advanced = raised + horizontal * forward_fraction;
+
+	const float down_fraction = cast_motion(advanced, Vector3(0.0, -clearance, 0.0));
+	const Vector3 landed = advanced + Vector3(0.0, -clearance * down_fraction, 0.0);
+
+	if (landed.y - p_start.y < STEP_MIN_RISE) {
+		return false;
+	}
+
+	const Array landed_planes = _collide_internal(landed);
+	Vector3 ground_normal;
+	int material_id = 0;
+	if (!_ground_probe(landed, landed_planes, ground_normal, material_id)) {
+		return false;
+	}
+
+	r_position = landed;
+	r_floor_normal = ground_normal;
+	r_material_id = material_id;
+	return true;
+}
+
 Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p_velocity, float p_delta) const {
 	ERR_FAIL_COND_V_MSG(!_can_query(), Dictionary(), "Box3DCharacterMover cannot query the space right now.");
 
@@ -276,6 +441,13 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	Array solved_planes;
 	int total_iterations = 0;
 	float last_fraction = 1.0f;
+
+	// Stepping only assists grounded lateral motion; an upward launch (jump) must not be
+	// converted into a step.
+	const bool step_allowed = step_height > 0.0 && p_velocity.y <= 0.05;
+	bool stepped = false;
+	Vector3 stepped_floor_normal;
+	int stepped_material_id = 0;
 
 	for (int i = 0; i < 5; i++) {
 		const Array planes = _collide_internal(position);
@@ -289,11 +461,22 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		position += applied_delta;
 
 		if (applied_delta.length_squared() < 0.0001f) {
+			if (step_allowed) {
+				Vector3 stepped_position;
+				Vector3 step_normal;
+				int step_material_id = 0;
+				if (_try_step_up(position, target_position, stepped_position, step_normal, step_material_id)) {
+					position = stepped_position;
+					stepped = true;
+					stepped_floor_normal = step_normal;
+					stepped_material_id = step_material_id;
+					continue;
+				}
+			}
 			break;
 		}
 	}
 
-	const Vector3 clipped_velocity = clip_velocity(p_velocity, solved_planes);
 	if (push_strength > 0.0 && p_delta > 0.0) {
 		Box3DPhysicsServer3D *server = Box3DPhysicsServer3D::get_singleton();
 		for (int i = 0; server != nullptr && i < solved_planes.size(); i++) {
@@ -348,6 +531,56 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		}
 	}
 
+	// A capsule mid-step rides the lip on its hemisphere for several ticks; the tilted edge
+	// contact fails the plane test above even though the character is supported by walkable
+	// ground. Reclassify with ray probes so the floor flag holds through the climb.
+	int probe_material_id = -1;
+	bool probe_grounded = false;
+	if (!on_floor && step_allowed) {
+		if (stepped) {
+			on_floor = true;
+			probe_grounded = true;
+			floor_normal = stepped_floor_normal;
+			probe_material_id = stepped_material_id;
+		} else {
+			Vector3 probe_normal;
+			int material_id = 0;
+			if (_ground_probe(position, solved_planes, probe_normal, material_id)) {
+				on_floor = true;
+				probe_grounded = true;
+				floor_normal = probe_normal;
+				probe_material_id = material_id;
+			}
+		}
+	}
+
+	// Velocity clipping, with two floor-stop rules that keep grounded movement from dying at
+	// climbable contacts:
+	// - The grounded downward stick velocity must not reflect off inclined contacts into lateral
+	//   drift — that reversal deadlocks the approach/step cycle at a stair riser.
+	// - Planes the character is standing ON must not clip walk velocity: walkable floors always,
+	//   and partial-support lip contacts when the ground probes verified walkable tread there.
+	//   Otherwise each tick's clip re-zeroes the approach speed and a step climb crawls at the
+	//   acceleration floor. True walls and ceilings still clip; penetration is prevented by the
+	//   plane solver and cast regardless.
+	Vector3 clip_input = p_velocity;
+	if (on_floor && p_velocity.y < 0.0) {
+		clip_input.y = 0.0;
+	}
+	Array clip_planes;
+	for (int i = 0; i < solved_planes.size(); i++) {
+		Dictionary plane = solved_planes[i];
+		const Vector3 normal = plane["normal"];
+		if (normal.y > floor_threshold) {
+			continue;
+		}
+		if (probe_grounded && normal.y > BOX3D_MOVER_SUPPORT_MIN_NY) {
+			continue;
+		}
+		clip_planes.push_back(plane);
+	}
+	const Vector3 clipped_velocity = clip_velocity(clip_input, clip_planes);
+
 	Dictionary result;
 	result["position"] = position;
 	result["velocity"] = clipped_velocity;
@@ -358,7 +591,10 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	result["planes"] = solved_planes;
 	result["cast_fraction"] = last_fraction;
 	result["iterations"] = total_iterations;
-	if (on_floor && floor_plane.has("point")) {
+	result["stepped"] = stepped;
+	if (on_floor && probe_material_id >= 0) {
+		_add_floor_material_fields(result, probe_material_id);
+	} else if (on_floor && floor_plane.has("point")) {
 		Box3DSpace3D *query_space = _get_space();
 		Box3DMoverFloorProbeContext ctx;
 		ctx.exclusions = &exclusions;

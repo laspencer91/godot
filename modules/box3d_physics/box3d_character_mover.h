@@ -20,6 +20,7 @@ class Box3DCharacterMover : public RefCounted {
 	uint32_t collision_mask = 1;
 	real_t floor_max_angle = 0.7853981633974483;
 	real_t push_strength = 1.0;
+	real_t step_height = 0.0;
 	HashSet<RID> exclusions;
 
 	static void _bind_methods();
@@ -28,6 +29,9 @@ class Box3DCharacterMover : public RefCounted {
 	b3QueryFilter _make_filter() const;
 	bool _can_query() const;
 	Array _collide_internal(const Vector3 &p_position) const;
+	bool _probe_walkable(const Vector3 &p_from, real_t p_length, Vector3 &r_normal, real_t &r_hit_y, int &r_material_id) const;
+	bool _ground_probe(const Vector3 &p_feet, const Array &p_planes, Vector3 &r_normal, int &r_material_id) const;
+	bool _try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Vector3 &r_floor_normal, int &r_material_id) const;
 
 public:
 	Box3DCharacterMover();
@@ -40,6 +44,8 @@ public:
 	real_t get_floor_max_angle() const { return floor_max_angle; }
 	void set_push_strength(real_t p_strength);
 	real_t get_push_strength() const { return push_strength; }
+	void set_step_height(real_t p_height);
+	real_t get_step_height() const { return step_height; }
 	void set_exclusions(const TypedArray<RID> &p_bodies);
 
 	float cast_motion(const Vector3 &p_position, const Vector3 &p_translation) const;

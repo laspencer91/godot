@@ -348,7 +348,9 @@ Rect2 ItemList::get_item_rect(int p_idx, bool p_expand) const {
 		if (scroll_bar_v->is_visible()) {
 			width -= scroll_bar_v->get_bound_minimum_size().width;
 		}
-		ret.size.width = width - ret.position.x;
+		// A container can transiently make the list narrower than its panel and scroll bar while
+		// relayout is settling. Keep the public item rectangle valid during that frame.
+		ret.size.width = MAX(0.0f, width - ret.position.x);
 	}
 	ret.position += theme_cache.panel_style->get_offset();
 	return ret;

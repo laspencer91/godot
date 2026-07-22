@@ -49,6 +49,7 @@
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/gui/editor_toaster.h"
 #include "editor/gui/editor_zoom_widget.h"
+#include "editor/gui/editor_viewport_chrome.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
 #include "editor/plugins/editor_plugin_list.h"
 #include "editor/run/editor_run_bar.h"
@@ -304,7 +305,7 @@ void CanvasItemEditor::_snap_if_closer_float(
 		real_t &r_current_snap, SnapTarget &r_current_snap_target,
 		const real_t p_target_value, const SnapTarget p_snap_target,
 		const real_t p_radius) {
-	const real_t radius = p_radius / main_view->zoom;
+	const real_t radius = p_radius / _get_active_view()->zoom;
 	const real_t dist = Math::abs(p_value - p_target_value);
 	if ((p_radius < 0 || dist < radius) && (r_current_snap_target == SNAP_TARGET_NONE || dist < Math::abs(r_current_snap - p_value))) {
 		r_current_snap = p_target_value;
@@ -531,21 +532,21 @@ void CanvasItemEditor::shortcut_input(const Ref<InputEvent> &p_ev) {
 
 	if (k.is_valid()) {
 		if (!k->is_echo() && (k->get_keycode() == Key::CTRL || k->get_keycode() == Key::ALT || k->get_keycode() == Key::SHIFT)) {
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		}
 
 		if (k->is_pressed() && !k->is_command_or_control_pressed() && !k->is_echo() && (grid_snap_active || is_grid_visible())) {
 			if (multiply_grid_step_shortcut.is_valid() && multiply_grid_step_shortcut->matches_event(p_ev)) {
 				// Multiply the grid size
 				grid_step_multiplier = MIN(grid_step_multiplier + 1, 12);
-				main_view->viewport->queue_redraw();
+				update_viewport();
 			} else if (divide_grid_step_shortcut.is_valid() && divide_grid_step_shortcut->matches_event(p_ev)) {
 				// Divide the grid size
 				Point2 new_grid_step = grid_step * Math::pow(2.0, grid_step_multiplier - 1);
 				if (new_grid_step.x >= 1.0 && new_grid_step.y >= 1.0) {
 					grid_step_multiplier--;
 				}
-				main_view->viewport->queue_redraw();
+				update_viewport();
 			}
 		}
 
@@ -684,7 +685,7 @@ void CanvasItemEditor::find_canvas_items_at_pos(const Point2 &p_pos, Node *p_nod
 			xform *= p_parent_xform;
 		}
 		xform = (xform * ci->get_transform()).affine_inverse();
-		const real_t local_grab_distance = xform.basis_xform(Vector2(grab_distance, 0)).length() / main_view->zoom;
+		const real_t local_grab_distance = xform.basis_xform(Vector2(grab_distance, 0)).length() / _get_active_view()->zoom;
 		if (ci->_edit_is_selected_on_click(xform.xform(p_pos), local_grab_distance)) {
 			Node2D *node = Object::cast_to<Node2D>(ci);
 
@@ -845,7 +846,7 @@ List<CanvasItem *> CanvasItemEditor::_get_edited_canvas_items(bool p_retrieve_lo
 		if (ci) {
 			if (ci->is_visible_in_tree() && (p_retrieve_locked || !_is_node_locked(ci))) {
 				Viewport *vp = ci->get_viewport();
-				if (vp && !vp->is_visible_subviewport()) {
+				if (!is_viewport_visible_for_editing(vp)) {
 					continue;
 				}
 				CanvasItemEditorSelectedItem *se = editor_selection->get_node_editor_data<CanvasItemEditorSelectedItem>(ci);
@@ -965,8 +966,8 @@ void CanvasItemEditor::_commit_canvas_item_state(const List<CanvasItem *> &p_can
 			}
 		}
 	}
-	undo_redo->add_do_method(main_view->viewport, "queue_redraw");
-	undo_redo->add_undo_method(main_view->viewport, "queue_redraw");
+	undo_redo->add_do_method(this, "update_viewport");
+	undo_redo->add_undo_method(this, "update_viewport");
 	undo_redo->commit_action();
 }
 
@@ -981,7 +982,7 @@ void CanvasItemEditor::_snap_changed() {
 	EditorSettings::get_singleton()->set_project_metadata("2d_editor", "snap_scale_step", snap_scale_step);
 
 	grid_step_multiplier = 0;
-	main_view->viewport->queue_redraw();
+	update_viewport();
 	emit_signal("snap_changed");
 }
 
@@ -1095,7 +1096,7 @@ void CanvasItemEditor::_on_grid_menu_id_pressed(int p_id) {
 		case GRID_VISIBILITY_SHOW_WHEN_SNAPPING:
 		case GRID_VISIBILITY_HIDE:
 			_get_active_view()->grid_visibility = (GridVisibility)p_id;
-			main_view->viewport->queue_redraw();
+			update_viewport();
 			view_menu->get_popup()->hide();
 			emit_signal("grid_visibility_changed", is_grid_visible());
 			return;
@@ -1123,7 +1124,7 @@ void CanvasItemEditor::_on_grid_menu_id_pressed(int p_id) {
 				break;
 		}
 	}
-	main_view->viewport->queue_redraw();
+	update_viewport();
 	emit_signal("grid_visibility_changed", is_grid_visible());
 }
 
@@ -2766,6 +2767,14 @@ bool CanvasItemEditorView::_gui_input_hover(const Ref<InputEvent> &p_event) {
 }
 
 void CanvasItemEditorView::_gui_input_viewport(const Ref<InputEvent> &p_event) {
+	// A press is an unambiguous pane activation even if the workspace focus notification is delivered
+	// after this input callback. Plugin input and transform access must resolve to this view immediately.
+	Ref<InputEventMouseButton> context_mb = p_event;
+	if (context_mb.is_valid() && context_mb->is_pressed() &&
+			(context_mb->get_button_index() == MouseButton::LEFT || context_mb->get_button_index() == MouseButton::RIGHT)) {
+		set_context_active(true);
+	}
+
 	// Step⑤b.4d edit-gating (view-many, edit-active): a document-bound view that is NOT the active
 	// edited scene may only pan/zoom -- never manipulate (matches CanvasView2D's active-only
 	// editing). A LMB/RMB press first promotes this document to active, so the next event edits
@@ -4387,6 +4396,21 @@ void CanvasItemEditorView::bind_document(EditorDocument *p_document) {
 	}
 }
 
+void CanvasItemEditorView::set_context_active(bool p_active) {
+	if (!editor) {
+		return;
+	}
+	if (p_active) {
+		if (editor->active_view != this) {
+			editor->active_view = this;
+			editor->update_viewport();
+		}
+	} else if (editor->active_view == this) {
+		editor->active_view = nullptr;
+		editor->update_viewport();
+	}
+}
+
 void CanvasItemEditorView::_notification(int p_what) {
 	if (p_what == NOTIFICATION_ENTER_TREE) {
 		// Reparent-tolerant, mirroring Node3DEditorView: recompute the settings-derived caches once
@@ -4420,9 +4444,8 @@ void CanvasItemEditorView::_draw_viewport() {
 	RID ci = viewport->get_canvas_item();
 	RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, Transform2D());
 
-	// Only the active view forwards to plugin overlays (identical behavior today: main_view is the
-	// only view; document-bound views are never _get_active_view()). EditorPlugin::update_overlays()
-	// reaches the overlay via get_viewport_control().
+	// Only the focused 2D view forwards plugin overlays. Their legacy service lookups
+	// (get_canvas_transform/get_viewport_control) now resolve through the same active-view pointer.
 	if (draw_edit_overlay && this == editor->_get_active_view()) {
 		EditorNode::get_singleton()->get_editor_plugins_over()->forward_canvas_draw_over_viewport(viewport);
 		EditorNode::get_singleton()->get_editor_plugins_force_over()->forward_canvas_force_draw_over_viewport(viewport);
@@ -4445,7 +4468,18 @@ void CanvasItemEditorView::_draw_viewport() {
 }
 
 void CanvasItemEditor::update_viewport() {
-	main_view->update_viewport();
+	// Scroll ranges describe the active document. Updating a background pane with those ranges would
+	// corrupt its independent pan state, so only the focused view refreshes them.
+	CanvasItemEditorView *active = _get_active_view();
+	if (active && active->viewport && active->h_scroll && active->v_scroll) {
+		active->_update_scrollbars();
+	}
+
+	for (CanvasItemEditorView *view : editor_views) {
+		if (view && view->viewport) {
+			view->viewport->queue_redraw();
+		}
+	}
 }
 
 void CanvasItemEditor::set_current_tool(Tool p_tool) {
@@ -4547,7 +4581,7 @@ void CanvasItemEditor::_notification(int p_what) {
 				Transform2D xform = ci->get_global_transform();
 
 				if (rect != se->prev_rect || xform != se->prev_xform) {
-					main_view->viewport->queue_redraw();
+					update_viewport();
 					se->prev_rect = rect;
 					se->prev_xform = xform;
 				}
@@ -4570,7 +4604,7 @@ void CanvasItemEditor::_notification(int p_what) {
 						se->prev_anchors[SIDE_RIGHT] = anchors[SIDE_RIGHT];
 						se->prev_anchors[SIDE_TOP] = anchors[SIDE_TOP];
 						se->prev_anchors[SIDE_BOTTOM] = anchors[SIDE_BOTTOM];
-						main_view->viewport->queue_redraw();
+						update_viewport();
 					}
 				}
 			}
@@ -4582,7 +4616,7 @@ void CanvasItemEditor::_notification(int p_what) {
 			for (KeyValue<BoneKey, BoneList> &E : bone_list) {
 				Object *b = ObjectDB::get_instance(E.key.from);
 				if (!b) {
-					main_view->viewport->queue_redraw();
+					update_viewport();
 					break;
 				}
 
@@ -4595,13 +4629,13 @@ void CanvasItemEditor::_notification(int p_what) {
 
 				if (global_xform != E.value.xform) {
 					E.value.xform = global_xform;
-					main_view->viewport->queue_redraw();
+					update_viewport();
 				}
 
 				Bone2D *bone = Object::cast_to<Bone2D>(b);
 				if (bone && bone->get_length() != E.value.length) {
 					E.value.length = bone->get_length();
-					main_view->viewport->queue_redraw();
+					update_viewport();
 				}
 			}
 		} break;
@@ -4652,7 +4686,7 @@ void CanvasItemEditor::_selection_changed() {
 
 	if (_get_active_view()->temp_pivot != Vector2(Math::INF, Math::INF)) {
 		_get_active_view()->temp_pivot = Vector2(Math::INF, Math::INF);
-		main_view->viewport->queue_redraw();
+		update_viewport();
 	}
 
 	// Check to redraw to clear anything drawn from visible selections if no selections are visible.
@@ -4664,7 +4698,7 @@ void CanvasItemEditor::_selection_changed() {
 		}
 
 		Viewport *vp = ci->get_viewport();
-		if (vp && !vp->is_visible_subviewport()) {
+		if (!is_viewport_visible_for_editing(vp)) {
 			continue;
 		}
 
@@ -4676,7 +4710,7 @@ void CanvasItemEditor::_selection_changed() {
 	}
 	if (had_visible_selection != has_visible) {
 		if (!has_visible) {
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		}
 		had_visible_selection = has_visible;
 	}
@@ -4696,10 +4730,9 @@ void CanvasItemEditor::edit(CanvasItem *p_canvas_item) {
 void CanvasItemEditorView::_update_scrollbars() {
 	updating_scroll = true;
 
-	// Move the zoom buttons.
-	Point2 controls_vb_begin = Point2(5, 5);
-	controls_vb_begin += (show_rulers) ? Point2(ruler_width_scaled, ruler_width_scaled) : Point2();
-	controls_vb->set_begin(controls_vb_begin);
+	// Keep viewport chrome clear of rulers and scrollbars.
+	const int base_inset = Math::round(5 * EDSCALE);
+	const int ruler_inset = show_rulers ? Math::round(ruler_width_scaled) : 0;
 
 	Size2 hmin = h_scroll->get_minimum_size();
 	Size2 vmin = v_scroll->get_minimum_size();
@@ -4740,6 +4773,18 @@ void CanvasItemEditorView::_update_scrollbars() {
 		h_scroll->set_max(MAX(view_offset.x, end.x) + screen_rect.x);
 		h_scroll->set_page(screen_rect.x);
 	}
+
+	int left_inset = base_inset + ruler_inset;
+	int right_inset = base_inset;
+	if (v_scroll->is_visible()) {
+		if (is_layout_rtl()) {
+			left_inset += Math::round(vmin.width);
+		} else {
+			right_inset += Math::round(vmin.width);
+		}
+	}
+	const int bottom_inset = base_inset + (h_scroll->is_visible() ? Math::round(hmin.height) : 0);
+	viewport_chrome->set_safe_area_insets(left_inset, base_inset + ruler_inset, right_inset, bottom_inset);
 
 	// Move and resize the scrollbars, avoiding overlap.
 	if (is_layout_rtl()) {
@@ -4815,17 +4860,17 @@ void CanvasItemEditorView::_shortcut_zoom_set(real_t p_zoom) {
 
 void CanvasItemEditor::_button_toggle_local_space(bool p_status) {
 	use_local_space = p_status;
-	main_view->viewport->queue_redraw();
+	update_viewport();
 }
 
 void CanvasItemEditor::_button_toggle_smart_snap(bool p_status) {
 	smart_snap_active = p_status;
-	main_view->viewport->queue_redraw();
+	update_viewport();
 }
 
 void CanvasItemEditor::_button_toggle_grid_snap(bool p_status) {
 	grid_snap_active = p_status;
-	main_view->viewport->queue_redraw();
+	update_viewport();
 	emit_signal("grid_visibility_changed", is_grid_visible());
 }
 
@@ -4851,7 +4896,7 @@ void CanvasItemEditor::_button_tool_select(int p_index) {
 		}
 	}
 
-	main_view->viewport->queue_redraw();
+	update_viewport();
 	_get_active_view()->_update_cursor();
 	emit_signal("canvas_item_tool_changed", tool);
 }
@@ -4955,37 +5000,37 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 			_get_active_view()->show_origin = !_get_active_view()->show_origin;
 			int idx = view_menu->get_popup()->get_item_index(SHOW_ORIGIN);
 			view_menu->get_popup()->set_item_checked(idx, _get_active_view()->show_origin);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SHOW_VIEWPORT: {
 			_get_active_view()->show_viewport = !_get_active_view()->show_viewport;
 			int idx = view_menu->get_popup()->get_item_index(SHOW_VIEWPORT);
 			view_menu->get_popup()->set_item_checked(idx, _get_active_view()->show_viewport);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SHOW_POSITION_GIZMOS: {
 			_get_active_view()->show_position_gizmos = !_get_active_view()->show_position_gizmos;
 			int idx = gizmos_menu->get_item_index(SHOW_POSITION_GIZMOS);
 			gizmos_menu->set_item_checked(idx, _get_active_view()->show_position_gizmos);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SHOW_LOCK_GIZMOS: {
 			_get_active_view()->show_lock_gizmos = !_get_active_view()->show_lock_gizmos;
 			int idx = gizmos_menu->get_item_index(SHOW_LOCK_GIZMOS);
 			gizmos_menu->set_item_checked(idx, _get_active_view()->show_lock_gizmos);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SHOW_GROUP_GIZMOS: {
 			_get_active_view()->show_group_gizmos = !_get_active_view()->show_group_gizmos;
 			int idx = gizmos_menu->get_item_index(SHOW_GROUP_GIZMOS);
 			gizmos_menu->set_item_checked(idx, _get_active_view()->show_group_gizmos);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SHOW_TRANSFORMATION_GIZMOS: {
 			_get_active_view()->show_transformation_gizmos = !_get_active_view()->show_transformation_gizmos;
 			int idx = gizmos_menu->get_item_index(SHOW_TRANSFORMATION_GIZMOS);
 			gizmos_menu->set_item_checked(idx, _get_active_view()->show_transformation_gizmos);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SNAP_USE_NODE_PARENT: {
 			snap_node_parent = !snap_node_parent;
@@ -5031,7 +5076,7 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 			snap_relative = !snap_relative;
 			int idx = snap_config_menu->get_popup()->get_item_index(SNAP_RELATIVE);
 			snap_config_menu->get_popup()->set_item_checked(idx, snap_relative);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SNAP_USE_PIXEL: {
 			snap_pixel = !snap_pixel;
@@ -5061,7 +5106,7 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 			_get_active_view()->show_helpers = !_get_active_view()->show_helpers;
 			int idx = view_menu->get_popup()->get_item_index(SHOW_HELPERS);
 			view_menu->get_popup()->set_item_checked(idx, _get_active_view()->show_helpers);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case SHOW_RULERS: {
 			_get_active_view()->show_rulers = !_get_active_view()->show_rulers;
@@ -5073,7 +5118,7 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 			_get_active_view()->show_guides = !_get_active_view()->show_guides;
 			int idx = view_menu->get_popup()->get_item_index(SHOW_GUIDES);
 			view_menu->get_popup()->set_item_checked(idx, _get_active_view()->show_guides);
-			main_view->viewport->queue_redraw();
+			update_viewport();
 		} break;
 		case LOCK_SELECTED: {
 			undo_redo->create_action(TTR("Lock Selected"));
@@ -5090,8 +5135,8 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 				undo_redo->add_do_method(this, "emit_signal", "item_lock_status_changed");
 				undo_redo->add_undo_method(this, "emit_signal", "item_lock_status_changed");
 			}
-			undo_redo->add_do_method(main_view->viewport, "queue_redraw");
-			undo_redo->add_undo_method(main_view->viewport, "queue_redraw");
+			undo_redo->add_do_method(this, "update_viewport");
+			undo_redo->add_undo_method(this, "update_viewport");
 			undo_redo->commit_action();
 		} break;
 		case UNLOCK_SELECTED: {
@@ -5109,8 +5154,8 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 				undo_redo->add_do_method(this, "emit_signal", "item_lock_status_changed");
 				undo_redo->add_undo_method(this, "emit_signal", "item_lock_status_changed");
 			}
-			undo_redo->add_do_method(main_view->viewport, "queue_redraw");
-			undo_redo->add_undo_method(main_view->viewport, "queue_redraw");
+			undo_redo->add_do_method(this, "update_viewport");
+			undo_redo->add_undo_method(this, "update_viewport");
 			undo_redo->commit_action();
 		} break;
 		case GROUP_SELECTED: {
@@ -5128,8 +5173,8 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 				undo_redo->add_do_method(this, "emit_signal", "item_group_status_changed");
 				undo_redo->add_undo_method(this, "emit_signal", "item_group_status_changed");
 			}
-			undo_redo->add_do_method(main_view->viewport, "queue_redraw");
-			undo_redo->add_undo_method(main_view->viewport, "queue_redraw");
+			undo_redo->add_do_method(this, "update_viewport");
+			undo_redo->add_undo_method(this, "update_viewport");
 			undo_redo->commit_action();
 		} break;
 		case UNGROUP_SELECTED: {
@@ -5147,8 +5192,8 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 				undo_redo->add_do_method(this, "emit_signal", "item_group_status_changed");
 				undo_redo->add_undo_method(this, "emit_signal", "item_group_status_changed");
 			}
-			undo_redo->add_do_method(main_view->viewport, "queue_redraw");
-			undo_redo->add_undo_method(main_view->viewport, "queue_redraw");
+			undo_redo->add_do_method(this, "update_viewport");
+			undo_redo->add_undo_method(this, "update_viewport");
 			undo_redo->commit_action();
 		} break;
 
@@ -5260,8 +5305,8 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 					undo_redo->add_do_method(root, "remove_meta", "_edit_vertical_guides_");
 					undo_redo->add_undo_method(root, "set_meta", "_edit_vertical_guides_", vguides);
 				}
-				undo_redo->add_do_method(main_view->viewport, "queue_redraw");
-				undo_redo->add_undo_method(main_view->viewport, "queue_redraw");
+				undo_redo->add_do_method(this, "update_viewport");
+				undo_redo->add_undo_method(this, "update_viewport");
 				undo_redo->commit_action();
 			}
 
@@ -5341,6 +5386,7 @@ void CanvasItemEditor::_set_owner_for_node_and_children(Node *p_node, Node *p_ow
 }
 
 void CanvasItemEditor::_focus_selection(int p_op) {
+	CanvasItemEditorView *view = _get_active_view();
 	Rect2 rect;
 	int count = 0;
 
@@ -5377,15 +5423,15 @@ void CanvasItemEditor::_focus_selection(int p_op) {
 	}
 
 	if (p_op == VIEW_FRAME_TO_SELECTION && rect.size.x > CMP_EPSILON && rect.size.y > CMP_EPSILON) {
-		real_t scale_x = main_view->viewport->get_size().x / rect.size.x;
-		real_t scale_y = main_view->viewport->get_size().y / rect.size.y;
-		main_view->zoom = scale_x < scale_y ? scale_x : scale_y;
-		main_view->zoom *= 0.90;
-		main_view->zoom_widget->set_zoom(main_view->zoom);
-		main_view->viewport->queue_redraw(); // Redraw to update the global canvas transform after zoom changes.
+		real_t scale_x = view->viewport->get_size().x / rect.size.x;
+		real_t scale_y = view->viewport->get_size().y / rect.size.y;
+		view->zoom = scale_x < scale_y ? scale_x : scale_y;
+		view->zoom *= 0.90;
+		view->zoom_widget->set_zoom(view->zoom);
+		update_viewport(); // Redraw to update the active view's canvas transform after zoom changes.
 		callable_mp(this, &CanvasItemEditor::center_at).call_deferred(rect.get_center()); // Defer because the updated transform is needed.
 		if (auto_resampling_enabled) {
-			main_view->resample_timer->start();
+			view->resample_timer->start();
 		}
 	} else {
 		center_at(rect.get_center());
@@ -5647,7 +5693,7 @@ void CanvasItemEditor::set_state(const Dictionary &p_state) {
 	if (update_scrollbars) {
 		main_view->_update_scrollbars();
 	}
-	main_view->viewport->queue_redraw();
+	update_viewport();
 }
 
 void CanvasItemEditor::clear() {
@@ -5751,16 +5797,16 @@ void CanvasItemEditor::focus_selection() {
 }
 
 void CanvasItemEditor::center_at(const Point2 &p_pos) {
-	Vector2 offset = main_view->viewport->get_size() / 2 - main_view->get_canvas_transform().xform(p_pos);
-	main_view->view_offset = (main_view->view_offset - offset / main_view->zoom).round();
+	CanvasItemEditorView *view = _get_active_view();
+	Vector2 offset = view->viewport->get_size() / 2 - view->get_canvas_transform().xform(p_pos);
+	view->view_offset = (view->view_offset - offset / view->zoom).round();
 	update_viewport();
 }
 
 CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	editor = p_editor;
-	// Publish ourselves as the services' main_view up front: the editor's get_*_container /
-	// get_viewport_control forwarders route through main_view, and CanvasItemEditorViewport's
-	// ctor (built below) calls get_controls_container() before this constructor returns.
+	// Publish ourselves as the services' main_view up front so editor service forwarders remain
+	// valid throughout construction.
 	// Step⑤b.4d: only the FIRST (main) view claims main_view; minted document-bound views
 	// (create_view_bound_to) must not clobber it or every editor->view forwarder would retarget.
 	if (!editor->main_view) {
@@ -5790,7 +5836,8 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	// the container is empty. The shared scene_root is never reparented in here anymore.
 
 	controls_vb = memnew(VBoxContainer);
-	controls_vb->set_begin(Point2(5, 5));
+	controls_vb->set_mouse_filter(MOUSE_FILTER_IGNORE);
+	controls_vb->set_theme_type_variation("ViewportChromeGroup");
 
 	ED_SHORTCUT("canvas_item_editor/cancel_transform", TTRC("Cancel Transformation"), Key::ESCAPE);
 
@@ -5827,9 +5874,12 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 			{ int32_t(Key::KEY_5), int32_t(Key::KP_5) });
 
 	HBoxContainer *controls_hb = memnew(HBoxContainer);
+	controls_hb->set_mouse_filter(MOUSE_FILTER_IGNORE);
+	controls_hb->set_theme_type_variation("ViewportToolbar");
 	controls_vb->add_child(controls_hb);
 
 	button_center_view = memnew(Button);
+	button_center_view->set_theme_type_variation("ViewportButton");
 	controls_hb->add_child(button_center_view);
 	button_center_view->set_flat(true);
 	button_center_view->set_tooltip_text(TTR("Center View"));
@@ -5842,6 +5892,7 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	zoom_widget->connect("zoom_changed", callable_mp(this, &CanvasItemEditorView::_update_zoom));
 
 	EditorTranslationPreviewButton *translation_preview_button = memnew(EditorTranslationPreviewButton);
+	translation_preview_button->set_theme_type_variation("ViewportButton");
 	translation_preview_button->set_flat(true);
 	translation_preview_button->add_theme_constant_override("outline_size", Math::ceil(2 * EDSCALE));
 	translation_preview_button->add_theme_color_override("font_outline_color", Color(0, 0, 0));
@@ -5851,7 +5902,7 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	panner.instantiate();
 	panner->set_callbacks(callable_mp(this, &CanvasItemEditorView::_pan_callback), callable_mp(this, &CanvasItemEditorView::_zoom_callback));
 
-	viewport = memnew(CanvasItemEditorViewport(editor));
+	viewport = memnew(CanvasItemEditorViewport(editor, controls_vb));
 	viewport_scrollable->add_child(viewport);
 	viewport->set_mouse_filter(MOUSE_FILTER_PASS);
 	viewport->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
@@ -5871,7 +5922,13 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	v_scroll->connect(SceneStringName(value_changed), callable_mp(this, &CanvasItemEditorView::_update_scroll));
 	v_scroll->hide();
 
-	viewport->add_child(controls_vb);
+	Dictionary chrome_context;
+	chrome_context["view"] = this;
+	chrome_context["overlay_control"] = viewport;
+	viewport_chrome = memnew(EditorViewportChrome(SNAME("2d"), EditorViewportChrome::SCOPE_VIEW, chrome_context));
+	viewport_chrome->set_safe_area_insets(5 * EDSCALE, 5 * EDSCALE, 5 * EDSCALE, 5 * EDSCALE);
+	viewport->add_child(viewport_chrome);
+	viewport_chrome->add_control(EditorViewportChrome::SLOT_TOP_LEFT, controls_vb, -1000);
 
 	// Auto-resample timer (moved here with resample_timer; fires _update_oversampling).
 	resample_timer = memnew(Timer);
@@ -5879,6 +5936,24 @@ CanvasItemEditorView::CanvasItemEditorView(CanvasItemEditor *p_editor) {
 	resample_timer->set_one_shot(true);
 	add_child(resample_timer);
 	resample_timer->connect("timeout", callable_mp(this, &CanvasItemEditorView::_update_oversampling));
+
+	// Register only after the view is fully initialized. Selection changes can fan out a
+	// redraw to every registered view, so partially constructed views must not be visible.
+	editor->editor_views.push_back(this);
+	viewport_chrome->activate();
+}
+
+CanvasItemEditorView::~CanvasItemEditorView() {
+	if (!editor) {
+		return;
+	}
+	if (editor->active_view == this) {
+		editor->active_view = nullptr;
+	}
+	if (editor->main_view == this) {
+		editor->main_view = nullptr;
+	}
+	editor->editor_views.erase(this);
 }
 
 Control *CanvasItemEditor::create_view_bound_to(EditorDocument *p_document) {
@@ -5951,20 +6026,33 @@ void CanvasItemEditor::set_scene_view_button_state(bool p_2d) {
 }
 
 void CanvasItemEditorView::update_viewport() {
+	if (!viewport || !h_scroll || !v_scroll) {
+		return;
+	}
 	_update_scrollbars();
 	viewport->queue_redraw();
 }
 
 Transform2D CanvasItemEditor::get_canvas_transform() const {
-	return main_view->get_canvas_transform();
+	return _get_active_view()->get_canvas_transform();
 }
 
 Control *CanvasItemEditor::get_viewport_control() {
-	return main_view->get_overlay_control();
+	return _get_active_view()->get_overlay_control();
+}
+
+bool CanvasItemEditor::is_viewport_visible_for_editing(const Viewport *p_viewport) const {
+	if (!p_viewport || p_viewport->is_visible_subviewport()) {
+		return true;
+	}
+
+	EditorNode *editor_node = EditorNode::get_singleton();
+	EditorDocument *active_document = editor_node ? editor_node->get_editor_data().get_active_document() : nullptr;
+	return active_document && p_viewport == active_document->get_scene_root();
 }
 
 Control *CanvasItemEditor::get_controls_container() {
-	return main_view->get_controls_container();
+	return _get_active_view()->get_controls_container();
 }
 
 CanvasItemEditor::CanvasItemEditor() {
@@ -5973,7 +6061,7 @@ CanvasItemEditor::CanvasItemEditor() {
 
 	editor_selection = EditorNode::get_singleton()->get_editor_selection();
 	editor_selection->add_editor_plugin(this);
-	editor_selection->connect("selection_changed", callable_mp((CanvasItem *)this, &CanvasItem::queue_redraw));
+	editor_selection->connect("selection_changed", callable_mp(this, &CanvasItemEditor::update_viewport));
 	editor_selection->connect("selection_changed", callable_mp(this, &CanvasItemEditor::_selection_changed));
 
 	SceneTreeDock::get_singleton()->connect("node_created", callable_mp(this, &CanvasItemEditor::_adjust_new_node_position));
@@ -6462,8 +6550,8 @@ void CanvasItemEditorPlugin::clear() {
 void CanvasItemEditorPlugin::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
-			connect("scene_changed", callable_mp((CanvasItem *)canvas_item_editor->get_viewport_control(), &CanvasItem::queue_redraw).unbind(1));
-			connect("scene_closed", callable_mp((CanvasItem *)canvas_item_editor->get_viewport_control(), &CanvasItem::queue_redraw).unbind(1));
+			connect("scene_changed", callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport).unbind(1));
+			connect("scene_closed", callable_mp(canvas_item_editor, &CanvasItemEditor::update_viewport).unbind(1));
 		} break;
 	}
 }
@@ -7081,7 +7169,7 @@ void CanvasItemEditorViewport::_notification(int p_what) {
 	}
 }
 
-CanvasItemEditorViewport::CanvasItemEditorViewport(CanvasItemEditor *p_canvas_item_editor) {
+CanvasItemEditorViewport::CanvasItemEditorViewport(CanvasItemEditor *p_canvas_item_editor, Control *p_controls_container) {
 	default_texture_node_type = "Sprite2D";
 	// Node2D
 	texture_node_types.push_back("Sprite2D");
@@ -7128,7 +7216,8 @@ CanvasItemEditorViewport::CanvasItemEditorViewport(CanvasItemEditor *p_canvas_it
 	}
 
 	tooltip_panel = memnew(RichTextLabel);
-	canvas_item_editor->get_controls_container()->add_child(tooltip_panel);
+	ERR_FAIL_NULL(p_controls_container);
+	p_controls_container->add_child(tooltip_panel);
 	tooltip_panel->hide();
 	tooltip_panel->set_h_grow_direction(GROW_DIRECTION_BEGIN);
 	tooltip_panel->set_v_grow_direction(GROW_DIRECTION_BEGIN);

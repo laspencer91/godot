@@ -267,10 +267,19 @@ void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	// reselect that follows dropping a tab mid scene-close (suppress_activation).
 	if (is_inside_tree() && !suppress_activation) {
 		_activate_document(p_idx);
-		_sync_current_script_view(p_idx); // G2 S6a
 		WorkspacePane *pane = _owning_pane();
 		EditorWorkspace *workspace = pane ? pane->get_workspace() : nullptr;
 		if (workspace && workspace->get_focused_pane() == pane) {
+			// G2 M7.2b-fix: the "follow the focused pane" services (ScriptEditor / Shader current-surface,
+			// shared 2D/3D toolbar) must only re-point when THIS pane is the focused one. A programmatic
+			// tab change in a *background* pane (set_current() re-emitting tab_selected, the background reveal
+			// from _ensure_active_scene_tab) would otherwise steal or park the shared toolbar and re-route the
+			// current surfaces — killing the tool shortcuts (Q/W/E/R) in the pane the user is actually in.
+			// This is safe for genuine clicks: the Viewport grabs focus (→ set_focused_pane) on the mouse
+			// press before TabBar emits tab_selected, so the focused pane is already this one; and
+			// EditorWorkspace::set_focused_pane re-runs the very same sync on any focus change, so no
+			// focused-pane tab switch is ever starved.
+			_sync_current_script_view(p_idx); // G2 S6a
 			set_context_active(true);
 		}
 	}

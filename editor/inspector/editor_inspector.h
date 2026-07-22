@@ -473,6 +473,11 @@ class EditorInspectorSection : public Container {
 	int indent_depth = 0;
 	int level = 1;
 	String related_enable_property;
+	// G2 M7.2a-fix: ObjectID of the EditorInspector we connected `property_edited` to while checkable.
+	// Stored so the disconnect (set_checkable false-branch + destructor) always targets the SAME
+	// inspector we connected to — the per-pane InspectorDock singleton flips between panes, so
+	// resolving it fresh at disconnect time could hit a different inspector (error 15 + leaked signal).
+	ObjectID checkable_connected_inspector;
 
 	Timer *dropping_unfold_timer = nullptr;
 	bool dropping_for_unfold = false;

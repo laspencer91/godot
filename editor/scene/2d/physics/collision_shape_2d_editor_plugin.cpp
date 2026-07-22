@@ -353,7 +353,7 @@ bool CollisionShape2DEditor::forward_canvas_gui_input(const Ref<InputEvent> &p_e
 	}
 
 	Viewport *vp = node->get_viewport();
-	if (vp && !vp->is_visible_subviewport()) {
+	if (!canvas_item_editor->is_viewport_visible_for_editing(vp)) {
 		return false;
 	}
 
@@ -504,7 +504,7 @@ void CollisionShape2DEditor::forward_canvas_draw_over_viewport(Control *p_overla
 	}
 
 	Viewport *vp = node->get_viewport();
-	if (vp && !vp->is_visible_subviewport()) {
+	if (!canvas_item_editor->is_viewport_visible_for_editing(vp)) {
 		return;
 	}
 

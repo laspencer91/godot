@@ -393,6 +393,10 @@ void EditorResourcePreview::_iterate() {
 
 	if (queue.is_empty()) {
 		preview_mutex.unlock();
+		if (thread.is_started()) {
+			// Resource previews drained; spend this wake-up probing a queued scene preview.
+			_probe_scene_preview();
+		}
 		return;
 	}
 
@@ -709,6 +713,14 @@ void EditorResourcePreview::_queue_scene_preview(const SceneQueueItem &p_item) {
 			return;
 		}
 	}
+	for (const SceneQueueItem &queued_item : scene_generate_queue) {
+		if (queued_item.path == p_item.path && queued_item.callback == p_item.callback) {
+			return;
+		}
+	}
+	if (scene_probe_active && scene_probe_item.path == p_item.path && scene_probe_item.callback == p_item.callback) {
+		return;
+	}
 
 	if (scene_queue.size() >= MAX_SCENE_PREVIEW_QUEUE_SIZE) {
 		List<SceneQueueItem>::Element *last = scene_queue.back();
@@ -718,13 +730,21 @@ void EditorResourcePreview::_queue_scene_preview(const SceneQueueItem &p_item) {
 		scene_queue.erase(last);
 	}
 
+	bool inserted = false;
 	for (List<SceneQueueItem>::Element *element = scene_queue.front(); element; element = element->next()) {
 		if (element->get().priority < p_item.priority) {
 			scene_queue.insert_before(element, p_item);
-			return;
+			inserted = true;
+			break;
 		}
 	}
-	scene_queue.push_back(p_item);
+	if (!inserted) {
+		scene_queue.push_back(p_item);
+	}
+	if (thread.is_started()) {
+		// Wake the worker so it can probe the disk cache off the main thread.
+		preview_sem.post();
+	}
 }
 
 bool EditorResourcePreview::_pop_scene_preview(SceneQueueItem &r_item) {
@@ -737,6 +757,42 @@ bool EditorResourcePreview::_pop_scene_preview(SceneQueueItem &r_item) {
 	return true;
 }
 
+// Worker-thread stage: probe the disk cache for the next queued scene so the stat and PNG reads
+// never block a frame. Hits complete here; misses move to scene_generate_queue for the main thread.
+void EditorResourcePreview::_probe_scene_preview() {
+	SceneQueueItem item;
+	{
+		MutexLock lock(preview_mutex);
+		if (scene_queue.is_empty()) {
+			return;
+		}
+		item = scene_queue.front()->get();
+		scene_queue.pop_front();
+		scene_probe_item = item;
+		scene_probe_active = true;
+	}
+
+	Ref<ImageTexture> texture;
+	Ref<ImageTexture> small_texture;
+	Dictionary preview_metadata;
+	const bool cache_hit = _load_cached_preview(item.path, texture, small_texture, preview_metadata);
+
+	{
+		MutexLock lock(preview_mutex);
+		// cancel_scene_preview() may have nulled the callback while the probe ran.
+		item.callback = scene_probe_item.callback;
+		scene_probe_item = SceneQueueItem();
+		scene_probe_active = false;
+		if (!cache_hit) {
+			item.cache_probed = true;
+			scene_generate_queue.push_back(item);
+		}
+	}
+	if (cache_hit) {
+		_preview_ready(item.path, 0, texture, small_texture, item.callback, preview_metadata);
+	}
+}
+
 void EditorResourcePreview::_begin_scene_preview(const SceneQueueItem &p_item) {
 	Item cached_item;
 	bool has_cached_item = false;
@@ -744,8 +800,10 @@ void EditorResourcePreview::_begin_scene_preview(const SceneQueueItem &p_item) {
 		MutexLock lock(preview_mutex);
 		const Item *cached = cache.getptr(p_item.path);
 		if (cached && cached->modified_time == _get_preview_modified_time(p_item.path)) {
-			cached_item = *cached;
-			has_cached_item = true;
+			if (_cached_preview_suppresses_scene_generation(*cached)) {
+				cached_item = *cached;
+				has_cached_item = true;
+			}
 		} else if (cached) {
 			cache.erase(p_item.path);
 		}
@@ -757,18 +815,19 @@ void EditorResourcePreview::_begin_scene_preview(const SceneQueueItem &p_item) {
 		return;
 	}
 
-	Ref<ImageTexture> texture;
-	Ref<ImageTexture> small_texture;
-	Dictionary preview_metadata;
-	if (_load_cached_preview(p_item.path, texture, small_texture, preview_metadata)) {
-		_preview_ready(p_item.path, 0, texture, small_texture, p_item.callback, preview_metadata);
-		return;
+	if (!p_item.cache_probed) {
+		Ref<ImageTexture> texture;
+		Ref<ImageTexture> small_texture;
+		Dictionary preview_metadata;
+		if (_load_cached_preview(p_item.path, texture, small_texture, preview_metadata)) {
+			_preview_ready(p_item.path, 0, texture, small_texture, p_item.callback, preview_metadata);
+			return;
+		}
 	}
 
 	active_scene_preview = ActiveScenePreview();
 	active_scene_preview.item = p_item;
 	active_scene_preview.source_modified_time = _get_preview_modified_time(p_item.path);
-	active_scene_preview.source_hash = FileAccess::get_md5(p_item.path);
 
 	ScenePreviewScriptGuard script_guard;
 	Error load_error = OK;
@@ -923,7 +982,6 @@ void EditorResourcePreview::_scene_preview_ready(const String &p_path, const Ref
 void EditorResourcePreview::_finish_scene_preview(const Ref<Image> &p_image, const String &p_failure_reason) {
 	const SceneQueueItem item = active_scene_preview.item;
 	const uint64_t source_modified_time = active_scene_preview.source_modified_time;
-	const String source_hash = active_scene_preview.source_hash;
 	_clear_active_scene_preview();
 
 	if (p_image.is_null()) {
@@ -934,7 +992,8 @@ void EditorResourcePreview::_finish_scene_preview(const Ref<Image> &p_image, con
 		return;
 	}
 
-	if (_get_preview_modified_time(item.path) != source_modified_time || FileAccess::get_md5(item.path) != source_hash) {
+	// A save during generation bumps the mtime; content hashing is left to the cache write itself.
+	if (_get_preview_modified_time(item.path) != source_modified_time) {
 		if (item.callback.is_valid()) {
 			item.callback.call_deferred(item.path, Ref<Texture2D>(), Ref<Texture2D>());
 		}
@@ -975,10 +1034,33 @@ void EditorResourcePreview::_process_scene_preview() {
 		return;
 	}
 
+	if (OS::get_singleton()->get_ticks_msec() < scene_preview_defer_until_ms) {
+		return;
+	}
+
 	SceneQueueItem item;
-	if (_pop_scene_preview(item)) {
+	bool has_item = false;
+	{
+		MutexLock lock(preview_mutex);
+		if (!scene_generate_queue.is_empty()) {
+			item = scene_generate_queue.front()->get();
+			scene_generate_queue.pop_front();
+			has_item = true;
+		}
+	}
+	if (!has_item && !thread.is_started()) {
+		// Without a worker (OpenGL and tests), the main thread drains scene_queue directly.
+		has_item = _pop_scene_preview(item);
+	}
+	if (has_item) {
 		_begin_scene_preview(item);
 	}
+}
+
+void EditorResourcePreview::defer_scene_preview_generation(double p_seconds) {
+	ERR_FAIL_COND(p_seconds < 0.0);
+	const uint64_t until_ms = OS::get_singleton()->get_ticks_msec() + uint64_t(p_seconds * 1000.0);
+	scene_preview_defer_until_ms = MAX(scene_preview_defer_until_ms, until_ms);
 }
 
 Error EditorResourcePreview::save_preview_cache(const String &p_path, const Ref<Image> &p_preview, const Ref<Image> &p_small_preview, const Dictionary &p_metadata) {
@@ -1235,6 +1317,16 @@ void EditorResourcePreview::cancel_scene_preview(const String &p_path, const Cal
 		}
 		element = next;
 	}
+	for (List<SceneQueueItem>::Element *element = scene_generate_queue.front(); element;) {
+		List<SceneQueueItem>::Element *next = element->next();
+		if (element->get().path == p_path && element->get().callback == p_callback) {
+			scene_generate_queue.erase(element);
+		}
+		element = next;
+	}
+	if (scene_probe_active && scene_probe_item.path == p_path && scene_probe_item.callback == p_callback) {
+		scene_probe_item.callback = Callable();
+	}
 	if (active_scene_preview.item.path == p_path && active_scene_preview.item.callback == p_callback) {
 		active_scene_preview.item.callback = Callable();
 	}
@@ -1292,6 +1384,18 @@ void EditorResourcePreview::check_for_invalidation(const String &p_path) {
 			}
 			element = next;
 		}
+		for (List<SceneQueueItem>::Element *element = scene_generate_queue.front(); element;) {
+			List<SceneQueueItem>::Element *next = element->next();
+			if (element->get().path == p_path) {
+				scene_generate_queue.erase(element);
+				call_invalidated = true;
+			}
+			element = next;
+		}
+		if (scene_probe_active && scene_probe_item.path == p_path) {
+			scene_probe_item.callback = Callable();
+			call_invalidated = true;
+		}
 		if (active_scene_preview.item.path == p_path) {
 			active_scene_preview.item.callback = Callable();
 			call_invalidated = true;
@@ -1321,10 +1425,6 @@ void EditorResourcePreview::start() {
 void EditorResourcePreview::stop() {
 	set_process_internal(false);
 	_clear_active_scene_preview();
-	{
-		MutexLock lock(preview_mutex);
-		scene_queue.clear();
-	}
 	if (is_threaded()) {
 		if (thread.is_started()) {
 			exiting.set();
@@ -1343,6 +1443,12 @@ void EditorResourcePreview::stop() {
 
 			thread.wait_to_finish();
 		}
+	}
+	// After the join, so a mid-probe worker cannot repopulate the generate queue behind the clear.
+	{
+		MutexLock lock(preview_mutex);
+		scene_queue.clear();
+		scene_generate_queue.clear();
 	}
 }
 

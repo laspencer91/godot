@@ -1703,6 +1703,41 @@ void ThemeModern::populate_editor_styles(const Ref<EditorTheme> &p_theme, Editor
 		style_info_3d_viewport->set_content_margin_individual(p_config.base_margin * 2 * EDSCALE, p_config.base_margin * 1.5 * EDSCALE, p_config.base_margin * 2 * EDSCALE, p_config.base_margin * 1.5 * EDSCALE);
 		p_theme->set_stylebox("Information3dViewport", EditorStringName(EditorStyles), style_info_3d_viewport);
 
+		// Screen-space controls drawn over 2D and 3D editor viewports.
+		auto setup_viewport_button = [&](const StringName &p_type, const StringName &p_base_type) {
+			p_theme->set_type_variation(p_type, p_base_type);
+			p_theme->set_stylebox(CoreStringName(normal), p_type, style_info_3d_viewport);
+			p_theme->set_stylebox(SceneStringName(hover), p_type, style_info_3d_viewport);
+			p_theme->set_stylebox(SceneStringName(pressed), p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("hover_pressed", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("disabled", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("focus", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("normal_mirrored", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("hover_mirrored", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("pressed_mirrored", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("hover_pressed_mirrored", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("disabled_mirrored", p_type, style_info_3d_viewport);
+			p_theme->set_stylebox("focus_mirrored", p_type, style_info_3d_viewport);
+			p_theme->set_color(SceneStringName(font_color), p_type, p_config.font_dark_background_color);
+			p_theme->set_color("font_hover_color", p_type, p_config.font_dark_background_hover_color);
+			p_theme->set_color("font_focus_color", p_type, p_config.font_dark_background_focus_color);
+			p_theme->set_color("font_pressed_color", p_type, p_config.font_dark_background_pressed_color);
+			p_theme->set_color("font_hover_pressed_color", p_type, p_config.font_dark_background_hover_pressed_color);
+			p_theme->set_color("font_disabled_color", p_type, Color(p_config.font_dark_background_color, 0.5));
+		};
+		setup_viewport_button("ViewportButton", "Button");
+		setup_viewport_button("ViewportMenuButton", "Button");
+		setup_viewport_button("ViewportCheckBox", "CheckBoxNoIconTint");
+
+		p_theme->set_type_variation("ViewportPanel", "PanelContainer");
+		p_theme->set_stylebox(SceneStringName(panel), "ViewportPanel", style_info_3d_viewport);
+		p_theme->set_type_variation("ViewportToolbar", "HBoxContainer");
+		p_theme->set_constant("separation", "ViewportToolbar", 2 * EDSCALE);
+		p_theme->set_type_variation("ViewportChromeGroup", "VBoxContainer");
+		p_theme->set_constant("separation", "ViewportChromeGroup", 6 * EDSCALE);
+		p_theme->set_type_variation("ViewportChromeSlot", "VBoxContainer");
+		p_theme->set_constant("separation", "ViewportChromeSlot", 8 * EDSCALE);
+
 		// 2D, 3D, and Game toolbar.
 		p_theme->set_type_variation("MainToolBarMargin", "MarginContainer");
 		p_theme->set_constant("margin_left", "MainToolBarMargin", 4 * EDSCALE);

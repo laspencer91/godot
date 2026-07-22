@@ -42,6 +42,7 @@ class AspectRatioContainer;
 class Camera3D;
 class CheckBox;
 class EditorSelection;
+class EditorViewportChrome;
 class Gradient;
 class ImmediateMesh;
 class MenuButton;
@@ -331,6 +332,7 @@ private:
 	PopupMenu *display_submenu = nullptr;
 
 	Control *surface = nullptr;
+	EditorViewportChrome *viewport_chrome = nullptr;
 	SubViewport *viewport = nullptr;
 	Camera3D *camera = nullptr;
 	bool transforming = false;
