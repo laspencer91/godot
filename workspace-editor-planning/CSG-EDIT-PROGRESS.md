@@ -7,7 +7,7 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 - Implementation is delegated to Codex CLI (`codex exec`) per phase; the orchestrator reviews the diff after each phase.
 - After each phase: run an Opus agent with the /simplify pass over the phase's changes, then re-verify.
 - Build only when necessary (phase verification or compile-sanity after large changes). Full builds are expensive.
-- Working tree: `master` with the user's uncommitted workspace-editor changes. DO NOT commit, stash, or revert anything not created by this effort. No git commits unless the user asks.
+- Git: user approved committing. Baseline workspace WIP committed at d399876524; plan docs at 7bf59608a7. Commit each phase after verification + simplify pass (one commit per phase, Co-Authored-By trailer). Never stash/revert user work.
 - Any new editor surface/context must reuse an established fork pattern (chrome registry, provider/registry factories, per-view state) or establish one that later systems can reuse.
 
 ## Build commands (verified 2026-07)
