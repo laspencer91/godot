@@ -182,6 +182,10 @@ class EditorFileSystem : public Node {
 		uint64_t modified_time = 0;
 		HashMap<String, uint64_t> file_modified_times;
 
+		// Returns the modified time captured during enumeration for `p_file` (a plain
+		// entry name, not a path), falling back to a stat when it wasn't captured.
+		uint64_t get_file_modified_time(const String &p_file, const String &p_path) const;
+
 		~ScannedDirectory();
 	};
 
@@ -238,7 +242,20 @@ class EditorFileSystem : public Node {
 	};
 
 	HashMap<String, FileCache> file_cache;
+	// First-scan-only scratch state, cleared at the end of _scan_filesystem().
+	// Resource types of every script found by _collect_first_scan_script_types(),
+	// so _first_scan_process_scripts() doesn't resolve them a second time.
+	HashMap<String, StringName> first_scan_script_types;
+	// Class info produced by _first_scan_process_scripts(), consumed by the later
+	// _process_file_system() pass so scripts are only parsed once per startup.
+	HashMap<String, ScriptClassInfo> first_scan_script_class_info;
 	HashSet<String> dep_update_list;
+	// True while the class info stored in `file_cache` may still be reused: the cache
+	// file carried a matching script class marker and no recognized script has changed.
+	bool filesystem_cache_script_classes_valid = false;
+
+	void _load_filesystem_cache();
+	bool _collect_first_scan_script_types(const ScannedDirectory *p_scan_dir);
 
 	struct ScanProgress {
 		float hi = 0;
@@ -350,6 +367,7 @@ class EditorFileSystem : public Node {
 	void _get_all_scenes(EditorFileSystemDirectory *p_dir, HashSet<String> &r_list);
 
 	ScriptClassInfo _get_global_script_class(const String &p_type, const String &p_path) const;
+	ScriptClassInfo _get_global_script_class_cached(const String &p_type, const String &p_path) const;
 
 	static Error _resource_import(const String &p_path);
 	static Ref<Resource> _load_resource_on_startup(ResourceFormatImporter *p_importer, const String &p_path, Error *r_error, bool p_use_sub_threads, float *r_progress, ResourceLoaderConstants::CacheMode p_cache_mode);

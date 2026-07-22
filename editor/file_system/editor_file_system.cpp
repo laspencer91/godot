@@ -60,6 +60,11 @@ EditorFileSystem::ScannedDirectory *EditorFileSystem::first_scan_root_dir = null
 //the name is the version, to keep compatibility with different versions of Godot
 #define CACHE_FILE_NAME "filesystem_cache10"
 
+// Bump this when script global class extraction semantics change. The marker is
+// stored at the end of the filesystem cache, so older editors safely ignore it
+// and rewrite the cache without the marker, forcing one validating scan here.
+#define SCRIPT_CLASS_CACHE_VERSION "1"
+
 int EditorFileSystemDirectory::find_file_index(const String &p_file) const {
 	for (int i = 0; i < files.size(); i++) {
 		if (files[i]->file == p_file) {
@@ -257,12 +262,63 @@ EditorFileSystem::ScannedDirectory::~ScannedDirectory() {
 	}
 }
 
+uint64_t EditorFileSystem::ScannedDirectory::get_file_modified_time(const String &p_file, const String &p_path) const {
+	const uint64_t *scanned_time = file_modified_times.getptr(p_file.to_lower());
+	if (scanned_time && *scanned_time) {
+		return *scanned_time;
+	}
+	return FileAccess::get_modified_time(p_path);
+}
+
+// Returns true if `p_extension` (already lowercased) is the extension of a registered
+// script language. Used to skip the far more expensive ResourceLoader::get_resource_type()
+// for files that cannot be scripts; some loaders read the file to answer it, which is
+// very slow on large projects.
+static bool _is_script_extension(const String &p_extension) {
+	return ScriptServer::get_language_for_extension(p_extension) != nullptr;
+}
+
 void EditorFileSystem::_load_first_scan_root_dir() {
 	Ref<DirAccess> d = DirAccess::create(DirAccess::ACCESS_RESOURCES);
 	first_scan_root_dir = memnew(ScannedDirectory);
 	first_scan_root_dir->full_path = "res://";
 
 	nb_files_total = _scan_new_dir(first_scan_root_dir, d);
+}
+
+// Records the resource type of every script under `p_scan_dir` into first_scan_script_types
+// and returns whether all of them still match the filesystem cache. The whole tree is always
+// walked, even once a mismatch is known: the types are needed by _first_scan_process_scripts()
+// either way, and resolving them here means it never has to resolve them again.
+bool EditorFileSystem::_collect_first_scan_script_types(const ScannedDirectory *p_scan_dir) {
+	bool cache_matches = true;
+
+	for (ScannedDirectory *scan_sub_dir : p_scan_dir->subdirs) {
+		if (!_collect_first_scan_script_types(scan_sub_dir)) {
+			cache_matches = false;
+		}
+	}
+
+	for (const String &scan_file : p_scan_dir->files) {
+		if (!_is_script_extension(scan_file.get_extension().to_lower())) {
+			continue;
+		}
+
+		const String path = p_scan_dir->full_path.path_join(scan_file);
+		const StringName type = ResourceLoader::get_resource_type(path);
+		if (!ClassDB::is_parent_class(type, SNAME("Script"))) {
+			continue;
+		}
+		first_scan_script_types.insert(path, type);
+
+		const uint64_t modified_time = p_scan_dir->get_file_modified_time(scan_file, path);
+		const FileCache *cached_file = file_cache.getptr(path);
+		if (modified_time == 0 || !cached_file || cached_file->modification_time != modified_time || cached_file->type != type) {
+			cache_matches = false;
+		}
+	}
+
+	return cache_matches;
 }
 
 void EditorFileSystem::scan_for_uid() {
@@ -318,22 +374,47 @@ void EditorFileSystem::_first_scan_filesystem() {
 	EditorProgress ep = EditorProgress("first_scan_filesystem", TTR("Project initialization"), 5);
 	HashSet<String> existing_class_names;
 	HashSet<String> extensions;
+	first_scan_script_class_info.clear();
+	first_scan_script_types.clear();
 
 	if (!first_scan_root_dir) {
 		ep.step(TTR("Scanning file structure..."), 0, true);
 		_load_first_scan_root_dir();
 	}
 
+	const uint64_t script_class_scan_begin = OS::get_singleton()->get_ticks_usec();
+
 	// Preloading GDExtensions file extensions to prevent looping on all the resource loaders
 	// for each files in _first_scan_process_scripts.
 	List<String> gdextension_extensions;
 	ResourceLoader::get_recognized_extensions_for_type("GDExtension", &gdextension_extensions);
+
+	// A script's global class metadata can depend on a path-based base script, so
+	// per-file mtime validation is insufficient. Reuse class metadata only when
+	// the complete recognized script set is unchanged: every script still matches
+	// the cache, and the cache holds no script that has since been removed.
+	if (filesystem_cache_script_classes_valid) {
+		filesystem_cache_script_classes_valid = _collect_first_scan_script_types(first_scan_root_dir);
+	}
+	if (filesystem_cache_script_classes_valid) {
+		// Mirrors the removal check in _process_removed_files(); keep the two in sync.
+		for (const KeyValue<String, FileCache> &cached_file : file_cache) {
+			if (ClassDB::is_parent_class(cached_file.value.type, SNAME("Script")) && !first_scan_script_types.has(cached_file.key)) {
+				filesystem_cache_script_classes_valid = false;
+				break;
+			}
+		}
+	}
 
 	// This loads the global class names from the scripts and ensures that even if the
 	// global_script_class_cache.cfg was missing or invalid, the global class names are valid in ScriptServer.
 	// At the same time, to prevent looping multiple times in all files, it looks for extensions.
 	ep.step(TTR("Loading global class names..."), 1, true);
 	_first_scan_process_scripts(first_scan_root_dir, gdextension_extensions, existing_class_names, extensions);
+	print_verbose(vformat("EditorFileSystem: Global script class scan processed %d scripts in %d ms (cached class metadata %s).",
+			first_scan_script_class_info.size(),
+			(OS::get_singleton()->get_ticks_usec() - script_class_scan_begin) / 1000,
+			filesystem_cache_script_classes_valid ? "reused" : "reparsed"));
 
 	// Removing invalid global class to prevent having invalid paths in ScriptServer.
 	bool save_scripts = _remove_invalid_global_class_names(existing_class_names);
@@ -359,6 +440,12 @@ void EditorFileSystem::_first_scan_filesystem() {
 	ep.step(TTR("Initializing plugins..."), 4, true);
 	EditorNode::get_singleton()->init_plugins();
 
+	// Importers can be registered by the GDExtensions and plugins loaded above, so the
+	// import settings hash is only meaningful once they have all initialized.
+	if (filesystem_settings_version_for_import != ResourceFormatImporter::get_singleton()->get_import_settings_hash()) {
+		revalidate_import_files = true;
+	}
+
 	ep.step(TTR("Starting file scan..."), 5, true);
 }
 
@@ -368,23 +455,21 @@ void EditorFileSystem::_first_scan_process_scripts(const ScannedDirectory *p_sca
 	}
 
 	for (const String &scan_file : p_scan_dir->files) {
-		// Optimization to skip the ResourceLoader::get_resource_type for files
-		// that are not scripts. Some loader get_resource_type methods read the file
-		// which can be very slow on large projects.
 		const String ext = scan_file.get_extension().to_lower();
-		bool is_script = false;
-		for (int i = 0; i < ScriptServer::get_language_count(); i++) {
-			if (ScriptServer::get_language(i)->get_extension() == ext) {
-				is_script = true;
-				break;
-			}
-		}
-		if (is_script) {
+		if (_is_script_extension(ext)) {
 			const String path = p_scan_dir->full_path.path_join(scan_file);
-			const String type = ResourceLoader::get_resource_type(path);
+			// _collect_first_scan_script_types() already resolved the type when the cache
+			// carried a script class marker; otherwise resolve it now.
+			const StringName *scanned_type = first_scan_script_types.getptr(path);
+			const StringName type = scanned_type ? *scanned_type : StringName(ResourceLoader::get_resource_type(path));
 
 			if (ClassDB::is_parent_class(type, SNAME("Script"))) {
-				const ScriptClassInfo &info = _get_global_script_class(type, path);
+				// When the cache is still valid, every script is present in it with matching
+				// type and mtime, so the stored class info can be reused without reparsing.
+				const FileCache *cached_file = filesystem_cache_script_classes_valid ? file_cache.getptr(path) : nullptr;
+				const ScriptClassInfo info = cached_file ? cached_file->class_info : _get_global_script_class(type, path);
+				first_scan_script_class_info.insert(path, info);
+
 				ScriptClassInfoUpdate update(info);
 				update.type = type;
 				_register_global_class_script(path, path, update);
@@ -406,17 +491,12 @@ void EditorFileSystem::_first_scan_process_scripts(const ScannedDirectory *p_sca
 	}
 }
 
-void EditorFileSystem::_scan_filesystem() {
-	// On the first scan, the first_scan_root_dir is created in _first_scan_filesystem.
-	ERR_FAIL_COND(!scanning || new_filesystem || (first_scan && !first_scan_root_dir));
-
-	//read .fscache
+void EditorFileSystem::_load_filesystem_cache() {
 	String cpath;
 
-	sources_changed.clear();
 	file_cache.clear();
-
-	String project = ProjectSettings::get_singleton()->get_resource_path();
+	dep_update_list.clear();
+	filesystem_cache_script_classes_valid = false;
 
 	String fscache = EditorPaths::get_singleton()->get_project_settings_dir().path_join(CACHE_FILE_NAME);
 	{
@@ -435,9 +515,6 @@ void EditorFileSystem::_scan_filesystem() {
 						// your workflow is not killed after changing a setting by forceful reimporting
 						// everything there is.
 						filesystem_settings_version_for_import = l.strip_edges();
-						if (filesystem_settings_version_for_import != ResourceFormatImporter::get_singleton()->get_import_settings_hash()) {
-							revalidate_import_files = true;
-						}
 					}
 					first = false;
 					continue;
@@ -449,6 +526,10 @@ void EditorFileSystem::_scan_filesystem() {
 				if (l.begins_with("::")) {
 					Vector<String> split = l.split("::");
 					ERR_CONTINUE(split.size() != 3);
+					if (split[1] == "script_class_cache") {
+						filesystem_cache_script_classes_valid = split[2] == SCRIPT_CLASS_CACHE_VERSION;
+						continue;
+					}
 					const String &name = split[1];
 
 					cpath = name;
@@ -505,6 +586,17 @@ void EditorFileSystem::_scan_filesystem() {
 		Ref<DirAccess> d = DirAccess::create(DirAccess::ACCESS_RESOURCES);
 		d->remove(update_cache); // Bye bye update cache.
 	}
+}
+
+void EditorFileSystem::_scan_filesystem() {
+	// On the first scan, the first_scan_root_dir is created in _first_scan_filesystem.
+	ERR_FAIL_COND(!scanning || new_filesystem || (first_scan && !first_scan_root_dir));
+
+	sources_changed.clear();
+	if (!first_scan) {
+		// On the first scan, scan() already loaded the cache before _first_scan_filesystem().
+		_load_filesystem_cache();
+	}
 
 	EditorProgressBG scan_progress("efs", "ScanFS", 1000);
 	ScanProgress sp;
@@ -537,6 +629,8 @@ void EditorFileSystem::_scan_filesystem() {
 	}
 	dep_update_list.clear();
 	file_cache.clear(); //clear caches, no longer needed
+	first_scan_script_class_info.clear();
+	first_scan_script_types.clear();
 
 	if (first_scan) {
 		memdelete(first_scan_root_dir);
@@ -560,6 +654,9 @@ void EditorFileSystem::_save_filesystem_cache() {
 
 	f->store_line(filesystem_settings_version_for_import);
 	_save_filesystem_cache(filesystem, f);
+	// Must stay after the directory records: older editors parse this as a directory
+	// entry, which is harmless at the end of the file but would shadow a real one.
+	f->store_line("::script_class_cache::" SCRIPT_CLASS_CACHE_VERSION);
 }
 
 void EditorFileSystem::_thread_func(void *_userdata) {
@@ -1101,6 +1198,9 @@ void EditorFileSystem::scan() {
 	// be added on the main thread because they are nodes, and we need to wait for them
 	// to be loaded to continue the scan and reimportations.
 	if (first_scan) {
+		// Load the filesystem cache before processing scripts so unchanged global class
+		// metadata can be reused without reopening and parsing every script.
+		_load_filesystem_cache();
 		_first_scan_filesystem();
 #ifdef ANDROID_ENABLED
 		// Create a .nomedia file to hide assets from media apps on Android.
@@ -1287,23 +1387,11 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 
 		FileCache *fc = file_cache.getptr(path);
 
-		uint64_t mt = 0;
-		const uint64_t *cached_mt = p_scan_dir->file_modified_times.getptr(scan_file.to_lower());
-		if (cached_mt && *cached_mt) {
-			mt = *cached_mt;
-		} else {
-			mt = FileAccess::get_modified_time(path);
-		}
+		const uint64_t mt = p_scan_dir->get_file_modified_time(scan_file, path);
 
 		if (_can_import_file(scan_file)) {
 			//is imported
-			uint64_t import_mt = 0;
-			const uint64_t *cached_import_mt = p_scan_dir->file_modified_times.getptr((scan_file + ".import").to_lower());
-			if (cached_import_mt && *cached_import_mt) {
-				import_mt = *cached_import_mt;
-			} else {
-				import_mt = FileAccess::get_modified_time(path + ".import");
-			}
+			const uint64_t import_mt = p_scan_dir->get_file_modified_time(scan_file + ".import", path + ".import");
 
 			if (fc) {
 				fi->type = fc->type;
@@ -1354,7 +1442,7 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 			} else {
 				// Using get_resource_import_info() to prevent calling 3 times ResourceFormatImporter::_get_path_and_type.
 				ResourceFormatImporter::get_singleton()->get_resource_import_info(path, fi->type, fi->uid, fi->import_group_file);
-				fi->class_info = _get_global_script_class(fi->type, path);
+				fi->class_info = _get_global_script_class_cached(fi->type, path);
 				fi->modified_time = 0;
 				fi->import_modified_time = 0;
 				fi->import_md5 = FileAccess::get_md5(path + ".import");
@@ -1384,7 +1472,7 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				if (first_scan && ClassDB::is_parent_class(fi->type, SNAME("Script"))) {
 					bool update_script = false;
 					String old_class_name = fi->class_info.name;
-					fi->class_info = _get_global_script_class(fi->type, path);
+					fi->class_info = _get_global_script_class_cached(fi->type, path);
 					if (old_class_name != fi->class_info.name) {
 						update_script = true;
 					} else if (!fi->class_info.name.is_empty() && (!ScriptServer::is_global_class(fi->class_info.name) || ScriptServer::get_global_class_path(fi->class_info.name) != path)) {
@@ -1406,7 +1494,7 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 					fi->type = "OtherFile";
 				}
 				fi->uid = ResourceLoader::get_resource_uid(path);
-				fi->class_info = _get_global_script_class(fi->type, path);
+				fi->class_info = _get_global_script_class_cached(fi->type, path);
 				fi->deps = _get_dependencies(path);
 				fi->modified_time = mt;
 				fi->import_modified_time = 0;
@@ -2195,6 +2283,17 @@ EditorFileSystem::ScriptClassInfo EditorFileSystem::_get_global_script_class(con
 		}
 	}
 	return info;
+}
+
+// Returns the class info already computed for this path by _first_scan_process_scripts(),
+// parsing the script only if there is none. The map is empty outside the first scan, so
+// _scan_fs_changes()/update_files() keep going straight to _get_global_script_class().
+EditorFileSystem::ScriptClassInfo EditorFileSystem::_get_global_script_class_cached(const String &p_type, const String &p_path) const {
+	const ScriptClassInfo *first_scan_info = first_scan_script_class_info.getptr(p_path);
+	if (first_scan_info) {
+		return *first_scan_info;
+	}
+	return _get_global_script_class(p_type, p_path);
 }
 
 void EditorFileSystem::_update_file_icon_path(EditorFileSystemDirectory::FileInfo *file_info) {
