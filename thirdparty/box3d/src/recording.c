@@ -175,6 +175,7 @@ void b3RecW_QUERYFILTER( b3RecBuffer* buf, b3QueryFilter v )
 {
 	b3RecW_U64( buf, v.categoryBits );
 	b3RecW_U64( buf, v.maskBits );
+	b3RecW_BOOL( buf, v.hitBackFaces );
 }
 
 // Variable length: count, then count points, then radius. The point cloud lives behind a pointer so

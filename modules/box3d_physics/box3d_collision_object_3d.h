@@ -18,6 +18,7 @@ public:
 
 private:
 	Type type;
+	bool ray_pickable = true;
 
 public:
 	explicit Box3DCollisionObject3D(Type p_type) :
@@ -25,6 +26,8 @@ public:
 	virtual ~Box3DCollisionObject3D() = default;
 
 	Type get_type() const { return type; }
+	void set_ray_pickable(bool p_enable) { ray_pickable = p_enable; }
+	bool is_ray_pickable() const { return ray_pickable; }
 	virtual RID get_rid() const = 0;
 	virtual ObjectID get_instance_id() const = 0;
 	virtual Box3DSpace3D *get_space() const = 0;

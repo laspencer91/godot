@@ -2854,6 +2854,7 @@ static float RayCastCallback( const b3RayCastInput* input, int proxyId, uint64_t
 
 	b3RayCastInput localInput = *input;
 	localInput.origin = b3Vec3_zero;
+	localInput.hitBackFaces = queryFilter.hitBackFaces;
 	b3CastOutput output = b3RayCastShape( shape, transform, &localInput );
 
 	if ( output.hit )

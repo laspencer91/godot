@@ -53,7 +53,6 @@ private:
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
 	bool monitorable = false;
-	bool ray_pickable = false;
 
 	PS3DE::AreaSpaceOverrideMode gravity_override_mode = PS3DE::AREA_SPACE_OVERRIDE_DISABLED;
 	PS3DE::AreaSpaceOverrideMode linear_damp_override_mode = PS3DE::AREA_SPACE_OVERRIDE_DISABLED;
@@ -113,8 +112,6 @@ public:
 	uint32_t get_collision_mask() const { return collision_mask; }
 	void set_monitorable(bool p_monitorable);
 	bool is_monitorable() const { return monitorable; }
-	void set_ray_pickable(bool p_enable) { ray_pickable = p_enable; }
-	bool is_ray_pickable() const { return ray_pickable; }
 	void set_monitor_callback(const Callable &p_callback) { monitor_callback = p_callback; }
 	void set_area_monitor_callback(const Callable &p_callback) { area_monitor_callback = p_callback; }
 

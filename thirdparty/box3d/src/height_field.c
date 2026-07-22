@@ -591,6 +591,9 @@ b3AABB b3ComputeHeightFieldAABB( const b3HeightFieldData* shape, b3Transform tra
 	return b3AABB_Transform( transform, shape->aabb );
 }
 
+static b3CastOutput b3ShapeCastHeightFieldInternal( const b3HeightFieldData* heightField, const b3ShapeCastInput* input,
+												 bool hitBackFaces );
+
 b3CastOutput b3RayCastHeightField( const b3HeightFieldData* heightField, const b3RayCastInput* input )
 {
 	b3ShapeCastInput shapeCastInput = { 0 };
@@ -598,12 +601,18 @@ b3CastOutput b3RayCastHeightField( const b3HeightFieldData* heightField, const b
 	shapeCastInput.translation = input->translation;
 	shapeCastInput.maxFraction = input->maxFraction;
 
-	return b3ShapeCastHeightField( heightField, &shapeCastInput );
+	return b3ShapeCastHeightFieldInternal( heightField, &shapeCastInput, input->hitBackFaces );
 }
 
 // todo advance cast to the grid border immediately if it starts outside the row/column range
 // todo terminate the cast immediately if it leaves the row/column range
 b3CastOutput b3ShapeCastHeightField( const b3HeightFieldData* heightField, const b3ShapeCastInput* input )
+{
+	return b3ShapeCastHeightFieldInternal( heightField, input, false );
+}
+
+static b3CastOutput b3ShapeCastHeightFieldInternal( const b3HeightFieldData* heightField, const b3ShapeCastInput* input,
+												 bool hitBackFaces )
 {
 	b3AABB shapeBounds = b3MakeAABB( input->proxy.points, input->proxy.count, input->proxy.radius );
 	b3Vec3 shapeTranslation = input->translation;
@@ -862,12 +871,23 @@ b3CastOutput b3ShapeCastHeightField( const b3HeightFieldData* heightField, const
 
 						float alpha = b3IntersectRayTriangle( rayOrigin, rayTranslation, vertex1, vertex2, vertex3 );
 						B3_ASSERT( 0 <= alpha && alpha <= 1.0f );
+						bool backFaceHit = false;
+						if ( alpha == 1.0f && hitBackFaces )
+						{
+							alpha = b3IntersectRayTriangle( rayOrigin, rayTranslation, vertex1, vertex3, vertex2 );
+							B3_ASSERT( 0 <= alpha && alpha <= 1.0f );
+							backFaceHit = alpha < 1.0f;
+						}
 
 						if ( alpha < bestFraction )
 						{
 							b3Vec3 edge1 = b3Sub( point21, point11 );
 							b3Vec3 edge2 = b3Sub( point12, point11 );
 							b3Vec3 normal = heightField->clockwise ? b3Cross( edge2, edge1 ) : b3Cross( edge1, edge2 );
+							if ( backFaceHit )
+							{
+								normal = b3Neg( normal );
+							}
 
 							result.point = b3MulAdd( shapeStart, alpha, shapeTranslation );
 							result.normal = b3Normalize( normal );
@@ -896,12 +916,23 @@ b3CastOutput b3ShapeCastHeightField( const b3HeightFieldData* heightField, const
 
 						float alpha = b3IntersectRayTriangle( rayOrigin, rayTranslation, vertex1, vertex2, vertex3 );
 						B3_ASSERT( 0 <= alpha && alpha <= 1.0f );
+						bool backFaceHit = false;
+						if ( alpha == 1.0f && hitBackFaces )
+						{
+							alpha = b3IntersectRayTriangle( rayOrigin, rayTranslation, vertex1, vertex3, vertex2 );
+							B3_ASSERT( 0 <= alpha && alpha <= 1.0f );
+							backFaceHit = alpha < 1.0f;
+						}
 
 						if ( alpha < bestFraction )
 						{
 							b3Vec3 edge1 = b3Sub( point22, point21 );
 							b3Vec3 edge2 = b3Sub( point12, point21 );
 							b3Vec3 normal = heightField->clockwise ? b3Cross( edge2, edge1 ) : b3Cross( edge1, edge2 );
+							if ( backFaceHit )
+							{
+								normal = b3Neg( normal );
+							}
 
 							result.point = b3MulAdd( shapeStart, alpha, shapeTranslation );
 							result.normal = b3Normalize( normal );

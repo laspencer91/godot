@@ -8,6 +8,10 @@ env_box3d = env_modules.Clone()
 
 thirdparty_dir = "#thirdparty/box3d/"
 env_box3d.Prepend(CPPPATH=[thirdparty_dir + "include"])
+if env["tests"]:
+    # Auto-collected module test headers are compiled as part of the global
+    # test translation unit, so it also needs the public Box3D include path.
+    env.Prepend(CPPPATH=[thirdparty_dir + "include"])
 
 # Thirdparty Box3D library (C17).
 env_thirdparty = env_box3d.Clone()

@@ -169,7 +169,9 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			LocalVector<int32_t> indices;
 			LocalVector<uint8_t> material_indices;
 			vertices.resize(width * depth);
-			indices.resize((width - 1) * (depth - 1) * 6);
+			const int source_triangle_count = (width - 1) * (depth - 1) * 2;
+			const int output_triangle_count = source_triangle_count * 2;
+			indices.resize(output_triangle_count * 3);
 
 			const real_t x_offset = (real_t)(width - 1) * 0.5;
 			const real_t z_offset = (real_t)(depth - 1) * 0.5;
@@ -188,13 +190,21 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 					const int i01 = (z + 1) * width + x;
 					const int i11 = (z + 1) * width + x + 1;
 
-					// Heightmaps are module-authored; this winding gives flat grids +Y collision normals in Box3D.
+					// Heightmaps are currently represented by Box3D meshes. Keep both
+					// windings so ray queries can honor Godot's per-query back-face flag;
+					// the direct-space callback filters the reverse winding when disabled.
 					indices[index++] = i00;
 					indices[index++] = i01;
 					indices[index++] = i10;
+					indices[index++] = i00;
+					indices[index++] = i10;
+					indices[index++] = i01;
 					indices[index++] = i10;
 					indices[index++] = i01;
 					indices[index++] = i11;
+					indices[index++] = i10;
+					indices[index++] = i11;
+					indices[index++] = i01;
 				}
 			}
 
@@ -202,8 +212,14 @@ void Box3DShape3D::set_data(const Variant &p_data) {
 			mesh_def.vertices = vertices.ptr();
 			mesh_def.indices = indices.ptr();
 			mesh_def.vertexCount = vertices.size();
-			mesh_def.triangleCount = indices.size() / 3;
-			_copy_material_indices(mesh_triangle_material_indices, material_indices, mesh_def.triangleCount);
+			mesh_def.triangleCount = output_triangle_count;
+			if (mesh_triangle_material_indices.size() == source_triangle_count) {
+				material_indices.resize(output_triangle_count);
+				for (int i = 0; i < source_triangle_count; i++) {
+					material_indices[i * 2] = mesh_triangle_material_indices[i];
+					material_indices[i * 2 + 1] = mesh_triangle_material_indices[i];
+				}
+			}
 			mesh_def.materialIndices = material_indices.size() == mesh_def.triangleCount ? material_indices.ptr() : nullptr;
 			mesh_def.weldVertices = true;
 			mesh_def.weldTolerance = 0.0001f;

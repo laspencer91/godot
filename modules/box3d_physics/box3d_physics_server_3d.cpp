@@ -503,6 +503,12 @@ uint32_t Box3DPhysicsServer3D::body_get_collision_mask(RID p_body) const {
 	return body->get_collision_mask();
 }
 
+void Box3DPhysicsServer3D::body_set_ray_pickable(RID p_body, bool p_enable) {
+	Box3DBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+	body->set_ray_pickable(p_enable);
+}
+
 void Box3DPhysicsServer3D::body_add_collision_exception(RID p_body, RID p_body_b) {
 	Box3DBody3D *body = body_owner.get_or_null(p_body);
 	ERR_FAIL_NULL(body);

@@ -1293,6 +1293,9 @@ typedef struct b3QueryFilter
 	/// query would accept for collision.
 	uint64_t maskBits;
 
+	/// Allow height-field ray casts to hit triangles from the back side.
+	bool hitBackFaces;
+
 	/// Optional id combined with @ref name to identify this query in a recording, e.g. an entity id.
 	/// Need not be unique on its own. 0 with a null name means untagged. Ignored when not recording.
 	uint64_t id;
@@ -1319,6 +1322,9 @@ typedef struct b3RayCastInput
 
 	/// The maximum fraction of the translation to consider, typically 1
 	float maxFraction;
+
+	/// Allow height-field triangles to be hit from the back side.
+	bool hitBackFaces;
 } b3RayCastInput;
 
 /// Result from b3World_RayCastClosest.

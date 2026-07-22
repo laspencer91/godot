@@ -52,7 +52,10 @@ b3Filter b3DefaultFilter( void )
 
 b3QueryFilter b3DefaultQueryFilter( void )
 {
-	b3QueryFilter filter = { B3_DEFAULT_CATEGORY_BITS, B3_DEFAULT_MASK_BITS, 0, NULL };
+	b3QueryFilter filter = { 0 };
+	filter.categoryBits = B3_DEFAULT_CATEGORY_BITS;
+	filter.maskBits = B3_DEFAULT_MASK_BITS;
+	filter.hitBackFaces = false;
 	return filter;
 }
 

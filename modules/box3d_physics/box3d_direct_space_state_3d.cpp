@@ -84,10 +84,11 @@ Object *Box3DDirectSpaceState3D::_get_instance(ObjectID p_id) {
 	return p_id.is_valid() ? ObjectDB::get_instance(p_id) : nullptr;
 }
 
-b3QueryFilter Box3DDirectSpaceState3D::make_query_filter(uint32_t p_collision_mask) {
+b3QueryFilter Box3DDirectSpaceState3D::make_query_filter(uint32_t p_collision_mask, bool p_hit_back_faces) {
 	b3QueryFilter filter = b3DefaultQueryFilter();
 	filter.categoryBits = BOX3D_QUERY_FILTER_BIT;
 	filter.maskBits = (uint64_t)p_collision_mask;
+	filter.hitBackFaces = p_hit_back_faces;
 	return filter;
 }
 
@@ -217,9 +218,51 @@ struct Box3DRayContext {
 	bool hit = false;
 };
 
+static bool _is_heightmap_back_face(Box3DCollisionObject3D *object, b3ShapeId p_shape_id, b3Vec3 p_normal) {
+	const int shape_index = Box3DDirectSpaceState3D::_get_shape_index(p_shape_id);
+	Box3DShape3D *shape = nullptr;
+	Transform3D shape_transform;
+	if (object->get_type() == Box3DCollisionObject3D::TYPE_BODY) {
+		Box3DBody3D *body = static_cast<Box3DBody3D *>(object);
+		const Box3DBody3D::ShapeSlot *slot = body->get_shape_slot(shape_index);
+		if (slot != nullptr) {
+			shape = slot->shape;
+			shape_transform = body->get_transform() * slot->xform;
+		}
+	} else {
+		Box3DArea3D *area = static_cast<Box3DArea3D *>(object);
+		const Box3DArea3D::ShapeSlot *slot = area->get_shape_slot(shape_index);
+		if (slot != nullptr) {
+			shape = slot->shape;
+			shape_transform = area->get_transform() * slot->xform;
+		}
+	}
+
+	if (shape == nullptr || shape->get_type() != PS3DE::SHAPE_HEIGHTMAP) {
+		return false;
+	}
+
+	// The source heightmap winding has a positive local-Y normal. Correct for
+	// mirrored transforms because transforming triangle vertices flips winding.
+	const real_t orientation = shape_transform.basis.determinant() < 0.0 ? -1.0 : 1.0;
+	const Vector3 transformed_up = shape_transform.basis.xform(Vector3(0.0, 1.0, 0.0));
+	return orientation * to_godot(p_normal).dot(transformed_up) < 0.0;
+}
+
 static float _ray_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal, float p_fraction, uint64_t p_user_material_id, int p_triangle_index, int p_child_index, void *p_context) {
 	Box3DRayContext *ctx = static_cast<Box3DRayContext *>(p_context);
 	if (!ctx->state->_can_query_shape(p_shape_id, ctx->parameters->exclude, ctx->parameters->collide_with_bodies, ctx->parameters->collide_with_areas)) {
+		return -1.0f;
+	}
+	if (p_fraction == 0.0f && !ctx->parameters->hit_from_inside) {
+		return -1.0f;
+	}
+
+	Box3DCollisionObject3D *object = ctx->state->_get_object(p_shape_id);
+	if (ctx->parameters->pick_ray && !object->is_ray_pickable()) {
+		return -1.0f;
+	}
+	if (!ctx->parameters->hit_back_faces && _is_heightmap_back_face(object, p_shape_id, p_normal)) {
 		return -1.0f;
 	}
 
@@ -234,9 +277,6 @@ static float _ray_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Vec3 p_normal,
 bool Box3DDirectSpaceState3D::_intersect_ray_internal(const PS3DT::RayParameters &p_parameters, PS3DT::RayResult &r_result, uint64_t *r_user_material_id) const {
 	ERR_FAIL_NULL_V(space, false);
 	ERR_FAIL_COND_V_MSG(space->is_stepping(), false, "intersect_ray must not be called while the physics space is being stepped.");
-	if (p_parameters.hit_from_inside || p_parameters.hit_back_faces || p_parameters.pick_ray) {
-		WARN_PRINT_ONCE("Box3D: ray query hit_from_inside, hit_back_faces, and pick_ray flags are not implemented yet; using Box3D ray behavior.");
-	}
 
 	Box3DRayContext ctx;
 	ctx.state = this;
@@ -244,7 +284,7 @@ bool Box3DDirectSpaceState3D::_intersect_ray_internal(const PS3DT::RayParameters
 	ctx.result = &r_result;
 	ctx.user_material_id = r_user_material_id;
 
-	b3World_CastRay(space->get_world(), to_box3d(p_parameters.from), to_box3d(p_parameters.to - p_parameters.from), make_query_filter(p_parameters.collision_mask), _ray_callback, &ctx);
+	b3World_CastRay(space->get_world(), to_box3d(p_parameters.from), to_box3d(p_parameters.to - p_parameters.from), make_query_filter(p_parameters.collision_mask, p_parameters.hit_back_faces), _ray_callback, &ctx);
 	return ctx.hit;
 }
 
