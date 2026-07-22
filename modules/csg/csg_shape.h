@@ -44,6 +44,28 @@ class Mesh;
 class NavigationMesh;
 class NavigationMeshSourceGeometryData3D;
 
+using CSGOriginToken = uint32_t;
+
+struct CSGSurfaceKey {
+	// ObjectID is intentional: this is deliberately non-serializable,
+	// process-local authoring identity rather than scene data.
+	ObjectID source_shape;
+	uint32_t semantic_surface = 0;
+	uint32_t schema_generation = 0;
+
+	bool operator==(const CSGSurfaceKey &p_other) const {
+		return source_shape == p_other.source_shape && semantic_surface == p_other.semantic_surface && schema_generation == p_other.schema_generation;
+	}
+};
+
+struct CSGSurfaceHit {
+	CSGSurfaceKey surface;
+	uint64_t result_generation = 0;
+	uint32_t face_id = 0;
+	uint32_t triangle = 0;
+	uint32_t connected_fragment = UINT32_MAX;
+};
+
 class CSGShape3D : public GeometryInstance3D {
 	GDCLASS(CSGShape3D, GeometryInstance3D);
 
@@ -61,6 +83,9 @@ private:
 
 	struct ManifoldCache;
 	ManifoldCache *manifold_cache = nullptr;
+	uint32_t surface_schema_generation = 1;
+	uint32_t cached_surface_schema_size = UINT32_MAX;
+	uint64_t result_generation = 0;
 
 	CSGBrush *brush = nullptr;
 
@@ -122,13 +147,15 @@ private:
 	void _ensure_subtree_manifold();
 	void _ensure_transformed_manifold();
 	Ref<Material> _resolve_manifold_material(const Ref<Material> &p_source_material) const;
-	void _gather_manifold_materials(HashMap<int32_t, Ref<Material>> &r_mesh_materials);
+	void _gather_manifold_surface_records(HashMap<CSGOriginToken, Ref<Material>> &r_mesh_materials, HashMap<CSGOriginToken, CSGSurfaceKey> &r_surface_keys);
 	void _update_cached_aabb_from_manifold();
 	void _update_child_manifold_aabbs();
 
 protected:
 	void _notification(int p_what);
 	virtual CSGBrush *_build_brush() = 0;
+	virtual uint32_t _get_surface_schema_size() const { return 0; }
+	void _synchronize_surface_schema();
 	void _make_dirty();
 	void _make_material_dirty();
 	void _make_output_dirty();
@@ -149,6 +176,15 @@ public:
 	Operation get_operation() const;
 
 	virtual Vector<Vector3> get_brush_faces();
+	uint32_t get_surface_schema_size() const;
+	uint32_t get_surface_schema_generation() const;
+	bool get_surface_key(uint32_t p_semantic_surface, CSGSurfaceKey &r_surface) const;
+	bool get_surface_origin_token(uint32_t p_semantic_surface, CSGOriginToken &r_token);
+	static bool is_surface_key_valid(const CSGSurfaceKey &p_surface);
+
+	uint64_t get_result_generation() const;
+	uint32_t get_result_triangle_count() const;
+	bool resolve_result_triangle(uint32_t p_triangle, uint64_t p_result_generation, CSGSurfaceKey &r_surface, uint32_t &r_face_id, CSGOriginToken *r_origin_token = nullptr) const;
 
 	virtual AABB get_aabb() const override;
 
@@ -216,8 +252,13 @@ class CSGCombiner3D : public CSGShape3D {
 
 private:
 	virtual CSGBrush *_build_brush() override;
+	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 
 public:
+	enum Surface {
+		SURFACE_COUNT = 0,
+	};
+
 	CSGCombiner3D();
 };
 
@@ -239,6 +280,7 @@ public:
 class CSGMesh3D : public CSGPrimitive3D {
 	GDCLASS(CSGMesh3D, CSGPrimitive3D);
 
+	virtual uint32_t _get_surface_schema_size() const override;
 	virtual CSGBrush *_build_brush() override;
 
 	Ref<Mesh> mesh;
@@ -250,6 +292,8 @@ protected:
 	static void _bind_methods();
 
 public:
+	static constexpr uint32_t SURFACE_SOURCE_MESH_BASE = 0;
+
 	void set_mesh(const Ref<Mesh> &p_mesh);
 	Ref<Mesh> get_mesh();
 
@@ -259,6 +303,7 @@ public:
 
 class CSGSphere3D : public CSGPrimitive3D {
 	GDCLASS(CSGSphere3D, CSGPrimitive3D);
+	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
 
 	Ref<Material> material;
@@ -271,6 +316,11 @@ protected:
 	static void _bind_methods();
 
 public:
+	enum Surface {
+		SURFACE_BODY = 0,
+		SURFACE_COUNT,
+	};
+
 	void set_radius(const float p_radius);
 	float get_radius() const;
 
@@ -291,6 +341,7 @@ public:
 
 class CSGBox3D : public CSGPrimitive3D {
 	GDCLASS(CSGBox3D, CSGPrimitive3D);
+	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
 
 	Ref<Material> material;
@@ -304,6 +355,16 @@ protected:
 #endif
 
 public:
+	enum Surface {
+		SURFACE_POSITIVE_X = 0,
+		SURFACE_NEGATIVE_X,
+		SURFACE_POSITIVE_Y,
+		SURFACE_NEGATIVE_Y,
+		SURFACE_POSITIVE_Z,
+		SURFACE_NEGATIVE_Z,
+		SURFACE_COUNT,
+	};
+
 	void set_size(const Vector3 &p_size);
 	Vector3 get_size() const;
 
@@ -315,6 +376,7 @@ public:
 
 class CSGCylinder3D : public CSGPrimitive3D {
 	GDCLASS(CSGCylinder3D, CSGPrimitive3D);
+	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
 
 	Ref<Material> material;
@@ -328,6 +390,13 @@ protected:
 	static void _bind_methods();
 
 public:
+	enum Surface {
+		SURFACE_SIDE = 0,
+		SURFACE_TOP,
+		SURFACE_BOTTOM,
+		SURFACE_COUNT,
+	};
+
 	void set_radius(const float p_radius);
 	float get_radius() const;
 
@@ -351,6 +420,7 @@ public:
 
 class CSGTorus3D : public CSGPrimitive3D {
 	GDCLASS(CSGTorus3D, CSGPrimitive3D);
+	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
 
 	Ref<Material> material;
@@ -364,6 +434,11 @@ protected:
 	static void _bind_methods();
 
 public:
+	enum Surface {
+		SURFACE_BODY = 0,
+		SURFACE_COUNT,
+	};
+
 	void set_inner_radius(const float p_inner_radius);
 	float get_inner_radius() const;
 
@@ -407,6 +482,7 @@ public:
 	};
 
 private:
+	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
 
 	Vector<Vector2> polygon;
@@ -446,6 +522,16 @@ protected:
 	void _notification(int p_what);
 
 public:
+	// The schema keeps all three slots even when the extrusion has no end caps
+	// (e.g. an open path); the size stays constant so toggling caps does not bump
+	// the surface schema generation and invalidate surface keys.
+	enum Surface {
+		SURFACE_FRONT = 0,
+		SURFACE_BACK,
+		SURFACE_SIDE,
+		SURFACE_COUNT,
+	};
+
 	void set_polygon(const Vector<Vector2> &p_polygon);
 	Vector<Vector2> get_polygon() const;
 

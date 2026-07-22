@@ -27,8 +27,8 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Characterization tests + dev counters (no behavior change) | DONE — committed 4261ae84e1 (simplify pass: one test-helper consolidation) |
-| 1 | Persistent Manifold cache graph | implemented+verified (13/13 cases, 135/135 asserts); simplify pass running |
-| 2 | Semantic provenance (schemas, origin tokens, faceID) | pending |
+| 1 | Persistent Manifold cache graph | DONE — committed 95e5716225 (simplify: one hidden-constraint comment added; code judged minimal) |
+| 2 | Semantic provenance (schemas, origin tokens, faceID) | implemented+verified (18/18 cases, 912/912 asserts); simplify pass running |
 | 3A | Document surface registry | pending |
 | 3B | Edit-domain host + chrome (center slots, dummy domain) | pending |
 | 4 | Evaluation scheduler + box Surface tool (push/pull) | pending |
@@ -59,4 +59,16 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
   - _get_brush audit: parent composition no longer calls child _get_brush; gizmos/tests use explicit get_brush_faces() materialization; non-root AABBs from Manifold bounds; config warnings use cached emptiness. get_brush_faces not script-bound.
   - CRITICAL GOTCHA (documented for later phases): manifold::Manifold::GetMeshGL64() REPLACES the receiving handle with an evaluated leaf — root materialization must evaluate a COPY of the subtree handle or expression identity is destroyed.
   - Grouping subtlety preserved: node's own operation starts the grouping before child op switches; singleton BatchBoolean calls elided (same handle) with identical output.
-- Opus /simplify pass over the five files: launched, pending.
+- Opus /simplify pass: DONE — verdict "already close to minimal"; added one comment documenting that IsEmpty()/BoundingBox() also collapse the receiving Manifold handle (same trap as GetMeshGL64), so cached handles are always evaluated via a copy. Re-verified 13/13, 135/135. Committed 95e5716225.
+- Scout docs committed 03e49a3d94 (CSG-3A-SURFACE-SCOUT.md, CSG-3B-INPUT-SCOUT.md).
+
+### Phase 2 — started 2026-07-22
+
+- Scope: semantic provenance per plan §10/§11/§28 Phase 2. Per-primitive surface schemas + named constants, CSGSurfaceKey/CSGOriginToken with once-per-schema ReserveIDs ranges retained in ManifoldCache, semantic-surface MeshGL runs + meaningful input faceIDs, material lookup moved off runOriginalID, evaluation snapshot (token→SurfaceKey) + generation-bound triangle resolution API, provenance tests. Module-only.
+- Codex result (task-mrwcu7gj-if6fov): DONE, verified. 18/18 cases, 912/912 assertions; all Phase 0/1 pins green.
+  - Files: csg.h (Face semantic metadata), csg_shape.h (CSGSurfaceKey/CSGSurfaceHit/CSGOriginToken, per-primitive Surface enums, resolution API), csg_shape.cpp (token ranges, semantic packing, snapshot), test_csg.h (+5 cases).
+  - Schemas: Box +X/-X/+Y/-Y/+Z/-Z=0..5 (brush emits +X,+Y,+Z,-X,-Y,-Z → map 0,2,4,1,3,5); Cylinder SIDE/TOP/BOTTOM (cone has no top slot); Sphere/Torus BODY=0 with per-triangle faceIDs (curvature); Polygon FRONT/BACK/SIDE fixed 3-slot schema even when caps absent (avoids generation churn); path-extrusion side quads get per-triangle faceIDs (non-planar under twist); Mesh semantic index = source surface index, faceID = triangle ordinal.
+  - Token ranges: ManifoldCache stores origin_base/count/schema_generation; ReserveIDs(schema_size) once per schema generation; retained across geometry rebuilds; new range on mesh surface-count change.
+  - Snapshot per root: HashMap<token, CSGSurfaceKey> + Vector<{token,faceID}> per output triangle (2×u32/tri) + result_generation u64. resolve_result_triangle(triangle, generation, &key, &face_id) validates generation, live ObjectID, schema generation, range. connected_fragment deferred to editor phase.
+  - Inter-surface triangle order changes for interleaved primitives (cylinder) — render-surface grouping and geometry identical, pins passed.
+- Opus /simplify pass over the four files: launched, pending.

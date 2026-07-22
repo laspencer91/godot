@@ -54,9 +54,15 @@
 
 #include <cfloat> // FLT_EPSILON
 
-struct CSGManifoldMaterialRecord {
-	uint32_t original_id = 0;
+struct CSGManifoldSurfaceRecord {
+	CSGOriginToken origin_token = 0;
+	CSGSurfaceKey surface;
 	Ref<Material> source_material;
+};
+
+struct CSGManifoldResultTriangle {
+	CSGOriginToken origin_token = 0;
+	uint32_t face_id = 0;
 };
 
 struct CSGShape3D::ManifoldCache {
@@ -66,9 +72,17 @@ struct CSGShape3D::ManifoldCache {
 	manifold::Manifold local_manifold;
 	manifold::Manifold transformed_manifold;
 	manifold::Manifold subtree_manifold;
-	// Original IDs are reserved when local_manifold is packed and live for the
-	// same cache generation.
-	Vector<CSGManifoldMaterialRecord> material_records;
+	// One contiguous origin-token range is retained for the whole schema
+	// generation, including across geometry-only leaf rebuilds.
+	CSGOriginToken origin_base = 0;
+	uint32_t origin_count = 0;
+	uint32_t origin_schema_generation = 0;
+	Vector<CSGManifoldSurfaceRecord> surface_records;
+
+	// Root materialization snapshot. One compact pair is retained per output
+	// triangle; keys are stored once per origin token.
+	HashMap<CSGOriginToken, CSGSurfaceKey> result_surface_keys;
+	Vector<CSGManifoldResultTriangle> result_triangles;
 
 	bool local_manifold_dirty = true;
 	bool transformed_manifold_dirty = true;
@@ -264,6 +278,77 @@ bool CSGShape3D::is_root_shape() const {
 	return !parent_shape;
 }
 
+uint32_t CSGShape3D::get_surface_schema_size() const {
+	return _get_surface_schema_size();
+}
+
+uint32_t CSGShape3D::get_surface_schema_generation() const {
+	return surface_schema_generation;
+}
+
+bool CSGShape3D::get_surface_key(uint32_t p_semantic_surface, CSGSurfaceKey &r_surface) const {
+	r_surface = CSGSurfaceKey();
+	if (p_semantic_surface >= _get_surface_schema_size()) {
+		return false;
+	}
+
+	r_surface.source_shape = get_instance_id();
+	r_surface.semantic_surface = p_semantic_surface;
+	r_surface.schema_generation = surface_schema_generation;
+	return true;
+}
+
+bool CSGShape3D::get_surface_origin_token(uint32_t p_semantic_surface, CSGOriginToken &r_token) {
+	r_token = 0;
+	if (p_semantic_surface >= _get_surface_schema_size()) {
+		return false;
+	}
+
+	_ensure_local_manifold();
+	if (manifold_cache->origin_schema_generation != surface_schema_generation || p_semantic_surface >= manifold_cache->origin_count) {
+		return false;
+	}
+	r_token = manifold_cache->origin_base + p_semantic_surface;
+	return true;
+}
+
+bool CSGShape3D::is_surface_key_valid(const CSGSurfaceKey &p_surface) {
+	CSGShape3D *source = ObjectDB::get_instance<CSGShape3D>(p_surface.source_shape);
+	return source && p_surface.schema_generation == source->surface_schema_generation && p_surface.semantic_surface < source->_get_surface_schema_size();
+}
+
+uint64_t CSGShape3D::get_result_generation() const {
+	return result_generation;
+}
+
+uint32_t CSGShape3D::get_result_triangle_count() const {
+	return manifold_cache->result_triangles.size();
+}
+
+bool CSGShape3D::resolve_result_triangle(uint32_t p_triangle, uint64_t p_result_generation, CSGSurfaceKey &r_surface, uint32_t &r_face_id, CSGOriginToken *r_origin_token) const {
+	r_surface = CSGSurfaceKey();
+	r_face_id = 0;
+	if (r_origin_token) {
+		*r_origin_token = 0;
+	}
+	if (!is_root_shape() || p_result_generation != result_generation || p_triangle >= (uint32_t)manifold_cache->result_triangles.size()) {
+		return false;
+	}
+
+	const CSGManifoldResultTriangle &triangle = manifold_cache->result_triangles[p_triangle];
+	const CSGSurfaceKey *surface = manifold_cache->result_surface_keys.getptr(triangle.origin_token);
+	if (!surface || !is_surface_key_valid(*surface)) {
+		return false;
+	}
+
+	r_surface = *surface;
+	r_face_id = triangle.face_id;
+	if (r_origin_token) {
+		*r_origin_token = triangle.origin_token;
+	}
+	return true;
+}
+
 #ifndef DISABLE_DEPRECATED
 void CSGShape3D::set_snap(float p_snap) {
 	if (snap == p_snap) {
@@ -338,6 +423,23 @@ void CSGShape3D::_make_operation_dirty() {
 	}
 }
 
+void CSGShape3D::_synchronize_surface_schema() {
+	const uint32_t schema_size = _get_surface_schema_size();
+	if (cached_surface_schema_size == UINT32_MAX) {
+		cached_surface_schema_size = schema_size;
+		return;
+	}
+	if (cached_surface_schema_size == schema_size) {
+		return;
+	}
+
+	cached_surface_schema_size = schema_size;
+	surface_schema_generation++;
+	if (surface_schema_generation == 0) {
+		surface_schema_generation = 1;
+	}
+}
+
 Ref<Material> CSGShape3D::_resolve_manifold_material(const Ref<Material> &p_source_material) const {
 	if (const CSGMesh3D *mesh = Object::cast_to<CSGMesh3D>(this)) {
 		Ref<Material> csg_material_override = mesh->get_material();
@@ -374,14 +476,15 @@ enum ManifoldProperty {
 
 static void _unpack_manifold(
 		const manifold::Manifold &p_manifold,
-		const HashMap<int32_t, Ref<Material>> &p_mesh_materials,
-		CSGBrush *r_mesh_merge) {
+		const HashMap<CSGOriginToken, Ref<Material>> &p_mesh_materials,
+		CSGBrush *r_mesh_merge,
+		Vector<CSGManifoldResultTriangle> *r_result_triangles) {
 	manifold::MeshGL64 mesh = p_manifold.GetMeshGL64();
 
 	constexpr int32_t order[3] = { 0, 2, 1 };
 
 	for (size_t run_i = 0; run_i < mesh.runIndex.size() - 1; run_i++) {
-		uint32_t original_id = -1;
+		CSGOriginToken original_id = UINT32_MAX;
 		if (run_i < mesh.runOriginalID.size()) {
 			original_id = mesh.runOriginalID[run_i];
 		}
@@ -418,6 +521,15 @@ static void _unpack_manifold(
 						mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_UV_Y_0]);
 			}
 			r_mesh_merge->faces.push_back(face);
+			if (r_result_triangles) {
+				const size_t triangle_i = vert_i / 3;
+				CSGManifoldResultTriangle triangle;
+				triangle.origin_token = original_id;
+				if (triangle_i < mesh.faceID.size()) {
+					triangle.face_id = (uint32_t)mesh.faceID[triangle_i];
+				}
+				r_result_triangles->push_back(triangle);
+			}
 		}
 	}
 
@@ -493,39 +605,54 @@ static String _export_meshgl_as_json(const manifold::MeshGL64 &p_mesh) {
 static void _pack_manifold(
 		const CSGBrush *const p_mesh_merge,
 		manifold::Manifold &r_manifold,
-		Vector<CSGManifoldMaterialRecord> &r_material_records) {
+		CSGOriginToken p_origin_base,
+		uint32_t p_schema_size,
+		ObjectID p_source_shape,
+		uint32_t p_schema_generation,
+		Vector<CSGManifoldSurfaceRecord> &r_surface_records) {
 	ERR_FAIL_NULL_MSG(p_mesh_merge, "p_mesh_merge is null");
-	HashMap<uint32_t, Vector<CSGBrush::Face>> faces_by_material;
+
+	Vector<Vector<CSGBrush::Face>> faces_by_surface;
+	faces_by_surface.resize(p_schema_size);
 	for (int face_i = 0; face_i < p_mesh_merge->faces.size(); face_i++) {
 		const CSGBrush::Face &face = p_mesh_merge->faces[face_i];
-		faces_by_material[face.material].push_back(face);
+		ERR_FAIL_COND_MSG(face.semantic_surface >= p_schema_size, "CSG brush face has no valid semantic surface.");
+		faces_by_surface.write[face.semantic_surface].push_back(face);
+	}
+
+	r_surface_records.resize(p_schema_size);
+	for (uint32_t surface_i = 0; surface_i < p_schema_size; surface_i++) {
+		CSGManifoldSurfaceRecord &record = r_surface_records.write[surface_i];
+		record.origin_token = p_origin_base + surface_i;
+		record.surface.source_shape = p_source_shape;
+		record.surface.semantic_surface = surface_i;
+		record.surface.schema_generation = p_schema_generation;
+		if (!faces_by_surface[surface_i].is_empty()) {
+			const int32_t material_id = faces_by_surface[surface_i][0].material;
+			if (material_id >= 0 && material_id < p_mesh_merge->materials.size()) {
+				record.source_material = p_mesh_merge->materials[material_id];
+			}
+		}
 	}
 
 	manifold::MeshGL64 mesh;
 	mesh.numProp = MANIFOLD_PROPERTY_MAX;
-	mesh.runOriginalID.reserve(faces_by_material.size());
-	mesh.runIndex.reserve(faces_by_material.size() + 1);
+	mesh.runOriginalID.reserve(p_schema_size);
+	mesh.runIndex.reserve(p_schema_size + 1);
 	mesh.vertProperties.reserve(p_mesh_merge->faces.size() * 3 * MANIFOLD_PROPERTY_MAX);
+	mesh.faceID.reserve(p_mesh_merge->faces.size());
 
-	// Make a run of triangles for each material.
-	for (const KeyValue<uint32_t, Vector<CSGBrush::Face>> &E : faces_by_material) {
-		const uint32_t material_id = E.key;
-		const Vector<CSGBrush::Face> &faces = E.value;
-		mesh.runIndex.push_back(mesh.triVerts.size());
-
-		// Associate the material with an ID.
-		uint32_t reserved_id = manifold::Manifold::ReserveIDs(1);
-		mesh.runOriginalID.push_back(reserved_id);
-		Ref<Material> material;
-		if (material_id < p_mesh_merge->materials.size()) {
-			material = p_mesh_merge->materials[material_id];
+	// One run per non-empty semantic surface. Relative triangle order within a
+	// surface is unchanged from the brush.
+	for (uint32_t surface_i = 0; surface_i < p_schema_size; surface_i++) {
+		const Vector<CSGBrush::Face> &faces = faces_by_surface[surface_i];
+		if (faces.is_empty()) {
+			continue;
 		}
-
-		CSGManifoldMaterialRecord material_record;
-		material_record.original_id = reserved_id;
-		material_record.source_material = material;
-		r_material_records.push_back(material_record);
+		mesh.runIndex.push_back(mesh.triVerts.size());
+		mesh.runOriginalID.push_back(p_origin_base + surface_i);
 		for (const CSGBrush::Face &face : faces) {
+			mesh.faceID.push_back(face.face_id);
 			for (int32_t tri_order_i = 0; tri_order_i < 3; tri_order_i++) {
 				constexpr int32_t order[3] = { 0, 2, 1 };
 				int i = order[tri_order_i];
@@ -596,6 +723,11 @@ static manifold::Manifold _combine_manifolds(const std::vector<manifold::Manifol
 }
 
 void CSGShape3D::_ensure_local_manifold() {
+	const uint32_t previous_schema_generation = surface_schema_generation;
+	_synchronize_surface_schema();
+	if (surface_schema_generation != previous_schema_generation) {
+		manifold_cache->local_manifold_dirty = true;
+	}
 	if (!manifold_cache->local_manifold_dirty) {
 		return;
 	}
@@ -605,7 +737,14 @@ void CSGShape3D::_ensure_local_manifold() {
 	}
 	manifold_cache->local_brush = _build_brush();
 	manifold_cache->local_manifold = manifold::Manifold();
-	manifold_cache->material_records.clear();
+	manifold_cache->surface_records.clear();
+
+	const uint32_t schema_size = _get_surface_schema_size();
+	if (manifold_cache->origin_schema_generation != surface_schema_generation) {
+		manifold_cache->origin_base = schema_size > 0 ? manifold::Manifold::ReserveIDs(schema_size) : 0;
+		manifold_cache->origin_count = schema_size;
+		manifold_cache->origin_schema_generation = surface_schema_generation;
+	}
 
 #ifdef DEV_ENABLED
 	const bool is_primitive = Object::cast_to<CSGPrimitive3D>(this);
@@ -613,7 +752,14 @@ void CSGShape3D::_ensure_local_manifold() {
 		CSGDebugCounters::count_local_primitive_brush_pack();
 	}
 #endif // DEV_ENABLED
-	_pack_manifold(manifold_cache->local_brush, manifold_cache->local_manifold, manifold_cache->material_records);
+	_pack_manifold(
+			manifold_cache->local_brush,
+			manifold_cache->local_manifold,
+			manifold_cache->origin_base,
+			schema_size,
+			get_instance_id(),
+			surface_schema_generation,
+			manifold_cache->surface_records);
 #ifdef DEV_ENABLED
 	if (is_primitive) {
 		CSGDebugCounters::count_leaf_manifold_repack();
@@ -674,16 +820,17 @@ void CSGShape3D::_ensure_transformed_manifold() {
 #endif // DEV_ENABLED
 }
 
-void CSGShape3D::_gather_manifold_materials(HashMap<int32_t, Ref<Material>> &r_mesh_materials) {
+void CSGShape3D::_gather_manifold_surface_records(HashMap<CSGOriginToken, Ref<Material>> &r_mesh_materials, HashMap<CSGOriginToken, CSGSurfaceKey> &r_surface_keys) {
 	_ensure_local_manifold();
-	for (const CSGManifoldMaterialRecord &record : manifold_cache->material_records) {
-		r_mesh_materials.insert(record.original_id, _resolve_manifold_material(record.source_material));
+	for (const CSGManifoldSurfaceRecord &record : manifold_cache->surface_records) {
+		r_mesh_materials.insert(record.origin_token, _resolve_manifold_material(record.source_material));
+		r_surface_keys.insert(record.origin_token, record.surface);
 	}
 
 	for (int i = 0; i < get_child_count(); i++) {
 		CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
 		if (child && child->is_visible()) {
-			child->_gather_manifold_materials(r_mesh_materials);
+			child->_gather_manifold_surface_records(r_mesh_materials, r_surface_keys);
 		}
 	}
 }
@@ -727,8 +874,9 @@ CSGBrush *CSGShape3D::_get_brush() {
 	}
 
 	_ensure_subtree_manifold();
-	HashMap<int32_t, Ref<Material>> mesh_materials;
-	_gather_manifold_materials(mesh_materials);
+	HashMap<CSGOriginToken, Ref<Material>> mesh_materials;
+	HashMap<CSGOriginToken, CSGSurfaceKey> surface_keys;
+	_gather_manifold_surface_records(mesh_materials, surface_keys);
 
 	if (brush) {
 		memdelete(brush);
@@ -744,7 +892,16 @@ CSGBrush *CSGShape3D::_get_brush() {
 	// GetMeshGL64() replaces the handle it is called on with an evaluated leaf.
 	// Materialize a copy so the authored subtree keeps its operation-node handle.
 	manifold::Manifold manifold_result = manifold_cache->subtree_manifold;
-	_unpack_manifold(manifold_result, mesh_materials, brush);
+	Vector<CSGManifoldResultTriangle> result_triangles;
+	_unpack_manifold(manifold_result, mesh_materials, brush, is_root_shape() ? &result_triangles : nullptr);
+	if (is_root_shape()) {
+		manifold_cache->result_surface_keys = surface_keys;
+		manifold_cache->result_triangles = result_triangles;
+		result_generation++;
+		if (result_generation == 0) {
+			result_generation = 1;
+		}
+	}
 
 	AABB aabb;
 	if (!brush->faces.is_empty()) {
@@ -1526,6 +1683,10 @@ CSGPrimitive3D::CSGPrimitive3D() {
 
 /////////////////////
 
+uint32_t CSGMesh3D::_get_surface_schema_size() const {
+	return mesh.is_valid() ? mesh->get_surface_count() : 0;
+}
+
 CSGBrush *CSGMesh3D::_build_brush() {
 	if (mesh.is_null()) {
 		return memnew(CSGBrush);
@@ -1535,6 +1696,8 @@ CSGBrush *CSGMesh3D::_build_brush() {
 	Vector<bool> smooth;
 	Vector<Ref<Material>> materials;
 	Vector<Vector2> uvs;
+	Vector<uint32_t> semantic_surfaces;
+	Vector<uint32_t> face_ids;
 
 	for (int i = 0; i < mesh->get_surface_count(); i++) {
 		if (mesh->surface_get_primitive_type(i) != Mesh::PRIMITIVE_TRIANGLES) {
@@ -1581,6 +1744,8 @@ CSGBrush *CSGMesh3D::_build_brush() {
 			smooth.resize((as + is) / 3);
 			materials.resize((as + is) / 3);
 			uvs.resize(as + is);
+			semantic_surfaces.resize((as + is) / 3);
+			face_ids.resize((as + is) / 3);
 
 			Vector3 *vw = vertices.ptrw();
 			bool *sw = smooth.ptrw();
@@ -1615,8 +1780,11 @@ CSGBrush *CSGMesh3D::_build_brush() {
 				uvw[as + j + 1] = uv[1];
 				uvw[as + j + 2] = uv[2];
 
-				sw[(as + j) / 3] = !flat;
-				mw[(as + j) / 3] = mat;
+				const int face_index = (as + j) / 3;
+				sw[face_index] = !flat;
+				mw[face_index] = mat;
+				semantic_surfaces.write[face_index] = i;
+				face_ids.write[face_index] = j / 3;
 			}
 		} else {
 			int as = vertices.size();
@@ -1626,6 +1794,8 @@ CSGBrush *CSGMesh3D::_build_brush() {
 			smooth.resize((as + is) / 3);
 			uvs.resize(as + is);
 			materials.resize((as + is) / 3);
+			semantic_surfaces.resize((as + is) / 3);
+			face_ids.resize((as + is) / 3);
 
 			Vector3 *vw = vertices.ptrw();
 			bool *sw = smooth.ptrw();
@@ -1657,8 +1827,11 @@ CSGBrush *CSGMesh3D::_build_brush() {
 				uvw[as + j + 1] = uv[1];
 				uvw[as + j + 2] = uv[2];
 
-				sw[(as + j) / 3] = !flat;
-				mw[(as + j) / 3] = mat;
+				const int face_index = (as + j) / 3;
+				sw[face_index] = !flat;
+				mw[face_index] = mat;
+				semantic_surfaces.write[face_index] = i;
+				face_ids.write[face_index] = j / 3;
 			}
 		}
 	}
@@ -1667,10 +1840,16 @@ CSGBrush *CSGMesh3D::_build_brush() {
 		return memnew(CSGBrush);
 	}
 
-	return _create_brush_from_arrays(vertices, uvs, smooth, materials);
+	CSGBrush *new_brush = _create_brush_from_arrays(vertices, uvs, smooth, materials);
+	for (int face_i = 0; face_i < new_brush->faces.size(); face_i++) {
+		new_brush->faces.write[face_i].semantic_surface = semantic_surfaces[face_i];
+		new_brush->faces.write[face_i].face_id = face_ids[face_i];
+	}
+	return new_brush;
 }
 
 void CSGMesh3D::_mesh_changed() {
+	_synchronize_surface_schema();
 	_make_dirty();
 
 	callable_mp((Node3D *)this, &Node3D::update_gizmos).call_deferred();
@@ -1721,6 +1900,15 @@ Ref<Mesh> CSGMesh3D::get_mesh() {
 }
 
 ////////////////////////////////
+
+// Tag every brush face with one semantic surface, giving each triangle its own
+// planar faceID. Used by primitives whose whole hull is a single named surface.
+static void _tag_faces_single_surface(CSGBrush *p_brush, uint32_t p_surface) {
+	for (int face_i = 0; face_i < p_brush->faces.size(); face_i++) {
+		p_brush->faces.write[face_i].semantic_surface = p_surface;
+		p_brush->faces.write[face_i].face_id = face_i;
+	}
+}
 
 CSGBrush *CSGSphere3D::_build_brush() {
 	// set our bounding box
@@ -1849,6 +2037,7 @@ CSGBrush *CSGSphere3D::_build_brush() {
 	}
 
 	new_brush->build_from_faces(faces, uvs, smooth, materials, invert);
+	_tag_faces_single_surface(new_brush, SURFACE_BODY);
 
 	return new_brush;
 }
@@ -2030,6 +2219,21 @@ CSGBrush *CSGBox3D::_build_brush() {
 	}
 
 	new_brush->build_from_faces(faces, uvs, smooth, materials, invert);
+	static constexpr uint32_t brush_face_surfaces[6] = {
+		SURFACE_POSITIVE_X,
+		SURFACE_POSITIVE_Y,
+		SURFACE_POSITIVE_Z,
+		SURFACE_NEGATIVE_X,
+		SURFACE_NEGATIVE_Y,
+		SURFACE_NEGATIVE_Z,
+	};
+	for (int face_i = 0; face_i < new_brush->faces.size(); face_i++) {
+		// Two triangles per axis face; each box face is a single planar facet, so
+		// its faceID is just its semantic surface.
+		const uint32_t surface = brush_face_surfaces[face_i / 2];
+		new_brush->faces.write[face_i].semantic_surface = surface;
+		new_brush->faces.write[face_i].face_id = surface;
+	}
 
 	return new_brush;
 }
@@ -2222,6 +2426,27 @@ CSGBrush *CSGCylinder3D::_build_brush() {
 	}
 
 	new_brush->build_from_faces(faces, uvs, smooth, materials, invert);
+	// Faces are emitted per side in build order: the side quad (two triangles, or
+	// one for a cone) followed by its bottom cap triangle and, when not a cone, its
+	// top cap triangle. All sides share one SIDE surface but keep distinct faceIDs.
+	const int faces_per_side = cone ? 2 : 4;
+	for (int side_i = 0; side_i < sides; side_i++) {
+		const int first_face = side_i * faces_per_side;
+		new_brush->faces.write[first_face].semantic_surface = SURFACE_SIDE;
+		new_brush->faces.write[first_face].face_id = side_i;
+		int cap_face = first_face + 1;
+		if (!cone) {
+			new_brush->faces.write[first_face + 1].semantic_surface = SURFACE_SIDE;
+			new_brush->faces.write[first_face + 1].face_id = side_i;
+			cap_face++;
+		}
+		new_brush->faces.write[cap_face].semantic_surface = SURFACE_BOTTOM;
+		new_brush->faces.write[cap_face].face_id = 0;
+		if (!cone) {
+			new_brush->faces.write[cap_face + 1].semantic_surface = SURFACE_TOP;
+			new_brush->faces.write[cap_face + 1].face_id = 0;
+		}
+	}
 
 	return new_brush;
 }
@@ -2447,6 +2672,7 @@ CSGBrush *CSGTorus3D::_build_brush() {
 	}
 
 	new_brush->build_from_faces(faces, uvs, smooth, materials, invert);
+	_tag_faces_single_surface(new_brush, SURFACE_BODY);
 
 	return new_brush;
 }
@@ -2907,6 +3133,23 @@ CSGBrush *CSGPolygon3D::_build_brush() {
 	}
 
 	new_brush->build_from_faces(faces, uvs, smooth, materials, invert);
+	const int front_face_count = end_count > 0 ? shape_face_count : 0;
+	const int back_face_count = end_count > 1 ? shape_face_count : 0;
+	const int side_face_end = new_brush->faces.size() - back_face_count;
+	for (int face_i = 0; face_i < front_face_count; face_i++) {
+		new_brush->faces.write[face_i].semantic_surface = SURFACE_FRONT;
+		new_brush->faces.write[face_i].face_id = 0;
+	}
+	for (int face_i = front_face_count; face_i < side_face_end; face_i++) {
+		new_brush->faces.write[face_i].semantic_surface = SURFACE_SIDE;
+		// Path frames can twist, so their two triangles are not guaranteed to
+		// form one planar quad. Depth/spin side pairs are planar facets.
+		new_brush->faces.write[face_i].face_id = mode == MODE_PATH ? face_i - front_face_count : (face_i - front_face_count) / 2;
+	}
+	for (int face_i = side_face_end; face_i < new_brush->faces.size(); face_i++) {
+		new_brush->faces.write[face_i].semantic_surface = SURFACE_BACK;
+		new_brush->faces.write[face_i].face_id = 0;
+	}
 
 	return new_brush;
 }
@@ -3039,6 +3282,7 @@ Vector<Vector2> CSGPolygon3D::get_polygon() const {
 
 void CSGPolygon3D::set_mode(Mode p_mode) {
 	mode = p_mode;
+	_synchronize_surface_schema();
 	_make_dirty();
 	update_gizmos();
 	notify_property_list_changed();

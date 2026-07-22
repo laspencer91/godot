@@ -43,6 +43,8 @@ struct CSGBrush {
 		Vector3 vertices[3];
 		Vector2 uvs[3];
 		AABB aabb;
+		uint32_t semantic_surface = 0;
+		uint32_t face_id = 0;
 		bool smooth = false;
 		bool invert = false;
 		int material = 0;

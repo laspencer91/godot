@@ -35,6 +35,7 @@
 #include "../csg_debug_counters.h"
 #endif // DEV_ENABLED
 
+#include "core/templates/hash_set.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
 #include "scene/resources/3d/primitive_meshes.h"
@@ -73,6 +74,27 @@ static void _reset_csg_counters() {
 #ifdef DEV_ENABLED
 	CSGDebugCounters::reset();
 #endif // DEV_ENABLED
+}
+
+static Ref<ArrayMesh> _make_two_surface_box_mesh() {
+	Ref<BoxMesh> box;
+	box.instantiate();
+	Ref<ArrayMesh> mesh;
+	mesh.instantiate();
+
+	for (int surface_i = 0; surface_i < 2; surface_i++) {
+		Array arrays;
+		arrays.resize(Mesh::ARRAY_MAX);
+		box->create_mesh_array(arrays, Vector3(1, 1, 1));
+		Vector<Vector3> vertices = arrays[Mesh::ARRAY_VERTEX];
+		for (Vector3 &vertex : vertices) {
+			vertex.x += surface_i == 0 ? -1.0f : 1.0f;
+		}
+		arrays[Mesh::ARRAY_VERTEX] = vertices;
+		mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+	}
+
+	return mesh;
 }
 
 TEST_CASE("[SceneTree][CSG] Phase 0 operation ordering") {
@@ -499,6 +521,268 @@ TEST_CASE("[SceneTree][CSG] Phase 1 operation order and visibility reuse clean l
 	CHECK_EQ(counters.leaf_manifold_repacks, 0);
 	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
 	CHECK_EQ(counters.expression_node_reconstructions, 1);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 2 boolean surface provenance") {
+	auto check_operation = [](CSGShape3D::Operation p_operation, const Vector3 &p_first_size, const Vector3 &p_first_position, const Vector3 &p_second_size, const Vector3 &p_second_position) {
+		CSGCombiner3D *root = memnew(CSGCombiner3D);
+		CSGBox3D *first = _add_box(root, p_first_size, p_first_position);
+		CSGBox3D *second = _add_box(root, p_second_size, p_second_position, p_operation);
+		SceneTree::get_singleton()->get_root()->add_child(root);
+
+		Vector<Vector3> faces = root->get_brush_faces();
+		REQUIRE(!faces.is_empty());
+		REQUIRE_EQ(root->get_result_triangle_count(), (uint32_t)(faces.size() / 3));
+		const uint64_t generation = root->get_result_generation();
+		bool saw_first = false;
+		bool saw_second = false;
+		for (uint32_t triangle_i = 0; triangle_i < root->get_result_triangle_count(); triangle_i++) {
+			CSGSurfaceKey surface;
+			uint32_t face_id = 0;
+			CSGOriginToken token = 0;
+			REQUIRE(root->resolve_result_triangle(triangle_i, generation, surface, face_id, &token));
+			CHECK(CSGShape3D::is_surface_key_valid(surface));
+			CHECK(surface.semantic_surface < CSGBox3D::SURFACE_COUNT);
+			CHECK_EQ(face_id, surface.semantic_surface);
+
+			CSGOriginToken source_token = 0;
+			if (surface.source_shape == first->get_instance_id()) {
+				saw_first = true;
+				REQUIRE(first->get_surface_origin_token(surface.semantic_surface, source_token));
+			} else if (surface.source_shape == second->get_instance_id()) {
+				saw_second = true;
+				REQUIRE(second->get_surface_origin_token(surface.semantic_surface, source_token));
+			} else {
+				FAIL_CHECK("Boolean output lost its source CSG node.");
+			}
+			CHECK_EQ(token, source_token);
+		}
+		CHECK(saw_first);
+		CHECK(saw_second);
+
+		CSGSurfaceKey stale_surface;
+		uint32_t stale_face_id = 0;
+		CHECK_FALSE(root->resolve_result_triangle(0, generation + 1, stale_surface, stale_face_id));
+		root->queue_free();
+	};
+
+	SUBCASE("Union") {
+		check_operation(CSGShape3D::OPERATION_UNION, Vector3(1, 1, 1), Vector3(-1, 0, 0), Vector3(1, 1, 1), Vector3(1, 0, 0));
+	}
+	SUBCASE("Subtraction") {
+		check_operation(CSGShape3D::OPERATION_SUBTRACTION, Vector3(4, 4, 4), Vector3(), Vector3(2, 2, 2), Vector3());
+	}
+	SUBCASE("Intersection") {
+		check_operation(CSGShape3D::OPERATION_INTERSECTION, Vector3(3, 3, 3), Vector3(-0.5, -0.5, -0.5), Vector3(3, 3, 3), Vector3(0.5, 0.5, 0.5));
+	}
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 2 nested transform provenance") {
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGCombiner3D *nested = memnew(CSGCombiner3D);
+	root->add_child(nested);
+	CSGBox3D *box = _add_box(nested, Vector3(1, 2, 3), Vector3(0.5, 0, 0));
+	SceneTree::get_singleton()->get_root()->add_child(root);
+
+	Vector<CSGOriginToken> tokens;
+	tokens.resize(CSGBox3D::SURFACE_COUNT);
+	for (uint32_t surface_i = 0; surface_i < CSGBox3D::SURFACE_COUNT; surface_i++) {
+		REQUIRE(box->get_surface_origin_token(surface_i, tokens.write[surface_i]));
+	}
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+	const uint64_t first_generation = root->get_result_generation();
+
+	_reset_csg_counters();
+	nested->set_transform(Transform3D(Basis(Vector3(0, 1, 0), Math::deg_to_rad(35.0f)), Vector3(2, 1, -3)));
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+	CHECK(root->get_result_generation() > first_generation);
+
+	for (uint32_t surface_i = 0; surface_i < CSGBox3D::SURFACE_COUNT; surface_i++) {
+		CSGOriginToken token = 0;
+		REQUIRE(box->get_surface_origin_token(surface_i, token));
+		CHECK_EQ(token, tokens[surface_i]);
+	}
+	const uint64_t generation = root->get_result_generation();
+	for (uint32_t triangle_i = 0; triangle_i < root->get_result_triangle_count(); triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		CSGOriginToken token = 0;
+		REQUIRE(root->resolve_result_triangle(triangle_i, generation, surface, face_id, &token));
+		CHECK_EQ(surface.source_shape, box->get_instance_id());
+		CHECK_EQ(face_id, surface.semantic_surface);
+		CHECK_EQ(token, tokens[surface.semantic_surface]);
+	}
+
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 2 geometry stability and schema invalidation") {
+	CSGBox3D *box = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(box);
+	CHECK_FALSE(box->get_brush_faces().is_empty());
+
+	CSGSurfaceKey box_key;
+	CSGOriginToken box_token = 0;
+	REQUIRE(box->get_surface_key(CSGBox3D::SURFACE_POSITIVE_X, box_key));
+	REQUIRE(box->get_surface_origin_token(CSGBox3D::SURFACE_POSITIVE_X, box_token));
+	box->set_size(Vector3(2, 3, 4));
+	CHECK_FALSE(box->get_brush_faces().is_empty());
+
+	CSGSurfaceKey resized_key;
+	CSGOriginToken resized_token = 0;
+	REQUIRE(box->get_surface_key(CSGBox3D::SURFACE_POSITIVE_X, resized_key));
+	REQUIRE(box->get_surface_origin_token(CSGBox3D::SURFACE_POSITIVE_X, resized_token));
+	CHECK(box_key == resized_key);
+	CHECK_EQ(box_token, resized_token);
+	CHECK(CSGShape3D::is_surface_key_valid(box_key));
+	box->queue_free();
+
+	Ref<BoxMesh> one_surface_mesh;
+	one_surface_mesh.instantiate();
+	CSGMesh3D *mesh_shape = memnew(CSGMesh3D);
+	mesh_shape->set_mesh(one_surface_mesh);
+	SceneTree::get_singleton()->get_root()->add_child(mesh_shape);
+	CHECK_FALSE(mesh_shape->get_brush_faces().is_empty());
+	REQUIRE_EQ(mesh_shape->get_surface_schema_size(), 1);
+
+	CSGSurfaceKey old_key;
+	CSGOriginToken old_token = 0;
+	REQUIRE(mesh_shape->get_surface_key(CSGMesh3D::SURFACE_SOURCE_MESH_BASE, old_key));
+	REQUIRE(mesh_shape->get_surface_origin_token(CSGMesh3D::SURFACE_SOURCE_MESH_BASE, old_token));
+	CHECK(CSGShape3D::is_surface_key_valid(old_key));
+	const uint64_t old_result_generation = mesh_shape->get_result_generation();
+	const uint32_t old_schema_generation = mesh_shape->get_surface_schema_generation();
+
+	Ref<ArrayMesh> two_surface_mesh = _make_two_surface_box_mesh();
+	mesh_shape->set_mesh(two_surface_mesh);
+	CHECK_EQ(mesh_shape->get_surface_schema_size(), 2);
+	CHECK_EQ(mesh_shape->get_surface_schema_generation(), old_schema_generation + 1);
+	CHECK_FALSE(CSGShape3D::is_surface_key_valid(old_key));
+	CSGSurfaceKey stale_surface;
+	uint32_t stale_face_id = 0;
+	CHECK_FALSE(mesh_shape->resolve_result_triangle(0, old_result_generation, stale_surface, stale_face_id));
+
+	CSGOriginToken new_token = 0;
+	REQUIRE(mesh_shape->get_surface_origin_token(CSGMesh3D::SURFACE_SOURCE_MESH_BASE, new_token));
+	CHECK_NE(new_token, old_token);
+	CHECK_FALSE(mesh_shape->get_brush_faces().is_empty());
+	bool saw_surface_0 = false;
+	bool saw_surface_1 = false;
+	const uint64_t new_result_generation = mesh_shape->get_result_generation();
+	for (uint32_t triangle_i = 0; triangle_i < mesh_shape->get_result_triangle_count(); triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		REQUIRE(mesh_shape->resolve_result_triangle(triangle_i, new_result_generation, surface, face_id));
+		CHECK_EQ(surface.source_shape, mesh_shape->get_instance_id());
+		CHECK_EQ(surface.schema_generation, mesh_shape->get_surface_schema_generation());
+		saw_surface_0 |= surface.semantic_surface == 0;
+		saw_surface_1 |= surface.semantic_surface == 1;
+	}
+	CHECK(saw_surface_0);
+	CHECK(saw_surface_1);
+	mesh_shape->queue_free();
+
+	CSGBox3D *deleted_box = memnew(CSGBox3D);
+	CSGSurfaceKey deleted_key;
+	REQUIRE(deleted_box->get_surface_key(CSGBox3D::SURFACE_POSITIVE_X, deleted_key));
+	CHECK(CSGShape3D::is_surface_key_valid(deleted_key));
+	memdelete(deleted_box);
+	CHECK_FALSE(CSGShape3D::is_surface_key_valid(deleted_key));
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 2 cylinder side facet IDs") {
+	CSGCylinder3D *cylinder = memnew(CSGCylinder3D);
+	cylinder->set_sides(12);
+	SceneTree::get_singleton()->get_root()->add_child(cylinder);
+	CHECK_FALSE(cylinder->get_brush_faces().is_empty());
+
+	HashSet<uint32_t> side_face_ids;
+	bool saw_top = false;
+	bool saw_bottom = false;
+	const uint64_t generation = cylinder->get_result_generation();
+	for (uint32_t triangle_i = 0; triangle_i < cylinder->get_result_triangle_count(); triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		CSGOriginToken token = 0;
+		REQUIRE(cylinder->resolve_result_triangle(triangle_i, generation, surface, face_id, &token));
+		CHECK_EQ(surface.source_shape, cylinder->get_instance_id());
+		CSGOriginToken source_token = 0;
+		REQUIRE(cylinder->get_surface_origin_token(surface.semantic_surface, source_token));
+		CHECK_EQ(token, source_token);
+		if (surface.semantic_surface == CSGCylinder3D::SURFACE_SIDE) {
+			side_face_ids.insert(face_id);
+		} else if (surface.semantic_surface == CSGCylinder3D::SURFACE_TOP) {
+			saw_top = true;
+		} else if (surface.semantic_surface == CSGCylinder3D::SURFACE_BOTTOM) {
+			saw_bottom = true;
+		}
+	}
+	CHECK(side_face_ids.size() > 1);
+	CHECK(saw_top);
+	CHECK(saw_bottom);
+	cylinder->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 2 provenance material resolution avoids boolean repacking") {
+	Ref<StandardMaterial3D> material_a;
+	material_a.instantiate();
+	Ref<StandardMaterial3D> material_b;
+	material_b.instantiate();
+	Ref<StandardMaterial3D> material_c;
+	material_c.instantiate();
+
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGBox3D *left = _add_box(root, Vector3(1, 1, 1), Vector3(-1, 0, 0), CSGShape3D::OPERATION_UNION, material_a);
+	_add_box(root, Vector3(1, 1, 1), Vector3(1, 0, 0), CSGShape3D::OPERATION_UNION, material_b);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+	CSGOriginToken token_before = 0;
+	REQUIRE(left->get_surface_origin_token(CSGBox3D::SURFACE_POSITIVE_X, token_before));
+
+	_reset_csg_counters();
+	left->set_material(material_c);
+	root->update_shape();
+	CSGOriginToken token_after = 0;
+	REQUIRE(left->get_surface_origin_token(CSGBox3D::SURFACE_POSITIVE_X, token_after));
+	CHECK_EQ(token_before, token_after);
+
+	Ref<ArrayMesh> mesh = root->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	REQUIRE_EQ(mesh->get_surface_count(), 2);
+	bool found_material_b = false;
+	bool found_material_c = false;
+	for (int surface_i = 0; surface_i < mesh->get_surface_count(); surface_i++) {
+		Ref<Material> surface_material = mesh->surface_get_material(surface_i);
+		found_material_b |= surface_material.ptr() == material_b.ptr();
+		found_material_c |= surface_material.ptr() == material_c.ptr();
+	}
+	CHECK(found_material_b);
+	CHECK(found_material_c);
+
+	const uint64_t generation = root->get_result_generation();
+	for (uint32_t triangle_i = 0; triangle_i < root->get_result_triangle_count(); triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		REQUIRE(root->resolve_result_triangle(triangle_i, generation, surface, face_id));
+	}
+
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
 	CHECK_EQ(counters.root_materializations, 1);
 #endif // DEV_ENABLED
 
