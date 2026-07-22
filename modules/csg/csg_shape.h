@@ -43,6 +43,9 @@
 class Mesh;
 class NavigationMesh;
 class NavigationMeshSourceGeometryData3D;
+struct CSGEvaluationInputs;
+struct CSGEvaluationSnapshot;
+struct CSGRenderSurface;
 
 using CSGOriginToken = uint32_t;
 
@@ -113,22 +116,7 @@ private:
 
 	Ref<ArrayMesh> root_mesh;
 
-	struct ShapeUpdateSurface {
-		Vector<Vector3> vertices;
-		Vector<Vector3> normals;
-		Vector<Vector2> uvs;
-		Vector<float> tans;
-		Ref<Material> material;
-		int last_added = 0;
-
-		Vector3 *verticesw = nullptr;
-		Vector3 *normalsw = nullptr;
-		Vector2 *uvsw = nullptr;
-		float *tansw = nullptr;
-	};
-
 #ifndef PHYSICS_3D_DISABLED
-	void _update_collision_faces();
 	bool _is_debug_collision_shape_visible();
 	void _update_debug_collision_shape();
 	void _clear_debug_collision_shape();
@@ -136,8 +124,6 @@ private:
 	Vector<Vector3> _get_brush_collision_faces();
 #endif // PHYSICS_3D_DISABLED
 
-	void _build_surfaces_smoothed(CSGBrush *p_brush, Vector<ShapeUpdateSurface> &r_surfaces, Vector<int> &r_face_count);
-	void _build_surfaces_default(CSGBrush *p_brush, Vector<ShapeUpdateSurface> &r_surfaces, Vector<int> &r_face_count);
 	void _queue_root_update(bool p_force = false);
 	void _invalidate_subtree_and_ancestors();
 	void _invalidate_materialization_and_ancestors();
@@ -148,6 +134,8 @@ private:
 	void _ensure_transformed_manifold();
 	Ref<Material> _resolve_manifold_material(const Ref<Material> &p_source_material) const;
 	void _gather_manifold_surface_records(HashMap<CSGOriginToken, Ref<Material>> &r_mesh_materials, HashMap<CSGOriginToken, CSGSurfaceKey> &r_surface_keys);
+	CSGEvaluationInputs _gather_evaluation_inputs(bool p_want_render, bool p_want_collision);
+	void _publish_snapshot(CSGEvaluationSnapshot &p_snapshot);
 	void _update_cached_aabb_from_manifold();
 	void _update_child_manifold_aabbs();
 

@@ -31,7 +31,7 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 | 2 | Semantic provenance (schemas, origin tokens, faceID) | DONE — committed 9c24baed23 (simplify: tagging helper + hidden-constraint comments) |
 | 3A | Document surface registry | DONE — committed (simplify pass clean: no changes needed) |
 | 3B | Edit-domain host + chrome (center slots, dummy domain) | PLANNING (Opus) |
-| 4 | Evaluation scheduler + box Surface tool (push/pull) | pre-step IN PROGRESS (Codex, plan: CSG-PHASE4-PRESTEP-PLAN.md) |
+| 4 | Evaluation scheduler + box Surface tool (push/pull) | pre-step DONE (committed; simplify: minimal, zero edits); scheduler pending |
 | 5 | Shift-drag box extrusion | pending |
 | 6 | Surface materials + planar UVs + Paint tool | pending |
 | 7 | Draw tool | pending |
@@ -43,8 +43,8 @@ As of 2026-07-22 ~19:30Z:
 - Phase 3A COMMITTED (simplify pass green, zero source changes; all milestone tags preserved; migration fidelity verified vs HEAD).
 - Phase 4 pre-step plan SAVED at CSG-PHASE4-PRESTEP-PLAN.md (Opus planner done). Handed to Codex (module tree modules/csg/** disjoint from 3B editor work — interleaving approved by orchestrator). Codex must serialize dev builds: check `Get-Process python` for a running scons before every build.
 - Phase 3B plan SAVED at CSG-PHASE3B-PLAN.md (Opus planner done; line refs re-verified against live tree; typed EditorEditDomainContext mirrors 3A idiom; two-scope suppression: per-viewport domain_blocks_native + global is_edit_domain_active_anywhere; DEV-only dummy domain; headless test plan).
-- RUNNING: Codex implementing the Phase 4 pre-step per CSG-PHASE4-PRESTEP-PLAN.md (task-mrwfaikf-69b7f9, watcher bg1comcki). On completion: review diff → Opus /simplify → verify (18/18, 912 + counter pins) → commit.
-- NEXT after pre-step Codex finishes (its builds own the .dev. namespace — do NOT start 3B Codex while it runs): launch Codex on CSG-PHASE3B-PLAN.md (editor/** only). Then each phase: review → simplify → verify → commit.
+- Phase 4 pre-step COMMITTED (Codex task-mrwfaikf-69b7f9; simplify minimal/zero edits; 18/18, 912).
+- RUNNING: Codex implementing Phase 3B per CSG-PHASE3B-PLAN.md (editor/** only; owns the .dev. build namespace while running). On completion: review diff → Opus /simplify → verify (*EditorEditDomain*, *EditorDocumentSurface*, *ResponsiveLayout*, plus *CSG* regression) → commit → then plan/launch Phase 4 scheduler.
 - Orchestration flow (user-directed): Opus agents plan structural goals → Codex agents implement → Opus /simplify after each phase → verify → commit per phase. Codex launch = Agent(subagent_type codex:codex-rescue); job state JSON at C:\Users\laspe\.claude\plugins\data\codex-openai-codex\state\godot-683f4ee0b87eee85\jobs\<task-id>.json; watcher pattern = background bash until-loop on '"status": "running"'.
 - Remaining phases after 3A: 3B (edit-domain host + chrome, scout: CSG-3B-INPUT-SCOUT.md; gizmo-suppression decision = suppress globally while domain active, MVP), 4 (pre-step then scheduler + Surface tool), 5 (extrusion), 6 (materials/UVs/Paint), 7 (Draw), 8 (long tail).
 
@@ -54,6 +54,7 @@ As of 2026-07-22 ~19:30Z:
 - Phase 6 prompt: add a get_material() virtual on CSGPrimitive3D to replace the 7-way cast chain in _resolve_manifold_material (flagged by Phase 1 simplify) before layering surface-override resolution on top.
 - Phase 3B prompt + 3A review: ONE context carrier — surface instance context, domain session context, and chrome context should hand around the same object (view or domain host; 3A introduced typed EditorDocumentSurfaceContext). No parallel divergent Dictionary shapes.
 - Phase 7 prompt: decide use_collision default for Draw-tool-created standalone roots (new roots default off today; drawing under an existing root inherits root collision automatically). Also: mid-drag collision intentionally lags until final publish (§14/§30) — expected, documented.
+- Phase 4 (scheduler) prompt: CSGEvaluationSnapshot needs an explicit "collision payload built" flag (or quality tag) — an empty collision_faces Vector cannot distinguish skipped collision work from a valid empty result once interactive snapshots skip collision (Codex pre-step finding; harmless on the synchronous path).
 
 ## Phase log
 
@@ -90,6 +91,15 @@ As of 2026-07-22 ~19:30Z:
   - Snapshot per root: HashMap<token, CSGSurfaceKey> + Vector<{token,faceID}> per output triangle (2×u32/tri) + result_generation u64. resolve_result_triangle(triangle, generation, &key, &face_id) validates generation, live ObjectID, schema generation, range. connected_fragment deferred to editor phase.
   - Inter-surface triangle order changes for interleaved primitives (cylinder) — render-surface grouping and geometry identical, pins passed.
 - Opus /simplify pass: DONE — _tag_faces_single_surface helper (sphere/torus dedup), box-loop hoist, hidden-constraint comments (cylinder face layout dependency; polygon fixed 3-slot rationale). Re-verified 18/18, 912/912. Committed 9c24baed23.
+
+### Phase 4 pre-step — started 2026-07-22
+
+- Scope: per CSG-PHASE4-PRESTEP-PLAN.md — extract pure evaluation from csg_shape.cpp into csg_manifold_cache.h + csg_evaluation.{h,cpp}; introduce CSGEvaluationSettings/Inputs/Snapshot, _gather_evaluation_inputs, _publish_snapshot. Zero behavior change; the seam Phase 4's scheduler lands on. modules/csg/** only.
+- Codex result (task-mrwfaikf-69b7f9): DONE, verified. All 6 migration gates + final rerun: 18/18 cases, 912/912 assertions each time.
+  - Files: csg_shape.cpp (2927 lines, -672/+113 net), csg_shape.h (579), csg_manifold_cache.h (new, 76), csg_evaluation.h (new, 164), csg_evaluation.cpp (new, 643). No SCsub/test edits.
+  - Invariants audited by Codex + orchestrator review: subtree-copy-before-evaluate (with comments), _get_brush early-out + metadata/generation responsibilities intact, counter sites per plan §6, …w scratch pointers cleared, clear-then-rebuild deferred to _publish_snapshot.
+  - Noted coupling: csg_manifold_cache.h includes csg_evaluation.h (cache retains Vector<CSGManifoldResultTriangle>). Phase 4 finding recorded in deferred decisions (collision-payload-built flag).
+- Opus /simplify pass: DONE — verdict MINIMAL, zero edits. Every moved function diffed vs HEAD (only permitted renames/settings-parameterization); no double generation bump (sync path leaves snapshot.brush null so _publish_snapshot's brush branch is dormant); csg_build_snapshot coherent though unused by sync path (intentional Phase 4 seam); subtree-copy comments at all four sites; no dangling symbols. Noted-not-applied: update_shape re-assembles CSGEvaluationSettings that _get_brush's gather already built — fixing requires returning inputs from _get_brush, a seam change deferred to Phase 4. Re-verified 18/18 (912). Committed with this ledger update.
 
 ### Phase 3A — started 2026-07-22
 
