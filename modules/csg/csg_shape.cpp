@@ -41,6 +41,8 @@
 #include "servers/rendering/rendering_server.h"
 
 #ifdef DEV_ENABLED
+#include "csg_debug_counters.h"
+
 #include "core/io/json.h"
 #endif // DEV_ENABLED
 
@@ -490,6 +492,11 @@ CSGBrush *CSGShape3D::_get_brush() {
 	}
 	brush = nullptr;
 	CSGBrush *n = _build_brush();
+#ifdef DEV_ENABLED
+	if (Object::cast_to<CSGPrimitive3D>(this)) {
+		CSGDebugCounters::count_local_primitive_brush_pack();
+	}
+#endif // DEV_ENABLED
 	HashMap<int32_t, Ref<Material>> mesh_materials;
 	manifold::Manifold root_manifold;
 	_pack_manifold(n, root_manifold, mesh_materials, this);
@@ -507,10 +514,17 @@ CSGBrush *CSGShape3D::_get_brush() {
 		}
 		CSGBrush transformed_brush;
 		transformed_brush.copy_from(*child_brush, child->get_transform());
+#ifdef DEV_ENABLED
+		CSGDebugCounters::count_transformed_wrapper_construction();
+#endif // DEV_ENABLED
 		manifold::Manifold child_manifold;
 		_pack_manifold(&transformed_brush, child_manifold, mesh_materials, child);
 		manifold::OpType child_operation = ManifoldOperation::convert_csg_op(child->get_operation());
 		if (child_operation != current_op) {
+#ifdef DEV_ENABLED
+			CSGDebugCounters::count_operation_switch_flush();
+			CSGDebugCounters::count_batch_boolean_call();
+#endif // DEV_ENABLED
 			manifold::Manifold result = manifold::Manifold::BatchBoolean(manifolds, current_op);
 			manifolds.clear();
 			manifolds.push_back(result);
@@ -519,11 +533,19 @@ CSGBrush *CSGShape3D::_get_brush() {
 		manifolds.push_back(child_manifold);
 	}
 	if (!manifolds.empty()) {
+#ifdef DEV_ENABLED
+		CSGDebugCounters::count_batch_boolean_call();
+#endif // DEV_ENABLED
 		manifold::Manifold manifold_result = manifold::Manifold::BatchBoolean(manifolds, current_op);
 		if (n) {
 			memdelete(n);
 		}
 		n = memnew(CSGBrush);
+#ifdef DEV_ENABLED
+		if (is_root_shape()) {
+			CSGDebugCounters::count_root_materialization();
+		}
+#endif // DEV_ENABLED
 		_unpack_manifold(manifold_result, mesh_materials, n);
 	}
 	AABB aabb;
@@ -603,6 +625,10 @@ void CSGShape3D::update_shape() {
 	} else {
 		_build_surfaces_default(n, surfaces, face_count);
 	}
+#ifdef DEV_ENABLED
+	CSGDebugCounters::count_uv_finalization();
+	bool tangent_finalization_counted = false;
+#endif // DEV_ENABLED
 
 	root_mesh.instantiate();
 	//create surfaces
@@ -611,6 +637,12 @@ void CSGShape3D::update_shape() {
 		// calculate tangents for this surface
 		bool have_tangents = calculate_tangents && SurfaceTool::generate_tangents_func;
 		if (have_tangents) {
+#ifdef DEV_ENABLED
+			if (!tangent_finalization_counted) {
+				CSGDebugCounters::count_tangent_finalization();
+				tangent_finalization_counted = true;
+			}
+#endif // DEV_ENABLED
 			ShapeUpdateSurface &surface = surfaces.write[i];
 
 			_generate_tangents_unindexed(surface.tansw, surface.vertices.size(), surface.verticesw, surface.normalsw, surface.uvsw);
@@ -903,6 +935,9 @@ Vector<Vector3> CSGShape3D::_get_brush_collision_faces() {
 
 void CSGShape3D::_update_collision_faces() {
 	if (use_collision && is_root_shape() && root_collision_shape.is_valid()) {
+#ifdef DEV_ENABLED
+		CSGDebugCounters::count_collision_rebuild();
+#endif // DEV_ENABLED
 		root_collision_shape->set_faces(_get_brush_collision_faces());
 
 		if (_is_debug_collision_shape_visible()) {
