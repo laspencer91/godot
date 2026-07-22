@@ -93,8 +93,13 @@ try {
     if (Test-Path $targetExe) { $beforeStamp = (Get-Item $targetExe).LastWriteTimeUtc }
 
     Push-Location $repoRoot
+    $sconsOutput = New-Object System.Collections.Generic.List[string]
     try {
-        & scons @sconsArgs
+        & scons @sconsArgs 2>&1 | ForEach-Object {
+            $line = "$_"
+            $sconsOutput.Add($line)
+            Write-Host $line
+        }
         $sconsExit = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -105,13 +110,18 @@ try {
     }
 
     # scons can report success while the final link silently failed (locked
-    # exe + masked error). The binary timestamp is the ground truth.
+    # exe + masked error). The binary timestamp is the ground truth — except
+    # for a legitimate no-op build, which scons announces explicitly.
     if (-not (Test-Path $targetExe)) {
         throw "Build reported success but $targetExe does not exist."
     }
     $afterStamp = (Get-Item $targetExe).LastWriteTimeUtc
     if ($null -ne $beforeStamp -and $afterStamp -eq $beforeStamp) {
-        throw "Build reported success but the binary was NOT relinked (timestamp unchanged). Is an editor instance holding the exe lock? Check: Get-Process godot*"
+        $upToDate = $sconsOutput | Where-Object { $_ -match "godot\.windows\.editor\.x86_64\.exe' is up to date" }
+        if (-not $upToDate) {
+            throw "Build reported success but the binary was NOT relinked (timestamp unchanged). Is an editor instance holding the exe lock? Check: Get-Process godot*"
+        }
+        Write-Host "Target already up to date; nothing to relink."
     }
 
     Restore-Hardlinks
