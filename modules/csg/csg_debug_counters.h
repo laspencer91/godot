@@ -36,10 +36,13 @@
 
 struct CSGDebugCounters {
 	uint64_t local_primitive_brush_packs = 0;
+	uint64_t leaf_manifold_repacks = 0;
 	uint64_t transformed_wrapper_constructions = 0;
+	uint64_t expression_node_reconstructions = 0;
 	uint64_t batch_boolean_calls = 0;
 	uint64_t operation_switch_flushes = 0;
 	uint64_t root_materializations = 0;
+	uint64_t non_root_materializations = 0;
 	uint64_t uv_finalizations = 0;
 	uint64_t tangent_finalizations = 0;
 	uint64_t collision_rebuilds = 0;
@@ -48,10 +51,13 @@ struct CSGDebugCounters {
 	static CSGDebugCounters get();
 
 	static void count_local_primitive_brush_pack();
+	static void count_leaf_manifold_repack();
 	static void count_transformed_wrapper_construction();
+	static void count_expression_node_reconstruction();
 	static void count_batch_boolean_call();
 	static void count_operation_switch_flush();
 	static void count_root_materialization();
+	static void count_non_root_materialization();
 	static void count_uv_finalization();
 	static void count_tangent_finalization();
 	static void count_collision_rebuild();

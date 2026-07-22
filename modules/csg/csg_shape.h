@@ -32,6 +32,7 @@
 
 #include "csg.h"
 
+#include "core/templates/hash_map.h"
 #include "scene/3d/path_3d.h"
 #include "scene/3d/visual_instance_3d.h"
 
@@ -57,6 +58,9 @@ public:
 private:
 	Operation operation = OPERATION_UNION;
 	CSGShape3D *parent_shape = nullptr;
+
+	struct ManifoldCache;
+	ManifoldCache *manifold_cache = nullptr;
 
 	CSGBrush *brush = nullptr;
 
@@ -109,11 +113,25 @@ private:
 
 	void _build_surfaces_smoothed(CSGBrush *p_brush, Vector<ShapeUpdateSurface> &r_surfaces, Vector<int> &r_face_count);
 	void _build_surfaces_default(CSGBrush *p_brush, Vector<ShapeUpdateSurface> &r_surfaces, Vector<int> &r_face_count);
+	void _queue_root_update(bool p_force = false);
+	void _invalidate_subtree_and_ancestors();
+	void _invalidate_materialization_and_ancestors();
+	void _make_transform_dirty();
+	void _make_operation_dirty();
+	void _ensure_local_manifold();
+	void _ensure_subtree_manifold();
+	void _ensure_transformed_manifold();
+	Ref<Material> _resolve_manifold_material(const Ref<Material> &p_source_material) const;
+	void _gather_manifold_materials(HashMap<int32_t, Ref<Material>> &r_mesh_materials);
+	void _update_cached_aabb_from_manifold();
+	void _update_child_manifold_aabbs();
 
 protected:
 	void _notification(int p_what);
 	virtual CSGBrush *_build_brush() = 0;
-	void _make_dirty(bool p_parent_removing = false);
+	void _make_dirty();
+	void _make_material_dirty();
+	void _make_output_dirty();
 	PackedStringArray get_configuration_warnings() const override;
 
 	static void _bind_methods();

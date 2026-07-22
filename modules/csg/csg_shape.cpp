@@ -54,6 +54,36 @@
 
 #include <cfloat> // FLT_EPSILON
 
+struct CSGManifoldMaterialRecord {
+	uint32_t original_id = 0;
+	Ref<Material> source_material;
+};
+
+struct CSGShape3D::ManifoldCache {
+	CSGBrush *local_brush = nullptr;
+	// Clean Manifold values keep their exact CSG-node handles. In particular,
+	// subtree_manifold must only be evaluated through a copy.
+	manifold::Manifold local_manifold;
+	manifold::Manifold transformed_manifold;
+	manifold::Manifold subtree_manifold;
+	// Original IDs are reserved when local_manifold is packed and live for the
+	// same cache generation.
+	Vector<CSGManifoldMaterialRecord> material_records;
+
+	bool local_manifold_dirty = true;
+	bool transformed_manifold_dirty = true;
+	bool subtree_manifold_dirty = true;
+	bool materialization_dirty = true;
+	bool subtree_empty = true;
+	bool subtree_empty_valid = false;
+
+	~ManifoldCache() {
+		if (local_brush) {
+			memdelete(local_brush);
+		}
+	}
+};
+
 #ifndef NAVIGATION_3D_DISABLED
 Callable CSGShape3D::_navmesh_source_geometry_parsing_callback;
 RID CSGShape3D::_navmesh_source_geometry_parser;
@@ -116,7 +146,7 @@ void CSGShape3D::set_use_collision(bool p_enable) {
 		set_collision_layer(collision_layer);
 		set_collision_mask(collision_mask);
 		set_collision_priority(collision_priority);
-		_make_dirty(); //force update
+		_make_output_dirty(); // Force collision output to update.
 	} else {
 		PhysicsServer3D::get_singleton()->free_rid(root_collision_body);
 		root_collision_body = RID();
@@ -211,7 +241,7 @@ real_t CSGShape3D::get_collision_priority() const {
 
 void CSGShape3D::set_autosmooth(bool p_smooth) {
 	autosmooth = p_smooth;
-	_make_dirty();
+	_make_output_dirty();
 	notify_property_list_changed();
 }
 
@@ -221,7 +251,7 @@ bool CSGShape3D::is_autosmooth() const {
 
 void CSGShape3D::set_smoothing_angle(const float p_angle) {
 	smoothing_angle = p_angle;
-	_make_dirty();
+	_make_output_dirty();
 }
 
 float CSGShape3D::get_smoothing_angle() const {
@@ -241,7 +271,7 @@ void CSGShape3D::set_snap(float p_snap) {
 	}
 
 	snap = p_snap;
-	_make_dirty();
+	_make_output_dirty();
 }
 
 float CSGShape3D::get_snap() const {
@@ -249,23 +279,86 @@ float CSGShape3D::get_snap() const {
 }
 #endif // DISABLE_DEPRECATED
 
-void CSGShape3D::_make_dirty(bool p_parent_removing) {
-#ifndef PHYSICS_3D_DISABLED
-	if ((p_parent_removing || is_root_shape()) && !dirty) {
-		callable_mp(this, &CSGShape3D::update_shape).call_deferred(); // Must be deferred; otherwise, is_root_shape() will use the previous parent.
+void CSGShape3D::_queue_root_update(bool p_force) {
+	CSGShape3D *root = this;
+	while (root->parent_shape) {
+		root = root->parent_shape;
 	}
-#endif // PHYSICS_3D_DISABLED
 
-	if (!is_root_shape()) {
-		parent_shape->_make_dirty();
+	if (p_force || !root->dirty) {
+		callable_mp(root, &CSGShape3D::update_shape).call_deferred();
 	}
-#ifndef PHYSICS_3D_DISABLED
-	else if (!dirty) {
-		callable_mp(this, &CSGShape3D::update_shape).call_deferred();
-	}
-#endif // PHYSICS_3D_DISABLED
+	root->dirty = true;
+}
 
-	dirty = true;
+void CSGShape3D::_invalidate_subtree_and_ancestors() {
+	CSGShape3D *shape = this;
+	while (shape) {
+		shape->manifold_cache->subtree_manifold_dirty = true;
+		shape->manifold_cache->transformed_manifold_dirty = true;
+		shape->manifold_cache->materialization_dirty = true;
+		shape->manifold_cache->subtree_empty_valid = false;
+		shape = shape->parent_shape;
+	}
+	_queue_root_update();
+}
+
+void CSGShape3D::_invalidate_materialization_and_ancestors() {
+	CSGShape3D *shape = this;
+	while (shape) {
+		shape->manifold_cache->materialization_dirty = true;
+		shape = shape->parent_shape;
+	}
+	_queue_root_update();
+}
+
+void CSGShape3D::_make_dirty() {
+	manifold_cache->local_manifold_dirty = true;
+	_invalidate_subtree_and_ancestors();
+}
+
+void CSGShape3D::_make_material_dirty() {
+	_invalidate_materialization_and_ancestors();
+}
+
+void CSGShape3D::_make_output_dirty() {
+	_queue_root_update();
+}
+
+void CSGShape3D::_make_transform_dirty() {
+	manifold_cache->transformed_manifold_dirty = true;
+	if (parent_shape) {
+		parent_shape->_invalidate_subtree_and_ancestors();
+	}
+}
+
+void CSGShape3D::_make_operation_dirty() {
+	if (parent_shape) {
+		parent_shape->_invalidate_subtree_and_ancestors();
+	}
+}
+
+Ref<Material> CSGShape3D::_resolve_manifold_material(const Ref<Material> &p_source_material) const {
+	if (const CSGMesh3D *mesh = Object::cast_to<CSGMesh3D>(this)) {
+		Ref<Material> csg_material_override = mesh->get_material();
+		return csg_material_override.is_valid() ? csg_material_override : p_source_material;
+	}
+	if (const CSGSphere3D *sphere = Object::cast_to<CSGSphere3D>(this)) {
+		return sphere->get_material();
+	}
+	if (const CSGBox3D *box = Object::cast_to<CSGBox3D>(this)) {
+		return box->get_material();
+	}
+	if (const CSGCylinder3D *cylinder = Object::cast_to<CSGCylinder3D>(this)) {
+		return cylinder->get_material();
+	}
+	if (const CSGTorus3D *torus = Object::cast_to<CSGTorus3D>(this)) {
+		return torus->get_material();
+	}
+	if (const CSGPolygon3D *polygon = Object::cast_to<CSGPolygon3D>(this)) {
+		return polygon->get_material();
+	}
+	return p_source_material;
 }
 
 enum ManifoldProperty {
@@ -400,10 +493,8 @@ static String _export_meshgl_as_json(const manifold::MeshGL64 &p_mesh) {
 static void _pack_manifold(
 		const CSGBrush *const p_mesh_merge,
 		manifold::Manifold &r_manifold,
-		HashMap<int32_t, Ref<Material>> &p_mesh_materials,
-		CSGShape3D *p_csg_shape) {
+		Vector<CSGManifoldMaterialRecord> &r_material_records) {
 	ERR_FAIL_NULL_MSG(p_mesh_merge, "p_mesh_merge is null");
-	ERR_FAIL_NULL_MSG(p_csg_shape, "p_shape is null");
 	HashMap<uint32_t, Vector<CSGBrush::Face>> faces_by_material;
 	for (int face_i = 0; face_i < p_mesh_merge->faces.size(); face_i++) {
 		const CSGBrush::Face &face = p_mesh_merge->faces[face_i];
@@ -423,14 +514,17 @@ static void _pack_manifold(
 		mesh.runIndex.push_back(mesh.triVerts.size());
 
 		// Associate the material with an ID.
-		uint32_t reserved_id = r_manifold.ReserveIDs(1);
+		uint32_t reserved_id = manifold::Manifold::ReserveIDs(1);
 		mesh.runOriginalID.push_back(reserved_id);
 		Ref<Material> material;
 		if (material_id < p_mesh_merge->materials.size()) {
 			material = p_mesh_merge->materials[material_id];
 		}
 
-		p_mesh_materials.insert(reserved_id, material);
+		CSGManifoldMaterialRecord material_record;
+		material_record.original_id = reserved_id;
+		material_record.source_material = material;
+		r_material_records.push_back(material_record);
 		for (const CSGBrush::Face &face : faces) {
 			for (int32_t tri_order_i = 0; tri_order_i < 3; tri_order_i++) {
 				constexpr int32_t order[3] = { 0, 2, 1 };
@@ -464,102 +558,209 @@ static void _pack_manifold(
 	r_manifold = manifold::Manifold(mesh);
 }
 
-struct ManifoldOperation {
-	manifold::Manifold manifold;
-	manifold::OpType operation;
-	static manifold::OpType convert_csg_op(CSGShape3D::Operation op) {
-		switch (op) {
-			case CSGShape3D::OPERATION_SUBTRACTION:
-				return manifold::OpType::Subtract;
-			case CSGShape3D::OPERATION_INTERSECTION:
-				return manifold::OpType::Intersect;
-			default:
-				return manifold::OpType::Add;
-		}
+static manifold::OpType _convert_csg_operation(CSGShape3D::Operation p_operation) {
+	switch (p_operation) {
+		case CSGShape3D::OPERATION_SUBTRACTION:
+			return manifold::OpType::Subtract;
+		case CSGShape3D::OPERATION_INTERSECTION:
+			return manifold::OpType::Intersect;
+		default:
+			return manifold::OpType::Add;
 	}
-	ManifoldOperation() :
-			operation(manifold::OpType::Add) {}
-	ManifoldOperation(const manifold::Manifold &m, manifold::OpType op) :
-			manifold(m), operation(op) {}
-};
+}
 
-CSGBrush *CSGShape3D::_get_brush() {
-	if (!dirty) {
-		return brush;
+static manifold::mat3x4 _to_manifold_transform(const Transform3D &p_transform) {
+	const Vector3 basis_x = p_transform.basis.get_column(0);
+	const Vector3 basis_y = p_transform.basis.get_column(1);
+	const Vector3 basis_z = p_transform.basis.get_column(2);
+	const Vector3 origin = p_transform.origin;
+	return manifold::mat3x4(
+			manifold::mat3(
+					manifold::vec3(basis_x.x, basis_x.y, basis_x.z),
+					manifold::vec3(basis_y.x, basis_y.y, basis_y.z),
+					manifold::vec3(basis_z.x, basis_z.y, basis_z.z)),
+			manifold::vec3(origin.x, origin.y, origin.z));
+}
+
+static manifold::Manifold _combine_manifolds(const std::vector<manifold::Manifold> &p_manifolds, manifold::OpType p_operation) {
+	if (p_manifolds.empty()) {
+		return manifold::Manifold();
 	}
-	if (brush) {
-		memdelete(brush);
+	if (p_manifolds.size() == 1) {
+		return p_manifolds.front();
 	}
-	brush = nullptr;
-	CSGBrush *n = _build_brush();
 #ifdef DEV_ENABLED
-	if (Object::cast_to<CSGPrimitive3D>(this)) {
+	CSGDebugCounters::count_batch_boolean_call();
+#endif // DEV_ENABLED
+	return manifold::Manifold::BatchBoolean(p_manifolds, p_operation);
+}
+
+void CSGShape3D::_ensure_local_manifold() {
+	if (!manifold_cache->local_manifold_dirty) {
+		return;
+	}
+
+	if (manifold_cache->local_brush) {
+		memdelete(manifold_cache->local_brush);
+	}
+	manifold_cache->local_brush = _build_brush();
+	manifold_cache->local_manifold = manifold::Manifold();
+	manifold_cache->material_records.clear();
+
+#ifdef DEV_ENABLED
+	const bool is_primitive = Object::cast_to<CSGPrimitive3D>(this);
+	if (is_primitive) {
 		CSGDebugCounters::count_local_primitive_brush_pack();
 	}
 #endif // DEV_ENABLED
-	HashMap<int32_t, Ref<Material>> mesh_materials;
-	manifold::Manifold root_manifold;
-	_pack_manifold(n, root_manifold, mesh_materials, this);
-	manifold::OpType current_op = ManifoldOperation::convert_csg_op(get_operation());
+	_pack_manifold(manifold_cache->local_brush, manifold_cache->local_manifold, manifold_cache->material_records);
+#ifdef DEV_ENABLED
+	if (is_primitive) {
+		CSGDebugCounters::count_leaf_manifold_repack();
+	}
+#endif // DEV_ENABLED
+	manifold_cache->local_manifold_dirty = false;
+}
+
+void CSGShape3D::_ensure_subtree_manifold() {
+	if (!manifold_cache->subtree_manifold_dirty) {
+		return;
+	}
+
+	_ensure_local_manifold();
+	manifold::OpType current_op = _convert_csg_operation(get_operation());
 	std::vector<manifold::Manifold> manifolds;
-	manifolds.push_back(root_manifold);
+	manifolds.push_back(manifold_cache->local_manifold);
 	for (int i = 0; i < get_child_count(); i++) {
 		CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
 		if (!child || !child->is_visible()) {
 			continue;
 		}
-		CSGBrush *child_brush = child->_get_brush();
-		if (!child_brush) {
-			continue;
-		}
-		CSGBrush transformed_brush;
-		transformed_brush.copy_from(*child_brush, child->get_transform());
-#ifdef DEV_ENABLED
-		CSGDebugCounters::count_transformed_wrapper_construction();
-#endif // DEV_ENABLED
-		manifold::Manifold child_manifold;
-		_pack_manifold(&transformed_brush, child_manifold, mesh_materials, child);
-		manifold::OpType child_operation = ManifoldOperation::convert_csg_op(child->get_operation());
+		child->_ensure_transformed_manifold();
+		manifold::OpType child_operation = _convert_csg_operation(child->get_operation());
 		if (child_operation != current_op) {
 #ifdef DEV_ENABLED
 			CSGDebugCounters::count_operation_switch_flush();
-			CSGDebugCounters::count_batch_boolean_call();
 #endif // DEV_ENABLED
-			manifold::Manifold result = manifold::Manifold::BatchBoolean(manifolds, current_op);
+			manifold::Manifold result = _combine_manifolds(manifolds, current_op);
 			manifolds.clear();
 			manifolds.push_back(result);
 			current_op = child_operation;
 		}
-		manifolds.push_back(child_manifold);
+		manifolds.push_back(child->manifold_cache->transformed_manifold);
 	}
-	if (!manifolds.empty()) {
+	manifold_cache->subtree_manifold = _combine_manifolds(manifolds, current_op);
+	manifold_cache->subtree_manifold_dirty = false;
+	manifold_cache->transformed_manifold_dirty = true;
+	manifold_cache->materialization_dirty = true;
+	manifold_cache->subtree_empty_valid = false;
 #ifdef DEV_ENABLED
-		CSGDebugCounters::count_batch_boolean_call();
+	CSGDebugCounters::count_expression_node_reconstruction();
 #endif // DEV_ENABLED
-		manifold::Manifold manifold_result = manifold::Manifold::BatchBoolean(manifolds, current_op);
-		if (n) {
-			memdelete(n);
-		}
-		n = memnew(CSGBrush);
-#ifdef DEV_ENABLED
-		if (is_root_shape()) {
-			CSGDebugCounters::count_root_materialization();
-		}
-#endif // DEV_ENABLED
-		_unpack_manifold(manifold_result, mesh_materials, n);
+
+	update_configuration_warnings();
+}
+
+void CSGShape3D::_ensure_transformed_manifold() {
+	_ensure_subtree_manifold();
+	if (!manifold_cache->transformed_manifold_dirty) {
+		return;
 	}
+
+	manifold_cache->transformed_manifold = manifold_cache->subtree_manifold.Transform(_to_manifold_transform(get_transform()));
+	manifold_cache->transformed_manifold_dirty = false;
+#ifdef DEV_ENABLED
+	CSGDebugCounters::count_transformed_wrapper_construction();
+#endif // DEV_ENABLED
+}
+
+void CSGShape3D::_gather_manifold_materials(HashMap<int32_t, Ref<Material>> &r_mesh_materials) {
+	_ensure_local_manifold();
+	for (const CSGManifoldMaterialRecord &record : manifold_cache->material_records) {
+		r_mesh_materials.insert(record.original_id, _resolve_manifold_material(record.source_material));
+	}
+
+	for (int i = 0; i < get_child_count(); i++) {
+		CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
+		if (child && child->is_visible()) {
+			child->_gather_manifold_materials(r_mesh_materials);
+		}
+	}
+}
+
+void CSGShape3D::_update_cached_aabb_from_manifold() {
+	_ensure_subtree_manifold();
+	// IsEmpty()/BoundingBox() collapse the handle they are called on into an
+	// evaluated leaf (the same GetCsgLeafNode() subtlety as GetMeshGL64()).
+	// Evaluate a copy so the cached subtree keeps its operation-node handle and
+	// preserves the clean-subtree identity invariant.
+	manifold::Manifold evaluated_manifold = manifold_cache->subtree_manifold;
+	manifold_cache->subtree_empty = evaluated_manifold.IsEmpty();
+	manifold_cache->subtree_empty_valid = true;
+	if (manifold_cache->subtree_empty) {
+		node_aabb = AABB();
+		return;
+	}
+
+	const manifold::Box bounds = evaluated_manifold.BoundingBox();
+	const Vector3 position(bounds.min.x, bounds.min.y, bounds.min.z);
+	const Vector3 end(bounds.max.x, bounds.max.y, bounds.max.z);
+	node_aabb = AABB(position, end - position);
+}
+
+void CSGShape3D::_update_child_manifold_aabbs() {
+	for (int i = 0; i < get_child_count(); i++) {
+		CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
+		if (!child || !child->is_visible()) {
+			continue;
+		}
+		child->_update_cached_aabb_from_manifold();
+		child->_update_child_manifold_aabbs();
+		child->update_configuration_warnings();
+	}
+}
+
+CSGBrush *CSGShape3D::_get_brush() {
+	if (!manifold_cache->materialization_dirty && brush) {
+		dirty = false;
+		return brush;
+	}
+
+	_ensure_subtree_manifold();
+	HashMap<int32_t, Ref<Material>> mesh_materials;
+	_gather_manifold_materials(mesh_materials);
+
+	if (brush) {
+		memdelete(brush);
+	}
+	brush = memnew(CSGBrush);
+#ifdef DEV_ENABLED
+	if (is_root_shape()) {
+		CSGDebugCounters::count_root_materialization();
+	} else {
+		CSGDebugCounters::count_non_root_materialization();
+	}
+#endif // DEV_ENABLED
+	// GetMeshGL64() replaces the handle it is called on with an evaluated leaf.
+	// Materialize a copy so the authored subtree keeps its operation-node handle.
+	manifold::Manifold manifold_result = manifold_cache->subtree_manifold;
+	_unpack_manifold(manifold_result, mesh_materials, brush);
+
 	AABB aabb;
-	if (n && !n->faces.is_empty()) {
-		aabb.position = n->faces[0].vertices[0];
-		for (const CSGBrush::Face &face : n->faces) {
+	if (!brush->faces.is_empty()) {
+		aabb.position = brush->faces[0].vertices[0];
+		for (const CSGBrush::Face &face : brush->faces) {
 			for (int i = 0; i < 3; ++i) {
 				aabb.expand_to(face.vertices[i]);
 			}
 		}
 	}
 	node_aabb = aabb;
-	brush = n;
+	manifold_cache->subtree_empty = brush->faces.is_empty();
+	manifold_cache->subtree_empty_valid = true;
+	manifold_cache->materialization_dirty = false;
 	dirty = false;
+	_update_child_manifold_aabbs();
 	update_configuration_warnings();
 	return brush;
 }
@@ -1029,40 +1230,43 @@ void CSGShape3D::_notification(int p_what) {
 				if (parent_shape) {
 					set_base(RID());
 					root_mesh.unref();
+					dirty = false;
+					parent_shape->_invalidate_subtree_and_ancestors();
 				}
 			}
-			if (!brush || parent_shape) {
-				// Update this node if uninitialized, or both this node and its new parent if it gets added to another CSG shape
-				_make_dirty();
+			if (!parent_shape && !brush) {
+				_queue_root_update();
 			}
 			last_visible = is_visible();
 		} break;
 
 		case NOTIFICATION_UNPARENTED: {
 			if (!is_root_shape()) {
-				// Update this node and its previous parent only if it's currently being removed from another CSG shape
-				_make_dirty(true); // Must be forced since is_root_shape() uses the previous parent
+				// The subtree itself stays valid. Only its previous parent expression changes.
+				parent_shape->_invalidate_subtree_and_ancestors();
+				parent_shape = nullptr;
+				_queue_root_update(true); // Must be forced because this node only becomes a root after the notification.
+			} else {
+				parent_shape = nullptr;
 			}
-			parent_shape = nullptr;
 		} break;
 
 		case NOTIFICATION_CHILD_ORDER_CHANGED: {
-			_make_dirty();
+			_invalidate_subtree_and_ancestors();
 		} break;
 
 		case NOTIFICATION_VISIBILITY_CHANGED: {
 			if (!is_root_shape() && last_visible != is_visible()) {
 				// Update this node's parent only if its own visibility has changed, not the visibility of parent nodes
-				parent_shape->_make_dirty();
+				parent_shape->_invalidate_subtree_and_ancestors();
 			}
 			last_visible = is_visible();
 		} break;
 
 		case NOTIFICATION_LOCAL_TRANSFORM_CHANGED: {
-			if (!is_root_shape()) {
-				// Update this node's parent only if its own transformation has changed, not the transformation of parent nodes
-				parent_shape->_make_dirty();
-			}
+			// A root transform does not affect its local CSG result, but its wrapper must
+			// still be invalidated in case the node is subsequently reparented.
+			_make_transform_dirty();
 		} break;
 
 #ifndef PHYSICS_3D_DISABLED
@@ -1079,7 +1283,7 @@ void CSGShape3D::_notification(int p_what) {
 				set_collision_mask(collision_mask);
 				set_collision_priority(collision_priority);
 				debug_shape_old_transform = get_global_transform();
-				_make_dirty();
+				_make_output_dirty();
 			}
 		} break;
 
@@ -1104,7 +1308,7 @@ void CSGShape3D::_notification(int p_what) {
 
 void CSGShape3D::set_operation(Operation p_operation) {
 	operation = p_operation;
-	_make_dirty();
+	_make_operation_dirty();
 	update_gizmos();
 }
 
@@ -1114,7 +1318,7 @@ CSGShape3D::Operation CSGShape3D::get_operation() const {
 
 void CSGShape3D::set_calculate_tangents(bool p_calculate_tangents) {
 	calculate_tangents = p_calculate_tangents;
-	_make_dirty();
+	_make_output_dirty();
 }
 
 bool CSGShape3D::is_calculating_tangents() const {
@@ -1163,7 +1367,10 @@ PackedStringArray CSGShape3D::get_configuration_warnings() const {
 	PackedStringArray warnings = Node::get_configuration_warnings();
 	const CSGShape3D *current_shape = this;
 	while (current_shape) {
-		if (!current_shape->brush || current_shape->brush->faces.is_empty()) {
+		if (!current_shape->manifold_cache->subtree_empty_valid) {
+			const_cast<CSGShape3D *>(current_shape)->_update_cached_aabb_from_manifold();
+		}
+		if (current_shape->manifold_cache->subtree_empty) {
 			warnings.push_back(RTR("The CSGShape3D has an empty shape.\nCSGShape3D empty shapes typically occur because the mesh is not manifold.\nA manifold mesh forms a solid object without gaps, holes, or loose edges.\nEach edge must be a member of exactly two faces."));
 			break;
 		}
@@ -1251,6 +1458,7 @@ void CSGShape3D::_bind_methods() {
 }
 
 CSGShape3D::CSGShape3D() {
+	manifold_cache = memnew(ManifoldCache);
 	set_notify_local_transform(true);
 }
 
@@ -1259,6 +1467,8 @@ CSGShape3D::~CSGShape3D() {
 		memdelete(brush);
 		brush = nullptr;
 	}
+	memdelete(manifold_cache);
+	manifold_cache = nullptr;
 }
 
 //////////////////////////////////
@@ -1325,7 +1535,6 @@ CSGBrush *CSGMesh3D::_build_brush() {
 	Vector<bool> smooth;
 	Vector<Ref<Material>> materials;
 	Vector<Vector2> uvs;
-	Ref<Material> base_material = get_material();
 
 	for (int i = 0; i < mesh->get_surface_count(); i++) {
 		if (mesh->surface_get_primitive_type(i) != Mesh::PRIMITIVE_TRIANGLES) {
@@ -1358,12 +1567,10 @@ CSGBrush *CSGMesh3D::_build_brush() {
 			uvr = auvs.ptr();
 		}
 
-		Ref<Material> mat;
-		if (base_material.is_valid()) {
-			mat = base_material;
-		} else {
-			mat = mesh->surface_get_material(i);
-		}
+		// Preserve the source surface material in the cached leaf. The current
+		// CSGMesh3D override is resolved when the root is materialized, so changing
+		// only the override never requires new Manifold original IDs.
+		Ref<Material> mat = mesh->surface_get_material(i);
 
 		Vector<int> aindices = arrays[Mesh::ARRAY_INDEX];
 		if (aindices.size()) {
@@ -1474,7 +1681,7 @@ void CSGMesh3D::set_material(const Ref<Material> &p_material) {
 		return;
 	}
 	material = p_material;
-	_make_dirty();
+	_make_material_dirty();
 }
 
 Ref<Material> CSGMesh3D::get_material() const {
@@ -1710,7 +1917,7 @@ bool CSGSphere3D::get_smooth_faces() const {
 
 void CSGSphere3D::set_material(const Ref<Material> &p_material) {
 	material = p_material;
-	_make_dirty();
+	_make_material_dirty();
 }
 
 Ref<Material> CSGSphere3D::get_material() const {
@@ -1874,7 +2081,7 @@ bool CSGBox3D::_set(const StringName &p_name, const Variant &p_value) {
 
 void CSGBox3D::set_material(const Ref<Material> &p_material) {
 	material = p_material;
-	_make_dirty();
+	_make_material_dirty();
 	update_gizmos();
 }
 
@@ -2098,7 +2305,7 @@ bool CSGCylinder3D::get_smooth_faces() const {
 
 void CSGCylinder3D::set_material(const Ref<Material> &p_material) {
 	material = p_material;
-	_make_dirty();
+	_make_material_dirty();
 }
 
 Ref<Material> CSGCylinder3D::get_material() const {
@@ -2324,7 +2531,7 @@ bool CSGTorus3D::get_smooth_faces() const {
 
 void CSGTorus3D::set_material(const Ref<Material> &p_material) {
 	material = p_material;
-	_make_dirty();
+	_make_material_dirty();
 }
 
 Ref<Material> CSGTorus3D::get_material() const {
@@ -2984,7 +3191,7 @@ bool CSGPolygon3D::get_smooth_faces() const {
 
 void CSGPolygon3D::set_material(const Ref<Material> &p_material) {
 	material = p_material;
-	_make_dirty();
+	_make_material_dirty();
 }
 
 Ref<Material> CSGPolygon3D::get_material() const {

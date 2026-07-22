@@ -10,21 +10,24 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 - Git: user approved committing. Baseline workspace WIP committed at d399876524; plan docs at 7bf59608a7. Commit each phase after verification + simplify pass (one commit per phase, Co-Authored-By trailer). Never stash/revert user work.
 - Any new editor surface/context must reuse an established fork pattern (chrome registry, provider/registry factories, per-view state) or establish one that later systems can reuse.
 
-## Build commands (verified 2026-07)
+## Build commands (updated 2026-07-22 — see repo-root CLAUDE.md, shared-tree agreements)
 
-- Production editor: `scons platform=windows target=editor dev_build=no d3d12=yes winrt=no -j24`
-- Dev + unit tests: `scons platform=windows target=editor dev_build=yes tests=yes d3d12=yes winrt=no -j24`
+- The tree is shared by MULTIPLE concurrent agent sessions. Before ANY build, check for a running scons: `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` (look for SCons in command line). Never run two builds of the same object namespace concurrently (phantom LNK1120s).
+- Production editor: `.\build_editor.ps1` ONLY (serializes builds, pins flags, fixes hardlinks). Never raw scons for production.
+- Dev + unit tests (separate `.dev.` namespace, safe alongside production but not alongside another dev build): `scons platform=windows target=editor dev_build=yes tests=yes winrt=no -j24`
   - Test run: `bin/godot.windows.editor.dev.x86_64.exe --test --test-case="*CSG*"` (doctest filters)
-- `winrt=no` is REQUIRED — MSVC 14.51 hard-errors (STL1011) on `/await` + `<experimental/coroutine>` in the WinRT TTS driver.
-- A running editor holds the exe lock; scons may exit 0 despite a failed final link — check binary timestamp.
-- Long builds: run in background and poll; single Bash calls time out at 10 minutes.
+- `winrt=no` is REQUIRED for dev builds — MSVC 14.51 hard-errors (STL1011) on `/await` + `<experimental/coroutine>`.
+- A running editor holds the exe lock; the final link fails while output looks fine — check binary timestamp; RENAME (don't kill) a locking editor exe.
+- Shell pipelines mask scons's exit code — check `$LASTEXITCODE`/exit status directly.
+- Long builds: run in background and poll; single foreground calls time out at 10 minutes.
+- Git: stage files explicitly, never `git add -A` — other sessions' uncommitted work shares the tree.
 
 ## Phase status
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Characterization tests + dev counters (no behavior change) | implemented+verified; simplify pass running |
-| 1 | Persistent Manifold cache graph | pending |
+| 0 | Characterization tests + dev counters (no behavior change) | DONE — committed 4261ae84e1 (simplify pass: one test-helper consolidation) |
+| 1 | Persistent Manifold cache graph | implemented+verified (13/13 cases, 135/135 asserts); simplify pass running |
 | 2 | Semantic provenance (schemas, origin tokens, faceID) | pending |
 | 3A | Document surface registry | pending |
 | 3B | Edit-domain host + chrome (center slots, dummy domain) | pending |
@@ -44,4 +47,16 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
   - Counters: local_primitive_brush_packs, transformed_wrapper_constructions, batch_boolean_calls, operation_switch_flushes, root_materializations, uv_finalizations, tangent_finalizations, collision_rebuilds; reset()/get().
   - Tests: 6 new cases 46/46 assertions; full *CSG* filter 7/7 cases 48/48 (pre-existing polygon suite green). Dev build succeeded.
   - BASELINE (Phase 1 must beat): 3-leaf mixed-op tree = 6 BatchBoolean calls (one per child materialization + 3 root op groups), 2 op-switch flushes, each leaf packs once per rebuild; nested single-leaf tree = 3 BatchBoolean calls (one per authored level); 2 transformed wrappers for nested combiner case. Pinned behaviors: subtract-then-union vol 57 vs union-then-subtract vol 56; box = 36 corner UVs / 144 tangent floats; empty combiner → empty brush, default AABB, valid zero-surface mesh; hidden children fully excluded; collision 36 verts, 1 rebuild.
-- Opus /simplify pass over the four files: launched, pending.
+- Opus /simplify pass: DONE — collapsed repeated DEV_ENABLED reset boilerplate in test_csg.h into _reset_csg_counters() helper; rejected no-op-stub call sites (guard logic must compile out of release). Re-verified 7/7, 48/48. Committed 4261ae84e1.
+
+### Phase 1 — started 2026-07-22
+
+- Scope: persistent Manifold cache graph per plan §12/§13/§28 Phase 1. Recursive expression composition, subtree handle identity, root-only materialization, once-per-pack material ID records, granular invalidation, _get_brush caller audit, acceptance tests vs Phase 0 baseline.
+- Codex result (task-mrwbao0m-bpe6zz): DONE, verified. 13/13 cases, 135/135 assertions; all Phase 0 output pins unchanged.
+  - CSGShape3D::ManifoldCache (opaque, csg_shape.cpp): local brush, local Manifold, transformed wrapper, subtree expression handle, persistent originalID/material records, per-level dirty flags, cached subtree emptiness.
+  - Invalidation: geometry → _make_dirty (local + ancestors); LOCAL_TRANSFORM_CHANGED → _make_transform_dirty (wrapper + parent chain only); op/order/visibility → parent expression + ancestors; material setters → _make_material_dirty (materialization only).
+  - Acceptance deltas: transform edit = 0 leaf repacks/1 wrapper/1 parent expr; resize = 1 repack/2 exprs; deep branch = 1 repack/4 exprs on chain; material-only = zero boolean work; clean update = zero cache work. Mixed 3-leaf tree BatchBoolean 6→3.
+  - _get_brush audit: parent composition no longer calls child _get_brush; gizmos/tests use explicit get_brush_faces() materialization; non-root AABBs from Manifold bounds; config warnings use cached emptiness. get_brush_faces not script-bound.
+  - CRITICAL GOTCHA (documented for later phases): manifold::Manifold::GetMeshGL64() REPLACES the receiving handle with an evaluated leaf — root materialization must evaluate a COPY of the subtree handle or expression identity is destroyed.
+  - Grouping subtlety preserved: node's own operation starts the grouping before child op switches; singleton BatchBoolean calls elided (same handle) with identical output.
+- Opus /simplify pass over the five files: launched, pending.

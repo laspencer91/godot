@@ -37,6 +37,7 @@
 
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
+#include "scene/resources/3d/primitive_meshes.h"
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
 #include "tests/test_macros.h"
@@ -107,12 +108,15 @@ TEST_CASE("[SceneTree][CSG] Phase 0 Add Subtract Intersect grouping") {
 
 #ifdef DEV_ENABLED
 	CSGDebugCounters counters = CSGDebugCounters::get();
-	// The current full rebuild packs each of the three primitive leaves once.
+	// Phase 1 retains each leaf and composes only the three mixed-operation groups.
 	CHECK_EQ(counters.local_primitive_brush_packs, 3);
+	CHECK_EQ(counters.leaf_manifold_repacks, 3);
 	CHECK_EQ(counters.transformed_wrapper_constructions, 3);
-	CHECK_EQ(counters.batch_boolean_calls, 6);
+	CHECK_EQ(counters.expression_node_reconstructions, 4);
+	CHECK_EQ(counters.batch_boolean_calls, 3);
 	CHECK_EQ(counters.operation_switch_flushes, 2);
 	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.non_root_materializations, 0);
 #endif // DEV_ENABLED
 
 	root->queue_free();
@@ -134,10 +138,13 @@ TEST_CASE("[SceneTree][CSG] Phase 0 nested combiner transforms") {
 #ifdef DEV_ENABLED
 	CSGDebugCounters counters = CSGDebugCounters::get();
 	CHECK_EQ(counters.local_primitive_brush_packs, 1);
+	CHECK_EQ(counters.leaf_manifold_repacks, 1);
 	CHECK_EQ(counters.transformed_wrapper_constructions, 2);
-	CHECK_EQ(counters.batch_boolean_calls, 3);
+	CHECK_EQ(counters.expression_node_reconstructions, 3);
+	CHECK_EQ(counters.batch_boolean_calls, 2);
 	CHECK_EQ(counters.operation_switch_flushes, 0);
 	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.non_root_materializations, 0);
 #endif // DEV_ENABLED
 
 	root->queue_free();
@@ -270,6 +277,233 @@ TEST_CASE("[SceneTree][CSG] Phase 0 collision shape and AABB") {
 	root->queue_free();
 }
 #endif // PHYSICS_3D_DISABLED
+
+TEST_CASE("[SceneTree][CSG] Phase 1 transform resize and clean rebuild invalidation") {
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGBox3D *left = _add_box(root, Vector3(1, 1, 1), Vector3(-1, 0, 0));
+	_add_box(root, Vector3(1, 1, 1), Vector3(1, 0, 0));
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+
+	_reset_csg_counters();
+	left->set_position(Vector3(-2, 0, 0));
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 1);
+	CHECK_EQ(counters.expression_node_reconstructions, 1);
+	CHECK_EQ(counters.batch_boolean_calls, 1);
+	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.non_root_materializations, 0);
+#endif // DEV_ENABLED
+
+	_reset_csg_counters();
+	left->set_size(Vector3(2, 1, 1));
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+#ifdef DEV_ENABLED
+	counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 1);
+	CHECK_EQ(counters.leaf_manifold_repacks, 1);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 1);
+	CHECK_EQ(counters.expression_node_reconstructions, 2);
+	CHECK_EQ(counters.batch_boolean_calls, 1);
+	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.non_root_materializations, 0);
+#endif // DEV_ENABLED
+
+	_reset_csg_counters();
+	root->update_shape();
+#ifdef DEV_ENABLED
+	counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 0);
+	CHECK_EQ(counters.non_root_materializations, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 1 deep change retains clean subtree expressions") {
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGCombiner3D *clean_branch = memnew(CSGCombiner3D);
+	root->add_child(clean_branch);
+	_add_box(clean_branch, Vector3(1, 1, 1), Vector3(-2, 0, 0));
+
+	CSGCombiner3D *changed_outer = memnew(CSGCombiner3D);
+	root->add_child(changed_outer);
+	CSGCombiner3D *changed_inner = memnew(CSGCombiner3D);
+	changed_outer->add_child(changed_inner);
+	CSGBox3D *changed_leaf = _add_box(changed_inner, Vector3(1, 1, 1), Vector3(2, 0, 0));
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+
+	_reset_csg_counters();
+	changed_leaf->set_size(Vector3(2, 1, 1));
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 1);
+	CHECK_EQ(counters.leaf_manifold_repacks, 1);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 3);
+	// Changed leaf + its two authored combiners + root; the clean branch is retained.
+	CHECK_EQ(counters.expression_node_reconstructions, 4);
+	CHECK_EQ(counters.batch_boolean_calls, 3);
+	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.non_root_materializations, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 1 material changes retain the root expression") {
+	Ref<StandardMaterial3D> material_a;
+	material_a.instantiate();
+	Ref<StandardMaterial3D> material_b;
+	material_b.instantiate();
+
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGBox3D *box = _add_box(root, Vector3(1, 1, 1), Vector3(), CSGShape3D::OPERATION_UNION, material_a);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+
+	_reset_csg_counters();
+	box->set_material(material_b);
+	root->update_shape();
+	Ref<ArrayMesh> mesh = root->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	REQUIRE_EQ(mesh->get_surface_count(), 1);
+	CHECK_EQ(mesh->surface_get_material(0).ptr(), material_b.ptr());
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.non_root_materializations, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 1 mesh material override reuses source IDs") {
+	Ref<StandardMaterial3D> source_material;
+	source_material.instantiate();
+	Ref<StandardMaterial3D> material_override;
+	material_override.instantiate();
+	Ref<BoxMesh> source_mesh;
+	source_mesh.instantiate();
+	source_mesh->set_material(source_material);
+
+	CSGMesh3D *mesh_shape = memnew(CSGMesh3D);
+	mesh_shape->set_mesh(source_mesh);
+	mesh_shape->set_material(material_override);
+	SceneTree::get_singleton()->get_root()->add_child(mesh_shape);
+	mesh_shape->update_shape();
+	Ref<ArrayMesh> mesh = mesh_shape->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	REQUIRE_EQ(mesh->get_surface_count(), 1);
+	CHECK_EQ(mesh->surface_get_material(0).ptr(), material_override.ptr());
+
+	_reset_csg_counters();
+	mesh_shape->set_material(Ref<Material>());
+	mesh_shape->update_shape();
+	mesh = mesh_shape->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	REQUIRE_EQ(mesh->get_surface_count(), 1);
+	CHECK_EQ(mesh->surface_get_material(0).ptr(), source_material.ptr());
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+
+	mesh_shape->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 1 non-root brush materialization is explicit") {
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGCombiner3D *nested = memnew(CSGCombiner3D);
+	root->add_child(nested);
+	_add_box(nested, Vector3(1, 2, 3), Vector3());
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+
+	_reset_csg_counters();
+	CHECK_EQ(nested->get_brush_faces().size(), 36);
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 0);
+	CHECK_EQ(counters.non_root_materializations, 1);
+#endif // DEV_ENABLED
+
+	_reset_csg_counters();
+	CHECK_EQ(nested->get_brush_faces().size(), 36);
+#ifdef DEV_ENABLED
+	counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.non_root_materializations, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 1 operation order and visibility reuse clean leaves") {
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	_add_box(root, Vector3(3, 3, 3), Vector3());
+	CSGBox3D *operand = _add_box(root, Vector3(1, 1, 1), Vector3());
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+
+	_reset_csg_counters();
+	operand->set_operation(CSGShape3D::OPERATION_SUBTRACTION);
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 1);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+
+	_reset_csg_counters();
+	root->move_child(operand, 0);
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+#ifdef DEV_ENABLED
+	counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 1);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+
+	_reset_csg_counters();
+	operand->hide();
+	CHECK_FALSE(root->get_brush_faces().is_empty());
+#ifdef DEV_ENABLED
+	counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.transformed_wrapper_constructions, 0);
+	CHECK_EQ(counters.expression_node_reconstructions, 1);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
 
 TEST_CASE("[SceneTree][CSG] CSGPolygon3D") {
 	SUBCASE("[SceneTree][CSG] CSGPolygon3D: using accurate path tangent for polygon rotation") {
