@@ -113,6 +113,9 @@ private:
 	bool scheduler_poll_queued = false;
 	uint32_t root_update_deferred_count = 0;
 	uint32_t async_suppressed_deferred_count = 0;
+#ifdef TOOLS_ENABLED
+	bool gizmo_redraw_deferred = false;
+#endif
 
 	CSGBrush *brush = nullptr;
 
@@ -166,6 +169,9 @@ private:
 	void _poll_scheduler();
 	void _update_cached_aabb_from_manifold();
 	void _update_child_manifold_aabbs();
+#ifdef TOOLS_ENABLED
+	void _flush_deferred_gizmo_redraws();
+#endif
 
 protected:
 	void _notification(int p_what);
@@ -190,6 +196,9 @@ public:
 	void request_async_evaluation(CSGEvalQuality p_quality);
 	void request_final_async_evaluation();
 	static void set_async_evaluation_force_synchronous(bool p_force);
+#ifdef TOOLS_ENABLED
+	bool defer_gizmo_redraw_if_evaluation_pending();
+#endif
 
 	void set_operation(Operation p_operation);
 	Operation get_operation() const;

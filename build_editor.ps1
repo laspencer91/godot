@@ -95,12 +95,21 @@ try {
     Push-Location $repoRoot
     $sconsOutput = New-Object System.Collections.Generic.List[string]
     try {
-        & scons @sconsArgs 2>&1 | ForEach-Object {
-            $line = "$_"
-            $sconsOutput.Add($line)
-            Write-Host $line
+        # PS 5.1 wraps native stderr lines in ErrorRecords under 2>&1; with
+        # $ErrorActionPreference = "Stop" the first compiler *warning* would
+        # abort the build mid-run. Relax EAP for the scons pipeline only.
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & scons @sconsArgs 2>&1 | ForEach-Object {
+                $line = "$_"
+                $sconsOutput.Add($line)
+                Write-Host $line
+            }
+            $sconsExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEAP
         }
-        $sconsExit = $LASTEXITCODE
     } finally {
         Pop-Location
     }

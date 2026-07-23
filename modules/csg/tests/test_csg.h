@@ -997,6 +997,42 @@ TEST_CASE("[SceneTree][CSG] Phase 4 async final supersedes its queued synchronou
 	MessageQueue::get_singleton()->flush();
 }
 
+#ifdef TOOLS_ENABLED
+TEST_CASE("[SceneTree][CSG] Phase 4 gizmo redraw waits for final async publication") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+	MessageQueue::get_singleton()->flush();
+	const uint64_t generation_before = root->get_result_generation();
+
+	_reset_csg_counters();
+	root->set_size(Vector3(2, 3, 4));
+	root->request_final_async_evaluation();
+	// Mirror the native CSG gizmo: a pending snapshot keeps the last published
+	// brush instead of synchronously materializing and invalidating that job.
+	if (!root->defer_gizmo_redraw_if_evaluation_pending()) {
+		root->get_brush_faces();
+	}
+	MessageQueue::get_singleton()->flush();
+
+	CHECK_EQ(root->get_result_generation(), generation_before + 1);
+	Ref<ArrayMesh> mesh = root->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	CHECK(mesh->get_aabb().is_equal_approx(AABB(Vector3(-1, -1.5, -2), Vector3(2, 3, 4))));
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.scheduler_requests, 1);
+	CHECK_EQ(counters.scheduler_completions, 1);
+	CHECK_EQ(counters.scheduler_stale_drops, 0);
+	CHECK_EQ(counters.root_materializations, 0);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+#endif // TOOLS_ENABLED
+
 TEST_CASE("[SceneTree][CSG] Phase 4 model edit after async request is not wrongly suppressed") {
 	CSGSynchronousSchedulerScope force_sync;
 	CSGBox3D *root = memnew(CSGBox3D);

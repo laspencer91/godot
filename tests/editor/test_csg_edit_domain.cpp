@@ -101,10 +101,12 @@ TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Draw and Paint out of the Tab
 	CSGSurfaceSession session;
 	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::SURFACE);
 
-	Control *rail = session.build_tool_rail();
+	Control *rail_root = session.build_tool_rail();
 	Control *context_panel = session.build_contextual_panel();
-	REQUIRE(rail != nullptr);
+	REQUIRE(rail_root != nullptr);
 	REQUIRE(context_panel != nullptr);
+	Control *rail = Object::cast_to<Control>(rail_root->find_child("CSGSurfaceToolRail", true, false));
+	REQUIRE(rail != nullptr);
 	REQUIRE_EQ(rail->get_child_count(), 4);
 	Button *surface_button = Object::cast_to<Button>(rail->get_child(0));
 	Button *draw_button = Object::cast_to<Button>(rail->get_child(1));
@@ -156,7 +158,7 @@ TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Draw and Paint out of the Tab
 	CHECK(surface_button->is_pressed());
 
 	memdelete(context_panel);
-	memdelete(rail);
+	memdelete(rail_root);
 }
 
 TEST_CASE("[Editor][CSGEditDomain] Paint applies to the semantic source in one undo action") {

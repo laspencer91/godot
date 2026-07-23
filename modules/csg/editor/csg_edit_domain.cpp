@@ -2139,8 +2139,12 @@ void CSGSurfaceSession::draw_overlay(Node3DEditorViewport *p_viewport) {
 }
 
 Control *CSGSurfaceSession::build_tool_rail() {
+	PanelContainer *rail_panel = memnew(PanelContainer);
+	rail_panel->set_name("CSGSurfaceToolRailPanel");
+	rail_panel->set_theme_type_variation(SNAME("ViewportPanel"));
 	VBoxContainer *rail = memnew(VBoxContainer);
 	rail->set_name("CSGSurfaceToolRail");
+	rail_panel->add_child(rail);
 	Button *surface_button = memnew(Button);
 	surface_button->set_text(TTR("Surface"));
 	surface_button->set_toggle_mode(true);
@@ -2169,7 +2173,7 @@ Control *CSGSurfaceSession::build_tool_rail() {
 	operand_tool_button_id = operand_button->get_instance_id();
 	rail->add_child(operand_button);
 	_update_tool_buttons();
-	return rail;
+	return rail_panel;
 }
 
 static HBoxContainer *_add_csg_paint_row(VBoxContainer *p_parent, const String &p_label) {
@@ -2204,6 +2208,7 @@ static void _add_csg_paint_button(VBoxContainer *p_parent, const String &p_text,
 Control *CSGSurfaceSession::build_contextual_panel() {
 	PanelContainer *panel = memnew(PanelContainer);
 	panel->set_name("CSGSurfaceContextPanel");
+	panel->set_theme_type_variation(SNAME("ViewportPanel"));
 	VBoxContainer *contents = memnew(VBoxContainer);
 	panel->add_child(contents);
 

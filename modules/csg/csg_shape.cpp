@@ -726,6 +726,21 @@ void CSGShape3D::_update_child_manifold_aabbs() {
 	}
 }
 
+#ifdef TOOLS_ENABLED
+void CSGShape3D::_flush_deferred_gizmo_redraws() {
+	if (gizmo_redraw_deferred) {
+		gizmo_redraw_deferred = false;
+		update_gizmos();
+	}
+	for (int i = 0; i < get_child_count(); i++) {
+		CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
+		if (child) {
+			child->_flush_deferred_gizmo_redraws();
+		}
+	}
+}
+#endif
+
 CSGBrush *CSGShape3D::_get_brush(bool p_scheduler_prepared) {
 	if (!p_scheduler_prepared && is_root_shape() && evaluation_scheduler && (manifold_cache->materialization_dirty || !brush)) {
 		evaluation_scheduler->prepare_for_synchronous_evaluation();
@@ -840,6 +855,20 @@ void CSGShape3D::request_final_async_evaluation() {
 	request_async_evaluation(CSGEvalQuality::FINAL);
 }
 
+#ifdef TOOLS_ENABLED
+bool CSGShape3D::defer_gizmo_redraw_if_evaluation_pending() {
+	CSGShape3D *root = this;
+	while (root->parent_shape) {
+		root = root->parent_shape;
+	}
+	if (!root->evaluation_scheduler || root->evaluation_scheduler->get_requested_generation() == root->evaluation_scheduler->get_published_generation()) {
+		return false;
+	}
+	gizmo_redraw_deferred = true;
+	return true;
+}
+#endif
+
 void CSGShape3D::set_async_evaluation_force_synchronous(bool p_force) {
 	CSGEvaluationScheduler::set_force_synchronous(p_force);
 }
@@ -947,6 +976,9 @@ void CSGShape3D::_publish_snapshot(CSGEvaluationSnapshot &p_snapshot) {
 
 		set_base(root_mesh->get_rid());
 		update_gizmos();
+#ifdef TOOLS_ENABLED
+		_flush_deferred_gizmo_redraws();
+#endif
 	}
 
 #ifndef PHYSICS_3D_DISABLED

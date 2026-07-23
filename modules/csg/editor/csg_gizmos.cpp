@@ -379,9 +379,15 @@ bool CSGShape3DGizmoPlugin::is_selectable_when_hidden() const {
 }
 
 void CSGShape3DGizmoPlugin::redraw(EditorNode3DGizmo *p_gizmo) {
-	p_gizmo->clear();
-
 	CSGShape3D *cs = Object::cast_to<CSGShape3D>(p_gizmo->get_node_3d());
+	if (cs->defer_gizmo_redraw_if_evaluation_pending()) {
+		// Reading brush faces here would cancel the final async snapshot after its
+		// queued synchronous update was suppressed. Keep the published gizmo until
+		// the snapshot lands and requests this redraw again.
+		return;
+	}
+
+	p_gizmo->clear();
 
 	Vector<Vector3> faces = cs->get_brush_faces();
 
