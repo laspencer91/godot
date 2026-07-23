@@ -387,7 +387,32 @@ bool Box3DCharacterMover::_ground_probe(const Vector3 &p_feet, const Array &p_pl
 	return false;
 }
 
-// Unreal Engine 1 style up/forward/down step sweep, but with the landing classified by
+// Verify that the opposing capsule contact comes from a riser rather than a walkable ramp. The
+// capsule plane normal tilts upward while its hemisphere rides a sharp lip, so that normal alone
+// eventually looks walkable. A low forward ray sees the actual vertical face throughout the climb.
+bool Box3DCharacterMover::_has_step_obstruction(const Vector3 &p_start, const Vector3 &p_horizontal) const {
+	Box3DSpace3D *query_space = _get_space();
+	if (query_space == nullptr || p_horizontal.length_squared() < 1e-8) {
+		return false;
+	}
+
+	const Vector3 direction = p_horizontal.normalized();
+	const real_t probe_up = MIN((real_t)0.01, step_height * 0.5);
+	const real_t probe_length = p_horizontal.length() + capsule.radius + 0.01;
+	Box3DMoverRayProbeContext ctx;
+	ctx.exclusions = &exclusions;
+	b3World_CastRay(query_space->get_world(), to_box3d(p_start + Vector3(0.0, probe_up, 0.0)),
+			to_box3d(direction * probe_length), _make_filter(), _mover_ray_probe_callback, &ctx);
+	if (!ctx.hit) {
+		return false;
+	}
+
+	const real_t floor_threshold = Math::cos(floor_max_angle);
+	const Vector3 horizontal_normal(ctx.normal.x, 0.0, ctx.normal.z);
+	return ctx.normal.y <= floor_threshold && horizontal_normal.dot(direction) < -0.01;
+}
+
+// Unreal-style up/forward/down step sweep, but with the landing classified by
 // _ground_probe rather than by the sweep contact normal — the fork's CharacterBody3D step-up
 // classifies via the capsule contact normal, which reports tilted edge normals on a hemisphere
 // and only works reliably with flat-bottomed cylinders.
@@ -437,20 +462,42 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	ERR_FAIL_COND_V_MSG(!_can_query(), Dictionary(), "Box3DCharacterMover cannot query the space right now.");
 
 	const Vector3 target_position = p_position + p_velocity * p_delta;
+	Vector3 requested_horizontal = target_position - p_position;
+	requested_horizontal.y = 0.0;
+	const real_t floor_threshold = Math::cos(floor_max_angle);
 	Vector3 position = p_position;
 	Array solved_planes;
 	int total_iterations = 0;
 	float last_fraction = 1.0f;
 
-	// Stepping only assists grounded lateral motion; an upward launch (jump) must not be
-	// converted into a step.
-	const bool step_allowed = step_height > 0.0 && p_velocity.y <= 0.05;
+	// Stepping only assists lateral motion that began on walkable support. Testing support at
+	// the start prevents an airborne capsule brushing a ledge from being pulled up onto it.
+	Array starting_planes;
+	bool starting_planes_queried = false;
+	bool step_allowed = false;
+	if (step_height > 0.0 && p_velocity.y <= 0.05 && requested_horizontal.length_squared() > 1e-8) {
+		starting_planes = _collide_internal(p_position);
+		starting_planes_queried = true;
+		for (int i = 0; i < starting_planes.size(); i++) {
+			const Dictionary plane = starting_planes[i];
+			const Vector3 normal = plane["normal"];
+			if (normal.y > floor_threshold) {
+				step_allowed = true;
+				break;
+			}
+		}
+		if (!step_allowed) {
+			Vector3 probe_normal;
+			int probe_material_id = 0;
+			step_allowed = _ground_probe(p_position, starting_planes, probe_normal, probe_material_id);
+		}
+	}
 	bool stepped = false;
 	Vector3 stepped_floor_normal;
 	int stepped_material_id = 0;
 
 	for (int i = 0; i < 5; i++) {
-		const Array planes = _collide_internal(position);
+		const Array planes = i == 0 && starting_planes_queried ? starting_planes : _collide_internal(position);
 		const Dictionary solve = solve_planes(target_position - position, planes);
 		const Vector3 delta = solve["delta"];
 		solved_planes = solve["planes"];
@@ -461,19 +508,48 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		position += applied_delta;
 
 		if (applied_delta.length_squared() < 0.0001f) {
-			if (step_allowed) {
-				Vector3 stepped_position;
-				Vector3 step_normal;
-				int step_material_id = 0;
-				if (_try_step_up(position, target_position, stepped_position, step_normal, step_material_id)) {
+			break;
+		}
+	}
+
+	// A round capsule starts climbing a stair lip before it fully stalls. The plane solver can
+	// therefore return several centimeters of mostly-upward travel while silently discarding most
+	// of the requested horizontal distance. Detect that obstruction in the same move and compare an
+	// up/forward/down candidate from the original position. This is collision-triggered rather than
+	// waiting for a near-zero displacement, which was both later and frame-rate dependent.
+	if (step_allowed) {
+		const Vector3 move_direction = requested_horizontal.normalized();
+		bool has_lateral_obstruction = false;
+		for (int i = 0; i < solved_planes.size(); i++) {
+			const Dictionary plane = solved_planes[i];
+			const Vector3 normal = plane["normal"];
+			const Vector3 horizontal_normal(normal.x, 0.0, normal.z);
+			if (horizontal_normal.dot(move_direction) < -0.01) {
+				has_lateral_obstruction = true;
+				break;
+			}
+		}
+
+		const real_t STEP_PROGRESS_EPSILON = 0.001;
+		const Vector3 regular_horizontal(position.x - p_position.x, 0.0, position.z - p_position.z);
+		const real_t requested_progress = requested_horizontal.length();
+		const real_t regular_progress = regular_horizontal.dot(move_direction);
+		if (has_lateral_obstruction && regular_progress + STEP_PROGRESS_EPSILON < requested_progress &&
+				_has_step_obstruction(p_position, requested_horizontal)) {
+			Vector3 stepped_position;
+			Vector3 step_normal;
+			int step_material_id = 0;
+			if (_try_step_up(p_position, target_position, stepped_position, step_normal, step_material_id)) {
+				const Vector3 stepped_horizontal(stepped_position.x - p_position.x, 0.0, stepped_position.z - p_position.z);
+				const real_t stepped_progress = stepped_horizontal.dot(move_direction);
+				if (stepped_progress > regular_progress + STEP_PROGRESS_EPSILON) {
 					position = stepped_position;
 					stepped = true;
 					stepped_floor_normal = step_normal;
 					stepped_material_id = step_material_id;
-					continue;
+					solved_planes = _collide_internal(position);
 				}
 			}
-			break;
 		}
 	}
 
@@ -508,8 +584,6 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 			body->apply_impulse(impulse, point - body->get_transform().origin);
 		}
 	}
-	const real_t floor_threshold = Math::cos(floor_max_angle);
-
 	Vector3 floor_normal;
 	Dictionary floor_plane;
 	bool on_floor = false;
