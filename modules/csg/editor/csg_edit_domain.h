@@ -36,6 +36,8 @@
 #include "core/object/undo_redo.h"
 #include "editor/gui/editor_edit_domain.h"
 
+class EditorUndoRedoManager;
+
 struct CSGPushPullResult {
 	Vector3 size;
 	Transform3D transform;
@@ -54,10 +56,28 @@ CSGExtrusionResult csg_extrude_box_face(const Vector3 &p_source_size, uint32_t p
 void csg_configure_extrusion_surface_settings(CSGBox3D *p_source, uint32_t p_source_surface, const Transform3D &p_source_to_root, CSGBox3D *r_extrusion);
 bool csg_paint_surfaces_with_undo(UndoRedo *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, const Vector<CSGSurfaceKey> &p_surfaces, const CSGSurfaceSetting &p_setting, UndoRedo::MergeMode p_merge_mode = UndoRedo::MERGE_DISABLE, const String &p_action_name = "CSG Paint Surfaces");
 
+// CSG-7: Pure workplane rectangle and box construction shared by the Draw gesture and headless pins.
+struct CSGDrawRect {
+	Vector2 min;
+	Vector2 max;
+	bool degenerate = true;
+};
+
+struct CSGDrawBoxResult {
+	Vector3 size;
+	Transform3D world_transform;
+};
+
+CSGDrawRect csg_draw_rectangle_bounds(const Vector2 &p_a, const Vector2 &p_b, real_t p_min_extent);
+CSGDrawBoxResult csg_draw_box_from_rect(const CSGDrawRect &p_rect, real_t p_height, const Vector3 &p_plane_origin, const Vector3 &p_plane_u, const Vector3 &p_plane_normal, const Vector3 &p_plane_v);
+CSGBox3D *csg_draw_commit_box(EditorUndoRedoManager *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, CSGPrimitive3D *p_parent_operand, const CSGDrawBoxResult &p_box, bool p_cut, bool p_use_collision_for_new_root = true);
+CSGBox3D *csg_draw_commit_box(UndoRedo *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, CSGPrimitive3D *p_parent_operand, const CSGDrawBoxResult &p_box, bool p_cut, bool p_use_collision_for_new_root = true);
+
 class CSGSurfaceSession : public EditorEditDomainSession {
 public:
 	enum class ToolMode {
 		SURFACE,
+		DRAW,
 		PAINT,
 		OPERAND,
 	};
@@ -75,6 +95,11 @@ private:
 		LOCAL,
 		ROOT,
 		WORLD,
+	};
+	enum class DrawPhase {
+		IDLE,
+		RECTANGLE,
+		HEIGHT,
 	};
 
 	ObjectID active_root_id;
@@ -116,13 +141,36 @@ private:
 	bool paint_eyedropper_active = false;
 	bool updating_paint_controls = false;
 
+	// CSG-7: Draw is a separate two-phase gesture and never mutates the scene before commit.
+	DrawPhase draw_phase = DrawPhase::IDLE;
+	bool draw_cut_mode = false;
+	bool draw_ctrl_pressed = false;
+	Vector3 draw_plane_origin_world;
+	Vector3 draw_plane_normal_world;
+	Vector3 draw_plane_u_world;
+	Vector3 draw_plane_v_world;
+	ObjectID draw_parent_operand_id;
+	Vector2 draw_rect_min;
+	Vector2 draw_rect_max;
+	Vector2 draw_first_corner_uv;
+	real_t draw_height = 0.0;
+	Vector3 draw_height_line_origin_world;
+	Vector3 draw_height_line_direction_world;
+	real_t draw_height_start_parameter = 0.0;
+
 	ObjectID distance_label_id;
 	ObjectID coordinate_edit_id;
 	ObjectID surface_context_id;
+	ObjectID draw_context_id;
 	ObjectID paint_context_id;
 	ObjectID surface_tool_button_id;
+	ObjectID draw_tool_button_id;
 	ObjectID paint_tool_button_id;
 	ObjectID operand_tool_button_id;
+	ObjectID draw_add_button_id;
+	ObjectID draw_cut_button_id;
+	ObjectID draw_height_edit_id;
+	ObjectID draw_hint_label_id;
 	ObjectID paint_material_picker_id;
 	ObjectID paint_uv_mode_id;
 	ObjectID paint_uv_space_id;
@@ -147,10 +195,21 @@ private:
 	void _set_tool_mode(ToolMode p_mode);
 	void _update_tool_buttons();
 	bool _pick(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
+	bool _pick_for_draw(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector3 &r_hit_position_root, Vector3 &r_hit_normal_root);
 	void _queue_redraw(Node3DEditorViewport *p_viewport) const;
 	void _draw_hover(Node3DEditorViewport *p_viewport) const;
 	void _draw_paint_selection(Node3DEditorViewport *p_viewport) const;
 	void _draw_ghost(Node3DEditorViewport *p_viewport) const;
+	void _draw_draw_ghost(Node3DEditorViewport *p_viewport) const;
+	void _reset_draw_state(bool p_update = true);
+	bool _is_draw_cut_effective() const;
+	bool _resolve_draw_plane(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
+	bool _project_draw_point(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector2 &r_plane_position) const;
+	void _update_draw_rectangle(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
+	void _begin_draw_height(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
+	void _update_draw_height(Node3DEditorViewport *p_viewport, const Vector2 &p_position, bool p_ctrl_pressed);
+	void _commit_draw();
+	real_t _get_draw_min_extent() const;
 	bool _begin_gesture(Node3DEditorViewport *p_viewport, const Ref<InputEventMouseButton> &p_event);
 	void _update_drag(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
 	void _apply_displacement(); // CSG-4: Shared post-clamp push/pull recompute.
@@ -159,6 +218,7 @@ private:
 	void _commit_gesture();
 	void _update_context_panel();
 	void _numeric_coordinate_submitted(const String &p_text);
+	void _numeric_draw_height_submitted(const String &p_text);
 	void _prune_paint_selection();
 	bool _paint_selection_has(const CSGSurfaceKey &p_surface) const;
 	void _select_paint_surface(const CSGSurfaceKey &p_surface, bool p_add);
@@ -167,8 +227,11 @@ private:
 	void _update_paint_controls();
 	void _apply_well_to_selection(UndoRedo::MergeMode p_merge_mode, const String &p_action_name);
 	void _surface_tool_pressed();
+	void _draw_tool_pressed();
 	void _paint_tool_pressed();
 	void _operand_tool_pressed();
+	void _draw_add_pressed();
+	void _draw_cut_pressed();
 	void _paint_material_changed(Ref<Resource> p_resource);
 	void _paint_uv_mode_selected(int p_index);
 	void _paint_uv_space_selected(int p_index);
@@ -195,6 +258,7 @@ public:
 
 	ObjectID get_active_root_id() const { return active_root_id; }
 	ToolMode get_tool_mode() const { return tool_mode; }
+	bool get_draw_cut_mode() const { return draw_cut_mode; }
 	const CSGSurfaceSetting &get_paint_well() const { return paint_well; }
 	bool lift_paint_setting(const CSGSurfaceKey &p_surface) { return _lift_paint_setting(p_surface); }
 	void select_paint_surface(const CSGSurfaceKey &p_surface, bool p_add) { _select_paint_surface(p_surface, p_add); }

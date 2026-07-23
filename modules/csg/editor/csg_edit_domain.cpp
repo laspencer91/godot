@@ -30,6 +30,8 @@
 
 #include "csg_edit_domain.h"
 
+#include "core/config/project_settings.h"
+#include "core/input/input.h"
 #include "core/input/input_event.h"
 #include "core/object/callable_mp.h"
 #include "editor/editor_data.h"
@@ -144,6 +146,27 @@ CSGExtrusionResult csg_extrude_box_face(const Vector3 &p_source_size, uint32_t p
 	return result;
 }
 
+CSGDrawRect csg_draw_rectangle_bounds(const Vector2 &p_a, const Vector2 &p_b, real_t p_min_extent) {
+	// CSG-7: Normalize corner order before testing either workplane extent.
+	CSGDrawRect result;
+	result.min = Vector2(MIN(p_a.x, p_b.x), MIN(p_a.y, p_b.y));
+	result.max = Vector2(MAX(p_a.x, p_b.x), MAX(p_a.y, p_b.y));
+	const real_t minimum_extent = MAX(p_min_extent, (real_t)0.0);
+	result.degenerate = result.max.x - result.min.x < minimum_extent || result.max.y - result.min.y < minimum_extent;
+	return result;
+}
+
+CSGDrawBoxResult csg_draw_box_from_rect(const CSGDrawRect &p_rect, real_t p_height, const Vector3 &p_plane_origin, const Vector3 &p_plane_u, const Vector3 &p_plane_normal, const Vector3 &p_plane_v) {
+	// CSG-7: The authored box sits on the plane and grows only along its positive normal.
+	CSGDrawBoxResult result;
+	const real_t height = MAX(p_height, (real_t)0.001);
+	result.size = Vector3(p_rect.max.x - p_rect.min.x, height, p_rect.max.y - p_rect.min.y);
+	const Vector2 rect_center = (p_rect.min + p_rect.max) * 0.5;
+	const Vector3 world_center = p_plane_origin + p_plane_u * rect_center.x + p_plane_v * rect_center.y + p_plane_normal * (height * 0.5);
+	result.world_transform = Transform3D(Basis(p_plane_u, p_plane_normal, p_plane_v), world_center);
+	return result;
+}
+
 void csg_configure_extrusion_surface_settings(CSGBox3D *p_source, uint32_t p_source_surface, const Transform3D &p_source_to_root, CSGBox3D *r_extrusion) {
 	ERR_FAIL_NULL(p_source);
 	ERR_FAIL_NULL(r_extrusion);
@@ -217,6 +240,138 @@ struct CSGPaintUndoTarget {
 
 static bool _is_csg_source_editable(const CSGPrimitive3D *p_source, const Node *p_edited_root) {
 	return p_source && p_edited_root && (p_source == p_edited_root || p_source->get_owner() == p_edited_root);
+}
+
+static void _csg_draw_create_action(EditorUndoRedoManager *p_undo_redo, Node *p_edited_root) {
+	// CSG-7: Preserve the native create path's per-document undo history in workspace panes.
+	EditorNode *editor_node = EditorNode::get_singleton();
+	EditorDocument *active_document = editor_node ? editor_node->get_editor_data().get_active_document() : nullptr;
+	if (active_document && active_document->get_root() == p_edited_root && active_document->get_history_id() > 0) {
+		p_undo_redo->create_action_for_history(TTR("CSG Draw Box"), active_document->get_history_id());
+		return;
+	}
+	p_undo_redo->create_action(TTR("CSG Draw Box"), UndoRedo::MERGE_DISABLE, p_edited_root);
+}
+
+static void _csg_draw_create_action(UndoRedo *p_undo_redo, Node *) {
+	p_undo_redo->create_action(TTR("CSG Draw Box"));
+}
+
+static void _csg_draw_add_child(EditorUndoRedoManager *p_undo_redo, Node *p_parent, CSGBox3D *p_box) {
+	p_undo_redo->add_do_method(p_parent, "add_child", p_box, true);
+}
+
+static void _csg_draw_add_child(UndoRedo *p_undo_redo, Node *p_parent, CSGBox3D *p_box) {
+	p_undo_redo->add_do_method(Callable(p_parent, SNAME("add_child")).bind(p_box, true));
+}
+
+static void _csg_draw_set_owner(EditorUndoRedoManager *p_undo_redo, CSGBox3D *p_box, Node *p_owner) {
+	p_undo_redo->add_do_method(p_box, "set_owner", p_owner);
+}
+
+static void _csg_draw_set_owner(UndoRedo *p_undo_redo, CSGBox3D *p_box, Node *p_owner) {
+	p_undo_redo->add_do_method(Callable(p_box, SNAME("set_owner")).bind(p_owner));
+}
+
+static void _csg_draw_remove_child(EditorUndoRedoManager *p_undo_redo, Node *p_parent, CSGBox3D *p_box) {
+	p_undo_redo->add_undo_method(p_parent, "remove_child", p_box);
+}
+
+static void _csg_draw_remove_child(UndoRedo *p_undo_redo, Node *p_parent, CSGBox3D *p_box) {
+	p_undo_redo->add_undo_method(Callable(p_parent, SNAME("remove_child")).bind(p_box));
+}
+
+static void _csg_draw_request_evaluation(EditorUndoRedoManager *p_undo_redo, CSGShape3D *p_root, bool p_undo) {
+	if (p_undo) {
+		p_undo_redo->add_undo_method(p_root, SNAME("_request_final_async_evaluation"));
+	} else {
+		p_undo_redo->add_do_method(p_root, SNAME("_request_final_async_evaluation"));
+	}
+}
+
+static void _csg_draw_request_evaluation(UndoRedo *p_undo_redo, CSGShape3D *p_root, bool p_undo) {
+	if (p_undo) {
+		p_undo_redo->add_undo_method(Callable(p_root, SNAME("_request_final_async_evaluation")));
+	} else {
+		p_undo_redo->add_do_method(Callable(p_root, SNAME("_request_final_async_evaluation")));
+	}
+}
+
+static void _csg_draw_set_global_transform(EditorUndoRedoManager *p_undo_redo, CSGBox3D *p_box, const Transform3D &p_transform) {
+	p_undo_redo->add_do_method(p_box, "set_global_transform", p_transform);
+}
+
+static void _csg_draw_set_global_transform(UndoRedo *p_undo_redo, CSGBox3D *p_box, const Transform3D &p_transform) {
+	p_undo_redo->add_do_method(Callable(p_box, SNAME("set_global_transform")).bind(p_transform));
+}
+
+static void _csg_draw_set_use_collision(EditorUndoRedoManager *p_undo_redo, CSGBox3D *p_box, bool p_enabled) {
+	p_undo_redo->add_do_method(p_box, "set_use_collision", p_enabled);
+}
+
+static void _csg_draw_set_use_collision(UndoRedo *p_undo_redo, CSGBox3D *p_box, bool p_enabled) {
+	p_undo_redo->add_do_method(Callable(p_box, SNAME("set_use_collision")).bind(p_enabled));
+}
+
+template <typename TUndoRedo>
+static CSGBox3D *_csg_draw_commit_box_impl(TUndoRedo *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, CSGPrimitive3D *p_parent_operand, const CSGDrawBoxResult &p_box, bool p_cut, bool p_use_collision_for_new_root) {
+	// CSG-7: Reject every invalid configuration before allocating or opening history.
+	if (!p_undo_redo || !p_root || !p_edited_root || p_box.size.x <= CMP_EPSILON || p_box.size.y <= CMP_EPSILON || p_box.size.z <= CMP_EPSILON) {
+		return nullptr;
+	}
+	if (p_parent_operand && (!_is_csg_source_editable(p_parent_operand, p_edited_root) || _find_csg_root(p_parent_operand) != p_root)) {
+		return nullptr;
+	}
+
+	CSGBox3D *new_box = memnew(CSGBox3D);
+	if (!p_parent_operand) {
+		// Match the native Create CSG Box path before applying Draw-authored values.
+		if (EditorNode *editor_node = EditorNode::get_singleton()) {
+			editor_node->get_editor_data().instantiate_object_properties(new_box);
+		}
+	}
+	String node_name = (p_parent_operand ? static_cast<Node *>(p_parent_operand) : p_edited_root)->validate_child_name(new_box);
+	if (GLOBAL_GET("editor/naming/node_name_casing").operator int() != Node::NAME_CASING_PASCAL_CASE) {
+		node_name = Node::adjust_name_casing(node_name);
+	}
+	new_box->set_name(node_name);
+	new_box->set_size(p_box.size);
+
+	if (p_parent_operand) {
+		// A face draw authors one boolean child in the hit operand's local frame.
+		new_box->set_operation(p_cut ? CSGShape3D::OPERATION_SUBTRACTION : CSGShape3D::OPERATION_UNION);
+		new_box->set_transform(p_parent_operand->get_global_transform().affine_inverse() * p_box.world_transform);
+		_csg_draw_create_action(p_undo_redo, p_edited_root);
+		_csg_draw_add_child(p_undo_redo, p_parent_operand, new_box);
+		_csg_draw_set_owner(p_undo_redo, new_box, p_edited_root);
+		_csg_draw_remove_child(p_undo_redo, p_parent_operand, new_box);
+		p_undo_redo->add_do_reference(new_box);
+		_csg_draw_request_evaluation(p_undo_redo, p_root, false);
+		_csg_draw_request_evaluation(p_undo_redo, p_root, true);
+		p_undo_redo->commit_action();
+		return new_box;
+	}
+
+	// A ground-plane draw is a new standalone root, so its own operation is always Union.
+	new_box->set_operation(CSGShape3D::OPERATION_UNION);
+	_csg_draw_create_action(p_undo_redo, p_edited_root);
+	_csg_draw_add_child(p_undo_redo, p_edited_root, new_box);
+	_csg_draw_set_owner(p_undo_redo, new_box, p_edited_root);
+	_csg_draw_set_global_transform(p_undo_redo, new_box, p_box.world_transform);
+	_csg_draw_set_use_collision(p_undo_redo, new_box, p_use_collision_for_new_root);
+	p_undo_redo->add_do_reference(new_box);
+	_csg_draw_remove_child(p_undo_redo, p_edited_root, new_box);
+	_csg_draw_request_evaluation(p_undo_redo, new_box, false);
+	p_undo_redo->commit_action();
+	return new_box;
+}
+
+CSGBox3D *csg_draw_commit_box(EditorUndoRedoManager *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, CSGPrimitive3D *p_parent_operand, const CSGDrawBoxResult &p_box, bool p_cut, bool p_use_collision_for_new_root) {
+	return _csg_draw_commit_box_impl(p_undo_redo, p_root, p_edited_root, p_parent_operand, p_box, p_cut, p_use_collision_for_new_root);
+}
+
+CSGBox3D *csg_draw_commit_box(UndoRedo *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, CSGPrimitive3D *p_parent_operand, const CSGDrawBoxResult &p_box, bool p_cut, bool p_use_collision_for_new_root) {
+	return _csg_draw_commit_box_impl(p_undo_redo, p_root, p_edited_root, p_parent_operand, p_box, p_cut, p_use_collision_for_new_root);
 }
 
 static Vector<CSGPaintUndoTarget> _collect_csg_paint_targets(CSGShape3D *p_root, Node *p_edited_root, const Vector<CSGSurfaceKey> &p_surfaces, const CSGSurfaceSetting &p_setting) {
@@ -351,6 +506,10 @@ void CSGSurfaceSession::_set_tool_mode(ToolMode p_mode) {
 	if (gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING) {
 		_cancel_gesture();
 	}
+	if (p_mode != tool_mode && (tool_mode == ToolMode::DRAW || p_mode == ToolMode::DRAW)) {
+		// CSG-7: A tool switch abandons only the view-local Draw transaction.
+		_reset_draw_state(false);
+	}
 	tool_mode = p_mode;
 	if (tool_mode == ToolMode::OPERAND) {
 		has_hover = false;
@@ -363,6 +522,9 @@ void CSGSurfaceSession::_set_tool_mode(ToolMode p_mode) {
 void CSGSurfaceSession::_update_tool_buttons() {
 	if (Button *button = ObjectDB::get_instance<Button>(surface_tool_button_id)) {
 		button->set_pressed_no_signal(tool_mode == ToolMode::SURFACE);
+	}
+	if (Button *button = ObjectDB::get_instance<Button>(draw_tool_button_id)) {
+		button->set_pressed_no_signal(tool_mode == ToolMode::DRAW);
 	}
 	if (Button *button = ObjectDB::get_instance<Button>(paint_tool_button_id)) {
 		button->set_pressed_no_signal(tool_mode == ToolMode::PAINT);
@@ -448,12 +610,30 @@ void CSGSurfaceSession::_surface_tool_pressed() {
 	_set_tool_mode(ToolMode::SURFACE);
 }
 
+void CSGSurfaceSession::_draw_tool_pressed() {
+	_set_tool_mode(ToolMode::DRAW);
+}
+
 void CSGSurfaceSession::_paint_tool_pressed() {
 	_set_tool_mode(ToolMode::PAINT);
 }
 
 void CSGSurfaceSession::_operand_tool_pressed() {
 	_set_tool_mode(ToolMode::OPERAND);
+}
+
+void CSGSurfaceSession::_draw_add_pressed() {
+	// CSG-7: Explicit operation state remains stable when Ctrl temporarily inverts it.
+	draw_cut_mode = false;
+	_update_context_panel();
+	_queue_redraw(_get_active_viewport());
+}
+
+void CSGSurfaceSession::_draw_cut_pressed() {
+	// CSG-7: Explicit operation state remains stable when Ctrl temporarily inverts it.
+	draw_cut_mode = true;
+	_update_context_panel();
+	_queue_redraw(_get_active_viewport());
 }
 
 void CSGSurfaceSession::_paint_material_changed(Ref<Resource> p_resource) {
@@ -658,6 +838,267 @@ bool CSGSurfaceSession::_pick(Node3DEditorViewport *p_viewport, const Vector2 &p
 	hover_hit.triangle = (uint32_t)face_index;
 	has_hover = true;
 	return true;
+}
+
+bool CSGSurfaceSession::_pick_for_draw(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector3 &r_hit_position_root, Vector3 &r_hit_normal_root) {
+	// CSG-7: Preserve the established semantic pick path while retaining the geometric hit for a workplane.
+	if (!_pick(p_viewport, p_position)) {
+		return false;
+	}
+	CSGShape3D *root = _get_active_root();
+	if (!root || pick_mesh.is_null() || !pick_mesh->is_valid()) {
+		return false;
+	}
+
+	const Transform3D root_inverse = root->get_global_transform().affine_inverse();
+	const Vector3 ray_position = root_inverse.xform(p_viewport->get_ray_pos(p_position));
+	const Vector3 ray_direction = root_inverse.basis.xform(p_viewport->get_ray(p_position)).normalized();
+	int32_t face_index = -1;
+	if (!pick_mesh->intersect_ray(ray_position, ray_direction, r_hit_position_root, r_hit_normal_root, nullptr, &face_index) || face_index < 0 || (uint32_t)face_index != hover_hit.triangle) {
+		return false;
+	}
+	return true;
+}
+
+void CSGSurfaceSession::_reset_draw_state(bool p_update) {
+	// CSG-7: A fresh Draw transaction always starts in explicit Add mode.
+	draw_phase = DrawPhase::IDLE;
+	draw_cut_mode = false;
+	draw_ctrl_pressed = false;
+	draw_plane_origin_world = Vector3();
+	draw_plane_normal_world = Vector3();
+	draw_plane_u_world = Vector3();
+	draw_plane_v_world = Vector3();
+	draw_parent_operand_id = ObjectID();
+	draw_rect_min = Vector2();
+	draw_rect_max = Vector2();
+	draw_first_corner_uv = Vector2();
+	draw_height = 0.0;
+	draw_height_line_origin_world = Vector3();
+	draw_height_line_direction_world = Vector3();
+	draw_height_start_parameter = 0.0;
+	if (p_update) {
+		_update_context_panel();
+		_queue_redraw(_get_active_viewport());
+	}
+}
+
+bool CSGSurfaceSession::_is_draw_cut_effective() const {
+	const Input *input = Input::get_singleton();
+	const bool ctrl_pressed = input ? input->is_key_pressed(Key::CTRL) : draw_ctrl_pressed;
+	return draw_cut_mode ^ ctrl_pressed;
+}
+
+bool CSGSurfaceSession::_project_draw_point(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector2 &r_plane_position) const {
+	if (!p_viewport || draw_plane_normal_world.is_zero_approx()) {
+		return false;
+	}
+	Vector3 intersection;
+	const Vector3 ray_direction = p_viewport->get_ray(p_position).normalized();
+	if (!Plane(draw_plane_normal_world, draw_plane_origin_world).intersects_ray(p_viewport->get_ray_pos(p_position), ray_direction, &intersection)) {
+		return false;
+	}
+
+	const Vector3 offset = intersection - draw_plane_origin_world;
+	r_plane_position = Vector2(offset.dot(draw_plane_u_world), offset.dot(draw_plane_v_world));
+	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
+	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
+		const real_t snap_step = node_3d_editor->get_translate_snap();
+		if (snap_step > 0.0) {
+			r_plane_position.x = Math::snapped(r_plane_position.x, snap_step);
+			r_plane_position.y = Math::snapped(r_plane_position.y, snap_step);
+		}
+	}
+	return true;
+}
+
+bool CSGSurfaceSession::_resolve_draw_plane(Node3DEditorViewport *p_viewport, const Vector2 &p_position) {
+	CSGShape3D *root = _get_active_root();
+	if (!root || !p_viewport) {
+		return false;
+	}
+
+	Vector3 hit_position_root;
+	Vector3 hit_normal_root;
+	if (_pick_for_draw(p_viewport, p_position, hit_position_root, hit_normal_root)) {
+		CSGPrimitive3D *source = ObjectDB::get_instance<CSGPrimitive3D>(hover_hit.surface.source_shape);
+		if (!source || _find_csg_root(source) != root) {
+			return false;
+		}
+		draw_parent_operand_id = source->get_instance_id();
+		draw_plane_origin_world = root->get_global_transform().xform(hit_position_root);
+		draw_plane_normal_world = root->get_global_transform().basis.inverse().transposed().xform(hit_normal_root).normalized();
+
+		// An authored box face supplies an exact axis even when the visible fragment is triangulated.
+		if (CSGBox3D *box = Object::cast_to<CSGBox3D>(source)) {
+			int axis = 0;
+			real_t sign = 1.0;
+			Vector3 outward;
+			if (_get_box_surface_axis(hover_hit.surface.semantic_surface, axis, sign, outward)) {
+				draw_plane_normal_world = box->get_global_transform().basis.xform(outward).normalized();
+			}
+		}
+		if (draw_plane_normal_world.is_zero_approx()) {
+			return false;
+		}
+
+		Vector3 seed;
+		const Vector3 abs_normal = draw_plane_normal_world.abs();
+		if (abs_normal.x <= abs_normal.y && abs_normal.x <= abs_normal.z) {
+			seed = Vector3(1, 0, 0);
+		} else if (abs_normal.y <= abs_normal.z) {
+			seed = Vector3(0, 1, 0);
+		} else {
+			seed = Vector3(0, 0, 1);
+		}
+		draw_plane_u_world = seed.cross(draw_plane_normal_world).normalized();
+		draw_plane_v_world = draw_plane_normal_world.cross(draw_plane_u_world).normalized();
+	} else {
+		// No visible CSG hit means the world XZ ground plane and a future standalone root.
+		draw_parent_operand_id = ObjectID();
+		draw_plane_origin_world = Vector3();
+		draw_plane_normal_world = Vector3(0, 1, 0);
+		draw_plane_u_world = Vector3(1, 0, 0);
+		draw_plane_v_world = Vector3(0, 0, 1);
+	}
+
+	Vector2 first_corner;
+	if (!_project_draw_point(p_viewport, p_position, first_corner)) {
+		return false;
+	}
+	draw_first_corner_uv = first_corner;
+	draw_rect_min = first_corner;
+	draw_rect_max = first_corner;
+	draw_height = 0.0;
+	draw_phase = DrawPhase::RECTANGLE;
+	_update_context_panel();
+	_queue_redraw(p_viewport);
+	return true;
+}
+
+void CSGSurfaceSession::_update_draw_rectangle(Node3DEditorViewport *p_viewport, const Vector2 &p_position) {
+	if (draw_phase != DrawPhase::RECTANGLE) {
+		return;
+	}
+	Vector2 current_corner;
+	if (!_project_draw_point(p_viewport, p_position, current_corner)) {
+		return;
+	}
+	const CSGDrawRect rect = csg_draw_rectangle_bounds(draw_first_corner_uv, current_corner, 0.0);
+	draw_rect_min = rect.min;
+	draw_rect_max = rect.max;
+	_update_context_panel();
+	_queue_redraw(p_viewport);
+}
+
+static real_t _closest_parameter_on_line_to_ray(const Vector3 &p_line_origin, const Vector3 &p_line_direction, const Vector3 &p_ray_origin, const Vector3 &p_ray_direction);
+
+void CSGSurfaceSession::_begin_draw_height(Node3DEditorViewport *p_viewport, const Vector2 &p_position) {
+	if (!p_viewport || draw_phase != DrawPhase::RECTANGLE) {
+		return;
+	}
+	const Vector2 rect_center = (draw_rect_min + draw_rect_max) * 0.5;
+	draw_height_line_origin_world = draw_plane_origin_world + draw_plane_u_world * rect_center.x + draw_plane_v_world * rect_center.y;
+	draw_height_line_direction_world = draw_plane_normal_world;
+	draw_height_start_parameter = _closest_parameter_on_line_to_ray(
+			draw_height_line_origin_world,
+			draw_height_line_direction_world,
+			p_viewport->get_ray_pos(p_position),
+			p_viewport->get_ray(p_position).normalized());
+	draw_height = 0.0;
+	draw_phase = DrawPhase::HEIGHT;
+	_update_context_panel();
+	_queue_redraw(p_viewport);
+}
+
+void CSGSurfaceSession::_update_draw_height(Node3DEditorViewport *p_viewport, const Vector2 &p_position, bool p_ctrl_pressed) {
+	if (!p_viewport || draw_phase != DrawPhase::HEIGHT) {
+		return;
+	}
+	draw_ctrl_pressed = p_ctrl_pressed;
+	const real_t current_parameter = _closest_parameter_on_line_to_ray(
+			draw_height_line_origin_world,
+			draw_height_line_direction_world,
+			p_viewport->get_ray_pos(p_position),
+			p_viewport->get_ray(p_position).normalized());
+	draw_height = MAX(current_parameter - draw_height_start_parameter, (real_t)0.0);
+	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
+	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
+		const real_t snap_step = node_3d_editor->get_translate_snap();
+		if (snap_step > 0.0) {
+			// CSG-7: Snap the absolute height, never an accumulated mouse delta.
+			draw_height = Math::snapped(draw_height, snap_step);
+		}
+	}
+	_update_context_panel();
+	_queue_redraw(p_viewport);
+}
+
+void CSGSurfaceSession::_commit_draw() {
+	if (draw_phase != DrawPhase::HEIGHT) {
+		return;
+	}
+	// CSG-7: Zero height and a stale/degenerate footprint are pure cancellation, with no history.
+	const CSGDrawRect rect = csg_draw_rectangle_bounds(draw_rect_min, draw_rect_max, 0.001);
+	if (draw_height <= CMP_EPSILON || rect.degenerate) {
+		_reset_draw_state();
+		return;
+	}
+
+	CSGShape3D *root = _get_active_root();
+	Node *edited_root = _get_edited_scene_root();
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	if (!root || !edited_root || !undo_redo) {
+		_reset_draw_state();
+		return;
+	}
+	CSGPrimitive3D *parent_operand = nullptr;
+	if (!draw_parent_operand_id.is_null()) {
+		parent_operand = ObjectDB::get_instance<CSGPrimitive3D>(draw_parent_operand_id);
+		if (!parent_operand) {
+			_reset_draw_state();
+			return;
+		}
+	}
+	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, draw_height, draw_plane_origin_world, draw_plane_u_world, draw_plane_normal_world, draw_plane_v_world);
+	CSGBox3D *new_box = csg_draw_commit_box(undo_redo, root, edited_root, parent_operand, box, _is_draw_cut_effective());
+	if (!new_box) {
+		_reset_draw_state();
+		return;
+	}
+
+	// Retarget immediately so selection notifications cannot observe the old root with the new node selected.
+	CSGShape3D *new_active_root = _find_csg_root(new_box);
+	active_root_id = new_active_root ? new_active_root->get_instance_id() : ObjectID();
+	if (new_active_root != root) {
+		paint_selection.clear();
+	}
+	_clear_pick_state();
+	_clear_selection();
+
+	EditorNode *editor_node = EditorNode::get_singleton();
+	EditorDocument *active_document = editor_node ? editor_node->get_editor_data().get_active_document() : nullptr;
+	if (editor_node && (!active_document || active_document->get_root() == edited_root)) {
+		EditorSelection *selection = active_document && active_document->get_selection() ? active_document->get_selection() : editor_node->get_editor_selection();
+		if (selection) {
+			selection->clear();
+			selection->add_node(new_box);
+		}
+	}
+	// CSG-7: A successful commit keeps the explicit Add/Cut choice (§23) so repeated cuts
+	// don't require re-arming; cancel/exit/tool-switch paths still reset it (§3).
+	const bool keep_cut_mode = draw_cut_mode;
+	_reset_draw_state();
+	draw_cut_mode = keep_cut_mode;
+}
+
+real_t CSGSurfaceSession::_get_draw_min_extent() const {
+	real_t minimum_extent = 0.001;
+	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
+	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
+		minimum_extent = MAX(node_3d_editor->get_translate_snap(), minimum_extent);
+	}
+	return minimum_extent;
 }
 
 static real_t _closest_parameter_on_line_to_ray(const Vector3 &p_line_origin, const Vector3 &p_line_direction, const Vector3 &p_ray_origin, const Vector3 &p_ray_direction) {
@@ -930,12 +1371,46 @@ void CSGSurfaceSession::_commit_gesture() {
 
 void CSGSurfaceSession::_update_context_panel() {
 	Control *surface_context = ObjectDB::get_instance<Control>(surface_context_id);
+	Control *draw_context = ObjectDB::get_instance<Control>(draw_context_id);
 	Control *paint_context = ObjectDB::get_instance<Control>(paint_context_id);
 	if (surface_context) {
 		surface_context->set_visible(tool_mode == ToolMode::SURFACE);
 	}
+	if (draw_context) {
+		draw_context->set_visible(tool_mode == ToolMode::DRAW);
+	}
 	if (paint_context) {
 		paint_context->set_visible(tool_mode == ToolMode::PAINT);
+	}
+	if (tool_mode == ToolMode::DRAW) {
+		if (Button *button = ObjectDB::get_instance<Button>(draw_add_button_id)) {
+			button->set_pressed_no_signal(!draw_cut_mode);
+		}
+		if (Button *button = ObjectDB::get_instance<Button>(draw_cut_button_id)) {
+			button->set_pressed_no_signal(draw_cut_mode);
+		}
+		if (Label *hint = ObjectDB::get_instance<Label>(draw_hint_label_id)) {
+			switch (draw_phase) {
+				case DrawPhase::IDLE:
+					hint->set_text(TTR("Drag a rectangle on a face or the ground plane"));
+					break;
+				case DrawPhase::RECTANGLE:
+					hint->set_text(TTR("Drag to size the rectangle"));
+					break;
+				case DrawPhase::HEIGHT:
+					hint->set_text(TTR("Move to set height, then click or type a value"));
+					break;
+			}
+		}
+		if (LineEdit *height_edit = ObjectDB::get_instance<LineEdit>(draw_height_edit_id)) {
+			height_edit->set_editable(draw_phase == DrawPhase::HEIGHT);
+			if (draw_phase != DrawPhase::HEIGHT) {
+				height_edit->clear();
+			} else if (!height_edit->has_focus()) {
+				height_edit->set_text(String::num(draw_height, 4));
+			}
+		}
+		return;
 	}
 	if (tool_mode == ToolMode::PAINT) {
 		_prune_paint_selection();
@@ -1065,6 +1540,17 @@ void CSGSurfaceSession::_numeric_coordinate_submitted(const String &p_text) {
 	_update_context_panel();
 	_queue_redraw(_get_active_viewport());
 	_commit_gesture();
+}
+
+void CSGSurfaceSession::_numeric_draw_height_submitted(const String &p_text) {
+	if (draw_phase != DrawPhase::HEIGHT || !p_text.is_valid_float()) {
+		return;
+	}
+	// CSG-7: Draw boxes only grow along the positive plane normal.
+	draw_height = MAX(p_text.to_float(), (real_t)0.0);
+	_update_context_panel();
+	_queue_redraw(_get_active_viewport());
+	_commit_draw();
 }
 
 static void _get_box_face_corners(const Vector3 &p_size, uint32_t p_surface, Vector3 r_corners[4]) {
@@ -1212,6 +1698,102 @@ void CSGSurfaceSession::_draw_ghost(Node3DEditorViewport *p_viewport) const {
 	}
 }
 
+void CSGSurfaceSession::_draw_draw_ghost(Node3DEditorViewport *p_viewport) const {
+	if ((draw_phase != DrawPhase::RECTANGLE && draw_phase != DrawPhase::HEIGHT) || !p_viewport) {
+		return;
+	}
+	Camera3D *camera = p_viewport->get_previewing_camera();
+	if (!camera) {
+		camera = p_viewport->get_camera_3d();
+	}
+	Control *surface_control = p_viewport->get_surface();
+	if (!camera || !surface_control) {
+		return;
+	}
+
+	const bool effective_cut = _is_draw_cut_effective();
+	const Color color = effective_cut ? Color(1.0, 0.25, 0.2) : Color(0.25, 1.0, 0.45);
+	if (draw_phase == DrawPhase::RECTANGLE) {
+		// CSG-7: Rectangle feedback is view-only; no CSG node exists until the Height commit.
+		const Vector2 plane_corners[4] = {
+			Vector2(draw_rect_min.x, draw_rect_min.y),
+			Vector2(draw_rect_max.x, draw_rect_min.y),
+			Vector2(draw_rect_max.x, draw_rect_max.y),
+			Vector2(draw_rect_min.x, draw_rect_max.y),
+		};
+		Vector<Point2> outline;
+		outline.resize(5);
+		for (int i = 0; i < 4; i++) {
+			const Vector3 world_corner = draw_plane_origin_world + draw_plane_u_world * plane_corners[i].x + draw_plane_v_world * plane_corners[i].y;
+			if (camera->is_position_behind(world_corner)) {
+				return;
+			}
+			outline.write[i] = camera->unproject_position(world_corner);
+		}
+		outline.write[4] = outline[0];
+		surface_control->draw_polyline(outline, color, 2.0 * EDSCALE, true);
+		return;
+	}
+
+	const CSGDrawRect rect = { draw_rect_min, draw_rect_max, false };
+	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, draw_height, draw_plane_origin_world, draw_plane_u_world, draw_plane_normal_world, draw_plane_v_world);
+	Vector3 corners[8];
+	for (int corner_i = 0; corner_i < 8; corner_i++) {
+		const Vector3 local_corner(
+				(corner_i & 1) ? box.size.x * 0.5 : -box.size.x * 0.5,
+				(corner_i & 2) ? box.size.y * 0.5 : -box.size.y * 0.5,
+				(corner_i & 4) ? box.size.z * 0.5 : -box.size.z * 0.5);
+		corners[corner_i] = box.world_transform.xform(local_corner);
+	}
+	static constexpr int edge_indices[12][2] = {
+		{ 0, 1 },
+		{ 2, 3 },
+		{ 4, 5 },
+		{ 6, 7 },
+		{ 0, 2 },
+		{ 1, 3 },
+		{ 4, 6 },
+		{ 5, 7 },
+		{ 0, 4 },
+		{ 1, 5 },
+		{ 2, 6 },
+		{ 3, 7 },
+	};
+	for (const int *edge : edge_indices) {
+		if (camera->is_position_behind(corners[edge[0]]) || camera->is_position_behind(corners[edge[1]])) {
+			continue;
+		}
+		surface_control->draw_line(camera->unproject_position(corners[edge[0]]), camera->unproject_position(corners[edge[1]]), color, 1.5 * EDSCALE, true);
+	}
+
+	const int top_indices[4] = { 2, 3, 7, 6 };
+	Vector<Point2> top_cap;
+	top_cap.resize(4);
+	Vector3 top_center;
+	for (int i = 0; i < 4; i++) {
+		const Vector3 world_corner = corners[top_indices[i]];
+		if (camera->is_position_behind(world_corner)) {
+			return;
+		}
+		top_center += world_corner;
+		top_cap.write[i] = camera->unproject_position(world_corner);
+	}
+	top_center /= 4.0;
+	Color fill_color = color;
+	fill_color.a = 0.22;
+	surface_control->draw_colored_polygon(top_cap, fill_color);
+	top_cap.push_back(top_cap[0]);
+	surface_control->draw_polyline(top_cap, color, 2.0 * EDSCALE, true);
+	surface_control->draw_string(
+			surface_control->get_theme_default_font(),
+			camera->unproject_position(top_center) + Point2(10, -10) * EDSCALE,
+			vformat(TTR("Height %s m"), String::num(draw_height, 4)),
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			surface_control->get_theme_default_font_size(),
+			Color(0.95, 1.0, 0.96));
+}
+
 void CSGSurfaceSession::_draw_hover(Node3DEditorViewport *p_viewport) const {
 	if (!has_hover || !p_viewport) {
 		return;
@@ -1321,6 +1903,7 @@ void CSGSurfaceSession::enter(const EditorEditDomainContext &p_context) {
 
 void CSGSurfaceSession::exit() {
 	_cancel_gesture();
+	_reset_draw_state(false);
 	entered = false;
 	active_root_id = ObjectID();
 	active_viewport_id = ObjectID();
@@ -1333,6 +1916,7 @@ void CSGSurfaceSession::exit() {
 
 void CSGSurfaceSession::retarget(const EditorEditDomainContext &p_context) {
 	_cancel_gesture();
+	_reset_draw_state(false);
 	_clear_pick_state();
 	paint_selection.clear();
 	_clear_selection();
@@ -1355,6 +1939,10 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 		retarget(p_context);
 	}
 	if (!_get_active_root()) {
+		if (tool_mode == ToolMode::DRAW) {
+			// CSG-7: Draw never becomes an activation path after its scoped root disappears.
+			_reset_draw_state();
+		}
 		return EditorEditDomainInput::PASS_TO_VIEWPORT;
 	}
 	active_viewport_id = p_context.active_viewport->get_instance_id();
@@ -1378,6 +1966,20 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 	if (controller.is_valid() && (controller->is_navigating() || controller->cursor.region_select)) {
 		return EditorEditDomainInput::PASS_TO_VIEWPORT;
 	}
+	if (tool_mode == ToolMode::DRAW && key_event.is_valid()) {
+		const bool previous_ctrl = draw_ctrl_pressed;
+		draw_ctrl_pressed = key_event->is_ctrl_pressed();
+		if (previous_ctrl != draw_ctrl_pressed) {
+			_queue_redraw(p_context.active_viewport);
+		}
+		if (key_event->get_keycode() == Key::CTRL) {
+			return EditorEditDomainInput::BLOCK_NATIVE_EDIT;
+		}
+		if (key_event->is_pressed() && !key_event->is_echo() && draw_phase == DrawPhase::HEIGHT && (key_event->get_keycode() == Key::ENTER || key_event->get_keycode() == Key::KP_ENTER)) {
+			_commit_draw();
+			return EditorEditDomainInput::CONSUMED;
+		}
+	}
 
 	Ref<InputEventMouseButton> mouse_button = p_event;
 	if (mouse_button.is_valid()) {
@@ -1386,6 +1988,32 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 			return EditorEditDomainInput::PASS_TO_VIEWPORT;
 		}
 		if (button == MouseButton::LEFT) {
+			if (tool_mode == ToolMode::DRAW) {
+				draw_ctrl_pressed = mouse_button->is_ctrl_pressed();
+				if (mouse_button->is_pressed()) {
+					if (draw_phase == DrawPhase::HEIGHT) {
+						_commit_draw();
+						return EditorEditDomainInput::CONSUMED;
+					}
+					if (draw_phase == DrawPhase::IDLE) {
+						return _resolve_draw_plane(p_context.active_viewport, mouse_button->get_position()) ? EditorEditDomainInput::CONSUMED : EditorEditDomainInput::PASS_TO_VIEWPORT;
+					}
+					return EditorEditDomainInput::CONSUMED;
+				}
+				if (draw_phase == DrawPhase::RECTANGLE) {
+					_update_draw_rectangle(p_context.active_viewport, mouse_button->get_position());
+					const CSGDrawRect rect = csg_draw_rectangle_bounds(draw_rect_min, draw_rect_max, _get_draw_min_extent());
+					if (rect.degenerate) {
+						_reset_draw_state();
+					} else {
+						draw_rect_min = rect.min;
+						draw_rect_max = rect.max;
+						_begin_draw_height(p_context.active_viewport, mouse_button->get_position());
+					}
+					return EditorEditDomainInput::CONSUMED;
+				}
+				return EditorEditDomainInput::PASS_TO_VIEWPORT;
+			}
 			if (tool_mode == ToolMode::PAINT) {
 				if (mouse_button->is_pressed()) {
 					if (!_pick(p_context.active_viewport, mouse_button->get_position())) {
@@ -1423,6 +2051,18 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 	}
 
 	Ref<InputEventMouseMotion> mouse_motion = p_event;
+	if (tool_mode == ToolMode::DRAW) {
+		if (mouse_motion.is_valid() && mouse_motion->get_button_mask().has_flag(MouseButtonMask::LEFT) && draw_phase == DrawPhase::RECTANGLE) {
+			draw_ctrl_pressed = mouse_motion->is_ctrl_pressed();
+			_update_draw_rectangle(p_context.active_viewport, mouse_motion->get_position());
+			return EditorEditDomainInput::CONSUMED;
+		}
+		if (mouse_motion.is_valid() && draw_phase == DrawPhase::HEIGHT && !mouse_motion->get_button_mask().has_flag(MouseButtonMask::LEFT) && !mouse_motion->get_button_mask().has_flag(MouseButtonMask::MIDDLE) && !mouse_motion->get_button_mask().has_flag(MouseButtonMask::RIGHT)) {
+			_update_draw_height(p_context.active_viewport, mouse_motion->get_position(), mouse_motion->is_ctrl_pressed());
+			return EditorEditDomainInput::BLOCK_NATIVE_EDIT;
+		}
+		return EditorEditDomainInput::PASS_TO_VIEWPORT;
+	}
 	if (tool_mode == ToolMode::PAINT) {
 		if (mouse_motion.is_valid() && mouse_motion->get_button_mask().has_flag(MouseButtonMask::LEFT)) {
 			return has_hover ? EditorEditDomainInput::CONSUMED : EditorEditDomainInput::PASS_TO_VIEWPORT;
@@ -1456,6 +2096,23 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 }
 
 bool CSGSurfaceSession::handle_escape() {
+	if (tool_mode == ToolMode::DRAW) {
+		if (draw_phase == DrawPhase::HEIGHT) {
+			// CSG-7: Cancel only height selection and return to the authored footprint.
+			draw_phase = DrawPhase::RECTANGLE;
+			draw_height = 0.0;
+			draw_height_line_origin_world = Vector3();
+			draw_height_line_direction_world = Vector3();
+			draw_height_start_parameter = 0.0;
+			_update_context_panel();
+			_queue_redraw(_get_active_viewport());
+			return true;
+		}
+		if (draw_phase == DrawPhase::RECTANGLE) {
+			_reset_draw_state();
+			return true;
+		}
+	}
 	if (tool_mode == ToolMode::PAINT && paint_eyedropper_active) {
 		paint_eyedropper_active = false;
 		_update_paint_controls();
@@ -1480,6 +2137,8 @@ void CSGSurfaceSession::draw_overlay(Node3DEditorViewport *p_viewport) {
 	if (tool_mode == ToolMode::PAINT) {
 		_draw_paint_selection(p_viewport);
 		_draw_hover(p_viewport);
+	} else if (tool_mode == ToolMode::DRAW) {
+		_draw_draw_ghost(p_viewport);
 	} else {
 		_draw_hover(p_viewport);
 		_draw_ghost(p_viewport);
@@ -1498,7 +2157,9 @@ Control *CSGSurfaceSession::build_tool_rail() {
 
 	Button *draw_button = memnew(Button);
 	draw_button->set_text(TTR("Draw"));
-	draw_button->set_disabled(true);
+	draw_button->set_toggle_mode(true);
+	draw_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_draw_tool_pressed));
+	draw_tool_button_id = draw_button->get_instance_id();
 	rail->add_child(draw_button);
 
 	Button *paint_button = memnew(Button);
@@ -1571,6 +2232,55 @@ Control *CSGSurfaceSession::build_contextual_panel() {
 	coordinate_edit->connect(SceneStringName(text_submitted), callable_mp(this, &CSGSurfaceSession::_numeric_coordinate_submitted));
 	coordinate_edit_id = coordinate_edit->get_instance_id();
 	coordinate_row->add_child(coordinate_edit);
+
+	// CSG-7: Draw-specific state is view-local and lives only in this contextual panel.
+	VBoxContainer *draw_contents = memnew(VBoxContainer);
+	draw_context_id = draw_contents->get_instance_id();
+	contents->add_child(draw_contents);
+	Label *draw_title = memnew(Label);
+	draw_title->set_text(TTR("Draw Box"));
+	draw_contents->add_child(draw_title);
+
+	HBoxContainer *operation_row = memnew(HBoxContainer);
+	draw_contents->add_child(operation_row);
+	Ref<ButtonGroup> operation_group;
+	operation_group.instantiate();
+	operation_group->set_allow_unpress(false);
+	Button *add_button = memnew(Button);
+	add_button->set_name("CSGDrawAdd");
+	add_button->set_text(TTR("Add"));
+	add_button->set_toggle_mode(true);
+	add_button->set_button_group(operation_group);
+	add_button->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	add_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_draw_add_pressed));
+	draw_add_button_id = add_button->get_instance_id();
+	operation_row->add_child(add_button);
+	Button *cut_button = memnew(Button);
+	cut_button->set_name("CSGDrawCut");
+	cut_button->set_text(TTR("Cut"));
+	cut_button->set_toggle_mode(true);
+	cut_button->set_button_group(operation_group);
+	cut_button->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	cut_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_draw_cut_pressed));
+	draw_cut_button_id = cut_button->get_instance_id();
+	operation_row->add_child(cut_button);
+
+	HBoxContainer *height_row = memnew(HBoxContainer);
+	draw_contents->add_child(height_row);
+	Label *height_label = memnew(Label);
+	height_label->set_text(TTR("Height"));
+	height_row->add_child(height_label);
+	LineEdit *height_edit = memnew(LineEdit);
+	height_edit->set_name("CSGDrawHeight");
+	height_edit->set_placeholder(TTR("Height"));
+	height_edit->set_custom_minimum_size(Size2(96, 0) * EDSCALE);
+	height_edit->connect(SceneStringName(text_submitted), callable_mp(this, &CSGSurfaceSession::_numeric_draw_height_submitted));
+	draw_height_edit_id = height_edit->get_instance_id();
+	height_row->add_child(height_edit);
+	Label *draw_hint = memnew(Label);
+	draw_hint->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	draw_hint_label_id = draw_hint->get_instance_id();
+	draw_contents->add_child(draw_hint);
 
 	VBoxContainer *paint_contents = memnew(VBoxContainer);
 	paint_context_id = paint_contents->get_instance_id();

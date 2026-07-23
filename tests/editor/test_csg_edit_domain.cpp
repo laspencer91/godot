@@ -97,12 +97,14 @@ TEST_CASE("[Editor][CSGEditDomain] Provider creates independent surface sessions
 	memdelete(second);
 }
 
-TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Paint out of the Tab cycle") {
+TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Draw and Paint out of the Tab cycle") {
 	CSGSurfaceSession session;
 	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::SURFACE);
 
 	Control *rail = session.build_tool_rail();
+	Control *context_panel = session.build_contextual_panel();
 	REQUIRE(rail != nullptr);
+	REQUIRE(context_panel != nullptr);
 	REQUIRE_EQ(rail->get_child_count(), 4);
 	Button *surface_button = Object::cast_to<Button>(rail->get_child(0));
 	Button *draw_button = Object::cast_to<Button>(rail->get_child(1));
@@ -113,9 +115,34 @@ TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Paint out of the Tab cycle") 
 	REQUIRE(paint_button != nullptr);
 	REQUIRE(operand_button != nullptr);
 	CHECK(surface_button->is_pressed());
-	CHECK(draw_button->is_disabled());
+	CHECK_FALSE(draw_button->is_disabled());
 	CHECK_FALSE(paint_button->is_disabled());
 	CHECK_FALSE(operand_button->is_disabled());
+
+	draw_button->emit_signal(SNAME("pressed"));
+	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::DRAW);
+	CHECK(draw_button->is_pressed());
+	Button *add_button = Object::cast_to<Button>(context_panel->find_child("CSGDrawAdd", true, false));
+	Button *cut_button = Object::cast_to<Button>(context_panel->find_child("CSGDrawCut", true, false));
+	REQUIRE(add_button != nullptr);
+	REQUIRE(cut_button != nullptr);
+	CHECK(add_button->is_pressed());
+	CHECK_FALSE(session.get_draw_cut_mode());
+	cut_button->emit_signal(SNAME("pressed"));
+	CHECK(session.get_draw_cut_mode());
+	CHECK(cut_button->is_pressed());
+	add_button->emit_signal(SNAME("pressed"));
+	CHECK_FALSE(session.get_draw_cut_mode());
+	CHECK(add_button->is_pressed());
+	cut_button->emit_signal(SNAME("pressed"));
+	CHECK(session.get_draw_cut_mode());
+	CHECK(session.handle_tool_toggle());
+	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::OPERAND);
+	CHECK_FALSE(session.get_draw_cut_mode());
+	CHECK(operand_button->is_pressed());
+	CHECK_FALSE(draw_button->is_pressed());
+	CHECK(session.handle_tool_toggle());
+	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::SURFACE);
 
 	paint_button->emit_signal(SNAME("pressed"));
 	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::PAINT);
@@ -128,6 +155,7 @@ TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Paint out of the Tab cycle") 
 	CHECK(session.get_tool_mode() == CSGSurfaceSession::ToolMode::SURFACE);
 	CHECK(surface_button->is_pressed());
 
+	memdelete(context_panel);
 	memdelete(rail);
 }
 
@@ -291,6 +319,152 @@ TEST_CASE("[Editor][CSGEditDomain] Box push pull preserves the fixed face and tr
 		CHECK(result.transform.origin.x == doctest::Approx(1.9995));
 		CHECK(result.transform.basis.is_equal_approx(identity_start.basis));
 	}
+}
+
+// CSG-7: Pin corner normalization and the exact degeneracy threshold independently of viewport input.
+TEST_CASE("[Editor][CSGEditDomain] Draw rectangle bounds are corner-order independent") {
+	const CSGDrawRect forward = csg_draw_rectangle_bounds(Vector2(-2, 5), Vector2(4, -1), 0.5);
+	const CSGDrawRect reverse = csg_draw_rectangle_bounds(Vector2(4, -1), Vector2(-2, 5), 0.5);
+	CHECK_EQ(forward.min, Vector2(-2, -1));
+	CHECK_EQ(forward.max, Vector2(4, 5));
+	CHECK_EQ(reverse.min, forward.min);
+	CHECK_EQ(reverse.max, forward.max);
+	CHECK_FALSE(forward.degenerate);
+	CHECK_FALSE(reverse.degenerate);
+
+	CHECK_FALSE(csg_draw_rectangle_bounds(Vector2(), Vector2(0.5, 2), 0.5).degenerate);
+	CHECK(csg_draw_rectangle_bounds(Vector2(), Vector2(0.499, 2), 0.5).degenerate);
+	CHECK(csg_draw_rectangle_bounds(Vector2(), Vector2(2, 0.499), 0.5).degenerate);
+	CHECK(csg_draw_rectangle_bounds(Vector2(1, 1), Vector2(1, 3), 0.001).degenerate);
+}
+
+// CSG-7: Pin workplane-axis placement, including the minimum positive height.
+TEST_CASE("[Editor][CSGEditDomain] Draw box construction follows the workplane frame") {
+	const CSGDrawRect ground_rect = csg_draw_rectangle_bounds(Vector2(-2, -3), Vector2(4, 5), 0.001);
+	const CSGDrawBoxResult ground_box = csg_draw_box_from_rect(ground_rect, 6.0, Vector3(), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1));
+	CHECK(ground_box.size.is_equal_approx(Vector3(6, 6, 8)));
+	CHECK(ground_box.world_transform.basis.is_equal_approx(Basis()));
+	CHECK(ground_box.world_transform.origin.is_equal_approx(Vector3(1, 3, 1)));
+
+	const Vector3 normal = Vector3(1, 1, 0).normalized();
+	const Vector3 u(0, 0, 1);
+	const Vector3 v = normal.cross(u);
+	const Vector3 plane_origin(3, -2, 4);
+	const CSGDrawRect tilted_rect = csg_draw_rectangle_bounds(Vector2(1, 2), Vector2(5, 8), 0.001);
+	const CSGDrawBoxResult tilted_box = csg_draw_box_from_rect(tilted_rect, 2.5, plane_origin, u, normal, v);
+	CHECK(tilted_box.size.is_equal_approx(Vector3(4, 2.5, 6)));
+	CHECK(tilted_box.world_transform.basis.get_column(0).is_equal_approx(u));
+	CHECK(tilted_box.world_transform.basis.get_column(1).is_equal_approx(normal));
+	CHECK(tilted_box.world_transform.basis.get_column(2).is_equal_approx(v));
+	CHECK(tilted_box.world_transform.origin.is_equal_approx(plane_origin + u * 3.0 + v * 5.0 + normal * 1.25));
+
+	const CSGDrawBoxResult clamped_box = csg_draw_box_from_rect(ground_rect, 0.0, Vector3(), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1));
+	CHECK(clamped_box.size.y == doctest::Approx(0.001));
+	CHECK(clamped_box.world_transform.origin.y == doctest::Approx(0.0005));
+}
+
+// CSG-7: Pin the under-face structural action, operation, local transform, and editability gate.
+TEST_CASE("[Editor][CSGEditDomain] Draw commits one editable child action under the hit operand") {
+	CSGEditDomainSynchronousSchedulerScope synchronous_scope;
+	Node3D *edited_root = memnew(Node3D);
+	SceneTree::get_singleton()->get_root()->add_child(edited_root);
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	edited_root->add_child(root);
+	root->set_owner(edited_root);
+	CSGBox3D *parent_operand = memnew(CSGBox3D);
+	parent_operand->set_transform(Transform3D(Basis(Vector3(0, 1, 0), Math::deg_to_rad(25.0)).scaled_local(Vector3(2, 3, 4)), Vector3(2, 1, -3)));
+	root->add_child(parent_operand);
+	parent_operand->set_owner(edited_root);
+	root->update_shape();
+
+	const CSGDrawRect rect = csg_draw_rectangle_bounds(Vector2(-1, -2), Vector2(3, 4), 0.001);
+	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, 2.5, Vector3(4, 3, -2), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1));
+	const Transform3D expected_local = parent_operand->get_global_transform().affine_inverse() * box.world_transform;
+	UndoRedo undo_redo;
+
+	SUBCASE("Add creates a Union child") {
+		CSGBox3D *created = csg_draw_commit_box(&undo_redo, root, edited_root, parent_operand, box, false);
+		REQUIRE(created != nullptr);
+		CHECK_EQ(parent_operand->get_child_count(), 1);
+		CHECK_EQ(parent_operand->get_child(0), created);
+		CHECK_EQ(created->get_owner(), edited_root);
+		CHECK_EQ(created->get_operation(), CSGShape3D::OPERATION_UNION);
+		CHECK(created->get_size().is_equal_approx(box.size));
+		CHECK(created->get_transform().is_equal_approx(expected_local));
+		CHECK(created->get_global_transform().is_equal_approx(box.world_transform));
+		CHECK_FALSE(created->get_name().is_empty());
+		CHECK_EQ(undo_redo.get_history_count(), 1);
+		REQUIRE(undo_redo.undo());
+		CHECK_EQ(parent_operand->get_child_count(), 0);
+		REQUIRE(undo_redo.redo());
+		CHECK_EQ(parent_operand->get_child_count(), 1);
+		CHECK_EQ(created->get_owner(), edited_root);
+		REQUIRE(undo_redo.undo());
+	}
+
+	SUBCASE("Cut creates a Subtraction child") {
+		CSGBox3D *created = csg_draw_commit_box(&undo_redo, root, edited_root, parent_operand, box, true);
+		REQUIRE(created != nullptr);
+		CHECK_EQ(created->get_operation(), CSGShape3D::OPERATION_SUBTRACTION);
+		CHECK(created->get_transform().is_equal_approx(expected_local));
+		CHECK_EQ(undo_redo.get_history_count(), 1);
+		REQUIRE(undo_redo.undo());
+		CHECK_EQ(parent_operand->get_child_count(), 0);
+	}
+
+	SUBCASE("Unowned source is rejected without history") {
+		parent_operand->set_owner(nullptr);
+		CHECK(csg_draw_commit_box(&undo_redo, root, edited_root, parent_operand, box, false) == nullptr);
+		CHECK_FALSE(undo_redo.has_undo());
+		CHECK_EQ(parent_operand->get_child_count(), 0);
+	}
+
+	edited_root->queue_free();
+}
+
+// CSG-7: Pin native-style standalone creation and the Draw-only collision policy parameter.
+TEST_CASE("[Editor][CSGEditDomain] Draw commits one standalone root action with explicit collision policy") {
+	CSGEditDomainSynchronousSchedulerScope synchronous_scope;
+	Node3D *edited_root = memnew(Node3D);
+	SceneTree::get_singleton()->get_root()->add_child(edited_root);
+	CSGBox3D *active_root = memnew(CSGBox3D);
+	edited_root->add_child(active_root);
+	active_root->set_owner(edited_root);
+	active_root->update_shape();
+	const Basis basis(Vector3(0, 1, 0), Math::deg_to_rad(35.0));
+	const CSGDrawBoxResult box = { Vector3(4, 3, 2), Transform3D(basis, Vector3(7, 2, -5)) };
+	UndoRedo undo_redo;
+
+	SUBCASE("Collision defaults on") {
+		CSGBox3D *created = csg_draw_commit_box(&undo_redo, active_root, edited_root, nullptr, box, true);
+		REQUIRE(created != nullptr);
+		CHECK_EQ(edited_root->get_child_count(), 2);
+		CHECK_EQ(created->get_parent(), edited_root);
+		CHECK_EQ(created->get_owner(), edited_root);
+		CHECK_EQ(created->get_operation(), CSGShape3D::OPERATION_UNION);
+		CHECK(created->get_size().is_equal_approx(box.size));
+		CHECK(created->get_global_transform().is_equal_approx(box.world_transform));
+		CHECK(created->is_using_collision());
+		CHECK_EQ(undo_redo.get_history_count(), 1);
+		REQUIRE(undo_redo.undo());
+		CHECK_EQ(edited_root->get_child_count(), 1);
+		REQUIRE(undo_redo.redo());
+		CHECK_EQ(edited_root->get_child_count(), 2);
+		CHECK(created->is_using_collision());
+		REQUIRE(undo_redo.undo());
+	}
+
+	SUBCASE("Collision override is honored") {
+		CSGBox3D *created = csg_draw_commit_box(&undo_redo, active_root, edited_root, nullptr, box, false, false);
+		REQUIRE(created != nullptr);
+		CHECK_FALSE(created->is_using_collision());
+		CHECK_EQ(created->get_operation(), CSGShape3D::OPERATION_UNION);
+		CHECK_EQ(undo_redo.get_history_count(), 1);
+		REQUIRE(undo_redo.undo());
+		CHECK_EQ(edited_root->get_child_count(), 1);
+	}
+
+	edited_root->queue_free();
 }
 
 TEST_CASE("[Editor][CSGEditDomain] Local planar texture lock compensates a one-sided push pull") {
