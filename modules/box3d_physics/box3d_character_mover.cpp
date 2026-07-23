@@ -104,6 +104,7 @@ static int _mover_user_material_id(uint64_t p_user_material_id) {
 
 struct Box3DMoverRayProbeContext {
 	const HashSet<RID> *exclusions = nullptr;
+	Vector3 point;
 	Vector3 normal;
 	float fraction = 1.0f;
 	int material_id = 0;
@@ -118,6 +119,7 @@ static float _mover_ray_probe_callback(b3ShapeId p_shape_id, b3Pos p_point, b3Ve
 	}
 
 	ctx->hit = true;
+	ctx->point = to_godot(p_point);
 	ctx->normal = to_godot(p_normal);
 	ctx->fraction = p_fraction;
 	ctx->material_id = _mover_user_material_id(p_user_material_id);
@@ -397,19 +399,50 @@ bool Box3DCharacterMover::_has_step_obstruction(const Vector3 &p_start, const Ve
 	}
 
 	const Vector3 direction = p_horizontal.normalized();
+	const Vector3 lateral(-direction.z, 0.0, direction.x);
 	const real_t probe_up = MIN((real_t)0.01, step_height * 0.5);
 	const real_t probe_length = p_horizontal.length() + capsule.radius + 0.01;
-	Box3DMoverRayProbeContext ctx;
-	ctx.exclusions = &exclusions;
-	b3World_CastRay(query_space->get_world(), to_box3d(p_start + Vector3(0.0, probe_up, 0.0)),
-			to_box3d(direction * probe_length), _make_filter(), _mover_ray_probe_callback, &ctx);
-	if (!ctx.hit) {
-		return false;
-	}
-
 	const real_t floor_threshold = Math::cos(floor_max_angle);
-	const Vector3 horizontal_normal(ctx.normal.x, 0.0, ctx.normal.z);
-	return ctx.normal.y <= floor_threshold && horizontal_normal.dot(direction) < -0.01;
+	const real_t TREAD_AHEAD = 0.04;
+	const real_t TREAD_PROBE_UP = 0.05;
+	// A center ray alone misses an obstruction first touched by the capsule flank during diagonal
+	// movement. Sample most of the footprint so step eligibility does not depend on approach angle.
+	const real_t lateral_offset = capsule.radius * 0.8;
+	const real_t offsets[] = { 0.0, -lateral_offset, lateral_offset };
+	for (real_t offset : offsets) {
+		Box3DMoverRayProbeContext ctx;
+		ctx.exclusions = &exclusions;
+		const Vector3 from = p_start + lateral * offset + Vector3(0.0, probe_up, 0.0);
+		b3World_CastRay(query_space->get_world(), to_box3d(from), to_box3d(direction * probe_length),
+				_make_filter(), _mover_ray_probe_callback, &ctx);
+		if (!ctx.hit) {
+			continue;
+		}
+
+		const Vector3 horizontal_normal(ctx.normal.x, 0.0, ctx.normal.z);
+		if (ctx.normal.y > floor_threshold || horizontal_normal.dot(direction) >= -0.01) {
+			continue;
+		}
+
+		// Confirm a walkable tread within step_height just behind the low obstruction. Besides enforcing
+		// the height limit here, this keeps steep ramps and ordinary walls from receiving stair response.
+		Vector3 tread_from = ctx.point + direction * TREAD_AHEAD;
+		tread_from.y = p_start.y + step_height + TREAD_PROBE_UP;
+		const real_t tread_probe_length = step_height + TREAD_PROBE_UP * 2.0;
+		Box3DMoverRayProbeContext tread_ctx;
+		tread_ctx.exclusions = &exclusions;
+		b3World_CastRay(query_space->get_world(), to_box3d(tread_from),
+				to_box3d(Vector3(0.0, -tread_probe_length, 0.0)), _make_filter(),
+				_mover_ray_probe_callback, &tread_ctx);
+		if (tread_ctx.hit && tread_ctx.normal.y > floor_threshold) {
+			const real_t tread_y = tread_from.y - tread_probe_length * tread_ctx.fraction;
+			const real_t rise = tread_y - p_start.y;
+			if (rise >= 0.002 && rise <= step_height + 0.01) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 // Unreal-style up/forward/down step sweep, but with the landing classified by
@@ -435,8 +468,25 @@ bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_
 	}
 	const Vector3 raised = p_start + Vector3(0.0, clearance, 0.0);
 
-	const float forward_fraction = cast_motion(raised, horizontal);
-	const Vector3 advanced = raised + horizontal * forward_fraction;
+	// Sweep toward the horizontal target using the same iterative plane solve as ordinary movement.
+	// A single scalar cast fraction stops both components when it hits a side wall; solving the
+	// remaining displacement preserves the tangential component, matching expected stair/rail motion.
+	const Vector3 raised_target = raised + horizontal;
+	Vector3 advanced = raised;
+	for (int i = 0; i < 5; i++) {
+		const Array planes = _collide_internal(advanced);
+		const Dictionary solve = solve_planes(raised_target - advanced, planes);
+		const Vector3 delta = solve["delta"];
+		const float fraction = cast_motion(advanced, delta);
+		const Vector3 applied_delta = delta * fraction;
+		advanced += applied_delta;
+		// A short first sweep usually means we just reached a contact; the next iteration is what
+		// gathers its plane and preserves tangential motion. Stop only after a follow-up solve has
+		// genuinely converged, rather than treating any sub-centimeter impact as completion.
+		if (i > 0 && applied_delta.length_squared() < 1e-8f) {
+			break;
+		}
+	}
 
 	const float down_fraction = cast_motion(advanced, Vector3(0.0, -clearance, 0.0));
 	const Vector3 landed = advanced + Vector3(0.0, -clearance * down_fraction, 0.0);
@@ -494,6 +544,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		}
 	}
 	bool stepped = false;
+	bool step_obstruction = false;
 	Vector3 stepped_floor_normal;
 	int stepped_material_id = 0;
 
@@ -508,7 +559,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		const Vector3 applied_delta = delta * last_fraction;
 		position += applied_delta;
 
-		if (applied_delta.length_squared() < 0.0001f) {
+		if (i > 0 && applied_delta.length_squared() < 1e-8f) {
 			break;
 		}
 	}
@@ -535,8 +586,8 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		const Vector3 regular_horizontal(position.x - p_position.x, 0.0, position.z - p_position.z);
 		const real_t requested_progress = requested_horizontal.length();
 		const real_t regular_progress = regular_horizontal.dot(move_direction);
-		if (has_lateral_obstruction && regular_progress + STEP_PROGRESS_EPSILON < requested_progress &&
-				_has_step_obstruction(p_position, requested_horizontal)) {
+		step_obstruction = has_lateral_obstruction && _has_step_obstruction(p_position, requested_horizontal);
+		if (step_obstruction) {
 			Vector3 stepped_position;
 			Array stepped_planes;
 			Vector3 step_normal;
@@ -544,7 +595,13 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 			if (_try_step_up(p_position, target_position, stepped_position, stepped_planes, step_normal, step_material_id)) {
 				const Vector3 stepped_horizontal(stepped_position.x - p_position.x, 0.0, stepped_position.z - p_position.z);
 				const real_t stepped_progress = stepped_horizontal.dot(move_direction);
-				if (stepped_progress > regular_progress + STEP_PROGRESS_EPSILON) {
+				// Prefer a valid explicit step when it makes better progress, but also when ordinary
+				// capsule motion made equivalent progress by riding the rounded lip. The latter response
+				// produces an upward velocity and disables stepping on the next tick, causing the severe
+				// angle/speed-dependent stair stick this path exists to avoid.
+				const bool regular_was_blocked = regular_progress + STEP_PROGRESS_EPSILON < requested_progress;
+				const bool step_is_no_worse = stepped_progress + STEP_PROGRESS_EPSILON >= regular_progress;
+				if (step_is_no_worse && (regular_was_blocked || stepped_position.y > position.y + 0.001)) {
 					position = stepped_position;
 					stepped = true;
 					stepped_floor_normal = step_normal;
@@ -612,7 +669,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	// ground. Reclassify with ray probes so the floor flag holds through the climb.
 	int probe_material_id = -1;
 	bool probe_grounded = false;
-	if (!on_floor && step_allowed) {
+	if (step_allowed && (stepped || !on_floor || step_obstruction)) {
 		if (stepped) {
 			on_floor = true;
 			probe_grounded = true;
@@ -655,7 +712,13 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		}
 		clip_planes.push_back(plane);
 	}
-	const Vector3 clipped_velocity = clip_velocity(clip_input, clip_planes);
+	Vector3 clipped_velocity = clip_velocity(clip_input, clip_planes);
+	// Walking velocity is horizontal. Projecting it against an inclined capsule contact can otherwise
+	// manufacture upward speed even after clip_input.y was cleared, turning a stair lip into a launch.
+	// Keep intentional jumps intact; they do not finish the move on walkable support.
+	if (on_floor && p_velocity.y <= 0.05 && clipped_velocity.y > 0.0) {
+		clipped_velocity.y = 0.0;
+	}
 
 	Dictionary result;
 	result["position"] = position;
