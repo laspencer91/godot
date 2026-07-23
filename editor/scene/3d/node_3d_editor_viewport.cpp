@@ -2793,14 +2793,17 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 		}
 	}
 
-	// Unmodified RMB belongs to the shared context menu. Modified RMB events continue
-	// through the existing navigation and overlapping-node selection paths below.
+	// Ctrl+RMB belongs to the shared context menu. Other RMB events continue through
+	// the existing navigation and overlapping-node selection paths below.
 	Ref<InputEventMouseButton> context_button = p_event;
-	const bool is_plain_context_click = context_button.is_valid() &&
+	const bool is_context_click = context_button.is_valid() &&
 			context_button->is_pressed() &&
 			context_button->get_button_index() == MouseButton::RIGHT &&
-			_get_key_modifier(context_button) == Key::NONE;
-	if (is_plain_context_click) {
+			context_button->is_ctrl_pressed() &&
+			!context_button->is_shift_pressed() &&
+			!context_button->is_alt_pressed() &&
+			!context_button->is_meta_pressed();
+	if (is_context_click) {
 		emit_signal(SNAME("clicked"));
 		if (!surface->has_focus()) {
 			surface->grab_focus();
@@ -2875,7 +2878,7 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 		}
 	}
 
-	if (is_plain_context_click) {
+	if (is_context_click) {
 		if (_edit.gizmo.is_valid()) {
 			_edit.gizmo->commit_handle(_edit.gizmo_handle, _edit.gizmo_handle_secondary, _edit.gizmo_initial_value, true);
 			_edit.gizmo = Ref<EditorNode3DGizmo>();
@@ -2937,14 +2940,8 @@ void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
 					}
 
 					const Key mod = _get_key_modifier(b);
-					Key freelook_modifier = _get_key_modifier_setting("editors/3d/freelook/freelook_activation_modifier");
-					// Older editor settings may still contain the previous unmodified-RMB value.
-					// Plain RMB now belongs to the context menu, so treat that legacy value as Ctrl.
-					if (freelook_modifier == Key::NONE) {
-						freelook_modifier = Key::CTRL;
-					}
 					if (!view_3d_controller->is_orthogonal() && !(previewing && !pilot_preview_enabled)) {
-						if (mod == freelook_modifier) {
+						if (mod == _get_key_modifier_setting("editors/3d/freelook/freelook_activation_modifier")) {
 							view_3d_controller->set_freelook_enabled(true);
 						}
 					}
