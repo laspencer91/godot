@@ -1534,6 +1534,58 @@ TEST_CASE("[SceneTree][CSG] Phase 6 world-space planar UVs refinalize on root tr
 	box->queue_free();
 }
 
+TEST_CASE("[SceneTree][CSG] Phase 8 world-space planar UVs refinalize on ancestor move") {
+	Ref<StandardMaterial3D> node_material;
+	node_material.instantiate();
+	Ref<StandardMaterial3D> planar_material;
+	planar_material.instantiate();
+
+	Node3D *parent = memnew(Node3D);
+	SceneTree::get_singleton()->get_root()->add_child(parent);
+	CSGBox3D *box = memnew(CSGBox3D);
+	box->set_size(Vector3(2, 2, 2));
+	box->set_material(node_material);
+	box->set_position(Vector3(1.5, -0.75, 2));
+	CSGSurfaceSetting setting;
+	setting.material = planar_material;
+	setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_WORLD;
+	box->set_surface_setting(CSGBox3D::SURFACE_POSITIVE_Z, setting);
+	parent->add_child(box);
+	REQUIRE(box->is_root_shape());
+
+	SceneTree::get_singleton()->flush_transform_notifications();
+	MessageQueue::get_singleton()->flush();
+	box->update_shape();
+
+	auto check_world_mapping = [&]() {
+		PackedVector3Array vertices;
+		PackedVector2Array uvs;
+		REQUIRE(_get_surface_arrays_for_material(box->bake_static_mesh(), planar_material, vertices, uvs));
+		REQUIRE_EQ(vertices.size(), uvs.size());
+		const Vector3 global_origin = box->get_global_position();
+		for (int vertex_i = 0; vertex_i < vertices.size(); vertex_i++) {
+			const Vector2 expected(vertices[vertex_i].x + global_origin.x, vertices[vertex_i].y + global_origin.y);
+			CHECK(uvs[vertex_i].is_equal_approx(expected));
+		}
+	};
+
+	check_world_mapping();
+	_reset_csg_counters();
+	parent->set_position(Vector3(4, -3, 1));
+	SceneTree::get_singleton()->flush_transform_notifications();
+	MessageQueue::get_singleton()->flush();
+	check_world_mapping();
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.uv_finalizations, 1);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+#endif // DEV_ENABLED
+
+	parent->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
 TEST_CASE("[SceneTree][CSG] Phase 6 root-space texture lock survives one-sided box push pull") {
 	Ref<StandardMaterial3D> node_material;
 	node_material.instantiate();

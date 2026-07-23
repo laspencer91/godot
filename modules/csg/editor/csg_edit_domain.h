@@ -89,7 +89,6 @@ private:
 		PRESSED,
 		DRAGGING,
 		COMMIT,
-		CANCEL,
 	};
 	enum class SnapSpace {
 		LOCAL,
@@ -203,6 +202,7 @@ private:
 	void _draw_draw_ghost(Node3DEditorViewport *p_viewport) const;
 	void _reset_draw_state(bool p_update = true);
 	bool _is_draw_cut_effective() const;
+	real_t _active_translate_snap_step() const; // CSG-8: Shared viewport translate-snap lookup.
 	bool _resolve_draw_plane(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
 	bool _project_draw_point(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector2 &r_plane_position) const;
 	void _update_draw_rectangle(Node3DEditorViewport *p_viewport, const Vector2 &p_position);

@@ -112,17 +112,11 @@ Vector2 csg_texture_lock_compensate_offset(const CSGPrimitive3D *p_primitive, ui
 		return p_setting.offset;
 	}
 
-	Vector3 axis_u;
-	Vector3 axis_v;
-	p_primitive->get_surface_uv_basis(p_semantic_surface, axis_u, axis_v);
-	const real_t cos_rotation = Math::cos(p_setting.rotation);
-	const real_t sin_rotation = Math::sin(p_setting.rotation);
-	const Vector3 rotated_u = axis_u * cos_rotation + axis_v * sin_rotation;
-	const Vector3 rotated_v = axis_v * cos_rotation - axis_u * sin_rotation;
-	const real_t meters_u = Math::is_zero_approx(p_setting.meters_per_tile.x) ? 1.0 : p_setting.meters_per_tile.x;
-	const real_t meters_v = Math::is_zero_approx(p_setting.meters_per_tile.y) ? 1.0 : p_setting.meters_per_tile.y;
-	const Vector3 resolved_u = p_operand_to_root.basis.xform(rotated_u / meters_u);
-	const Vector3 resolved_v = p_operand_to_root.basis.xform(rotated_v / meters_v);
+	Vector3 scaled_u;
+	Vector3 scaled_v;
+	p_primitive->get_surface_planar_uv_axes(p_semantic_surface, p_setting, scaled_u, scaled_v);
+	const Vector3 resolved_u = p_operand_to_root.basis.xform(scaled_u);
+	const Vector3 resolved_v = p_operand_to_root.basis.xform(scaled_v);
 	return p_setting.offset + Vector2(resolved_u.dot(p_center_shift_root), resolved_v.dot(p_center_shift_root));
 }
 
@@ -889,6 +883,14 @@ bool CSGSurfaceSession::_is_draw_cut_effective() const {
 	return draw_cut_mode ^ ctrl_pressed;
 }
 
+real_t CSGSurfaceSession::_active_translate_snap_step() const {
+	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
+	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
+		return node_3d_editor->get_translate_snap();
+	}
+	return 0.0;
+}
+
 bool CSGSurfaceSession::_project_draw_point(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector2 &r_plane_position) const {
 	if (!p_viewport || draw_plane_normal_world.is_zero_approx()) {
 		return false;
@@ -901,13 +903,10 @@ bool CSGSurfaceSession::_project_draw_point(Node3DEditorViewport *p_viewport, co
 
 	const Vector3 offset = intersection - draw_plane_origin_world;
 	r_plane_position = Vector2(offset.dot(draw_plane_u_world), offset.dot(draw_plane_v_world));
-	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
-	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
-		const real_t snap_step = node_3d_editor->get_translate_snap();
-		if (snap_step > 0.0) {
-			r_plane_position.x = Math::snapped(r_plane_position.x, snap_step);
-			r_plane_position.y = Math::snapped(r_plane_position.y, snap_step);
-		}
+	const real_t snap_step = _active_translate_snap_step();
+	if (snap_step > 0.0) {
+		r_plane_position.x = Math::snapped(r_plane_position.x, snap_step);
+		r_plane_position.y = Math::snapped(r_plane_position.y, snap_step);
 	}
 	return true;
 }
@@ -935,7 +934,7 @@ bool CSGSurfaceSession::_resolve_draw_plane(Node3DEditorViewport *p_viewport, co
 			real_t sign = 1.0;
 			Vector3 outward;
 			if (_get_box_surface_axis(hover_hit.surface.semantic_surface, axis, sign, outward)) {
-				draw_plane_normal_world = box->get_global_transform().basis.xform(outward).normalized();
+				draw_plane_normal_world = box->get_global_transform().basis.inverse().transposed().xform(outward).normalized();
 			}
 		}
 		if (draw_plane_normal_world.is_zero_approx()) {
@@ -1022,13 +1021,10 @@ void CSGSurfaceSession::_update_draw_height(Node3DEditorViewport *p_viewport, co
 			p_viewport->get_ray_pos(p_position),
 			p_viewport->get_ray(p_position).normalized());
 	draw_height = MAX(current_parameter - draw_height_start_parameter, (real_t)0.0);
-	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
-	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
-		const real_t snap_step = node_3d_editor->get_translate_snap();
-		if (snap_step > 0.0) {
-			// CSG-7: Snap the absolute height, never an accumulated mouse delta.
-			draw_height = Math::snapped(draw_height, snap_step);
-		}
+	const real_t snap_step = _active_translate_snap_step();
+	if (snap_step > 0.0) {
+		// CSG-7: Snap the absolute height, never an accumulated mouse delta.
+		draw_height = Math::snapped(draw_height, snap_step);
 	}
 	_update_context_panel();
 	_queue_redraw(p_viewport);
@@ -1094,9 +1090,9 @@ void CSGSurfaceSession::_commit_draw() {
 
 real_t CSGSurfaceSession::_get_draw_min_extent() const {
 	real_t minimum_extent = 0.001;
-	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
-	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
-		minimum_extent = MAX(node_3d_editor->get_translate_snap(), minimum_extent);
+	const real_t snap_step = _active_translate_snap_step();
+	if (snap_step > 0.0) {
+		minimum_extent = MAX(snap_step, minimum_extent);
 	}
 	return minimum_extent;
 }
@@ -1192,12 +1188,9 @@ void CSGSurfaceSession::_update_drag(Node3DEditorViewport *p_viewport, const Vec
 			p_viewport->get_ray(p_position).normalized());
 	const real_t outward_displacement = (current_parameter - drag_start_parameter) / drag_axis_world_scale;
 	target_plane_coordinate = start_plane_coordinate + drag_axis_sign * outward_displacement;
-	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
-	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
-		const real_t snap_step = node_3d_editor->get_translate_snap();
-		if (snap_space == SnapSpace::LOCAL && snap_step > 0.0) {
-			target_plane_coordinate = Math::snapped(target_plane_coordinate, snap_step);
-		}
+	const real_t snap_step = _active_translate_snap_step();
+	if (snap_space == SnapSpace::LOCAL && snap_step > 0.0) {
+		target_plane_coordinate = Math::snapped(target_plane_coordinate, snap_step);
 	}
 
 	// CSG-4: Pointer and numeric input share the same post-clamp recompute.

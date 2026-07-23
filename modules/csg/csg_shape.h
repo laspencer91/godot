@@ -317,6 +317,9 @@ public:
 	bool get_flip_faces();
 	virtual Ref<Material> get_material() const { return Ref<Material>(); }
 	virtual void get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const;
+	// CSG-8: Keep evaluator and editor texture-lock projection math identical.
+	void get_surface_planar_uv_axes(uint32_t p_surface, const CSGSurfaceSetting &p_setting,
+			Vector3 &r_axis_u, Vector3 &r_axis_v) const;
 
 	bool has_surface_setting(uint32_t p_surface) const;
 	CSGSurfaceSetting get_surface_setting(uint32_t p_surface) const;

@@ -639,16 +639,9 @@ void CSGShape3D::_gather_manifold_surface_records(CSGEvaluationInputs &r_inputs,
 		if (primitive && primitive->has_surface_setting(record.surface.semantic_surface)) {
 			const CSGSurfaceSetting setting = primitive->get_surface_setting(record.surface.semantic_surface);
 			if (setting.uv_mode == CSGPrimitive3D::SURFACE_UV_MODE_PLANAR) {
-				Vector3 axis_u;
-				Vector3 axis_v;
-				primitive->get_surface_uv_basis(record.surface.semantic_surface, axis_u, axis_v);
-
-				const real_t cos_rotation = Math::cos(setting.rotation);
-				const real_t sin_rotation = Math::sin(setting.rotation);
-				const Vector3 rotated_u = axis_u * cos_rotation + axis_v * sin_rotation;
-				const Vector3 rotated_v = axis_v * cos_rotation - axis_u * sin_rotation;
-				const real_t meters_u = Math::is_zero_approx(setting.meters_per_tile.x) ? 1.0 : setting.meters_per_tile.x;
-				const real_t meters_v = Math::is_zero_approx(setting.meters_per_tile.y) ? 1.0 : setting.meters_per_tile.y;
+				Vector3 scaled_u;
+				Vector3 scaled_v;
+				primitive->get_surface_planar_uv_axes(record.surface.semantic_surface, setting, scaled_u, scaled_v);
 
 				Transform3D projection_to_root;
 				switch (setting.uv_space) {
@@ -665,8 +658,8 @@ void CSGShape3D::_gather_manifold_surface_records(CSGEvaluationInputs &r_inputs,
 
 				resolved_uv.planar = true;
 				resolved_uv.origin = projection_to_root.origin;
-				resolved_uv.axis_u = projection_to_root.basis.xform(rotated_u / meters_u);
-				resolved_uv.axis_v = projection_to_root.basis.xform(rotated_v / meters_v);
+				resolved_uv.axis_u = projection_to_root.basis.xform(scaled_u);
+				resolved_uv.axis_v = projection_to_root.basis.xform(scaled_v);
 				resolved_uv.offset = setting.offset;
 			}
 		}
@@ -1108,6 +1101,9 @@ void CSGShape3D::_notification(int p_what) {
 			// still be invalidated in case the node is subsequently reparented.
 			_make_transform_dirty();
 			if (is_root_shape() && _has_world_surface_uv_settings()) {
+				// CSG-8: Preserve synchronous self-move invalidation for callers that invoke
+				// update_shape() before global transform notifications are flushed. The global
+				// hook below additionally covers ancestor-only moves.
 				_make_material_dirty();
 			}
 		} break;
@@ -1138,14 +1134,22 @@ void CSGShape3D::_notification(int p_what) {
 				_clear_debug_collision_shape();
 			}
 		} break;
+#endif // PHYSICS_3D_DISABLED
 
 		case NOTIFICATION_TRANSFORM_CHANGED: {
+			// CSG-8: World-space planar UVs project through the root's global transform,
+			// so an ancestor-only move must refinalize them. This invalidates only
+			// materialization, with no boolean evaluation or primitive repack.
+			if (is_root_shape() && _has_world_surface_uv_settings()) {
+				_make_material_dirty();
+			}
+#ifndef PHYSICS_3D_DISABLED
 			if (use_collision && is_root_shape() && root_collision_body.is_valid()) {
 				PhysicsServer3D::get_singleton()->body_set_state(root_collision_body, PS3DE::BODY_STATE_TRANSFORM, get_global_transform());
 			}
 			_on_transform_changed();
-		} break;
 #endif // PHYSICS_3D_DISABLED
+		} break;
 	}
 }
 
@@ -1538,6 +1542,21 @@ bool CSGPrimitive3D::get_flip_faces() {
 void CSGPrimitive3D::get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const {
 	r_axis_u = Vector3(1, 0, 0);
 	r_axis_v = Vector3(0, 1, 0);
+}
+
+void CSGPrimitive3D::get_surface_planar_uv_axes(uint32_t p_surface, const CSGSurfaceSetting &p_setting,
+		Vector3 &r_axis_u, Vector3 &r_axis_v) const {
+	Vector3 axis_u;
+	Vector3 axis_v;
+	get_surface_uv_basis(p_surface, axis_u, axis_v);
+	const real_t cos_rotation = Math::cos(p_setting.rotation);
+	const real_t sin_rotation = Math::sin(p_setting.rotation);
+	const Vector3 rotated_u = axis_u * cos_rotation + axis_v * sin_rotation;
+	const Vector3 rotated_v = axis_v * cos_rotation - axis_u * sin_rotation;
+	const real_t meters_u = Math::is_zero_approx(p_setting.meters_per_tile.x) ? 1.0 : p_setting.meters_per_tile.x;
+	const real_t meters_v = Math::is_zero_approx(p_setting.meters_per_tile.y) ? 1.0 : p_setting.meters_per_tile.y;
+	r_axis_u = rotated_u / meters_u;
+	r_axis_v = rotated_v / meters_v;
 }
 
 bool CSGPrimitive3D::has_surface_setting(uint32_t p_surface) const {
