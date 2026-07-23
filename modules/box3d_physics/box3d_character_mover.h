@@ -33,6 +33,7 @@ class Box3DCharacterMover : public RefCounted {
 	bool _ground_probe(const Vector3 &p_feet, const Array &p_planes, Vector3 &r_normal, int &r_material_id) const;
 	bool _has_step_obstruction(const Vector3 &p_start, const Vector3 &p_horizontal) const;
 	bool _try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id) const;
+	bool _try_step_down(const Vector3 &p_start, const Vector3 &p_horizontal, const Array &p_planes, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id, real_t &r_step_delta_y) const;
 
 public:
 	Box3DCharacterMover();
@@ -53,5 +54,5 @@ public:
 	Array collide(const Vector3 &p_position) const;
 	Dictionary solve_planes(const Vector3 &p_target_delta, const Array &p_planes) const;
 	Vector3 clip_velocity(const Vector3 &p_velocity, const Array &p_planes) const;
-	Dictionary move(const Vector3 &p_position, const Vector3 &p_velocity, float p_delta) const;
+	Dictionary move(const Vector3 &p_position, const Vector3 &p_velocity, float p_delta, bool p_was_grounded = false) const;
 };

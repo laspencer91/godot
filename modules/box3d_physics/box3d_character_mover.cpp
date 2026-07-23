@@ -181,7 +181,7 @@ void Box3DCharacterMover::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("collide", "position"), &Box3DCharacterMover::collide);
 	ClassDB::bind_method(D_METHOD("solve_planes", "target_delta", "planes"), &Box3DCharacterMover::solve_planes);
 	ClassDB::bind_method(D_METHOD("clip_velocity", "velocity", "planes"), &Box3DCharacterMover::clip_velocity);
-	ClassDB::bind_method(D_METHOD("move", "position", "velocity", "delta"), &Box3DCharacterMover::move);
+	ClassDB::bind_method(D_METHOD("move", "position", "velocity", "delta", "was_grounded"), &Box3DCharacterMover::move, DEFVAL(false));
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "floor_max_angle", PROPERTY_HINT_RANGE, "0,1.5707963267949,0.001,radians"), "set_floor_max_angle", "get_floor_max_angle");
@@ -509,7 +509,73 @@ bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_
 	return true;
 }
 
-Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p_velocity, float p_delta) const {
+// Keep a walking capsule attached to a lower tread while it clears the rounded edge of the previous
+// one. A downward mover cast alone is not enough to classify support: while the capsule still touches
+// the old lip, that cast stops on the lip before reaching the walkable floor. The ray identifies the
+// intended lower floor, while the capsule cast applies only the collision-safe portion of the drop.
+// Returning grounded even for a temporarily zero-length cast lets the next horizontal tick clear the
+// lip and continue the descent instead of switching permanently to ballistic movement.
+bool Box3DCharacterMover::_try_step_down(const Vector3 &p_start, const Vector3 &p_horizontal, const Array &p_planes, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id, real_t &r_step_delta_y) const {
+	const real_t PROBE_UP = 0.05;
+	const real_t HEIGHT_TOLERANCE = 0.01;
+	const real_t EDGE_ROLL_ALLOWANCE = 0.10;
+	const real_t TREAD_BEHIND = 0.05;
+	const real_t CAST_OVERRUN = 0.01;
+	const real_t floor_threshold = Math::cos(floor_max_angle);
+
+	Vector3 floor_normal;
+	real_t floor_y = 0.0;
+	int material_id = 0;
+	if (!_probe_walkable(p_start + Vector3(0.0, PROBE_UP, 0.0),
+			PROBE_UP + step_height + EDGE_ROLL_ALLOWANCE + HEIGHT_TOLERANCE,
+			floor_normal, floor_y, material_id) || floor_normal.y <= floor_threshold) {
+		return false;
+	}
+
+	const real_t drop = p_start.y - floor_y;
+	if (drop < -HEIGHT_TOLERANCE) {
+		return false;
+	}
+
+	// Treads can be shorter than the capsule radius, so the capsule may still ride a lip two treads
+	// behind while its center crosses the next edge. Feet height and the active lip contact point are
+	// both misleading in that pose. Compare walkable surfaces just behind and below the center to
+	// measure the actual adjacent floor-to-floor drop.
+	Vector3 upper_normal;
+	real_t upper_y = 0.0;
+	int upper_material_id = 0;
+	bool has_upper_floor = false;
+	if (p_horizontal.length_squared() > 1e-8) {
+		const Vector3 direction = p_horizontal.normalized();
+		const real_t behind_distance = p_horizontal.length() + TREAD_BEHIND;
+		const Vector3 upper_from = p_start - direction * behind_distance + Vector3(0.0, PROBE_UP, 0.0);
+		has_upper_floor = _probe_walkable(upper_from,
+				PROBE_UP + step_height + EDGE_ROLL_ALLOWANCE + HEIGHT_TOLERANCE,
+				upper_normal, upper_y, upper_material_id) && upper_normal.y > floor_threshold;
+	}
+	const real_t floor_drop = has_upper_floor ? upper_y - floor_y : drop;
+	if (floor_drop < -HEIGHT_TOLERANCE || floor_drop > step_height + HEIGHT_TOLERANCE) {
+		return false;
+	}
+
+	// Cast slightly through the ray floor so reaching it produces a fraction below one. A cast that
+	// reports no collision is not enough to hold the grounded state: the ray may have found geometry
+	// too narrow for the capsule, or initial-overlap filtering may have hidden an invalid landing.
+	const real_t cast_distance = MAX(drop + CAST_OVERRUN, CAST_OVERRUN);
+	const float down_fraction = cast_motion(p_start, Vector3(0.0, -cast_distance, 0.0));
+	if (down_fraction >= 1.0f) {
+		return false;
+	}
+
+	r_position = p_start + Vector3(0.0, -cast_distance * down_fraction, 0.0);
+	r_step_delta_y = r_position.y - p_start.y;
+	r_planes = r_step_delta_y < -0.0001 ? _collide_internal(r_position) : p_planes;
+	r_floor_normal = floor_normal;
+	r_material_id = material_id;
+	return true;
+}
+
+Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p_velocity, float p_delta, bool p_was_grounded) const {
 	ERR_FAIL_COND_V_MSG(!_can_query(), Dictionary(), "Box3DCharacterMover cannot query the space right now.");
 
 	const Vector3 target_position = p_position + p_velocity * p_delta;
@@ -544,9 +610,12 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		}
 	}
 	bool stepped = false;
+	bool stepped_down = false;
+	bool ground_followed = false;
 	bool step_obstruction = false;
 	Vector3 stepped_floor_normal;
 	int stepped_material_id = 0;
+	real_t step_delta_y = 0.0;
 
 	for (int i = 0; i < 5; i++) {
 		const Array planes = i == 0 && starting_planes_queried ? starting_planes : _collide_internal(position);
@@ -607,8 +676,40 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 					stepped_floor_normal = step_normal;
 					stepped_material_id = step_material_id;
 					solved_planes = stepped_planes;
+					step_delta_y = position.y - p_position.y;
 				}
 			}
+		}
+	}
+
+	// Upward motion is an intentional jump and must never be pulled back to the floor. Otherwise a
+	// caller that began this tick grounded may follow a walkable descent no taller than step_height.
+	// This explicit prior-grounded input is what keeps the stateless mover safe for prediction/replay:
+	// velocity alone cannot distinguish walking down from a descending jump.
+	bool regular_on_floor = false;
+	for (int i = 0; i < solved_planes.size(); i++) {
+		const Dictionary plane = solved_planes[i];
+		if (((Vector3)plane["normal"]).y > floor_threshold) {
+			regular_on_floor = true;
+			break;
+		}
+	}
+	if (!stepped && !step_obstruction && !regular_on_floor && p_was_grounded &&
+			step_height > 0.0 && p_velocity.y <= 0.05) {
+		Vector3 followed_position;
+		Array followed_planes;
+		Vector3 followed_normal;
+		int followed_material_id = 0;
+		real_t followed_delta_y = 0.0;
+		if (_try_step_down(position, requested_horizontal, solved_planes, followed_position, followed_planes, followed_normal,
+				followed_material_id, followed_delta_y)) {
+			position = followed_position;
+			solved_planes = followed_planes;
+			ground_followed = true;
+			stepped_down = followed_delta_y < -0.0001;
+			stepped_floor_normal = followed_normal;
+			stepped_material_id = followed_material_id;
+			step_delta_y = followed_delta_y;
 		}
 	}
 
@@ -669,7 +770,12 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	// ground. Reclassify with ray probes so the floor flag holds through the climb.
 	int probe_material_id = -1;
 	bool probe_grounded = false;
-	if (step_allowed && (stepped || !on_floor || step_obstruction)) {
+	if (ground_followed) {
+		on_floor = true;
+		probe_grounded = true;
+		floor_normal = stepped_floor_normal;
+		probe_material_id = stepped_material_id;
+	} else if (step_allowed && (stepped || !on_floor || step_obstruction)) {
 		if (stepped) {
 			on_floor = true;
 			probe_grounded = true;
@@ -731,6 +837,9 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	result["cast_fraction"] = last_fraction;
 	result["iterations"] = total_iterations;
 	result["stepped"] = stepped;
+	result["stepped_down"] = stepped_down;
+	result["ground_followed"] = ground_followed;
+	result["step_delta_y"] = step_delta_y;
 	if (on_floor && probe_material_id >= 0) {
 		_add_floor_material_fields(result, probe_material_id);
 	} else if (on_floor && floor_plane.has("point")) {
