@@ -35,13 +35,19 @@
 #include "../csg_debug_counters.h"
 #endif // DEV_ENABLED
 
+#include "core/io/dir_access.h"
+#include "core/io/file_access.h"
+#include "core/io/resource_loader.h"
+#include "core/io/resource_saver.h"
 #include "core/object/message_queue.h"
+#include "core/os/os.h"
 #include "core/templates/hash_set.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
 #include "scene/resources/3d/primitive_meshes.h"
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
+#include "scene/resources/packed_scene.h"
 #include "tests/test_macros.h"
 
 namespace TestCSG {
@@ -87,6 +93,18 @@ struct CSGSynchronousSchedulerScope {
 	}
 };
 
+struct CSGTemporaryFileCleanup {
+	Vector<String> paths;
+
+	~CSGTemporaryFileCleanup() {
+		for (const String &path : paths) {
+			if (FileAccess::exists(path)) {
+				DirAccess::remove_absolute(path);
+			}
+		}
+	}
+};
+
 #ifndef PHYSICS_3D_DISABLED
 static CSGBox3D *_make_collision_box_root() {
 	CSGBox3D *root = memnew(CSGBox3D);
@@ -119,6 +137,22 @@ static Ref<ArrayMesh> _make_two_surface_box_mesh() {
 	}
 
 	return mesh;
+}
+
+static bool _get_surface_arrays_for_material(const Ref<ArrayMesh> &p_mesh, const Ref<Material> &p_material, PackedVector3Array &r_vertices, PackedVector2Array &r_uvs) {
+	if (p_mesh.is_null()) {
+		return false;
+	}
+	for (int surface_i = 0; surface_i < p_mesh->get_surface_count(); surface_i++) {
+		if (p_mesh->surface_get_material(surface_i).ptr() != p_material.ptr()) {
+			continue;
+		}
+		const Array arrays = p_mesh->surface_get_arrays(surface_i);
+		r_vertices = arrays[Mesh::ARRAY_VERTEX];
+		r_uvs = arrays[Mesh::ARRAY_TEX_UV];
+		return true;
+	}
+	return false;
 }
 
 TEST_CASE("[SceneTree][CSG] Phase 0 operation ordering") {
@@ -1036,6 +1070,521 @@ TEST_CASE("[SceneTree][CSG] Phase 5 new union child receives cap provenance") {
 
 	root->queue_free();
 	MessageQueue::get_singleton()->flush();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 sparse surface settings are inert and default-eliding") {
+	CSGBox3D *box = memnew(CSGBox3D);
+	const uint32_t schema_generation = box->get_surface_schema_generation();
+	const uint32_t surface = CSGBox3D::SURFACE_POSITIVE_X;
+
+	CHECK_FALSE(box->has_surface_setting(surface));
+	box->set_surface_setting(surface, CSGSurfaceSetting());
+	CHECK_FALSE(box->has_surface_setting(surface));
+
+	box->set_surface_offset(surface, Vector2(0.25, -0.5));
+	REQUIRE(box->has_surface_setting(surface));
+	CHECK_EQ(box->get_surface_setting(surface).offset, Vector2(0.25, -0.5));
+	CHECK_EQ(box->get_surface_schema_generation(), schema_generation);
+
+	List<PropertyInfo> properties;
+	box->get_property_list(&properties);
+	bool found_material = false;
+	bool found_uv_mode = false;
+	bool found_hidden_stored_offset = false;
+	for (const PropertyInfo &raw_property : properties) {
+		PropertyInfo property = raw_property;
+		box->validate_property(property);
+		if (property.name == "surface_settings/0/material") {
+			found_material = true;
+			CHECK((property.usage & PROPERTY_USAGE_EDITOR) != 0);
+			CHECK((property.usage & PROPERTY_USAGE_STORAGE) == 0);
+		} else if (property.name == "surface_settings/0/uv_mode") {
+			found_uv_mode = true;
+			CHECK((property.usage & PROPERTY_USAGE_EDITOR) != 0);
+			CHECK((property.usage & PROPERTY_USAGE_STORAGE) == 0);
+		} else if (property.name == "surface_settings/0/offset") {
+			found_hidden_stored_offset = true;
+			CHECK((property.usage & PROPERTY_USAGE_EDITOR) == 0);
+			CHECK((property.usage & PROPERTY_USAGE_STORAGE) != 0);
+		}
+	}
+	CHECK(found_material);
+	CHECK(found_uv_mode);
+	CHECK(found_hidden_stored_offset);
+	CHECK(box->property_can_revert("surface_settings/0/offset"));
+	CHECK_EQ((Vector2)box->property_get_revert("surface_settings/0/offset"), Vector2());
+
+	box->set_surface_uv_mode(surface, CSGPrimitive3D::SURFACE_UV_MODE_PLANAR);
+	properties.clear();
+	box->get_property_list(&properties);
+	bool found_visible_offset = false;
+	for (const PropertyInfo &raw_property : properties) {
+		PropertyInfo property = raw_property;
+		box->validate_property(property);
+		if (property.name == "surface_settings/0/offset") {
+			found_visible_offset = true;
+			CHECK((property.usage & PROPERTY_USAGE_EDITOR) != 0);
+			CHECK((property.usage & PROPERTY_USAGE_STORAGE) != 0);
+		}
+	}
+	CHECK(found_visible_offset);
+
+	box->set_surface_offset(surface, Vector2());
+	box->set_surface_uv_mode(surface, CSGPrimitive3D::SURFACE_UV_MODE_LEGACY);
+	CHECK_FALSE(box->has_surface_setting(surface));
+	CHECK_EQ(box->get_surface_schema_generation(), schema_generation);
+	memdelete(box);
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 surface settings serialize sparsely and round-trip") {
+	const String test_output_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+	const String untouched_path = test_output_dir.path_join("csg_phase6_untouched.tscn");
+	const String authored_path = test_output_dir.path_join("csg_phase6_authored.tscn");
+	CSGTemporaryFileCleanup file_cleanup;
+	file_cleanup.paths.push_back(untouched_path);
+	file_cleanup.paths.push_back(authored_path);
+	CSGBox3D *untouched = memnew(CSGBox3D);
+	untouched->set_name("UntouchedCSGBox");
+	Ref<PackedScene> untouched_scene;
+	untouched_scene.instantiate();
+	REQUIRE_EQ(untouched_scene->pack(untouched), OK);
+	REQUIRE_EQ(ResourceSaver::save(untouched_scene, untouched_path), OK);
+	const String untouched_before = FileAccess::get_file_as_string(untouched_path);
+	CHECK_FALSE(untouched_before.contains("surface_settings/"));
+	CHECK_FALSE(untouched_before.contains("surface_schema_version"));
+	memdelete(untouched);
+
+	Error load_error = OK;
+	Ref<PackedScene> untouched_loaded = ResourceLoader::load(untouched_path, "PackedScene", ResourceFormatLoader::CacheMode::CACHE_MODE_IGNORE, &load_error);
+	REQUIRE_EQ(load_error, OK);
+	REQUIRE(untouched_loaded.is_valid());
+	if (untouched_loaded.is_null()) {
+		return;
+	}
+	Node *untouched_instance = untouched_loaded->instantiate();
+	REQUIRE(untouched_instance != nullptr);
+	if (!untouched_instance) {
+		return;
+	}
+	Ref<PackedScene> untouched_repacked;
+	untouched_repacked.instantiate();
+	REQUIRE_EQ(untouched_repacked->pack(untouched_instance), OK);
+	REQUIRE_EQ(ResourceSaver::save(untouched_repacked, untouched_path), OK);
+	CHECK_EQ(FileAccess::get_file_as_string(untouched_path), untouched_before);
+	memdelete(untouched_instance);
+
+	CSGBox3D *authored = memnew(CSGBox3D);
+	authored->set_name("AuthoredCSGBox");
+	Ref<StandardMaterial3D> material;
+	material.instantiate();
+	material->set_albedo(Color(0.15, 0.35, 0.75));
+
+	CSGSurfaceSetting setting;
+	setting.material = material;
+	setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_WORLD;
+	setting.meters_per_tile = Vector2(2.5, 3.5);
+	setting.offset = Vector2(0.125, -0.75);
+	setting.rotation = Math::deg_to_rad(22.5);
+	setting.texture_lock = true;
+	authored->set_surface_setting(CSGBox3D::SURFACE_NEGATIVE_Z, setting);
+	authored->set_surface_material(CSGBox3D::SURFACE_POSITIVE_Y, material);
+	authored->set_surface_schema_version(0);
+
+	Ref<PackedScene> authored_scene;
+	authored_scene.instantiate();
+	REQUIRE_EQ(authored_scene->pack(authored), OK);
+	REQUIRE_EQ(ResourceSaver::save(authored_scene, authored_path), OK);
+	const String authored_text = FileAccess::get_file_as_string(authored_path);
+	CHECK(authored_text.contains("surface_schema_version = 0"));
+	CHECK(authored_text.contains("surface_settings/5/material"));
+	CHECK(authored_text.contains("surface_settings/5/uv_mode"));
+	CHECK(authored_text.contains("surface_settings/5/uv_space"));
+	CHECK(authored_text.contains("surface_settings/5/meters_per_tile"));
+	CHECK(authored_text.contains("surface_settings/5/offset"));
+	CHECK(authored_text.contains("surface_settings/5/rotation"));
+	CHECK(authored_text.contains("surface_settings/5/texture_lock"));
+	CHECK(authored_text.contains("surface_settings/2/material"));
+	CHECK_FALSE(authored_text.contains("surface_settings/2/uv_mode"));
+	memdelete(authored);
+
+	Ref<PackedScene> authored_loaded = ResourceLoader::load(authored_path, "PackedScene", ResourceFormatLoader::CacheMode::CACHE_MODE_IGNORE, &load_error);
+	REQUIRE_EQ(load_error, OK);
+	REQUIRE(authored_loaded.is_valid());
+	if (authored_loaded.is_null()) {
+		return;
+	}
+	CSGBox3D *loaded_box = Object::cast_to<CSGBox3D>(authored_loaded->instantiate());
+	REQUIRE(loaded_box != nullptr);
+	if (!loaded_box) {
+		return;
+	}
+	CHECK_EQ(loaded_box->get_surface_schema_version(), 0);
+	REQUIRE(loaded_box->has_surface_setting(CSGBox3D::SURFACE_NEGATIVE_Z));
+	const CSGSurfaceSetting loaded_setting = loaded_box->get_surface_setting(CSGBox3D::SURFACE_NEGATIVE_Z);
+	REQUIRE(loaded_setting.material.is_valid());
+	Ref<StandardMaterial3D> loaded_material = loaded_setting.material;
+	REQUIRE(loaded_material.is_valid());
+	CHECK_EQ(loaded_material->get_albedo(), material->get_albedo());
+	CHECK_EQ(loaded_setting.uv_mode, CSGPrimitive3D::SURFACE_UV_MODE_PLANAR);
+	CHECK_EQ(loaded_setting.uv_space, CSGPrimitive3D::SURFACE_UV_SPACE_WORLD);
+	CHECK_EQ(loaded_setting.meters_per_tile, setting.meters_per_tile);
+	CHECK_EQ(loaded_setting.offset, setting.offset);
+	CHECK(loaded_setting.rotation == doctest::Approx(setting.rotation));
+	CHECK(loaded_setting.texture_lock);
+
+	CSGBox3D *duplicated_box = Object::cast_to<CSGBox3D>(loaded_box->duplicate());
+	REQUIRE(duplicated_box != nullptr);
+	REQUIRE(duplicated_box->has_surface_setting(CSGBox3D::SURFACE_NEGATIVE_Z));
+	CHECK_EQ(duplicated_box->get_surface_setting(CSGBox3D::SURFACE_NEGATIVE_Z).offset, setting.offset);
+	CHECK_EQ(duplicated_box->get_surface_setting(CSGBox3D::SURFACE_POSITIVE_Y).material.ptr(), loaded_box->get_surface_setting(CSGBox3D::SURFACE_POSITIVE_Y).material.ptr());
+	memdelete(duplicated_box);
+	memdelete(loaded_box);
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 material resolution is override then node then inherited") {
+	Ref<StandardMaterial3D> inherited_material;
+	inherited_material.instantiate();
+	Ref<StandardMaterial3D> node_material;
+	node_material.instantiate();
+	Ref<StandardMaterial3D> surface_material;
+	surface_material.instantiate();
+
+	CSGBox3D *box = memnew(CSGBox3D);
+	box->set_material(inherited_material);
+	SceneTree::get_singleton()->get_root()->add_child(box);
+	box->update_shape();
+	const uint32_t schema_generation = box->get_surface_schema_generation();
+
+	auto mesh_has_material = [](const Ref<ArrayMesh> &p_mesh, const Ref<Material> &p_material) {
+		for (int surface_i = 0; surface_i < p_mesh->get_surface_count(); surface_i++) {
+			if (p_mesh->surface_get_material(surface_i).ptr() == p_material.ptr()) {
+				return true;
+			}
+		}
+		return false;
+	};
+
+	_reset_csg_counters();
+	box->set_surface_material(CSGBox3D::SURFACE_POSITIVE_X, surface_material);
+	box->update_shape();
+	Ref<ArrayMesh> mesh = box->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	CHECK(mesh_has_material(mesh, surface_material));
+	CHECK(mesh_has_material(mesh, inherited_material));
+
+	box->set_material(node_material);
+	box->update_shape();
+	mesh = box->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	CHECK(mesh_has_material(mesh, surface_material));
+	CHECK(mesh_has_material(mesh, node_material));
+	CHECK_FALSE(mesh_has_material(mesh, inherited_material));
+
+	box->clear_surface_setting(CSGBox3D::SURFACE_POSITIVE_X);
+	box->update_shape();
+	mesh = box->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	CHECK_EQ(mesh->get_surface_count(), 1);
+	CHECK(mesh_has_material(mesh, node_material));
+	CHECK_EQ(box->get_surface_schema_generation(), schema_generation);
+
+	box->set_material(Ref<Material>());
+	box->update_shape();
+	mesh = box->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	CHECK_EQ(mesh->get_surface_count(), 1);
+	CHECK(mesh_has_material(mesh, inherited_material));
+	CHECK_EQ(box->get_resolved_surface_material(CSGBox3D::SURFACE_POSITIVE_X).ptr(), inherited_material.ptr());
+	CHECK_EQ(box->get_surface_schema_generation(), schema_generation);
+
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+#endif // DEV_ENABLED
+
+	box->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 subtractive cut faces use cutter surface material") {
+	Ref<StandardMaterial3D> root_material;
+	root_material.instantiate();
+	Ref<StandardMaterial3D> cutter_material;
+	cutter_material.instantiate();
+	Ref<StandardMaterial3D> cut_override;
+	cut_override.instantiate();
+	Ref<StandardMaterial3D> replacement_override;
+	replacement_override.instantiate();
+
+	CSGBox3D *root = memnew(CSGBox3D);
+	root->set_size(Vector3(4, 4, 4));
+	root->set_material(root_material);
+	CSGBox3D *cutter = _add_box(root, Vector3(2, 2, 2), Vector3(), CSGShape3D::OPERATION_SUBTRACTION, cutter_material);
+	cutter->set_surface_material(CSGBox3D::SURFACE_POSITIVE_X, cut_override);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+
+	bool found_cut_surface_provenance = false;
+	const uint64_t generation = root->get_result_generation();
+	for (uint32_t triangle_i = 0; triangle_i < root->get_result_triangle_count(); triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		REQUIRE(root->resolve_result_triangle(triangle_i, generation, surface, face_id));
+		if (surface.source_shape == cutter->get_instance_id() && surface.semantic_surface == CSGBox3D::SURFACE_POSITIVE_X) {
+			found_cut_surface_provenance = true;
+		}
+	}
+	CHECK(found_cut_surface_provenance);
+
+	Ref<ArrayMesh> mesh = root->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	bool found_cut_override = false;
+	for (int surface_i = 0; surface_i < mesh->get_surface_count(); surface_i++) {
+		found_cut_override |= mesh->surface_get_material(surface_i).ptr() == cut_override.ptr();
+	}
+	CHECK(found_cut_override);
+
+	const uint32_t schema_generation = cutter->get_surface_schema_generation();
+	_reset_csg_counters();
+	cutter->set_surface_material(CSGBox3D::SURFACE_POSITIVE_X, replacement_override);
+	root->update_shape();
+	mesh = root->bake_static_mesh();
+	REQUIRE(mesh.is_valid());
+	bool found_replacement_override = false;
+	for (int surface_i = 0; surface_i < mesh->get_surface_count(); surface_i++) {
+		found_replacement_override |= mesh->surface_get_material(surface_i).ptr() == replacement_override.ptr();
+	}
+	CHECK(found_replacement_override);
+	CHECK_EQ(cutter->get_surface_schema_generation(), schema_generation);
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 planar UVs are deterministic and UV edits avoid booleans") {
+	Ref<StandardMaterial3D> node_material;
+	node_material.instantiate();
+	Ref<StandardMaterial3D> planar_material;
+	planar_material.instantiate();
+
+	CSGBox3D *box = memnew(CSGBox3D);
+	box->set_size(Vector3(2, 2, 2));
+	box->set_material(node_material);
+	CSGSurfaceSetting setting;
+	setting.material = planar_material;
+	setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_ROOT;
+	setting.meters_per_tile = Vector2(2, 4);
+	setting.offset = Vector2(0.25, -0.5);
+	box->set_surface_setting(CSGBox3D::SURFACE_POSITIVE_Z, setting);
+	SceneTree::get_singleton()->get_root()->add_child(box);
+	box->update_shape();
+
+	PackedVector3Array vertices;
+	PackedVector2Array uvs;
+	REQUIRE(_get_surface_arrays_for_material(box->bake_static_mesh(), planar_material, vertices, uvs));
+	REQUIRE_EQ(vertices.size(), uvs.size());
+	REQUIRE_EQ(vertices.size(), 6);
+	bool differs_from_legacy_corners = false;
+	for (int vertex_i = 0; vertex_i < vertices.size(); vertex_i++) {
+		const Vector2 expected(vertices[vertex_i].x / 2.0 + 0.25, vertices[vertex_i].y / 4.0 - 0.5);
+		CHECK(uvs[vertex_i].is_equal_approx(expected));
+		differs_from_legacy_corners |= !uvs[vertex_i].is_equal_approx(Vector2(0, 0)) && !uvs[vertex_i].is_equal_approx(Vector2(0, 1)) && !uvs[vertex_i].is_equal_approx(Vector2(1, 0)) && !uvs[vertex_i].is_equal_approx(Vector2(1, 1));
+	}
+	CHECK(differs_from_legacy_corners);
+
+	_reset_csg_counters();
+	box->set_surface_offset(CSGBox3D::SURFACE_POSITIVE_Z, Vector2(-0.75, 1.25));
+	box->update_shape();
+	REQUIRE(_get_surface_arrays_for_material(box->bake_static_mesh(), planar_material, vertices, uvs));
+	for (int vertex_i = 0; vertex_i < vertices.size(); vertex_i++) {
+		const Vector2 expected(vertices[vertex_i].x / 2.0 - 0.75, vertices[vertex_i].y / 4.0 + 1.25);
+		CHECK(uvs[vertex_i].is_equal_approx(expected));
+	}
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.local_primitive_brush_packs, 0);
+	CHECK_EQ(counters.leaf_manifold_repacks, 0);
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 1);
+	CHECK_EQ(counters.uv_finalizations, 1);
+	CHECK_EQ(counters.tangent_finalizations, 1);
+#endif // DEV_ENABLED
+
+	box->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 root-space planar mapping stays anchored across operand transforms") {
+	Ref<StandardMaterial3D> node_material;
+	node_material.instantiate();
+	Ref<StandardMaterial3D> planar_material;
+	planar_material.instantiate();
+
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGBox3D *box = _add_box(root, Vector3(2, 2, 2), Vector3(1.25, -0.5, 0.75), CSGShape3D::OPERATION_UNION, node_material);
+	box->set_rotation(Vector3(0.2, 0.45, -0.15));
+	CSGSurfaceSetting setting;
+	setting.material = planar_material;
+	setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_ROOT;
+	setting.meters_per_tile = Vector2(1.5, 2.5);
+	setting.offset = Vector2(0.125, -0.375);
+	box->set_surface_setting(CSGBox3D::SURFACE_POSITIVE_Z, setting);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+
+	auto check_root_mapping = [&](const Ref<ArrayMesh> &p_mesh) {
+		PackedVector3Array vertices;
+		PackedVector2Array uvs;
+		REQUIRE(_get_surface_arrays_for_material(p_mesh, planar_material, vertices, uvs));
+		REQUIRE_EQ(vertices.size(), uvs.size());
+		REQUIRE_EQ(vertices.size(), 6);
+		for (int vertex_i = 0; vertex_i < vertices.size(); vertex_i++) {
+			const Vector2 expected(vertices[vertex_i].x / 1.5 + 0.125, vertices[vertex_i].y / 2.5 - 0.375);
+			CHECK(uvs[vertex_i].is_equal_approx(expected));
+		}
+	};
+
+	check_root_mapping(root->bake_static_mesh());
+	box->set_position(Vector3(-0.75, 1.1, 0.25));
+	root->update_shape();
+	check_root_mapping(root->bake_static_mesh());
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 subtractive cut faces inherit cutter planar UVs") {
+	Ref<StandardMaterial3D> root_material;
+	root_material.instantiate();
+	Ref<StandardMaterial3D> cutter_material;
+	cutter_material.instantiate();
+	Ref<StandardMaterial3D> cut_material;
+	cut_material.instantiate();
+
+	CSGBox3D *root = memnew(CSGBox3D);
+	root->set_size(Vector3(4, 4, 4));
+	root->set_material(root_material);
+	CSGBox3D *cutter = _add_box(root, Vector3(2, 2, 2), Vector3(), CSGShape3D::OPERATION_SUBTRACTION, cutter_material);
+	CSGSurfaceSetting setting;
+	setting.material = cut_material;
+	setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_ROOT;
+	setting.meters_per_tile = Vector2(2, 3);
+	setting.offset = Vector2(0.5, -0.25);
+	cutter->set_surface_setting(CSGBox3D::SURFACE_POSITIVE_X, setting);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+
+	PackedVector3Array vertices;
+	PackedVector2Array uvs;
+	REQUIRE(_get_surface_arrays_for_material(root->bake_static_mesh(), cut_material, vertices, uvs));
+	REQUIRE_EQ(vertices.size(), uvs.size());
+	REQUIRE_EQ(vertices.size(), 6);
+	for (int vertex_i = 0; vertex_i < vertices.size(); vertex_i++) {
+		const Vector2 expected(-vertices[vertex_i].z / 2.0 + 0.5, vertices[vertex_i].y / 3.0 - 0.25);
+		CHECK(uvs[vertex_i].is_equal_approx(expected));
+	}
+	root->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 world-space planar UVs refinalize on root transform") {
+	Ref<StandardMaterial3D> node_material;
+	node_material.instantiate();
+	Ref<StandardMaterial3D> planar_material;
+	planar_material.instantiate();
+
+	CSGBox3D *box = memnew(CSGBox3D);
+	box->set_size(Vector3(2, 2, 2));
+	box->set_material(node_material);
+	CSGSurfaceSetting setting;
+	setting.material = planar_material;
+	setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_WORLD;
+	box->set_surface_setting(CSGBox3D::SURFACE_POSITIVE_Z, setting);
+	box->set_position(Vector3(3, -2, 4));
+	SceneTree::get_singleton()->get_root()->add_child(box);
+	box->update_shape();
+
+	auto check_world_mapping = [&](const Vector3 &p_root_position) {
+		PackedVector3Array vertices;
+		PackedVector2Array uvs;
+		REQUIRE(_get_surface_arrays_for_material(box->bake_static_mesh(), planar_material, vertices, uvs));
+		REQUIRE_EQ(vertices.size(), uvs.size());
+		for (int vertex_i = 0; vertex_i < vertices.size(); vertex_i++) {
+			const Vector2 expected(vertices[vertex_i].x + p_root_position.x, vertices[vertex_i].y + p_root_position.y);
+			CHECK(uvs[vertex_i].is_equal_approx(expected));
+		}
+	};
+
+	check_world_mapping(box->get_position());
+	_reset_csg_counters();
+	box->set_position(Vector3(-5, 7, 1));
+	box->update_shape();
+	check_world_mapping(box->get_position());
+#ifdef DEV_ENABLED
+	CSGDebugCounters counters = CSGDebugCounters::get();
+	CHECK_EQ(counters.batch_boolean_calls, 0);
+	CHECK_EQ(counters.root_materializations, 1);
+#endif // DEV_ENABLED
+	box->queue_free();
+}
+
+TEST_CASE("[SceneTree][CSG] Phase 6 root-space texture lock survives one-sided box push pull") {
+	Ref<StandardMaterial3D> node_material;
+	node_material.instantiate();
+	Ref<StandardMaterial3D> dragged_material;
+	dragged_material.instantiate();
+	Ref<StandardMaterial3D> fixed_material;
+	fixed_material.instantiate();
+
+	CSGCombiner3D *root = memnew(CSGCombiner3D);
+	CSGBox3D *box = _add_box(root, Vector3(2, 2, 2), Vector3(), CSGShape3D::OPERATION_UNION, node_material);
+	CSGSurfaceSetting dragged_setting;
+	dragged_setting.material = dragged_material;
+	dragged_setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	dragged_setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_ROOT;
+	dragged_setting.meters_per_tile = Vector2(1.5, 2.5);
+	dragged_setting.offset = Vector2(0.125, -0.375);
+	dragged_setting.texture_lock = true;
+	box->set_surface_setting(CSGBox3D::SURFACE_POSITIVE_X, dragged_setting);
+	CSGSurfaceSetting fixed_setting = dragged_setting;
+	fixed_setting.material = fixed_material;
+	box->set_surface_setting(CSGBox3D::SURFACE_NEGATIVE_X, fixed_setting);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+
+	PackedVector3Array dragged_vertices_before;
+	PackedVector2Array dragged_uvs_before;
+	PackedVector3Array fixed_vertices_before;
+	PackedVector2Array fixed_uvs_before;
+	REQUIRE(_get_surface_arrays_for_material(root->bake_static_mesh(), dragged_material, dragged_vertices_before, dragged_uvs_before));
+	REQUIRE(_get_surface_arrays_for_material(root->bake_static_mesh(), fixed_material, fixed_vertices_before, fixed_uvs_before));
+
+	box->set_size(Vector3(4, 2, 2));
+	box->set_transform(Transform3D(Basis(), Vector3(1, 0, 0)));
+	root->update_shape();
+	PackedVector3Array dragged_vertices_after;
+	PackedVector2Array dragged_uvs_after;
+	PackedVector3Array fixed_vertices_after;
+	PackedVector2Array fixed_uvs_after;
+	REQUIRE(_get_surface_arrays_for_material(root->bake_static_mesh(), dragged_material, dragged_vertices_after, dragged_uvs_after));
+	REQUIRE(_get_surface_arrays_for_material(root->bake_static_mesh(), fixed_material, fixed_vertices_after, fixed_uvs_after));
+	REQUIRE_EQ(dragged_uvs_after.size(), dragged_uvs_before.size());
+	REQUIRE_EQ(fixed_uvs_after.size(), fixed_uvs_before.size());
+	for (int vertex_i = 0; vertex_i < dragged_uvs_before.size(); vertex_i++) {
+		CHECK(dragged_uvs_after[vertex_i].is_equal_approx(dragged_uvs_before[vertex_i]));
+		CHECK(dragged_vertices_after[vertex_i].x == doctest::Approx(dragged_vertices_before[vertex_i].x + 2.0));
+	}
+	for (int vertex_i = 0; vertex_i < fixed_uvs_before.size(); vertex_i++) {
+		CHECK(fixed_uvs_after[vertex_i].is_equal_approx(fixed_uvs_before[vertex_i]));
+		CHECK(fixed_vertices_after[vertex_i].is_equal_approx(fixed_vertices_before[vertex_i]));
+	}
+	root->queue_free();
 }
 
 TEST_CASE("[SceneTree][CSG] CSGPolygon3D") {

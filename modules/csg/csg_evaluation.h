@@ -82,6 +82,14 @@ struct CSGEvaluationSettings {
 	bool want_render = false;
 };
 
+struct CSGSurfaceUVResolved {
+	bool planar = false;
+	Vector3 origin;
+	Vector3 axis_u;
+	Vector3 axis_v;
+	Vector2 offset;
+};
+
 struct CSGEvaluationInputs {
 	// GetMeshGL64()/IsEmpty()/BoundingBox() collapse the receiving handle into
 	// an evaluated leaf. This value is a copy so the node's cached operation
@@ -89,6 +97,7 @@ struct CSGEvaluationInputs {
 	manifold::Manifold subtree;
 
 	HashMap<CSGOriginToken, Ref<Material>> mesh_materials;
+	HashMap<CSGOriginToken, CSGSurfaceUVResolved> mesh_uv_settings;
 	HashMap<CSGOriginToken, CSGSurfaceKey> surface_keys;
 
 	CSGEvaluationSettings settings;
@@ -160,7 +169,7 @@ manifold::Manifold csg_combine_manifolds(const std::vector<manifold::Manifold> &
 manifold::OpType csg_convert_operation(CSGShape3D::Operation p_operation);
 manifold::mat3x4 csg_to_manifold_transform(const Transform3D &p_transform);
 void csg_pack_manifold(const CSGBrush *p_mesh_merge, manifold::Manifold &r_manifold, CSGOriginToken p_origin_base, uint32_t p_schema_size, ObjectID p_source_shape, uint32_t p_schema_generation, Vector<CSGManifoldSurfaceRecord> &r_surface_records);
-void csg_materialize_brush(const manifold::Manifold &p_manifold, const HashMap<CSGOriginToken, Ref<Material>> &p_mesh_materials, CSGBrush *r_mesh_merge, Vector<CSGManifoldResultTriangle> *r_result_triangles);
+void csg_materialize_brush(const manifold::Manifold &p_manifold, const HashMap<CSGOriginToken, Ref<Material>> &p_mesh_materials, const HashMap<CSGOriginToken, CSGSurfaceUVResolved> &p_mesh_uv_settings, CSGBrush *r_mesh_merge, Vector<CSGManifoldResultTriangle> *r_result_triangles);
 void csg_build_render_surfaces(const CSGBrush *p_brush, const CSGEvaluationSettings &p_settings, Vector<CSGRenderSurface> &r_surfaces, bool &r_built_tangents);
 void csg_extract_collision_faces(const CSGBrush *p_brush, Vector<Vector3> &r_collision_faces);
 CSGEvaluationSnapshot csg_build_snapshot(const CSGEvaluationInputs &p_inputs);

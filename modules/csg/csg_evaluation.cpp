@@ -47,6 +47,7 @@
 void csg_materialize_brush(
 		const manifold::Manifold &p_manifold,
 		const HashMap<CSGOriginToken, Ref<Material>> &p_mesh_materials,
+		const HashMap<CSGOriginToken, CSGSurfaceUVResolved> &p_mesh_uv_settings,
 		CSGBrush *r_mesh_merge,
 		Vector<CSGManifoldResultTriangle> *r_result_triangles) {
 	manifold::MeshGL64 mesh = p_manifold.GetMeshGL64();
@@ -63,6 +64,7 @@ void csg_materialize_brush(
 		if (p_mesh_materials.has(original_id)) {
 			material = p_mesh_materials[original_id];
 		}
+		const CSGSurfaceUVResolved *resolved_uv = p_mesh_uv_settings.getptr(original_id);
 		// Find or reserve a material ID in the brush.
 		int32_t material_id = r_mesh_merge->materials.find(material);
 		if (material_id == -1) {
@@ -86,9 +88,19 @@ void csg_materialize_brush(
 						mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_POSITION_X],
 						mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_POSITION_Y],
 						mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_POSITION_Z]);
-				face.uvs[tri_order_i] = Vector2(
-						mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_UV_X_0],
-						mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_UV_Y_0]);
+				if (resolved_uv && resolved_uv->planar) {
+					// Materialization is the only stage that still has the Manifold
+					// run-to-origin mapping. The frame was fully resolved on the main
+					// thread, so applying it here needs no node or Resource access.
+					const Vector3 relative_position = face.vertices[tri_order_i] - resolved_uv->origin;
+					face.uvs[tri_order_i] = Vector2(
+							resolved_uv->axis_u.dot(relative_position) + resolved_uv->offset.x,
+							resolved_uv->axis_v.dot(relative_position) + resolved_uv->offset.y);
+				} else {
+					face.uvs[tri_order_i] = Vector2(
+							mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_UV_X_0],
+							mesh.vertProperties[property_i * mesh.numProp + MANIFOLD_PROPERTY_UV_Y_0]);
+				}
 			}
 			r_mesh_merge->faces.push_back(face);
 			if (r_result_triangles) {
@@ -616,7 +628,7 @@ CSGEvaluationSnapshot csg_build_snapshot(const CSGEvaluationInputs &p_inputs) {
 	snapshot.brush = memnew(CSGBrush);
 
 	Vector<CSGManifoldResultTriangle> *result_triangles = p_inputs.want_result_metadata ? &snapshot.result_triangles : nullptr;
-	csg_materialize_brush(p_inputs.subtree, p_inputs.mesh_materials, snapshot.brush, result_triangles);
+	csg_materialize_brush(p_inputs.subtree, p_inputs.mesh_materials, p_inputs.mesh_uv_settings, snapshot.brush, result_triangles);
 	if (p_inputs.want_result_metadata) {
 		snapshot.result_surface_keys = p_inputs.surface_keys;
 	}

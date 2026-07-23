@@ -53,6 +53,66 @@
 
 #include <manifold/manifold.h>
 
+namespace {
+
+enum class CSGSurfacePropertyField {
+	MATERIAL,
+	UV_MODE,
+	UV_SPACE,
+	METERS_PER_TILE,
+	OFFSET,
+	ROTATION,
+	TEXTURE_LOCK,
+};
+
+bool _parse_csg_surface_property(const StringName &p_name, uint32_t &r_surface, CSGSurfacePropertyField &r_field) {
+	const String name = p_name;
+	if (!name.begins_with("surface_settings/")) {
+		return false;
+	}
+
+	const PackedStringArray components = name.split("/", false);
+	if (components.size() != 3 || components[0] != "surface_settings" || !components[1].is_valid_int()) {
+		return false;
+	}
+
+	const int64_t surface = components[1].to_int();
+	if (surface < 0 || surface > UINT32_MAX) {
+		return false;
+	}
+
+	if (components[2] == "material") {
+		r_field = CSGSurfacePropertyField::MATERIAL;
+	} else if (components[2] == "uv_mode") {
+		r_field = CSGSurfacePropertyField::UV_MODE;
+	} else if (components[2] == "uv_space") {
+		r_field = CSGSurfacePropertyField::UV_SPACE;
+	} else if (components[2] == "meters_per_tile") {
+		r_field = CSGSurfacePropertyField::METERS_PER_TILE;
+	} else if (components[2] == "offset") {
+		r_field = CSGSurfacePropertyField::OFFSET;
+	} else if (components[2] == "rotation") {
+		r_field = CSGSurfacePropertyField::ROTATION;
+	} else if (components[2] == "texture_lock") {
+		r_field = CSGSurfacePropertyField::TEXTURE_LOCK;
+	} else {
+		return false;
+	}
+
+	r_surface = (uint32_t)surface;
+	return true;
+}
+
+bool _is_default_csg_surface_setting(const CSGSurfaceSetting &p_setting) {
+	return p_setting.material.is_null() && p_setting.uv_mode == CSGPrimitive3D::SURFACE_UV_MODE_LEGACY && p_setting.uv_space == CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL && p_setting.meters_per_tile == Vector2(1, 1) && p_setting.offset == Vector2() && p_setting.rotation == 0.0 && !p_setting.texture_lock;
+}
+
+uint32_t _surface_property_usage(bool p_store) {
+	return PROPERTY_USAGE_EDITOR | (p_store ? PROPERTY_USAGE_STORAGE : PROPERTY_USAGE_NONE);
+}
+
+} // namespace
+
 #ifndef NAVIGATION_3D_DISABLED
 Callable CSGShape3D::_navmesh_source_geometry_parsing_callback;
 RID CSGShape3D::_navmesh_source_geometry_parser;
@@ -241,6 +301,17 @@ uint32_t CSGShape3D::get_surface_schema_generation() const {
 	return surface_schema_generation;
 }
 
+Ref<Material> CSGShape3D::get_resolved_surface_material(uint32_t p_semantic_surface) {
+	ERR_FAIL_COND_V(p_semantic_surface >= _get_surface_schema_size(), Ref<Material>());
+	_ensure_local_manifold();
+	for (const CSGManifoldSurfaceRecord &record : manifold_cache->surface_records) {
+		if (record.surface.semantic_surface == p_semantic_surface) {
+			return _resolve_manifold_material(record.source_material, p_semantic_surface);
+		}
+	}
+	return _resolve_manifold_material(Ref<Material>(), p_semantic_surface);
+}
+
 bool CSGShape3D::get_surface_key(uint32_t p_semantic_surface, CSGSurfaceKey &r_surface) const {
 	r_surface = CSGSurfaceKey();
 	if (p_semantic_surface >= _get_surface_schema_size()) {
@@ -418,27 +489,45 @@ void CSGShape3D::_synchronize_surface_schema() {
 	}
 }
 
-Ref<Material> CSGShape3D::_resolve_manifold_material(const Ref<Material> &p_source_material) const {
-	if (const CSGMesh3D *mesh = Object::cast_to<CSGMesh3D>(this)) {
-		Ref<Material> csg_material_override = mesh->get_material();
-		return csg_material_override.is_valid() ? csg_material_override : p_source_material;
+bool CSGShape3D::_has_world_surface_uv_settings() const {
+	const CSGPrimitive3D *primitive = Object::cast_to<CSGPrimitive3D>(this);
+	if (primitive) {
+		const uint32_t surface_count = primitive->get_surface_schema_size();
+		for (uint32_t surface = 0; surface < surface_count; surface++) {
+			if (!primitive->has_surface_setting(surface)) {
+				continue;
+			}
+			const CSGSurfaceSetting setting = primitive->get_surface_setting(surface);
+			if (setting.uv_mode == CSGPrimitive3D::SURFACE_UV_MODE_PLANAR && setting.uv_space == CSGPrimitive3D::SURFACE_UV_SPACE_WORLD) {
+				return true;
+			}
+		}
 	}
-	if (const CSGSphere3D *sphere = Object::cast_to<CSGSphere3D>(this)) {
-		return sphere->get_material();
+
+	for (int i = 0; i < get_child_count(); i++) {
+		const CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
+		if (child && child->is_visible() && child->_has_world_surface_uv_settings()) {
+			return true;
+		}
 	}
-	if (const CSGBox3D *box = Object::cast_to<CSGBox3D>(this)) {
-		return box->get_material();
+	return false;
+}
+
+Ref<Material> CSGShape3D::_resolve_manifold_material(const Ref<Material> &p_source_material, uint32_t p_semantic_surface) const {
+	const CSGPrimitive3D *primitive = Object::cast_to<CSGPrimitive3D>(this);
+	if (!primitive) {
+		return p_source_material;
 	}
-	if (const CSGCylinder3D *cylinder = Object::cast_to<CSGCylinder3D>(this)) {
-		return cylinder->get_material();
+
+	if (primitive->has_surface_setting(p_semantic_surface)) {
+		const Ref<Material> surface_material = primitive->get_surface_setting(p_semantic_surface).material;
+		if (surface_material.is_valid()) {
+			return surface_material;
+		}
 	}
-	if (const CSGTorus3D *torus = Object::cast_to<CSGTorus3D>(this)) {
-		return torus->get_material();
-	}
-	if (const CSGPolygon3D *polygon = Object::cast_to<CSGPolygon3D>(this)) {
-		return polygon->get_material();
-	}
-	return p_source_material;
+
+	const Ref<Material> node_material = primitive->get_material();
+	return node_material.is_valid() ? node_material : p_source_material;
 }
 
 void CSGShape3D::_ensure_local_manifold() {
@@ -539,17 +628,55 @@ void CSGShape3D::_ensure_transformed_manifold() {
 #endif // DEV_ENABLED
 }
 
-void CSGShape3D::_gather_manifold_surface_records(HashMap<CSGOriginToken, Ref<Material>> &r_mesh_materials, HashMap<CSGOriginToken, CSGSurfaceKey> &r_surface_keys) {
+void CSGShape3D::_gather_manifold_surface_records(CSGEvaluationInputs &r_inputs, const CSGShape3D *p_root) {
 	_ensure_local_manifold();
+	const CSGPrimitive3D *primitive = Object::cast_to<CSGPrimitive3D>(this);
 	for (const CSGManifoldSurfaceRecord &record : manifold_cache->surface_records) {
-		r_mesh_materials.insert(record.origin_token, _resolve_manifold_material(record.source_material));
-		r_surface_keys.insert(record.origin_token, record.surface);
+		r_inputs.mesh_materials.insert(record.origin_token, _resolve_manifold_material(record.source_material, record.surface.semantic_surface));
+		r_inputs.surface_keys.insert(record.origin_token, record.surface);
+
+		CSGSurfaceUVResolved resolved_uv;
+		if (primitive && primitive->has_surface_setting(record.surface.semantic_surface)) {
+			const CSGSurfaceSetting setting = primitive->get_surface_setting(record.surface.semantic_surface);
+			if (setting.uv_mode == CSGPrimitive3D::SURFACE_UV_MODE_PLANAR) {
+				Vector3 axis_u;
+				Vector3 axis_v;
+				primitive->get_surface_uv_basis(record.surface.semantic_surface, axis_u, axis_v);
+
+				const real_t cos_rotation = Math::cos(setting.rotation);
+				const real_t sin_rotation = Math::sin(setting.rotation);
+				const Vector3 rotated_u = axis_u * cos_rotation + axis_v * sin_rotation;
+				const Vector3 rotated_v = axis_v * cos_rotation - axis_u * sin_rotation;
+				const real_t meters_u = Math::is_zero_approx(setting.meters_per_tile.x) ? 1.0 : setting.meters_per_tile.x;
+				const real_t meters_v = Math::is_zero_approx(setting.meters_per_tile.y) ? 1.0 : setting.meters_per_tile.y;
+
+				Transform3D projection_to_root;
+				switch (setting.uv_space) {
+					case CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL: {
+						projection_to_root = p_root->get_global_transform().affine_inverse() * get_global_transform();
+					} break;
+					case CSGPrimitive3D::SURFACE_UV_SPACE_ROOT: {
+						projection_to_root = Transform3D();
+					} break;
+					case CSGPrimitive3D::SURFACE_UV_SPACE_WORLD: {
+						projection_to_root = p_root->get_global_transform().affine_inverse();
+					} break;
+				}
+
+				resolved_uv.planar = true;
+				resolved_uv.origin = projection_to_root.origin;
+				resolved_uv.axis_u = projection_to_root.basis.xform(rotated_u / meters_u);
+				resolved_uv.axis_v = projection_to_root.basis.xform(rotated_v / meters_v);
+				resolved_uv.offset = setting.offset;
+			}
+		}
+		r_inputs.mesh_uv_settings.insert(record.origin_token, resolved_uv);
 	}
 
 	for (int i = 0; i < get_child_count(); i++) {
 		CSGShape3D *child = Object::cast_to<CSGShape3D>(get_child(i));
 		if (child && child->is_visible()) {
-			child->_gather_manifold_surface_records(r_mesh_materials, r_surface_keys);
+			child->_gather_manifold_surface_records(r_inputs, p_root);
 		}
 	}
 }
@@ -558,7 +685,7 @@ CSGEvaluationInputs CSGShape3D::_gather_evaluation_inputs(bool p_want_render, bo
 	_ensure_subtree_manifold();
 
 	CSGEvaluationInputs inputs;
-	_gather_manifold_surface_records(inputs.mesh_materials, inputs.surface_keys);
+	_gather_manifold_surface_records(inputs, this);
 	// Manifold evaluation collapses its receiver. Copy the cached handle before
 	// any pure build step can evaluate it.
 	inputs.subtree = manifold_cache->subtree_manifold;
@@ -629,7 +756,7 @@ CSGBrush *CSGShape3D::_get_brush(bool p_scheduler_prepared) {
 	}
 #endif // DEV_ENABLED
 	Vector<CSGManifoldResultTriangle> result_triangles;
-	csg_materialize_brush(inputs.subtree, inputs.mesh_materials, brush, inputs.want_result_metadata ? &result_triangles : nullptr);
+	csg_materialize_brush(inputs.subtree, inputs.mesh_materials, inputs.mesh_uv_settings, brush, inputs.want_result_metadata ? &result_triangles : nullptr);
 	if (inputs.want_result_metadata) {
 		manifold_cache->result_surface_keys = inputs.surface_keys;
 		manifold_cache->result_triangles = result_triangles;
@@ -980,6 +1107,9 @@ void CSGShape3D::_notification(int p_what) {
 			// A root transform does not affect its local CSG result, but its wrapper must
 			// still be invalidated in case the node is subsequently reparented.
 			_make_transform_dirty();
+			if (is_root_shape() && _has_world_surface_uv_settings()) {
+				_make_material_dirty();
+			}
 		} break;
 
 #ifndef PHYSICS_3D_DISABLED
@@ -1201,6 +1331,172 @@ CSGCombiner3D::CSGCombiner3D() {
 
 /////////////////////
 
+bool CSGPrimitive3D::_set(const StringName &p_name, const Variant &p_value) {
+	if (p_name == SNAME("surface_schema_version")) {
+		set_surface_schema_version(p_value);
+		return true;
+	}
+
+	uint32_t surface = 0;
+	CSGSurfacePropertyField field;
+	if (!_parse_csg_surface_property(p_name, surface, field) || surface >= _get_surface_schema_size()) {
+		return false;
+	}
+
+	switch (field) {
+		case CSGSurfacePropertyField::MATERIAL: {
+			set_surface_material(surface, p_value);
+		} break;
+		case CSGSurfacePropertyField::UV_MODE: {
+			const int uv_mode = p_value;
+			if (uv_mode < SURFACE_UV_MODE_LEGACY || uv_mode > SURFACE_UV_MODE_PLANAR) {
+				return false;
+			}
+			set_surface_uv_mode(surface, uv_mode);
+		} break;
+		case CSGSurfacePropertyField::UV_SPACE: {
+			const int uv_space = p_value;
+			if (uv_space < SURFACE_UV_SPACE_LOCAL || uv_space > SURFACE_UV_SPACE_WORLD) {
+				return false;
+			}
+			set_surface_uv_space(surface, uv_space);
+		} break;
+		case CSGSurfacePropertyField::METERS_PER_TILE: {
+			set_surface_meters_per_tile(surface, p_value);
+		} break;
+		case CSGSurfacePropertyField::OFFSET: {
+			set_surface_offset(surface, p_value);
+		} break;
+		case CSGSurfacePropertyField::ROTATION: {
+			set_surface_rotation(surface, p_value);
+		} break;
+		case CSGSurfacePropertyField::TEXTURE_LOCK: {
+			set_surface_texture_lock(surface, p_value);
+		} break;
+	}
+	return true;
+}
+
+bool CSGPrimitive3D::_get(const StringName &p_name, Variant &r_ret) const {
+	if (p_name == SNAME("surface_schema_version")) {
+		r_ret = surface_schema_version;
+		return true;
+	}
+
+	uint32_t surface = 0;
+	CSGSurfacePropertyField field;
+	if (!_parse_csg_surface_property(p_name, surface, field) || surface >= _get_surface_schema_size()) {
+		return false;
+	}
+
+	const CSGSurfaceSetting setting = get_surface_setting(surface);
+	switch (field) {
+		case CSGSurfacePropertyField::MATERIAL: {
+			r_ret = setting.material;
+		} break;
+		case CSGSurfacePropertyField::UV_MODE: {
+			r_ret = setting.uv_mode;
+		} break;
+		case CSGSurfacePropertyField::UV_SPACE: {
+			r_ret = setting.uv_space;
+		} break;
+		case CSGSurfacePropertyField::METERS_PER_TILE: {
+			r_ret = setting.meters_per_tile;
+		} break;
+		case CSGSurfacePropertyField::OFFSET: {
+			r_ret = setting.offset;
+		} break;
+		case CSGSurfacePropertyField::ROTATION: {
+			r_ret = setting.rotation;
+		} break;
+		case CSGSurfacePropertyField::TEXTURE_LOCK: {
+			r_ret = setting.texture_lock;
+		} break;
+	}
+	return true;
+}
+
+void CSGPrimitive3D::_get_property_list(List<PropertyInfo> *p_list) const {
+	const uint32_t schema_version_usage = surface_schema_version == SURFACE_SCHEMA_VERSION_CURRENT ? PROPERTY_USAGE_NONE : PROPERTY_USAGE_STORAGE;
+	p_list->push_back(PropertyInfo(Variant::INT, "surface_schema_version", PROPERTY_HINT_NONE, "", schema_version_usage));
+
+	const uint32_t surface_count = _get_surface_schema_size();
+	for (uint32_t surface = 0; surface < surface_count; surface++) {
+		const CSGSurfaceSetting setting = get_surface_setting(surface);
+		const String prefix = vformat("surface_settings/%d/", surface);
+
+		p_list->push_back(PropertyInfo(Variant::OBJECT, prefix + "material", PROPERTY_HINT_RESOURCE_TYPE, "BaseMaterial3D,ShaderMaterial", _surface_property_usage(setting.material.is_valid())));
+		p_list->push_back(PropertyInfo(Variant::INT, prefix + "uv_mode", PROPERTY_HINT_ENUM, "Legacy,Planar", _surface_property_usage(setting.uv_mode != SURFACE_UV_MODE_LEGACY) | PROPERTY_USAGE_UPDATE_ALL_IF_MODIFIED));
+		p_list->push_back(PropertyInfo(Variant::INT, prefix + "uv_space", PROPERTY_HINT_ENUM, "Local,Root,World", _surface_property_usage(setting.uv_space != SURFACE_UV_SPACE_LOCAL)));
+		p_list->push_back(PropertyInfo(Variant::VECTOR2, prefix + "meters_per_tile", PROPERTY_HINT_LINK, "suffix:m", _surface_property_usage(setting.meters_per_tile != Vector2(1, 1))));
+		p_list->push_back(PropertyInfo(Variant::VECTOR2, prefix + "offset", PROPERTY_HINT_NONE, "", _surface_property_usage(setting.offset != Vector2())));
+		p_list->push_back(PropertyInfo(Variant::FLOAT, prefix + "rotation", PROPERTY_HINT_RANGE, "-360,360,0.1,or_less,or_greater,radians_as_degrees", _surface_property_usage(setting.rotation != 0.0)));
+		p_list->push_back(PropertyInfo(Variant::BOOL, prefix + "texture_lock", PROPERTY_HINT_NONE, "", _surface_property_usage(setting.texture_lock)));
+	}
+}
+
+bool CSGPrimitive3D::_property_can_revert(const StringName &p_name) const {
+	Variant revert_value;
+	return _property_get_revert(p_name, revert_value);
+}
+
+bool CSGPrimitive3D::_property_get_revert(const StringName &p_name, Variant &r_property) const {
+	if (p_name == SNAME("surface_schema_version")) {
+		r_property = SURFACE_SCHEMA_VERSION_CURRENT;
+		return true;
+	}
+
+	uint32_t surface = 0;
+	CSGSurfacePropertyField field;
+	if (!_parse_csg_surface_property(p_name, surface, field) || surface >= _get_surface_schema_size()) {
+		return false;
+	}
+
+	switch (field) {
+		case CSGSurfacePropertyField::MATERIAL: {
+			r_property = Ref<Material>();
+		} break;
+		case CSGSurfacePropertyField::UV_MODE: {
+			r_property = SURFACE_UV_MODE_LEGACY;
+		} break;
+		case CSGSurfacePropertyField::UV_SPACE: {
+			r_property = SURFACE_UV_SPACE_LOCAL;
+		} break;
+		case CSGSurfacePropertyField::METERS_PER_TILE: {
+			r_property = Vector2(1, 1);
+		} break;
+		case CSGSurfacePropertyField::OFFSET: {
+			r_property = Vector2();
+		} break;
+		case CSGSurfacePropertyField::ROTATION: {
+			r_property = 0.0;
+		} break;
+		case CSGSurfacePropertyField::TEXTURE_LOCK: {
+			r_property = false;
+		} break;
+	}
+	return true;
+}
+
+void CSGPrimitive3D::_validate_property(PropertyInfo &p_property) const {
+	uint32_t surface = 0;
+	CSGSurfacePropertyField field;
+	if (!_parse_csg_surface_property(p_property.name, surface, field)) {
+		return;
+	}
+
+	if (surface >= _get_surface_schema_size()) {
+		p_property.usage &= ~PROPERTY_USAGE_EDITOR;
+		return;
+	}
+
+	if (field != CSGSurfacePropertyField::MATERIAL && field != CSGSurfacePropertyField::UV_MODE && get_surface_setting(surface).uv_mode == SURFACE_UV_MODE_LEGACY) {
+		// Keep STORAGE on authored values while hiding controls that do not affect
+		// legacy/interpolated UVs.
+		p_property.usage &= ~PROPERTY_USAGE_EDITOR;
+	}
+}
+
 CSGBrush *CSGPrimitive3D::_create_brush_from_arrays(const Vector<Vector3> &p_vertices, const Vector<Vector2> &p_uv, const Vector<bool> &p_smooth, const Vector<Ref<Material>> &p_materials) {
 	CSGBrush *new_brush = memnew(CSGBrush);
 
@@ -1237,6 +1533,108 @@ void CSGPrimitive3D::set_flip_faces(bool p_invert) {
 
 bool CSGPrimitive3D::get_flip_faces() {
 	return flip_faces;
+}
+
+void CSGPrimitive3D::get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const {
+	r_axis_u = Vector3(1, 0, 0);
+	r_axis_v = Vector3(0, 1, 0);
+}
+
+bool CSGPrimitive3D::has_surface_setting(uint32_t p_surface) const {
+	return p_surface < _get_surface_schema_size() && surface_settings.has(p_surface);
+}
+
+CSGSurfaceSetting CSGPrimitive3D::get_surface_setting(uint32_t p_surface) const {
+	ERR_FAIL_COND_V(p_surface >= _get_surface_schema_size(), CSGSurfaceSetting());
+	const CSGSurfaceSetting *setting = surface_settings.getptr(p_surface);
+	return setting ? *setting : CSGSurfaceSetting();
+}
+
+void CSGPrimitive3D::set_surface_setting(uint32_t p_surface, const CSGSurfaceSetting &p_setting) {
+	ERR_FAIL_COND(p_surface >= _get_surface_schema_size());
+	ERR_FAIL_COND(p_setting.uv_mode < SURFACE_UV_MODE_LEGACY || p_setting.uv_mode > SURFACE_UV_MODE_PLANAR);
+	ERR_FAIL_COND(p_setting.uv_space < SURFACE_UV_SPACE_LOCAL || p_setting.uv_space > SURFACE_UV_SPACE_WORLD);
+
+	const CSGSurfaceSetting *existing = surface_settings.getptr(p_surface);
+	const bool is_default = _is_default_csg_surface_setting(p_setting);
+	if ((is_default && !existing) || (!is_default && existing && *existing == p_setting)) {
+		return;
+	}
+
+	if (is_default) {
+		surface_settings.erase(p_surface);
+	} else {
+		surface_settings.insert(p_surface, p_setting);
+	}
+
+	notify_property_list_changed();
+	_make_material_dirty();
+}
+
+void CSGPrimitive3D::clear_surface_setting(uint32_t p_surface) {
+	ERR_FAIL_COND(p_surface >= _get_surface_schema_size());
+	if (!surface_settings.erase(p_surface)) {
+		return;
+	}
+	notify_property_list_changed();
+	_make_material_dirty();
+}
+
+void CSGPrimitive3D::set_surface_material(uint32_t p_surface, const Ref<Material> &p_material) {
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.material = p_material;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_uv_mode(uint32_t p_surface, int p_uv_mode) {
+	ERR_FAIL_COND(p_uv_mode < SURFACE_UV_MODE_LEGACY || p_uv_mode > SURFACE_UV_MODE_PLANAR);
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.uv_mode = p_uv_mode;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_uv_space(uint32_t p_surface, int p_uv_space) {
+	ERR_FAIL_COND(p_uv_space < SURFACE_UV_SPACE_LOCAL || p_uv_space > SURFACE_UV_SPACE_WORLD);
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.uv_space = p_uv_space;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_meters_per_tile(uint32_t p_surface, const Vector2 &p_meters_per_tile) {
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.meters_per_tile = p_meters_per_tile;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_offset(uint32_t p_surface, const Vector2 &p_offset) {
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.offset = p_offset;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_rotation(uint32_t p_surface, real_t p_rotation) {
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.rotation = p_rotation;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_texture_lock(uint32_t p_surface, bool p_texture_lock) {
+	CSGSurfaceSetting setting = get_surface_setting(p_surface);
+	setting.texture_lock = p_texture_lock;
+	set_surface_setting(p_surface, setting);
+}
+
+void CSGPrimitive3D::set_surface_schema_version(int p_version) {
+	ERR_FAIL_COND(p_version < 0);
+	if (surface_schema_version == p_version) {
+		return;
+	}
+	surface_schema_version = p_version;
+	notify_property_list_changed();
+}
+
+int CSGPrimitive3D::get_surface_schema_version() const {
+	return surface_schema_version;
 }
 
 CSGPrimitive3D::CSGPrimitive3D() {
@@ -1685,6 +2083,38 @@ CSGSphere3D::CSGSphere3D() {
 
 ///////////////
 
+void CSGBox3D::get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const {
+	switch (p_surface) {
+		case SURFACE_POSITIVE_X: {
+			r_axis_u = Vector3(0, 0, -1);
+			r_axis_v = Vector3(0, 1, 0);
+		} break;
+		case SURFACE_NEGATIVE_X: {
+			r_axis_u = Vector3(0, 0, 1);
+			r_axis_v = Vector3(0, 1, 0);
+		} break;
+		case SURFACE_POSITIVE_Y: {
+			r_axis_u = Vector3(1, 0, 0);
+			r_axis_v = Vector3(0, 0, -1);
+		} break;
+		case SURFACE_NEGATIVE_Y: {
+			r_axis_u = Vector3(1, 0, 0);
+			r_axis_v = Vector3(0, 0, 1);
+		} break;
+		case SURFACE_POSITIVE_Z: {
+			r_axis_u = Vector3(1, 0, 0);
+			r_axis_v = Vector3(0, 1, 0);
+		} break;
+		case SURFACE_NEGATIVE_Z: {
+			r_axis_u = Vector3(-1, 0, 0);
+			r_axis_v = Vector3(0, 1, 0);
+		} break;
+		default: {
+			CSGPrimitive3D::get_surface_uv_basis(p_surface, r_axis_u, r_axis_v);
+		} break;
+	}
+}
+
 CSGBrush *CSGBox3D::_build_brush() {
 	// set our bounding box
 
@@ -1856,6 +2286,22 @@ Ref<Material> CSGBox3D::get_material() const {
 }
 
 ///////////////
+
+void CSGCylinder3D::get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const {
+	switch (p_surface) {
+		case SURFACE_TOP: {
+			r_axis_u = Vector3(1, 0, 0);
+			r_axis_v = Vector3(0, 0, -1);
+		} break;
+		case SURFACE_BOTTOM: {
+			r_axis_u = Vector3(1, 0, 0);
+			r_axis_v = Vector3(0, 0, 1);
+		} break;
+		default: {
+			CSGPrimitive3D::get_surface_uv_basis(p_surface, r_axis_u, r_axis_v);
+		} break;
+	}
+}
 
 CSGBrush *CSGCylinder3D::_build_brush() {
 	// set our bounding box
@@ -2336,6 +2782,22 @@ CSGTorus3D::CSGTorus3D() {
 }
 
 ///////////////
+
+void CSGPolygon3D::get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const {
+	switch (p_surface) {
+		case SURFACE_BACK: {
+			r_axis_u = Vector3(-1, 0, 0);
+			r_axis_v = Vector3(0, 1, 0);
+		} break;
+		case SURFACE_SIDE: {
+			r_axis_u = Vector3(1, 0, 0);
+			r_axis_v = Vector3(0, 0, 1);
+		} break;
+		default: {
+			CSGPrimitive3D::get_surface_uv_basis(p_surface, r_axis_u, r_axis_v);
+		} break;
+	}
+}
 
 CSGBrush *CSGPolygon3D::_build_brush() {
 	CSGBrush *new_brush = memnew(CSGBrush);

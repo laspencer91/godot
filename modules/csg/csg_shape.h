@@ -75,6 +75,20 @@ struct CSGSurfaceHit {
 	uint32_t connected_fragment = UINT32_MAX;
 };
 
+struct CSGSurfaceSetting {
+	Ref<Material> material;
+	int uv_mode = 0;
+	int uv_space = 0;
+	Vector2 meters_per_tile = Vector2(1, 1);
+	Vector2 offset;
+	real_t rotation = 0.0;
+	bool texture_lock = false;
+
+	bool operator==(const CSGSurfaceSetting &p_other) const {
+		return material == p_other.material && uv_mode == p_other.uv_mode && uv_space == p_other.uv_space && meters_per_tile == p_other.meters_per_tile && offset == p_other.offset && rotation == p_other.rotation && texture_lock == p_other.texture_lock;
+	}
+};
+
 class CSGShape3D : public GeometryInstance3D {
 	GDCLASS(CSGShape3D, GeometryInstance3D);
 
@@ -143,8 +157,9 @@ private:
 	void _ensure_local_manifold();
 	void _ensure_subtree_manifold();
 	void _ensure_transformed_manifold();
-	Ref<Material> _resolve_manifold_material(const Ref<Material> &p_source_material) const;
-	void _gather_manifold_surface_records(HashMap<CSGOriginToken, Ref<Material>> &r_mesh_materials, HashMap<CSGOriginToken, CSGSurfaceKey> &r_surface_keys);
+	bool _has_world_surface_uv_settings() const;
+	Ref<Material> _resolve_manifold_material(const Ref<Material> &p_source_material, uint32_t p_semantic_surface) const;
+	void _gather_manifold_surface_records(CSGEvaluationInputs &r_inputs, const CSGShape3D *p_root);
 	CSGEvaluationInputs _gather_evaluation_inputs(bool p_want_render, bool p_want_collision);
 	void _publish_snapshot(CSGEvaluationSnapshot &p_snapshot);
 	void _queue_scheduler_poll(bool p_next_frame = false);
@@ -182,6 +197,7 @@ public:
 	virtual Vector<Vector3> get_brush_faces();
 	uint32_t get_surface_schema_size() const;
 	uint32_t get_surface_schema_generation() const;
+	Ref<Material> get_resolved_surface_material(uint32_t p_semantic_surface);
 	bool get_surface_key(uint32_t p_semantic_surface, CSGSurfaceKey &r_surface) const;
 	bool get_surface_origin_token(uint32_t p_semantic_surface, CSGOriginToken &r_token);
 	static bool is_surface_key_valid(const CSGSurfaceKey &p_surface);
@@ -271,12 +287,52 @@ class CSGPrimitive3D : public CSGShape3D {
 
 protected:
 	bool flip_faces;
+	HashMap<uint32_t, CSGSurfaceSetting> surface_settings;
+	int surface_schema_version = SURFACE_SCHEMA_VERSION_CURRENT;
+
 	CSGBrush *_create_brush_from_arrays(const Vector<Vector3> &p_vertices, const Vector<Vector2> &p_uv, const Vector<bool> &p_smooth, const Vector<Ref<Material>> &p_materials);
+	bool _set(const StringName &p_name, const Variant &p_value);
+	bool _get(const StringName &p_name, Variant &r_ret) const;
+	void _get_property_list(List<PropertyInfo> *p_list) const;
+	bool _property_can_revert(const StringName &p_name) const;
+	bool _property_get_revert(const StringName &p_name, Variant &r_property) const;
+	void _validate_property(PropertyInfo &p_property) const;
 	static void _bind_methods();
 
 public:
+	enum SurfaceUVMode {
+		SURFACE_UV_MODE_LEGACY = 0,
+		SURFACE_UV_MODE_PLANAR = 1,
+	};
+
+	enum SurfaceUVSpace {
+		SURFACE_UV_SPACE_LOCAL = 0,
+		SURFACE_UV_SPACE_ROOT = 1,
+		SURFACE_UV_SPACE_WORLD = 2,
+	};
+
+	static constexpr int SURFACE_SCHEMA_VERSION_CURRENT = 1;
+
 	void set_flip_faces(bool p_invert);
 	bool get_flip_faces();
+	virtual Ref<Material> get_material() const { return Ref<Material>(); }
+	virtual void get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const;
+
+	bool has_surface_setting(uint32_t p_surface) const;
+	CSGSurfaceSetting get_surface_setting(uint32_t p_surface) const;
+	void set_surface_setting(uint32_t p_surface, const CSGSurfaceSetting &p_setting);
+	void clear_surface_setting(uint32_t p_surface);
+
+	void set_surface_material(uint32_t p_surface, const Ref<Material> &p_material);
+	void set_surface_uv_mode(uint32_t p_surface, int p_uv_mode);
+	void set_surface_uv_space(uint32_t p_surface, int p_uv_space);
+	void set_surface_meters_per_tile(uint32_t p_surface, const Vector2 &p_meters_per_tile);
+	void set_surface_offset(uint32_t p_surface, const Vector2 &p_offset);
+	void set_surface_rotation(uint32_t p_surface, real_t p_rotation);
+	void set_surface_texture_lock(uint32_t p_surface, bool p_texture_lock);
+
+	void set_surface_schema_version(int p_version);
+	int get_surface_schema_version() const;
 
 	CSGPrimitive3D();
 };
@@ -302,7 +358,7 @@ public:
 	Ref<Mesh> get_mesh();
 
 	void set_material(const Ref<Material> &p_material);
-	Ref<Material> get_material() const;
+	Ref<Material> get_material() const override;
 };
 
 class CSGSphere3D : public CSGPrimitive3D {
@@ -335,7 +391,7 @@ public:
 	int get_rings() const;
 
 	void set_material(const Ref<Material> &p_material);
-	Ref<Material> get_material() const;
+	Ref<Material> get_material() const override;
 
 	void set_smooth_faces(bool p_smooth_faces);
 	bool get_smooth_faces() const;
@@ -347,6 +403,7 @@ class CSGBox3D : public CSGPrimitive3D {
 	GDCLASS(CSGBox3D, CSGPrimitive3D);
 	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
+	virtual void get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const override;
 
 	Ref<Material> material;
 	Vector3 size = Vector3(1, 1, 1);
@@ -373,7 +430,7 @@ public:
 	Vector3 get_size() const;
 
 	void set_material(const Ref<Material> &p_material);
-	Ref<Material> get_material() const;
+	Ref<Material> get_material() const override;
 
 	CSGBox3D() {}
 };
@@ -382,6 +439,7 @@ class CSGCylinder3D : public CSGPrimitive3D {
 	GDCLASS(CSGCylinder3D, CSGPrimitive3D);
 	virtual uint32_t _get_surface_schema_size() const override { return SURFACE_COUNT; }
 	virtual CSGBrush *_build_brush() override;
+	virtual void get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const override;
 
 	Ref<Material> material;
 	float radius;
@@ -417,7 +475,7 @@ public:
 	bool get_smooth_faces() const;
 
 	void set_material(const Ref<Material> &p_material);
-	Ref<Material> get_material() const;
+	Ref<Material> get_material() const override;
 
 	CSGCylinder3D();
 };
@@ -459,13 +517,14 @@ public:
 	bool get_smooth_faces() const;
 
 	void set_material(const Ref<Material> &p_material);
-	Ref<Material> get_material() const;
+	Ref<Material> get_material() const override;
 
 	CSGTorus3D();
 };
 
 class CSGPolygon3D : public CSGPrimitive3D {
 	GDCLASS(CSGPolygon3D, CSGPrimitive3D);
+	virtual void get_surface_uv_basis(uint32_t p_surface, Vector3 &r_axis_u, Vector3 &r_axis_v) const override;
 
 public:
 	enum Mode {
@@ -585,7 +644,7 @@ public:
 	bool get_smooth_faces() const;
 
 	void set_material(const Ref<Material> &p_material);
-	Ref<Material> get_material() const;
+	Ref<Material> get_material() const override;
 
 	CSGPolygon3D();
 };

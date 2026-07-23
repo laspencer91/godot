@@ -36,14 +36,18 @@
 #include "editor/editor_document.h"
 #include "editor/editor_node.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/inspector/editor_resource_picker.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
 #include "editor/scene/3d/node_3d_editor_viewport.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
+#include "scene/gui/check_box.h"
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
+#include "scene/gui/option_button.h"
 #include "scene/gui/panel_container.h"
+#include "scene/gui/spin_box.h"
 
 static bool _get_box_surface_axis(uint32_t p_surface, int &r_axis, real_t &r_sign, Vector3 &r_outward) {
 	r_outward = Vector3();
@@ -101,6 +105,25 @@ CSGPushPullResult csg_push_pull_apply(const Vector3 &p_start_size, const Transfo
 	return result;
 }
 
+Vector2 csg_texture_lock_compensate_offset(const CSGPrimitive3D *p_primitive, uint32_t p_semantic_surface, const CSGSurfaceSetting &p_setting, const Transform3D &p_operand_to_root, const Vector3 &p_center_shift_root) {
+	if (!p_primitive || p_setting.uv_mode != CSGPrimitive3D::SURFACE_UV_MODE_PLANAR || p_setting.uv_space != CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL || !p_setting.texture_lock) {
+		return p_setting.offset;
+	}
+
+	Vector3 axis_u;
+	Vector3 axis_v;
+	p_primitive->get_surface_uv_basis(p_semantic_surface, axis_u, axis_v);
+	const real_t cos_rotation = Math::cos(p_setting.rotation);
+	const real_t sin_rotation = Math::sin(p_setting.rotation);
+	const Vector3 rotated_u = axis_u * cos_rotation + axis_v * sin_rotation;
+	const Vector3 rotated_v = axis_v * cos_rotation - axis_u * sin_rotation;
+	const real_t meters_u = Math::is_zero_approx(p_setting.meters_per_tile.x) ? 1.0 : p_setting.meters_per_tile.x;
+	const real_t meters_v = Math::is_zero_approx(p_setting.meters_per_tile.y) ? 1.0 : p_setting.meters_per_tile.y;
+	const Vector3 resolved_u = p_operand_to_root.basis.xform(rotated_u / meters_u);
+	const Vector3 resolved_v = p_operand_to_root.basis.xform(rotated_v / meters_v);
+	return p_setting.offset + Vector2(resolved_u.dot(p_center_shift_root), resolved_v.dot(p_center_shift_root));
+}
+
 // CSG-5: Keep the inner cap flush and extend an identity-basis child outward.
 CSGExtrusionResult csg_extrude_box_face(const Vector3 &p_source_size, uint32_t p_semantic_surface, real_t p_depth) {
 	CSGExtrusionResult result;
@@ -119,6 +142,43 @@ CSGExtrusionResult csg_extrude_box_face(const Vector3 &p_source_size, uint32_t p
 	center_local[axis] = sign * (p_source_size[axis] * 0.5 + result.size[axis] * 0.5);
 	result.local_transform = Transform3D(Basis(), center_local);
 	return result;
+}
+
+void csg_configure_extrusion_surface_settings(CSGBox3D *p_source, uint32_t p_source_surface, const Transform3D &p_source_to_root, CSGBox3D *r_extrusion) {
+	ERR_FAIL_NULL(p_source);
+	ERR_FAIL_NULL(r_extrusion);
+	ERR_FAIL_COND(p_source_surface >= CSGBox3D::SURFACE_COUNT);
+
+	CSGSurfaceSetting source_setting;
+	if (p_source->has_surface_setting(p_source_surface)) {
+		source_setting = p_source->get_surface_setting(p_source_surface);
+	}
+	const Ref<Material> source_material = p_source->get_resolved_surface_material(p_source_surface);
+	r_extrusion->set_material(source_material);
+
+	CSGSurfaceSetting cap_setting = source_setting;
+	cap_setting.material = source_material;
+	if (cap_setting.uv_mode == CSGPrimitive3D::SURFACE_UV_MODE_PLANAR && cap_setting.uv_space == CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL) {
+		// The cap's new operand-local frame is translated from the source frame.
+		// Preserve alignment at creation regardless of whether future edits are locked.
+		CSGSurfaceSetting alignment_setting = cap_setting;
+		alignment_setting.texture_lock = true;
+		const Vector3 center_shift_root = p_source_to_root.basis.xform(r_extrusion->get_transform().origin);
+		cap_setting.offset = csg_texture_lock_compensate_offset(p_source, p_source_surface, alignment_setting, p_source_to_root, center_shift_root);
+	}
+	r_extrusion->set_surface_setting(p_source_surface, cap_setting);
+
+	const uint32_t joining_surface = p_source_surface ^ 1;
+	for (uint32_t surface = 0; surface < CSGBox3D::SURFACE_COUNT; surface++) {
+		if (surface == p_source_surface || surface == joining_surface) {
+			continue;
+		}
+		CSGSurfaceSetting side_setting;
+		side_setting.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+		side_setting.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_ROOT;
+		side_setting.meters_per_tile = source_setting.meters_per_tile;
+		r_extrusion->set_surface_setting(surface, side_setting);
+	}
 }
 
 static CSGShape3D *_get_single_selected_csg_shape(const EditorEditDomainContext *p_context = nullptr) {
@@ -149,10 +209,104 @@ static CSGShape3D *_find_csg_root(CSGShape3D *p_shape) {
 	return root;
 }
 
+struct CSGPaintUndoTarget {
+	CSGPrimitive3D *source = nullptr;
+	uint32_t surface = 0;
+	CSGSurfaceSetting previous_setting;
+};
+
+static bool _is_csg_source_editable(const CSGPrimitive3D *p_source, const Node *p_edited_root) {
+	return p_source && p_edited_root && (p_source == p_edited_root || p_source->get_owner() == p_edited_root);
+}
+
+static Vector<CSGPaintUndoTarget> _collect_csg_paint_targets(CSGShape3D *p_root, Node *p_edited_root, const Vector<CSGSurfaceKey> &p_surfaces, const CSGSurfaceSetting &p_setting) {
+	Vector<CSGPaintUndoTarget> targets;
+	if (!p_root || !p_edited_root || p_setting.uv_mode < CSGPrimitive3D::SURFACE_UV_MODE_LEGACY || p_setting.uv_mode > CSGPrimitive3D::SURFACE_UV_MODE_PLANAR || p_setting.uv_space < CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL || p_setting.uv_space > CSGPrimitive3D::SURFACE_UV_SPACE_WORLD) {
+		return targets;
+	}
+
+	for (const CSGSurfaceKey &surface : p_surfaces) {
+		if (!CSGShape3D::is_surface_key_valid(surface)) {
+			continue;
+		}
+		CSGPrimitive3D *source = ObjectDB::get_instance<CSGPrimitive3D>(surface.source_shape);
+		if (!_is_csg_source_editable(source, p_edited_root) || _find_csg_root(source) != p_root) {
+			continue;
+		}
+
+		bool duplicate = false;
+		for (const CSGPaintUndoTarget &target : targets) {
+			if (target.source == source && target.surface == surface.semantic_surface) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (duplicate) {
+			continue;
+		}
+
+		const CSGSurfaceSetting previous_setting = source->get_surface_setting(surface.semantic_surface);
+		if (previous_setting == p_setting) {
+			continue;
+		}
+		CSGPaintUndoTarget target;
+		target.source = source;
+		target.surface = surface.semantic_surface;
+		target.previous_setting = previous_setting;
+		targets.push_back(target);
+	}
+	return targets;
+}
+
+template <typename TUndoRedo>
+static void _add_csg_paint_properties(TUndoRedo *p_undo_redo, const CSGPaintUndoTarget &p_target, const CSGSurfaceSetting &p_setting) {
+	const String prefix = vformat("surface_settings/%d/", p_target.surface);
+	p_undo_redo->add_do_property(p_target.source, prefix + "material", p_setting.material);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "material", p_target.previous_setting.material);
+	p_undo_redo->add_do_property(p_target.source, prefix + "uv_mode", p_setting.uv_mode);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "uv_mode", p_target.previous_setting.uv_mode);
+	p_undo_redo->add_do_property(p_target.source, prefix + "uv_space", p_setting.uv_space);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "uv_space", p_target.previous_setting.uv_space);
+	p_undo_redo->add_do_property(p_target.source, prefix + "meters_per_tile", p_setting.meters_per_tile);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "meters_per_tile", p_target.previous_setting.meters_per_tile);
+	p_undo_redo->add_do_property(p_target.source, prefix + "offset", p_setting.offset);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "offset", p_target.previous_setting.offset);
+	p_undo_redo->add_do_property(p_target.source, prefix + "rotation", p_setting.rotation);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "rotation", p_target.previous_setting.rotation);
+	p_undo_redo->add_do_property(p_target.source, prefix + "texture_lock", p_setting.texture_lock);
+	p_undo_redo->add_undo_property(p_target.source, prefix + "texture_lock", p_target.previous_setting.texture_lock);
+}
+
+bool csg_paint_surfaces_with_undo(UndoRedo *p_undo_redo, CSGShape3D *p_root, Node *p_edited_root, const Vector<CSGSurfaceKey> &p_surfaces, const CSGSurfaceSetting &p_setting, UndoRedo::MergeMode p_merge_mode, const String &p_action_name) {
+	ERR_FAIL_NULL_V(p_undo_redo, false);
+	const Vector<CSGPaintUndoTarget> targets = _collect_csg_paint_targets(p_root, p_edited_root, p_surfaces, p_setting);
+	if (targets.is_empty()) {
+		return false;
+	}
+
+	p_undo_redo->create_action(p_action_name, p_merge_mode);
+	for (const CSGPaintUndoTarget &target : targets) {
+		_add_csg_paint_properties(p_undo_redo, target, p_setting);
+	}
+	p_undo_redo->add_do_method(Callable(p_root, SNAME("_request_final_async_evaluation")));
+	p_undo_redo->add_undo_method(Callable(p_root, SNAME("_request_final_async_evaluation")));
+	p_undo_redo->commit_action();
+	return true;
+}
+
 void CSGSurfaceSession::_resolve_active_root(const EditorEditDomainContext &p_context) {
 	CSGShape3D *selected_shape = _get_single_selected_csg_shape(&p_context);
 	CSGShape3D *root = _find_csg_root(selected_shape);
 	active_root_id = root ? root->get_instance_id() : ObjectID();
+}
+
+void CSGSurfaceSession::_capture_edited_scene_root(const EditorEditDomainContext &p_context) {
+	Node *edited_root = p_context.document ? p_context.document->get_root() : nullptr;
+	if (!edited_root) {
+		EditorNode *editor_node = EditorNode::get_singleton();
+		edited_root = editor_node ? editor_node->get_edited_scene() : nullptr;
+	}
+	edited_scene_root_id = edited_root ? edited_root->get_instance_id() : ObjectID();
 }
 
 CSGShape3D *CSGSurfaceSession::_get_active_root() const {
@@ -165,6 +319,14 @@ CSGBox3D *CSGSurfaceSession::_get_active_box() const {
 
 Node3DEditorViewport *CSGSurfaceSession::_get_active_viewport() const {
 	return ObjectDB::get_instance<Node3DEditorViewport>(active_viewport_id);
+}
+
+Node *CSGSurfaceSession::_get_edited_scene_root() const {
+	return ObjectDB::get_instance<Node>(edited_scene_root_id);
+}
+
+bool CSGSurfaceSession::_is_source_editable(const CSGPrimitive3D *p_source) const {
+	return _is_csg_source_editable(p_source, _get_edited_scene_root());
 }
 
 void CSGSurfaceSession::_clear_pick_state() {
@@ -183,6 +345,261 @@ void CSGSurfaceSession::_clear_selection() {
 	extrude_gesture = false; // CSG-5: Do not leak a canceled mode into numeric entry.
 	gesture_state = has_hover ? GestureState::HOVER : GestureState::IDLE;
 	_update_context_panel();
+}
+
+void CSGSurfaceSession::_set_tool_mode(ToolMode p_mode) {
+	if (gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING) {
+		_cancel_gesture();
+	}
+	tool_mode = p_mode;
+	if (tool_mode == ToolMode::OPERAND) {
+		has_hover = false;
+	}
+	_update_tool_buttons();
+	_update_context_panel();
+	_queue_redraw(_get_active_viewport());
+}
+
+void CSGSurfaceSession::_update_tool_buttons() {
+	if (Button *button = ObjectDB::get_instance<Button>(surface_tool_button_id)) {
+		button->set_pressed_no_signal(tool_mode == ToolMode::SURFACE);
+	}
+	if (Button *button = ObjectDB::get_instance<Button>(paint_tool_button_id)) {
+		button->set_pressed_no_signal(tool_mode == ToolMode::PAINT);
+	}
+	if (Button *button = ObjectDB::get_instance<Button>(operand_tool_button_id)) {
+		button->set_pressed_no_signal(tool_mode == ToolMode::OPERAND);
+	}
+}
+
+void CSGSurfaceSession::_prune_paint_selection() {
+	for (int i = paint_selection.size() - 1; i >= 0; i--) {
+		if (!CSGShape3D::is_surface_key_valid(paint_selection[i])) {
+			paint_selection.remove_at(i);
+		}
+	}
+}
+
+bool CSGSurfaceSession::_paint_selection_has(const CSGSurfaceKey &p_surface) const {
+	for (const CSGSurfaceKey &surface : paint_selection) {
+		if (surface == p_surface) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void CSGSurfaceSession::_select_paint_surface(const CSGSurfaceKey &p_surface, bool p_add) {
+	_prune_paint_selection();
+	if (!p_add) {
+		paint_selection.clear();
+	}
+	if (CSGShape3D::is_surface_key_valid(p_surface) && !_paint_selection_has(p_surface)) {
+		paint_selection.push_back(p_surface);
+	}
+	_update_context_panel();
+}
+
+bool CSGSurfaceSession::_apply_paint_to_surfaces(const Vector<CSGSurfaceKey> &p_surfaces, UndoRedo::MergeMode p_merge_mode, const String &p_action_name) {
+	CSGShape3D *root = _get_active_root();
+	Node *edited_root = _get_edited_scene_root();
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	if (!root || !edited_root || !undo_redo) {
+		return false;
+	}
+
+	const Vector<CSGPaintUndoTarget> targets = _collect_csg_paint_targets(root, edited_root, p_surfaces, paint_well);
+	if (targets.is_empty()) {
+		return false;
+	}
+
+	undo_redo->create_action(p_action_name, p_merge_mode, edited_root);
+	for (const CSGPaintUndoTarget &target : targets) {
+		_add_csg_paint_properties(undo_redo, target, paint_well);
+	}
+	undo_redo->add_do_method(root, SNAME("_request_final_async_evaluation"));
+	undo_redo->add_undo_method(root, SNAME("_request_final_async_evaluation"));
+	undo_redo->commit_action();
+	return true;
+}
+
+bool CSGSurfaceSession::_lift_paint_setting(const CSGSurfaceKey &p_surface) {
+	if (!CSGShape3D::is_surface_key_valid(p_surface)) {
+		return false;
+	}
+	CSGPrimitive3D *source = ObjectDB::get_instance<CSGPrimitive3D>(p_surface.source_shape);
+	if (!source) {
+		return false;
+	}
+	paint_well = source->get_surface_setting(p_surface.semantic_surface);
+	if (paint_well.material.is_null()) {
+		paint_well.material = source->get_resolved_surface_material(p_surface.semantic_surface);
+	}
+	_update_paint_controls();
+	return true;
+}
+
+void CSGSurfaceSession::_apply_well_to_selection(UndoRedo::MergeMode p_merge_mode, const String &p_action_name) {
+	_prune_paint_selection();
+	_apply_paint_to_surfaces(paint_selection, p_merge_mode, p_action_name);
+}
+
+void CSGSurfaceSession::_surface_tool_pressed() {
+	_set_tool_mode(ToolMode::SURFACE);
+}
+
+void CSGSurfaceSession::_paint_tool_pressed() {
+	_set_tool_mode(ToolMode::PAINT);
+}
+
+void CSGSurfaceSession::_operand_tool_pressed() {
+	_set_tool_mode(ToolMode::OPERAND);
+}
+
+void CSGSurfaceSession::_paint_material_changed(Ref<Resource> p_resource) {
+	if (updating_paint_controls) {
+		return;
+	}
+	paint_well.material = p_resource;
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Paint Material"));
+}
+
+void CSGSurfaceSession::_paint_uv_mode_selected(int p_index) {
+	if (updating_paint_controls) {
+		return;
+	}
+	paint_well.uv_mode = p_index;
+	_update_paint_controls();
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Change Projection"));
+}
+
+void CSGSurfaceSession::_paint_uv_space_selected(int p_index) {
+	if (updating_paint_controls) {
+		return;
+	}
+	paint_well.uv_space = p_index;
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Change Projection Space"));
+}
+
+void CSGSurfaceSession::_paint_numeric_changed(double) {
+	if (updating_paint_controls) {
+		return;
+	}
+	SpinBox *meters_u = ObjectDB::get_instance<SpinBox>(paint_meters_u_id);
+	SpinBox *meters_v = ObjectDB::get_instance<SpinBox>(paint_meters_v_id);
+	SpinBox *offset_u = ObjectDB::get_instance<SpinBox>(paint_offset_u_id);
+	SpinBox *offset_v = ObjectDB::get_instance<SpinBox>(paint_offset_v_id);
+	SpinBox *rotation = ObjectDB::get_instance<SpinBox>(paint_rotation_id);
+	if (!meters_u || !meters_v || !offset_u || !offset_v || !rotation) {
+		return;
+	}
+	paint_well.meters_per_tile = Vector2(meters_u->get_value(), meters_v->get_value());
+	paint_well.offset = Vector2(offset_u->get_value(), offset_v->get_value());
+	paint_well.rotation = Math::deg_to_rad(rotation->get_value());
+	_apply_well_to_selection(UndoRedo::MERGE_ENDS, TTR("CSG Adjust Surface UV"));
+}
+
+void CSGSurfaceSession::_paint_texture_lock_toggled(bool p_pressed) {
+	if (updating_paint_controls) {
+		return;
+	}
+	paint_well.texture_lock = p_pressed;
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Toggle Texture Lock"));
+}
+
+void CSGSurfaceSession::_paint_assign_pressed() {
+	_prune_paint_selection();
+	if (!paint_selection.is_empty()) {
+		_apply_paint_to_surfaces(paint_selection, UndoRedo::MERGE_DISABLE, TTR("CSG Assign Surface Settings"));
+	} else if (has_hover) {
+		Vector<CSGSurfaceKey> hovered_surface;
+		hovered_surface.push_back(hover_hit.surface);
+		_apply_paint_to_surfaces(hovered_surface, UndoRedo::MERGE_DISABLE, TTR("CSG Assign Surface Settings"));
+	}
+}
+
+void CSGSurfaceSession::_paint_eyedropper_toggled(bool p_pressed) {
+	paint_eyedropper_active = p_pressed;
+}
+
+void CSGSurfaceSession::_paint_align_face_pressed() {
+	paint_well.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	paint_well.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL;
+	paint_well.offset = Vector2();
+	paint_well.rotation = 0.0;
+	_update_paint_controls();
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Align Surface UV"));
+}
+
+void CSGSurfaceSession::_paint_align_root_pressed() {
+	paint_well.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	paint_well.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_ROOT;
+	paint_well.offset = Vector2();
+	paint_well.rotation = 0.0;
+	_update_paint_controls();
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Align UV to Root Grid"));
+}
+
+void CSGSurfaceSession::_paint_fit_pressed() {
+	_prune_paint_selection();
+	CSGSurfaceKey surface;
+	if (!paint_selection.is_empty()) {
+		surface = paint_selection[0];
+	} else if (has_hover) {
+		surface = hover_hit.surface;
+	} else {
+		return;
+	}
+	if (!CSGShape3D::is_surface_key_valid(surface)) {
+		return;
+	}
+	CSGPrimitive3D *primitive = ObjectDB::get_instance<CSGPrimitive3D>(surface.source_shape);
+	if (!primitive) {
+		return;
+	}
+
+	Vector3 axis_u;
+	Vector3 axis_v;
+	primitive->get_surface_uv_basis(surface.semantic_surface, axis_u, axis_v);
+	const AABB bounds = primitive->get_aabb();
+	real_t min_u = 0.0;
+	real_t max_u = 0.0;
+	real_t min_v = 0.0;
+	real_t max_v = 0.0;
+	for (int corner_i = 0; corner_i < 8; corner_i++) {
+		const Vector3 corner = bounds.position + Vector3(
+				(corner_i & 1) ? bounds.size.x : 0.0,
+				(corner_i & 2) ? bounds.size.y : 0.0,
+				(corner_i & 4) ? bounds.size.z : 0.0);
+		const real_t u = axis_u.dot(corner);
+		const real_t v = axis_v.dot(corner);
+		if (corner_i == 0) {
+			min_u = max_u = u;
+			min_v = max_v = v;
+		} else {
+			min_u = MIN(min_u, u);
+			max_u = MAX(max_u, u);
+			min_v = MIN(min_v, v);
+			max_v = MAX(max_v, v);
+		}
+	}
+	paint_well.meters_per_tile = Vector2(MAX(max_u - min_u, (real_t)0.001), MAX(max_v - min_v, (real_t)0.001));
+	paint_well.uv_mode = CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	paint_well.uv_space = CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL;
+	paint_well.offset = Vector2();
+	paint_well.rotation = 0.0;
+	_update_paint_controls();
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Fit Surface UV"));
+}
+
+void CSGSurfaceSession::_paint_reset_pressed() {
+	paint_well = CSGSurfaceSetting();
+	_update_paint_controls();
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Reset Surface Settings"));
+}
+
+void CSGSurfaceSession::_paint_apply_selected_pressed() {
+	_apply_well_to_selection(UndoRedo::MERGE_DISABLE, TTR("CSG Apply Surface Settings"));
 }
 
 void CSGSurfaceSession::_queue_redraw(Node3DEditorViewport *p_viewport) const {
@@ -398,10 +815,9 @@ void CSGSurfaceSession::_commit_gesture() {
 			return;
 		}
 
-		// CSG-5: Only nodes owned directly by the edited scene are writable here.
-		EditorNode *editor_node = EditorNode::get_singleton();
-		Node *edited_root = editor_node ? editor_node->get_edited_scene() : nullptr;
-		if (!edited_root || (box != edited_root && box->get_owner() != edited_root)) {
+		// Only nodes owned directly by this pane's document are writable here.
+		Node *edited_root = _get_edited_scene_root();
+		if (!_is_source_editable(box)) {
 			_finish_without_commit();
 			return;
 		}
@@ -419,7 +835,8 @@ void CSGSurfaceSession::_commit_gesture() {
 		new_box->set_operation(CSGShape3D::OPERATION_UNION);
 		new_box->set_size(extrusion.size);
 		new_box->set_transform(extrusion.local_transform);
-		new_box->set_material(box->get_material());
+		const Transform3D source_to_root = root->get_global_transform().affine_inverse() * box->get_global_transform();
+		csg_configure_extrusion_surface_settings(box, selected_hit.surface.semantic_surface, source_to_root, new_box);
 
 		// CSG-5: Cap identity is transient - captured here, consumed below.
 		const ObjectID cap_box_id = new_box->get_instance_id();
@@ -473,6 +890,26 @@ void CSGSurfaceSession::_commit_gesture() {
 	undo_redo->add_undo_property(box, SNAME("size"), start_size);
 	undo_redo->add_do_property(box, SNAME("transform"), ghost_result.transform);
 	undo_redo->add_undo_property(box, SNAME("transform"), start_transform);
+
+	// A one-sided edit shifts the authored box center in its pre-edit local
+	// frame. Compensate every locked Local projection in this same action;
+	// Root and World frames are already anchored and need no stored change.
+	const Vector3 center_shift_local = start_transform.basis.inverse().xform(ghost_result.transform.origin - start_transform.origin);
+	const Transform3D operand_to_root = root->get_global_transform().affine_inverse() * start_global_transform;
+	const Vector3 center_shift_root = operand_to_root.basis.xform(center_shift_local);
+	for (uint32_t surface = 0; surface < box->get_surface_schema_size(); surface++) {
+		if (!box->has_surface_setting(surface)) {
+			continue;
+		}
+		const CSGSurfaceSetting setting = box->get_surface_setting(surface);
+		const Vector2 compensated_offset = csg_texture_lock_compensate_offset(box, surface, setting, operand_to_root, center_shift_root);
+		if (compensated_offset.is_equal_approx(setting.offset)) {
+			continue;
+		}
+		const StringName offset_property = vformat("surface_settings/%d/offset", surface);
+		undo_redo->add_do_property(box, offset_property, compensated_offset);
+		undo_redo->add_undo_property(box, offset_property, setting.offset);
+	}
 	// Property setters queue the ordinary deferred update first. This final
 	// request snapshots both properties and supersedes that queued sync update.
 	undo_redo->add_do_method(root, SNAME("_request_final_async_evaluation"));
@@ -492,6 +929,23 @@ void CSGSurfaceSession::_commit_gesture() {
 }
 
 void CSGSurfaceSession::_update_context_panel() {
+	Control *surface_context = ObjectDB::get_instance<Control>(surface_context_id);
+	Control *paint_context = ObjectDB::get_instance<Control>(paint_context_id);
+	if (surface_context) {
+		surface_context->set_visible(tool_mode == ToolMode::SURFACE);
+	}
+	if (paint_context) {
+		paint_context->set_visible(tool_mode == ToolMode::PAINT);
+	}
+	if (tool_mode == ToolMode::PAINT) {
+		_prune_paint_selection();
+		_update_paint_controls();
+		return;
+	}
+	if (tool_mode == ToolMode::OPERAND) {
+		return;
+	}
+
 	Label *distance_label = ObjectDB::get_instance<Label>(distance_label_id);
 	LineEdit *coordinate_edit = ObjectDB::get_instance<LineEdit>(coordinate_edit_id);
 	if (!has_selection) {
@@ -514,6 +968,69 @@ void CSGSurfaceSession::_update_context_panel() {
 	}
 	if (coordinate_edit && !coordinate_edit->has_focus()) {
 		coordinate_edit->set_text(String::num(target_plane_coordinate, 4));
+	}
+}
+
+void CSGSurfaceSession::_update_paint_controls() {
+	EditorResourcePicker *material_picker = ObjectDB::get_instance<EditorResourcePicker>(paint_material_picker_id);
+	OptionButton *uv_mode = ObjectDB::get_instance<OptionButton>(paint_uv_mode_id);
+	OptionButton *uv_space = ObjectDB::get_instance<OptionButton>(paint_uv_space_id);
+	SpinBox *meters_u = ObjectDB::get_instance<SpinBox>(paint_meters_u_id);
+	SpinBox *meters_v = ObjectDB::get_instance<SpinBox>(paint_meters_v_id);
+	SpinBox *offset_u = ObjectDB::get_instance<SpinBox>(paint_offset_u_id);
+	SpinBox *offset_v = ObjectDB::get_instance<SpinBox>(paint_offset_v_id);
+	SpinBox *rotation = ObjectDB::get_instance<SpinBox>(paint_rotation_id);
+	CheckBox *texture_lock = ObjectDB::get_instance<CheckBox>(paint_texture_lock_id);
+	Label *selection_label = ObjectDB::get_instance<Label>(paint_selection_label_id);
+	Button *eyedropper = ObjectDB::get_instance<Button>(paint_eyedropper_button_id);
+
+	updating_paint_controls = true;
+	if (material_picker) {
+		material_picker->set_edited_resource(paint_well.material);
+	}
+	if (uv_mode) {
+		uv_mode->select(paint_well.uv_mode);
+	}
+	if (uv_space) {
+		uv_space->select(paint_well.uv_space);
+	}
+	if (meters_u) {
+		meters_u->set_value(paint_well.meters_per_tile.x);
+	}
+	if (meters_v) {
+		meters_v->set_value(paint_well.meters_per_tile.y);
+	}
+	if (offset_u) {
+		offset_u->set_value(paint_well.offset.x);
+	}
+	if (offset_v) {
+		offset_v->set_value(paint_well.offset.y);
+	}
+	if (rotation) {
+		rotation->set_value(Math::rad_to_deg(paint_well.rotation));
+	}
+	if (texture_lock) {
+		texture_lock->set_pressed_no_signal(paint_well.texture_lock);
+	}
+	if (eyedropper) {
+		eyedropper->set_pressed_no_signal(paint_eyedropper_active);
+	}
+	updating_paint_controls = false;
+
+	const bool planar = paint_well.uv_mode == CSGPrimitive3D::SURFACE_UV_MODE_PLANAR;
+	if (uv_space) {
+		uv_space->set_disabled(!planar);
+	}
+	for (SpinBox *spin : { meters_u, meters_v, offset_u, offset_v, rotation }) {
+		if (spin) {
+			spin->set_editable(planar);
+		}
+	}
+	if (texture_lock) {
+		texture_lock->set_disabled(!planar);
+	}
+	if (selection_label) {
+		selection_label->set_text(vformat(TTRN("%d surface selected", "%d surfaces selected", paint_selection.size()), paint_selection.size()));
 	}
 }
 
@@ -745,9 +1262,57 @@ void CSGSurfaceSession::_draw_hover(Node3DEditorViewport *p_viewport) const {
 	surface_control->draw_polyline(polygon, Color(0.35, 0.85, 1.0), 2.0 * EDSCALE, true);
 }
 
+void CSGSurfaceSession::_draw_paint_selection(Node3DEditorViewport *p_viewport) const {
+	if (paint_selection.is_empty() || !p_viewport) {
+		return;
+	}
+	CSGShape3D *root = _get_active_root();
+	if (!root || pick_mesh_generation != root->get_result_generation()) {
+		return;
+	}
+
+	Camera3D *camera = p_viewport->get_previewing_camera();
+	if (!camera) {
+		camera = p_viewport->get_camera_3d();
+	}
+	Control *surface_control = p_viewport->get_surface();
+	if (!camera || !surface_control) {
+		return;
+	}
+
+	const uint64_t result_generation = root->get_result_generation();
+	const Transform3D root_to_world = root->get_global_transform();
+	for (uint32_t triangle_i = 0; triangle_i < (uint32_t)pick_faces.size() / 3; triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		if (!root->resolve_result_triangle(triangle_i, result_generation, surface, face_id) || !_paint_selection_has(surface)) {
+			continue;
+		}
+
+		Vector<Point2> polygon;
+		polygon.resize(3);
+		bool behind_camera = false;
+		for (int corner_i = 0; corner_i < 3; corner_i++) {
+			const Vector3 world_corner = root_to_world.xform(pick_faces[triangle_i * 3 + corner_i]);
+			if (camera->is_position_behind(world_corner)) {
+				behind_camera = true;
+				break;
+			}
+			polygon.write[corner_i] = camera->unproject_position(world_corner);
+		}
+		if (behind_camera) {
+			continue;
+		}
+		surface_control->draw_colored_polygon(polygon, Color(1.0, 0.58, 0.18, 0.14));
+		polygon.push_back(polygon[0]);
+		surface_control->draw_polyline(polygon, Color(1.0, 0.68, 0.28, 0.75), EDSCALE, true);
+	}
+}
+
 void CSGSurfaceSession::enter(const EditorEditDomainContext &p_context) {
 	entered = true;
 	active_viewport_id = p_context.active_viewport ? p_context.active_viewport->get_instance_id() : ObjectID();
+	_capture_edited_scene_root(p_context);
 	_resolve_active_root(p_context);
 	if (p_context.active_viewport) {
 		p_context.active_viewport->update_surface();
@@ -759,6 +1324,9 @@ void CSGSurfaceSession::exit() {
 	entered = false;
 	active_root_id = ObjectID();
 	active_viewport_id = ObjectID();
+	edited_scene_root_id = ObjectID();
+	paint_selection.clear();
+	paint_eyedropper_active = false;
 	_clear_pick_state();
 	_clear_selection();
 }
@@ -766,8 +1334,10 @@ void CSGSurfaceSession::exit() {
 void CSGSurfaceSession::retarget(const EditorEditDomainContext &p_context) {
 	_cancel_gesture();
 	_clear_pick_state();
+	paint_selection.clear();
 	_clear_selection();
 	active_viewport_id = p_context.active_viewport ? p_context.active_viewport->get_instance_id() : ObjectID();
+	_capture_edited_scene_root(p_context);
 	_resolve_active_root(p_context);
 	if (p_context.active_viewport) {
 		p_context.active_viewport->update_surface();
@@ -778,6 +1348,7 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 	if (!entered || !p_context.active_viewport) {
 		return EditorEditDomainInput::PASS_TO_VIEWPORT;
 	}
+	_capture_edited_scene_root(p_context);
 	CSGShape3D *selected_root = _find_csg_root(_get_single_selected_csg_shape(&p_context));
 	const ObjectID selected_root_id = selected_root ? selected_root->get_instance_id() : ObjectID();
 	if (selected_root_id != active_root_id) {
@@ -787,12 +1358,12 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 		return EditorEditDomainInput::PASS_TO_VIEWPORT;
 	}
 	active_viewport_id = p_context.active_viewport->get_instance_id();
-	if (!surface_tool_active) {
+	if (tool_mode == ToolMode::OPERAND) {
 		return EditorEditDomainInput::PASS_TO_VIEWPORT;
 	}
 
 	Ref<InputEventKey> key_event = p_event;
-	if (key_event.is_valid() && key_event->is_pressed() && !key_event->is_echo() && (key_event->get_keycode() == Key::ENTER || key_event->get_keycode() == Key::KP_ENTER)) {
+	if (tool_mode == ToolMode::SURFACE && key_event.is_valid() && key_event->is_pressed() && !key_event->is_echo() && (key_event->get_keycode() == Key::ENTER || key_event->get_keycode() == Key::KP_ENTER)) {
 		if (gesture_state == GestureState::DRAGGING) {
 			_commit_gesture();
 			return EditorEditDomainInput::CONSUMED;
@@ -815,6 +1386,28 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 			return EditorEditDomainInput::PASS_TO_VIEWPORT;
 		}
 		if (button == MouseButton::LEFT) {
+			if (tool_mode == ToolMode::PAINT) {
+				if (mouse_button->is_pressed()) {
+					if (!_pick(p_context.active_viewport, mouse_button->get_position())) {
+						return EditorEditDomainInput::PASS_TO_VIEWPORT;
+					}
+					if (mouse_button->is_alt_pressed() || paint_eyedropper_active) {
+						_lift_paint_setting(hover_hit.surface);
+						paint_eyedropper_active = false;
+						_update_paint_controls();
+						_queue_redraw(p_context.active_viewport);
+						return EditorEditDomainInput::CONSUMED;
+					}
+
+					_select_paint_surface(hover_hit.surface, mouse_button->is_shift_pressed());
+					Vector<CSGSurfaceKey> clicked_surface;
+					clicked_surface.push_back(hover_hit.surface);
+					_apply_paint_to_surfaces(clicked_surface, UndoRedo::MERGE_DISABLE, TTR("CSG Paint Surface"));
+					_queue_redraw(p_context.active_viewport);
+					return EditorEditDomainInput::CONSUMED;
+				}
+				return has_hover ? EditorEditDomainInput::CONSUMED : EditorEditDomainInput::PASS_TO_VIEWPORT;
+			}
 			if (mouse_button->is_pressed()) {
 				return _begin_gesture(p_context.active_viewport, mouse_button) ? EditorEditDomainInput::CONSUMED : EditorEditDomainInput::PASS_TO_VIEWPORT;
 			}
@@ -830,6 +1423,21 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 	}
 
 	Ref<InputEventMouseMotion> mouse_motion = p_event;
+	if (tool_mode == ToolMode::PAINT) {
+		if (mouse_motion.is_valid() && mouse_motion->get_button_mask().has_flag(MouseButtonMask::LEFT)) {
+			return has_hover ? EditorEditDomainInput::CONSUMED : EditorEditDomainInput::PASS_TO_VIEWPORT;
+		}
+		if (mouse_motion.is_valid() && !mouse_motion->get_button_mask().has_flag(MouseButtonMask::MIDDLE) && !mouse_motion->get_button_mask().has_flag(MouseButtonMask::RIGHT)) {
+			const bool had_hover = has_hover;
+			const CSGSurfaceHit previous_hit = hover_hit;
+			const bool picked = _pick(p_context.active_viewport, mouse_motion->get_position());
+			if (had_hover != has_hover || (has_hover && (!(previous_hit.surface == hover_hit.surface) || previous_hit.triangle != hover_hit.triangle || previous_hit.result_generation != hover_hit.result_generation))) {
+				_queue_redraw(p_context.active_viewport);
+			}
+			return picked ? EditorEditDomainInput::BLOCK_NATIVE_EDIT : EditorEditDomainInput::PASS_TO_VIEWPORT;
+		}
+		return EditorEditDomainInput::PASS_TO_VIEWPORT;
+	}
 	if (mouse_motion.is_valid() && mouse_motion->get_button_mask().has_flag(MouseButtonMask::LEFT) && (gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING)) {
 		_update_drag(p_context.active_viewport, mouse_motion->get_position());
 		return EditorEditDomainInput::CONSUMED;
@@ -848,6 +1456,11 @@ EditorEditDomainInput CSGSurfaceSession::handle_input(const EditorEditDomainCont
 }
 
 bool CSGSurfaceSession::handle_escape() {
+	if (tool_mode == ToolMode::PAINT && paint_eyedropper_active) {
+		paint_eyedropper_active = false;
+		_update_paint_controls();
+		return true;
+	}
 	if (gesture_state != GestureState::PRESSED && gesture_state != GestureState::DRAGGING) {
 		return false;
 	}
@@ -856,19 +1469,18 @@ bool CSGSurfaceSession::handle_escape() {
 }
 
 bool CSGSurfaceSession::handle_tool_toggle() {
-	if (gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING) {
-		_cancel_gesture();
-	}
-	surface_tool_active = !surface_tool_active;
-	if (!surface_tool_active) {
-		has_hover = false;
-	}
-	_queue_redraw(_get_active_viewport());
+	_set_tool_mode(tool_mode == ToolMode::OPERAND ? ToolMode::SURFACE : ToolMode::OPERAND);
 	return true;
 }
 
 void CSGSurfaceSession::draw_overlay(Node3DEditorViewport *p_viewport) {
-	if (entered && surface_tool_active) {
+	if (!entered || tool_mode == ToolMode::OPERAND) {
+		return;
+	}
+	if (tool_mode == ToolMode::PAINT) {
+		_draw_paint_selection(p_viewport);
+		_draw_hover(p_viewport);
+	} else {
 		_draw_hover(p_viewport);
 		_draw_ghost(p_viewport);
 	}
@@ -880,15 +1492,59 @@ Control *CSGSurfaceSession::build_tool_rail() {
 	Button *surface_button = memnew(Button);
 	surface_button->set_text(TTR("Surface"));
 	surface_button->set_toggle_mode(true);
-	surface_button->set_pressed(true);
+	surface_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_surface_tool_pressed));
+	surface_tool_button_id = surface_button->get_instance_id();
 	rail->add_child(surface_button);
-	for (const String &tool_name : { TTR("Draw"), TTR("Paint"), TTR("Operand") }) {
-		Button *button = memnew(Button);
-		button->set_text(tool_name);
-		button->set_disabled(true);
-		rail->add_child(button);
-	}
+
+	Button *draw_button = memnew(Button);
+	draw_button->set_text(TTR("Draw"));
+	draw_button->set_disabled(true);
+	rail->add_child(draw_button);
+
+	Button *paint_button = memnew(Button);
+	paint_button->set_text(TTR("Paint"));
+	paint_button->set_toggle_mode(true);
+	paint_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_paint_tool_pressed));
+	paint_tool_button_id = paint_button->get_instance_id();
+	rail->add_child(paint_button);
+
+	Button *operand_button = memnew(Button);
+	operand_button->set_text(TTR("Operand"));
+	operand_button->set_toggle_mode(true);
+	operand_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_operand_tool_pressed));
+	operand_tool_button_id = operand_button->get_instance_id();
+	rail->add_child(operand_button);
+	_update_tool_buttons();
 	return rail;
+}
+
+static HBoxContainer *_add_csg_paint_row(VBoxContainer *p_parent, const String &p_label) {
+	HBoxContainer *row = memnew(HBoxContainer);
+	p_parent->add_child(row);
+	Label *label = memnew(Label);
+	label->set_text(p_label);
+	label->set_custom_minimum_size(Size2(72, 0) * EDSCALE);
+	row->add_child(label);
+	return row;
+}
+
+static SpinBox *_create_csg_paint_spin(double p_min, double p_max, double p_step, const String &p_suffix = String()) {
+	SpinBox *spin = memnew(SpinBox);
+	spin->set_min(p_min);
+	spin->set_max(p_max);
+	spin->set_step(p_step);
+	spin->set_allow_lesser(true);
+	spin->set_allow_greater(true);
+	spin->set_suffix(p_suffix);
+	spin->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	return spin;
+}
+
+static void _add_csg_paint_button(VBoxContainer *p_parent, const String &p_text, const Callable &p_callable) {
+	Button *button = memnew(Button);
+	button->set_text(p_text);
+	button->connect(SceneStringName(pressed), p_callable);
+	p_parent->add_child(button);
 }
 
 Control *CSGSurfaceSession::build_contextual_panel() {
@@ -896,12 +1552,16 @@ Control *CSGSurfaceSession::build_contextual_panel() {
 	panel->set_name("CSGSurfaceContextPanel");
 	VBoxContainer *contents = memnew(VBoxContainer);
 	panel->add_child(contents);
+
+	VBoxContainer *surface_contents = memnew(VBoxContainer);
+	surface_context_id = surface_contents->get_instance_id();
+	contents->add_child(surface_contents);
 	Label *distance_label = memnew(Label);
 	distance_label->set_text(TTR("Select a box face"));
 	distance_label_id = distance_label->get_instance_id();
-	contents->add_child(distance_label);
+	surface_contents->add_child(distance_label);
 	HBoxContainer *coordinate_row = memnew(HBoxContainer);
-	contents->add_child(coordinate_row);
+	surface_contents->add_child(coordinate_row);
 	Label *coordinate_label = memnew(Label);
 	coordinate_label->set_text(TTR("Plane"));
 	coordinate_row->add_child(coordinate_label);
@@ -911,6 +1571,91 @@ Control *CSGSurfaceSession::build_contextual_panel() {
 	coordinate_edit->connect(SceneStringName(text_submitted), callable_mp(this, &CSGSurfaceSession::_numeric_coordinate_submitted));
 	coordinate_edit_id = coordinate_edit->get_instance_id();
 	coordinate_row->add_child(coordinate_edit);
+
+	VBoxContainer *paint_contents = memnew(VBoxContainer);
+	paint_context_id = paint_contents->get_instance_id();
+	contents->add_child(paint_contents);
+	Label *paint_title = memnew(Label);
+	paint_title->set_text(TTR("Surface Material and UV"));
+	paint_contents->add_child(paint_title);
+
+	Label *selection_label = memnew(Label);
+	paint_selection_label_id = selection_label->get_instance_id();
+	paint_contents->add_child(selection_label);
+
+	EditorResourcePicker *material_picker = memnew(EditorResourcePicker);
+	material_picker->set_base_type("Material");
+	material_picker->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	material_picker->connect(SNAME("resource_changed"), callable_mp(this, &CSGSurfaceSession::_paint_material_changed));
+	paint_material_picker_id = material_picker->get_instance_id();
+	_add_csg_paint_row(paint_contents, TTR("Material"))->add_child(material_picker);
+
+	OptionButton *uv_mode = memnew(OptionButton);
+	uv_mode->add_item(TTR("Legacy"), CSGPrimitive3D::SURFACE_UV_MODE_LEGACY);
+	uv_mode->add_item(TTR("Planar"), CSGPrimitive3D::SURFACE_UV_MODE_PLANAR);
+	uv_mode->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	uv_mode->connect(SceneStringName(item_selected), callable_mp(this, &CSGSurfaceSession::_paint_uv_mode_selected));
+	paint_uv_mode_id = uv_mode->get_instance_id();
+	_add_csg_paint_row(paint_contents, TTR("Projection"))->add_child(uv_mode);
+
+	OptionButton *uv_space = memnew(OptionButton);
+	uv_space->add_item(TTR("Local"), CSGPrimitive3D::SURFACE_UV_SPACE_LOCAL);
+	uv_space->add_item(TTR("Root"), CSGPrimitive3D::SURFACE_UV_SPACE_ROOT);
+	uv_space->add_item(TTR("World"), CSGPrimitive3D::SURFACE_UV_SPACE_WORLD);
+	uv_space->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	uv_space->connect(SceneStringName(item_selected), callable_mp(this, &CSGSurfaceSession::_paint_uv_space_selected));
+	paint_uv_space_id = uv_space->get_instance_id();
+	_add_csg_paint_row(paint_contents, TTR("Space"))->add_child(uv_space);
+
+	HBoxContainer *meters_row = _add_csg_paint_row(paint_contents, TTR("Tile Size"));
+	SpinBox *meters_u = _create_csg_paint_spin(0.001, 10000.0, 0.01, TTR(" m U"));
+	meters_u->connect(SceneStringName(value_changed), callable_mp(this, &CSGSurfaceSession::_paint_numeric_changed));
+	paint_meters_u_id = meters_u->get_instance_id();
+	meters_row->add_child(meters_u);
+	SpinBox *meters_v = _create_csg_paint_spin(0.001, 10000.0, 0.01, TTR(" m V"));
+	meters_v->connect(SceneStringName(value_changed), callable_mp(this, &CSGSurfaceSession::_paint_numeric_changed));
+	paint_meters_v_id = meters_v->get_instance_id();
+	meters_row->add_child(meters_v);
+
+	HBoxContainer *offset_row = _add_csg_paint_row(paint_contents, TTR("Offset"));
+	SpinBox *offset_u = _create_csg_paint_spin(-10000.0, 10000.0, 0.01, TTR(" U"));
+	offset_u->connect(SceneStringName(value_changed), callable_mp(this, &CSGSurfaceSession::_paint_numeric_changed));
+	paint_offset_u_id = offset_u->get_instance_id();
+	offset_row->add_child(offset_u);
+	SpinBox *offset_v = _create_csg_paint_spin(-10000.0, 10000.0, 0.01, TTR(" V"));
+	offset_v->connect(SceneStringName(value_changed), callable_mp(this, &CSGSurfaceSession::_paint_numeric_changed));
+	paint_offset_v_id = offset_v->get_instance_id();
+	offset_row->add_child(offset_v);
+
+	SpinBox *rotation = _create_csg_paint_spin(-360.0, 360.0, 0.1, TTR(" deg"));
+	rotation->connect(SceneStringName(value_changed), callable_mp(this, &CSGSurfaceSession::_paint_numeric_changed));
+	paint_rotation_id = rotation->get_instance_id();
+	_add_csg_paint_row(paint_contents, TTR("Rotation"))->add_child(rotation);
+
+	CheckBox *texture_lock = memnew(CheckBox);
+	texture_lock->set_text(TTR("Texture Lock"));
+	texture_lock->connect(SceneStringName(toggled), callable_mp(this, &CSGSurfaceSession::_paint_texture_lock_toggled));
+	paint_texture_lock_id = texture_lock->get_instance_id();
+	paint_contents->add_child(texture_lock);
+
+	HBoxContainer *primary_actions = memnew(HBoxContainer);
+	paint_contents->add_child(primary_actions);
+	Button *assign_button = memnew(Button);
+	assign_button->set_text(TTR("Assign"));
+	assign_button->connect(SceneStringName(pressed), callable_mp(this, &CSGSurfaceSession::_paint_assign_pressed));
+	primary_actions->add_child(assign_button);
+	Button *eyedropper_button = memnew(Button);
+	eyedropper_button->set_text(TTR("Eyedropper"));
+	eyedropper_button->set_toggle_mode(true);
+	eyedropper_button->connect(SceneStringName(toggled), callable_mp(this, &CSGSurfaceSession::_paint_eyedropper_toggled));
+	paint_eyedropper_button_id = eyedropper_button->get_instance_id();
+	primary_actions->add_child(eyedropper_button);
+
+	_add_csg_paint_button(paint_contents, TTR("Align to Face"), callable_mp(this, &CSGSurfaceSession::_paint_align_face_pressed));
+	_add_csg_paint_button(paint_contents, TTR("Align to Root Grid"), callable_mp(this, &CSGSurfaceSession::_paint_align_root_pressed));
+	_add_csg_paint_button(paint_contents, TTR("Fit"), callable_mp(this, &CSGSurfaceSession::_paint_fit_pressed));
+	_add_csg_paint_button(paint_contents, TTR("Reset"), callable_mp(this, &CSGSurfaceSession::_paint_reset_pressed));
+	_add_csg_paint_button(paint_contents, TTR("Apply to Selected"), callable_mp(this, &CSGSurfaceSession::_paint_apply_selected_pressed));
 	_update_context_panel();
 	return panel;
 }

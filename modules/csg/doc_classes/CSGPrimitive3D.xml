@@ -5,6 +5,9 @@
 	</brief_description>
 	<description>
 		Parent class for various CSG primitives. It contains code and functionality that is common between them. It cannot be used directly. Instead use one of the various classes that inherit from it.
+		Concrete primitives expose sparse per-surface settings using dynamic properties named [code]surface_settings/&lt;surface&gt;/material[/code], [code]surface_settings/&lt;surface&gt;/uv_mode[/code], [code]surface_settings/&lt;surface&gt;/uv_space[/code], [code]surface_settings/&lt;surface&gt;/meters_per_tile[/code], [code]surface_settings/&lt;surface&gt;/offset[/code], [code]surface_settings/&lt;surface&gt;/rotation[/code], and [code]surface_settings/&lt;surface&gt;/texture_lock[/code]. Surface indices are defined by each primitive's semantic surface schema. A material set this way overrides the primitive's [code]material[/code]; otherwise the primitive material and then the inherited CSG source material are used.
+		The default UV mode is legacy UV interpolation. Planar mode projects in operand-local, CSG-root, or world space and uses the remaining UV fields. Root and world projections remain anchored when the operand changes. Texture lock compensates the offset of local planar projections during supported geometry edits.
+		Only non-default per-surface values are stored in a scene. The internal [code]surface_schema_version[/code] property is reserved for serialized schema compatibility and is omitted while it has the current value.
 		[b]Note:[/b] CSG nodes are intended to be used for level prototyping. Creating CSG nodes has a significant CPU cost compared to creating a [MeshInstance3D] with a [PrimitiveMesh]. Moving a CSG node within another CSG node also has a significant CPU cost, so it should be avoided during gameplay.
 	</description>
 	<tutorials>
