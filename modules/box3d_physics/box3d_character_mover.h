@@ -32,7 +32,7 @@ class Box3DCharacterMover : public RefCounted {
 	bool _probe_walkable(const Vector3 &p_from, real_t p_length, Vector3 &r_normal, real_t &r_hit_y, int &r_material_id) const;
 	bool _ground_probe(const Vector3 &p_feet, const Array &p_planes, Vector3 &r_normal, int &r_material_id) const;
 	bool _has_step_obstruction(const Vector3 &p_start, const Vector3 &p_horizontal) const;
-	bool _try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Vector3 &r_floor_normal, int &r_material_id) const;
+	bool _try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id) const;
 
 public:
 	Box3DCharacterMover();

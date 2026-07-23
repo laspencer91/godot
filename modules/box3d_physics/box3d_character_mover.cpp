@@ -416,7 +416,7 @@ bool Box3DCharacterMover::_has_step_obstruction(const Vector3 &p_start, const Ve
 // _ground_probe rather than by the sweep contact normal — the fork's CharacterBody3D step-up
 // classifies via the capsule contact normal, which reports tilted edge normals on a hemisphere
 // and only works reliably with flat-bottomed cylinders.
-bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Vector3 &r_floor_normal, int &r_material_id) const {
+bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id) const {
 	const real_t STEP_MIN_CLEARANCE = 0.01;
 	// Low enough that acceleration-limited approach ticks (~1 mm advances after a velocity clip)
 	// can still ride a step lip upward; nonzero so flat forward motion never counts as a step.
@@ -453,6 +453,7 @@ bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_
 	}
 
 	r_position = landed;
+	r_planes = landed_planes;
 	r_floor_normal = ground_normal;
 	r_material_id = material_id;
 	return true;
@@ -537,9 +538,10 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		if (has_lateral_obstruction && regular_progress + STEP_PROGRESS_EPSILON < requested_progress &&
 				_has_step_obstruction(p_position, requested_horizontal)) {
 			Vector3 stepped_position;
+			Array stepped_planes;
 			Vector3 step_normal;
 			int step_material_id = 0;
-			if (_try_step_up(p_position, target_position, stepped_position, step_normal, step_material_id)) {
+			if (_try_step_up(p_position, target_position, stepped_position, stepped_planes, step_normal, step_material_id)) {
 				const Vector3 stepped_horizontal(stepped_position.x - p_position.x, 0.0, stepped_position.z - p_position.z);
 				const real_t stepped_progress = stepped_horizontal.dot(move_direction);
 				if (stepped_progress > regular_progress + STEP_PROGRESS_EPSILON) {
@@ -547,7 +549,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 					stepped = true;
 					stepped_floor_normal = step_normal;
 					stepped_material_id = step_material_id;
-					solved_planes = _collide_internal(position);
+					solved_planes = stepped_planes;
 				}
 			}
 		}
