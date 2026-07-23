@@ -42,6 +42,14 @@ struct CSGPushPullResult {
 
 CSGPushPullResult csg_push_pull_apply(const Vector3 &p_start_size, const Transform3D &p_start_transform, uint32_t p_semantic_surface, real_t p_displacement, bool p_symmetric);
 
+// CSG-5: Deterministic box operand produced by an outward face extrusion.
+struct CSGExtrusionResult {
+	Vector3 size;
+	Transform3D local_transform;
+};
+
+CSGExtrusionResult csg_extrude_box_face(const Vector3 &p_source_size, uint32_t p_semantic_surface, real_t p_depth);
+
 class CSGSurfaceSession : public EditorEditDomainSession {
 	enum class GestureState {
 		IDLE,
@@ -74,6 +82,7 @@ class CSGSurfaceSession : public EditorEditDomainSession {
 
 	Vector2 press_position;
 	bool symmetric_drag = false;
+	bool extrude_gesture = false; // CSG-5: Captured from Shift at press.
 	Vector3 start_size;
 	Transform3D start_transform;
 	Transform3D start_global_transform;
@@ -87,6 +96,7 @@ class CSGSurfaceSession : public EditorEditDomainSession {
 	real_t drag_start_parameter = 0.0;
 	real_t drag_displacement = 0.0;
 	CSGPushPullResult ghost_result;
+	CSGExtrusionResult extrude_ghost; // CSG-5: View-only child prism during drag.
 	bool has_ghost = false;
 
 	ObjectID distance_label_id;
@@ -104,6 +114,7 @@ class CSGSurfaceSession : public EditorEditDomainSession {
 	void _draw_ghost(Node3DEditorViewport *p_viewport) const;
 	bool _begin_gesture(Node3DEditorViewport *p_viewport, const Ref<InputEventMouseButton> &p_event);
 	void _update_drag(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
+	void _apply_displacement(); // CSG-4: Shared post-clamp push/pull recompute.
 	void _cancel_gesture();
 	void _finish_without_commit();
 	void _commit_gesture();

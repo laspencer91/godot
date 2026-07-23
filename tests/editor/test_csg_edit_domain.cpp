@@ -123,6 +123,60 @@ TEST_CASE("[Editor][CSGEditDomain] Box push pull preserves the fixed face and tr
 	}
 }
 
+// CSG-5: Pin the child footprint, cap center, and identity local basis on every face.
+TEST_CASE("[Editor][CSGEditDomain] Box face extrusion produces an outward identity-basis child") {
+	const Vector3 source_size(2, 4, 6);
+
+	SUBCASE("Positive X") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_POSITIVE_X, 1.5);
+		CHECK(result.size.is_equal_approx(Vector3(1.5, 4, 6)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(1.75, 0, 0)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+
+	SUBCASE("Negative X") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_NEGATIVE_X, 2.5);
+		CHECK(result.size.is_equal_approx(Vector3(2.5, 4, 6)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(-2.25, 0, 0)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+
+	SUBCASE("Positive Y") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_POSITIVE_Y, 0.75);
+		CHECK(result.size.is_equal_approx(Vector3(2, 0.75, 6)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(0, 2.375, 0)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+
+	SUBCASE("Negative Y") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_NEGATIVE_Y, 3.0);
+		CHECK(result.size.is_equal_approx(Vector3(2, 3, 6)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(0, -3.5, 0)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+
+	SUBCASE("Positive Z") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_POSITIVE_Z, 4.0);
+		CHECK(result.size.is_equal_approx(Vector3(2, 4, 4)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(0, 0, 5)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+
+	SUBCASE("Negative Z") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_NEGATIVE_Z, 1.25);
+		CHECK(result.size.is_equal_approx(Vector3(2, 4, 1.25)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(0, 0, -3.625)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+
+	SUBCASE("Depth clamps to the box minimum") {
+		const CSGExtrusionResult result = csg_extrude_box_face(source_size, CSGBox3D::SURFACE_NEGATIVE_Y, 0.0);
+		CHECK(result.size.is_equal_approx(Vector3(2, 0.001, 6)));
+		CHECK(result.local_transform.origin.is_equal_approx(Vector3(0, -2.0005, 0)));
+		CHECK(result.local_transform.basis.is_equal_approx(Basis()));
+	}
+}
+
 TEST_CASE("[Editor][CSGEditDomain] Provider removal notification exits a CSG session") {
 	EditorEditDomainRegistry *registry = EditorEditDomainRegistry::get_singleton();
 	REQUIRE(registry != nullptr);

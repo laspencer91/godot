@@ -101,6 +101,26 @@ CSGPushPullResult csg_push_pull_apply(const Vector3 &p_start_size, const Transfo
 	return result;
 }
 
+// CSG-5: Keep the inner cap flush and extend an identity-basis child outward.
+CSGExtrusionResult csg_extrude_box_face(const Vector3 &p_source_size, uint32_t p_semantic_surface, real_t p_depth) {
+	CSGExtrusionResult result;
+	result.size = p_source_size;
+	result.local_transform = Transform3D();
+
+	int axis = 0;
+	real_t sign = 1.0;
+	Vector3 outward;
+	if (!_get_box_surface_axis(p_semantic_surface, axis, sign, outward)) {
+		return result;
+	}
+
+	result.size[axis] = MAX(p_depth, (real_t)0.001);
+	Vector3 center_local;
+	center_local[axis] = sign * (p_source_size[axis] * 0.5 + result.size[axis] * 0.5);
+	result.local_transform = Transform3D(Basis(), center_local);
+	return result;
+}
+
 static CSGShape3D *_get_single_selected_csg_shape(const EditorEditDomainContext *p_context = nullptr) {
 	EditorSelection *selection = p_context && p_context->document ? p_context->document->get_selection() : nullptr;
 	if (!selection) {
@@ -160,6 +180,7 @@ void CSGSurfaceSession::_clear_selection() {
 	selected_hit = CSGSurfaceHit();
 	has_selection = false;
 	has_ghost = false;
+	extrude_gesture = false; // CSG-5: Do not leak a canceled mode into numeric entry.
 	gesture_state = has_hover ? GestureState::HOVER : GestureState::IDLE;
 	_update_context_panel();
 }
@@ -263,7 +284,12 @@ bool CSGSurfaceSession::_begin_gesture(Node3DEditorViewport *p_viewport, const R
 	has_selection = true;
 	gesture_state = GestureState::PRESSED;
 	press_position = p_event->get_position();
+	// CSG-5: Gesture mode is fixed at press; extrusion wins over Alt symmetry.
+	extrude_gesture = p_event->is_shift_pressed();
 	symmetric_drag = p_event->is_alt_pressed();
+	if (extrude_gesture) {
+		symmetric_drag = false;
+	}
 	start_size = box->get_size();
 	start_transform = box->get_transform();
 	start_global_transform = box->get_global_transform();
@@ -316,19 +342,32 @@ void CSGSurfaceSession::_update_drag(Node3DEditorViewport *p_viewport, const Vec
 		}
 	}
 
-	drag_displacement = (target_plane_coordinate - start_plane_coordinate) * drag_axis_sign;
-	ghost_result = csg_push_pull_apply(start_size, start_transform, selected_hit.surface.semantic_surface, drag_displacement, symmetric_drag);
-	const real_t multiplier = symmetric_drag ? 2.0 : 1.0;
-	drag_displacement = (ghost_result.size[drag_axis] - start_size[drag_axis]) / multiplier;
-	target_plane_coordinate = start_plane_coordinate + drag_axis_sign * drag_displacement;
+	// CSG-4: Pointer and numeric input share the same post-clamp recompute.
+	_apply_displacement();
 	has_ghost = true;
 	_update_context_panel();
 	_queue_redraw(p_viewport);
 }
 
+void CSGSurfaceSession::_apply_displacement() {
+	drag_displacement = (target_plane_coordinate - start_plane_coordinate) * drag_axis_sign;
+	if (extrude_gesture) {
+		// CSG-5: Inward depth stays non-committable while the ghost remains outward.
+		extrude_ghost = csg_extrude_box_face(start_size, selected_hit.surface.semantic_surface, MAX(drag_displacement, (real_t)0.0));
+		return;
+	}
+
+	// CSG-4: Re-derive the effective plane after the minimum-size clamp.
+	ghost_result = csg_push_pull_apply(start_size, start_transform, selected_hit.surface.semantic_surface, drag_displacement, symmetric_drag);
+	const real_t multiplier = symmetric_drag ? 2.0 : 1.0;
+	drag_displacement = (ghost_result.size[drag_axis] - start_size[drag_axis]) / multiplier;
+	target_plane_coordinate = start_plane_coordinate + drag_axis_sign * drag_displacement;
+}
+
 void CSGSurfaceSession::_cancel_gesture() {
-	gesture_state = GestureState::CANCEL;
+	// CSG-4: Cancellation clears only session-local transient state.
 	has_ghost = false;
+	extrude_gesture = false; // CSG-5: Escape leaves no captured extrusion mode.
 	drag_displacement = 0.0;
 	target_plane_coordinate = start_plane_coordinate;
 	gesture_state = has_hover ? GestureState::HOVER : GestureState::IDLE;
@@ -337,8 +376,9 @@ void CSGSurfaceSession::_cancel_gesture() {
 }
 
 void CSGSurfaceSession::_finish_without_commit() {
-	gesture_state = GestureState::COMMIT;
+	// CSG-4: A threshold miss or no-op creates no undo history.
 	has_ghost = false;
+	extrude_gesture = false; // CSG-5: Ghost-only release has no persistent state.
 	gesture_state = has_hover ? GestureState::HOVER : GestureState::IDLE;
 	_update_context_panel();
 	_queue_redraw(_get_active_viewport());
@@ -349,6 +389,71 @@ void CSGSurfaceSession::_commit_gesture() {
 	CSGShape3D *root = _get_active_root();
 	if (!has_ghost || !box || !root) {
 		_finish_without_commit();
+		return;
+	}
+	if (extrude_gesture) {
+		// CSG-5: Positive-only MVP; inward and zero drags create no node/history.
+		if (drag_displacement <= CMP_EPSILON) {
+			_finish_without_commit();
+			return;
+		}
+
+		// CSG-5: Only nodes owned directly by the edited scene are writable here.
+		EditorNode *editor_node = EditorNode::get_singleton();
+		Node *edited_root = editor_node ? editor_node->get_edited_scene() : nullptr;
+		if (!edited_root || (box != edited_root && box->get_owner() != edited_root)) {
+			_finish_without_commit();
+			return;
+		}
+
+		EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+		if (!undo_redo) {
+			_finish_without_commit();
+			return;
+		}
+
+		// CSG-5: Add one union child beneath the source; never reparent the source.
+		const CSGExtrusionResult extrusion = csg_extrude_box_face(start_size, selected_hit.surface.semantic_surface, drag_displacement);
+		CSGBox3D *new_box = memnew(CSGBox3D);
+		new_box->set_name("Extrusion");
+		new_box->set_operation(CSGShape3D::OPERATION_UNION);
+		new_box->set_size(extrusion.size);
+		new_box->set_transform(extrusion.local_transform);
+		new_box->set_material(box->get_material());
+
+		// CSG-5: Cap identity is transient - captured here, consumed below.
+		const ObjectID cap_box_id = new_box->get_instance_id();
+		const uint32_t cap_surface = selected_hit.surface.semantic_surface;
+		gesture_state = GestureState::COMMIT;
+		undo_redo->create_action(TTR("CSG Extrude Face"));
+		undo_redo->add_do_method(box, "add_child", new_box, true);
+		undo_redo->add_do_method(new_box, "set_owner", edited_root);
+		undo_redo->add_undo_method(box, "remove_child", new_box);
+		undo_redo->add_do_reference(new_box);
+		// add_child queued a sync update. This last do-method snapshots the
+		// post-add tree and supersedes that queued update (plan Sections 18/28).
+		undo_redo->add_do_method(root, SNAME("_request_final_async_evaluation"));
+		undo_redo->add_undo_method(root, SNAME("_request_final_async_evaluation"));
+		undo_redo->commit_action();
+
+		// CSG-5: Axes align, so the outward cap keeps the dragged surface index.
+		active_box_id = cap_box_id;
+		selected_hit = CSGSurfaceHit();
+		selected_hit.surface = { cap_box_id, cap_surface, new_box->get_surface_schema_generation() };
+		selected_hit.result_generation = root->get_result_generation();
+		has_selection = true;
+		has_ghost = false;
+		has_hover = false;
+		extrude_gesture = false;
+		gesture_state = GestureState::IDLE;
+		drag_displacement = 0.0;
+		start_size = new_box->get_size();
+		start_transform = new_box->get_transform();
+		start_global_transform = new_box->get_global_transform();
+		start_plane_coordinate = drag_axis_sign * start_size[drag_axis] * 0.5;
+		target_plane_coordinate = start_plane_coordinate;
+		_update_context_panel();
+		_queue_redraw(_get_active_viewport());
 		return;
 	}
 	if (ghost_result.size.is_equal_approx(start_size) && ghost_result.transform.is_equal_approx(start_transform)) {
@@ -400,7 +505,12 @@ void CSGSurfaceSession::_update_context_panel() {
 	}
 
 	if (distance_label) {
-		distance_label->set_text(vformat(TTR("Distance: %s m"), String::num(drag_displacement, 4)));
+		// CSG-5: An extrusion reports positive-only depth, not push/pull distance.
+		if (extrude_gesture) {
+			distance_label->set_text(vformat(TTR("Extrude depth: %s m"), String::num(MAX(drag_displacement, (real_t)0.0), 4)));
+		} else {
+			distance_label->set_text(vformat(TTR("Distance: %s m"), String::num(drag_displacement, 4)));
+		}
 	}
 	if (coordinate_edit && !coordinate_edit->has_focus()) {
 		coordinate_edit->set_text(String::num(target_plane_coordinate, 4));
@@ -426,15 +536,13 @@ void CSGSurfaceSession::_numeric_coordinate_submitted(const String &p_text) {
 		start_transform = box->get_transform();
 		start_global_transform = box->get_global_transform();
 		start_plane_coordinate = drag_axis_sign * start_size[drag_axis] * 0.5;
+		extrude_gesture = false; // CSG-5: Fresh numeric entry remains push/pull.
 		symmetric_drag = false;
 	}
 
 	target_plane_coordinate = p_text.to_float();
-	drag_displacement = (target_plane_coordinate - start_plane_coordinate) * drag_axis_sign;
-	ghost_result = csg_push_pull_apply(start_size, start_transform, selected_hit.surface.semantic_surface, drag_displacement, symmetric_drag);
-	const real_t multiplier = symmetric_drag ? 2.0 : 1.0;
-	drag_displacement = (ghost_result.size[drag_axis] - start_size[drag_axis]) / multiplier;
-	target_plane_coordinate = start_plane_coordinate + drag_axis_sign * drag_displacement;
+	// CSG-4: Numeric entry uses the pointer path's post-clamp recompute.
+	_apply_displacement();
 	gesture_state = GestureState::DRAGGING;
 	has_ghost = true;
 	_update_context_panel();
@@ -511,8 +619,10 @@ void CSGSurfaceSession::_draw_ghost(Node3DEditorViewport *p_viewport) const {
 		return;
 	}
 
-	const Vector3 target_size = has_ghost ? ghost_result.size : box->get_size();
-	const Transform3D target_global = has_ghost ? _local_to_world_transform(box, ghost_result.transform) : box->get_global_transform();
+	// CSG-5: The source stays rendered in place; only the prospective child prism moves.
+	const bool draw_extrusion = has_ghost && extrude_gesture;
+	const Vector3 target_size = draw_extrusion ? extrude_ghost.size : (has_ghost ? ghost_result.size : box->get_size());
+	const Transform3D target_global = draw_extrusion ? box->get_global_transform() * extrude_ghost.local_transform : (has_ghost ? _local_to_world_transform(box, ghost_result.transform) : box->get_global_transform());
 	Vector3 face_corners[4];
 	_get_box_face_corners(target_size, selected_hit.surface.semantic_surface, face_corners);
 	Vector<Point2> face_polygon;
@@ -527,9 +637,9 @@ void CSGSurfaceSession::_draw_ghost(Node3DEditorViewport *p_viewport) const {
 		face_polygon.write[i] = camera->unproject_position(world_corner);
 	}
 	face_center /= 4.0;
-	surface_control->draw_colored_polygon(face_polygon, Color(1.0, 0.65, 0.15, has_ghost ? 0.22 : 0.12));
+	surface_control->draw_colored_polygon(face_polygon, draw_extrusion ? Color(0.25, 0.95, 0.5, 0.24) : Color(1.0, 0.65, 0.15, has_ghost ? 0.22 : 0.12));
 	face_polygon.push_back(face_polygon[0]);
-	surface_control->draw_polyline(face_polygon, Color(1.0, 0.72, 0.2), 2.0 * EDSCALE, true);
+	surface_control->draw_polyline(face_polygon, draw_extrusion ? Color(0.35, 1.0, 0.6) : Color(1.0, 0.72, 0.2), 2.0 * EDSCALE, true);
 
 	int axis = 0;
 	real_t sign = 1.0;
@@ -539,7 +649,7 @@ void CSGSurfaceSession::_draw_ghost(Node3DEditorViewport *p_viewport) const {
 		const real_t handle_length = MAX(target_global.basis.xform(outward * target_size[axis] * 0.25).length(), (real_t)0.25);
 		const Vector3 handle_end = face_center + world_normal * handle_length;
 		if (!camera->is_position_behind(handle_end)) {
-			surface_control->draw_line(camera->unproject_position(face_center), camera->unproject_position(handle_end), Color(1.0, 0.78, 0.25), 2.0 * EDSCALE, true);
+			surface_control->draw_line(camera->unproject_position(face_center), camera->unproject_position(handle_end), draw_extrusion ? Color(0.45, 1.0, 0.65) : Color(1.0, 0.78, 0.25), 2.0 * EDSCALE, true);
 		}
 	}
 
@@ -570,7 +680,7 @@ void CSGSurfaceSession::_draw_ghost(Node3DEditorViewport *p_viewport) const {
 			if (camera->is_position_behind(corners[edge[0]]) || camera->is_position_behind(corners[edge[1]])) {
 				continue;
 			}
-			surface_control->draw_line(camera->unproject_position(corners[edge[0]]), camera->unproject_position(corners[edge[1]]), Color(0.4, 0.9, 1.0, 0.95), 1.5 * EDSCALE, true);
+			surface_control->draw_line(camera->unproject_position(corners[edge[0]]), camera->unproject_position(corners[edge[1]]), draw_extrusion ? Color(0.35, 1.0, 0.6, 0.95) : Color(0.4, 0.9, 1.0, 0.95), 1.5 * EDSCALE, true);
 		}
 
 		const Point2 label_position = camera->unproject_position(face_center) + Point2(10, -10) * EDSCALE;

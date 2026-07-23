@@ -1008,6 +1008,36 @@ TEST_CASE("[SceneTree][CSG] Phase 4 root deletion flushes queued evaluation") {
 #endif // DEV_ENABLED
 }
 
+// CSG-5: A newly parented extrusion operand publishes selectable cap provenance.
+TEST_CASE("[SceneTree][CSG] Phase 5 new union child receives cap provenance") {
+	CSGSynchronousSchedulerScope force_sync;
+	CSGBox3D *root = memnew(CSGBox3D);
+	SceneTree::get_singleton()->get_root()->add_child(root);
+	root->update_shape();
+	MessageQueue::get_singleton()->flush();
+	const uint64_t generation_before = root->get_result_generation();
+
+	CSGBox3D *child = _add_box(root, Vector3(2, 2, 2), Vector3(2, 0, 0), CSGShape3D::OPERATION_UNION);
+	const ObjectID child_id = child->get_instance_id();
+	root->update_shape();
+	CHECK(root->get_result_generation() > generation_before);
+
+	bool found_child_cap = false;
+	const uint64_t generation = root->get_result_generation();
+	for (uint32_t triangle_i = 0; triangle_i < root->get_result_triangle_count(); triangle_i++) {
+		CSGSurfaceKey surface;
+		uint32_t face_id = 0;
+		if (root->resolve_result_triangle(triangle_i, generation, surface, face_id) && surface.source_shape == child_id && surface.semantic_surface == CSGBox3D::SURFACE_POSITIVE_X) {
+			found_child_cap = true;
+			break;
+		}
+	}
+	CHECK(found_child_cap);
+
+	root->queue_free();
+	MessageQueue::get_singleton()->flush();
+}
+
 TEST_CASE("[SceneTree][CSG] CSGPolygon3D") {
 	SUBCASE("[SceneTree][CSG] CSGPolygon3D: using accurate path tangent for polygon rotation") {
 		const float polygon_radius = 10.0f;
