@@ -3879,6 +3879,15 @@ RID RenderForwardClustered::_setup_sdfgi_render_pass_uniform_set(RID p_albedo_te
 	}
 
 	{
+		// No AO maps.
+		RD::Uniform u;
+		u.binding = 37;
+		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+		u.append_id(texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_2D_ARRAY_WHITE));
+		uniforms.push_back(u);
+	}
+
+	{
 		// No VoxelGIs
 		RD::Uniform u;
 		u.binding = 8;
