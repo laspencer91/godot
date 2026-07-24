@@ -78,6 +78,7 @@
 #include "scene/gui/rich_text_label.h"
 #include "scene/gui/text_edit.h"
 #include "scene/gui/texture_rect.h"
+#include "scene/main/timer.h"
 #include "scene/resources/packed_scene.h"
 #include "scene/resources/style_box_flat.h"
 #include "servers/display/display_server.h"
@@ -86,6 +87,7 @@ namespace {
 
 constexpr int DESCRIPTION_TREE_BUTTON_ID = 2001;
 constexpr int MAX_DESCRIPTION_SIZE_BYTES = 32 * 1024;
+constexpr double SEARCH_DEBOUNCE_SECONDS = 0.15;
 
 struct ExploreCategoryIcon {
 	const char *theme_icon;
@@ -3368,12 +3370,40 @@ void FileSystemDock::_script_or_shader_created(const Ref<Resource> &p_resource) 
 }
 
 void FileSystemDock::_search_changed(const String &p_text, const Control *p_from) {
+	const String searched_string = p_text.to_lower();
+
+	if (p_from == tree_search_box) {
+		file_list_search_box->set_text(searched_string);
+	} else { // File_list_search_box.
+		tree_search_box->set_text(searched_string);
+	}
+
+	if (searched_string.is_empty()) {
+		// Restoring the unfiltered view is what the clear button does; it must never feel delayed.
+		search_debounce_timer->stop();
+		_apply_pending_search();
+	} else {
+		search_debounce_timer->start();
+	}
+}
+
+// Commits a query that is still waiting out the debounce. Callers that are about to act on
+// `searched_tokens`, or to change the tree out from under it, need it to be current first.
+void FileSystemDock::_flush_pending_search() {
+	if (!search_debounce_timer->is_stopped()) {
+		search_debounce_timer->stop();
+		_apply_pending_search();
+	}
+}
+
+void FileSystemDock::_apply_pending_search() {
 	if (searched_tokens.is_empty()) {
 		// Register the uncollapsed paths before they change.
 		uncollapsed_paths_before_search = get_uncollapsed_paths();
 	}
 
-	const String searched_string = p_text.to_lower();
+	// Both search boxes mirror each other in `_search_changed`, so either one is the pending query.
+	const String searched_string = tree_search_box->get_text().to_lower();
 	if (searched_string.begins_with("uid://")) {
 		ResourceUID::ID id = ResourceUID::get_singleton()->text_to_id(searched_string);
 		if (id != ResourceUID::INVALID_ID && ResourceUID::get_singleton()->has_id(id)) {
@@ -3383,12 +3413,6 @@ void FileSystemDock::_search_changed(const String &p_text, const Control *p_from
 	}
 
 	searched_tokens = searched_string.split(" ", false);
-
-	if (p_from == tree_search_box) {
-		file_list_search_box->set_text(searched_string);
-	} else { // File_list_search_box.
-		tree_search_box->set_text(searched_string);
-	}
 
 	if (_is_color_collection_active()) {
 		_update_tree(get_uncollapsed_paths(), false, false);
@@ -4169,6 +4193,10 @@ void FileSystemDock::_end_category_filter() {
 }
 
 void FileSystemDock::_set_category_filter(const String &p_color_key) {
+	// The category rail rebuilds the tree, so the snapshot in `_apply_pending_search` has to be
+	// taken against the pre-category view.
+	_flush_pending_search();
+
 	const bool was_active = _is_color_collection_active();
 	if (p_color_key.is_empty()) {
 		active_color_filter.clear();
@@ -5684,11 +5712,18 @@ FileSystemDock::FileSystemDock() {
 	toolbar2_hbc = memnew(HBoxContainer);
 	top_vbc->add_child(toolbar2_hbc);
 
+	search_debounce_timer = memnew(Timer);
+	search_debounce_timer->set_one_shot(true);
+	search_debounce_timer->set_wait_time(SEARCH_DEBOUNCE_SECONDS);
+	search_debounce_timer->connect("timeout", callable_mp(this, &FileSystemDock::_apply_pending_search));
+	add_child(search_debounce_timer);
+
 	tree_search_box = memnew(LineEdit);
 	tree_search_box->set_h_size_flags(SIZE_EXPAND_FILL);
 	tree_search_box->set_placeholder(TTRC("Filter Assets"));
 	tree_search_box->set_clear_button_enabled(true);
 	tree_search_box->connect(SceneStringName(text_changed), callable_mp(this, &FileSystemDock::_search_changed).bind(tree_search_box));
+	tree_search_box->connect(SceneStringName(text_submitted), callable_mp(this, &FileSystemDock::_flush_pending_search).unbind(1));
 	toolbar2_hbc->add_child(tree_search_box);
 
 	tree_button_sort = _create_file_menu_button();
@@ -5817,6 +5852,7 @@ FileSystemDock::FileSystemDock() {
 	file_list_search_box->set_accessibility_name(TTRC("Filter Assets"));
 	file_list_search_box->set_clear_button_enabled(true);
 	file_list_search_box->connect(SceneStringName(text_changed), callable_mp(this, &FileSystemDock::_search_changed).bind(file_list_search_box));
+	file_list_search_box->connect(SceneStringName(text_submitted), callable_mp(this, &FileSystemDock::_flush_pending_search).unbind(1));
 	path_hb->add_child(file_list_search_box);
 
 	file_list_button_sort = _create_file_menu_button();

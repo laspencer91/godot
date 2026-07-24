@@ -1,0 +1,11 @@
+; Explore search debounce smoke case.
+config_version=5
+
+[application]
+
+config/name="explore-search-debounce-smoke"
+config/features=PackedStringArray("4.8")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/explore_search_debounce_smoke/plugin.cfg")

@@ -3408,18 +3408,28 @@ void Node3DEditor::_bind_preview_nodes_to_active_world() {
 	const bool env_active = preview_environment->get_parent() != nullptr;
 
 	if (preview_env_bound_world.is_valid() && (!env_active || preview_env_bound_world != target_world)) {
-		// Only clear what is still ours — a WorldEnvironment added to the scene may have
-		// already applied its own environment to this world in the same update.
+		// Only restore what is still ours — a WorldEnvironment added to the scene may have
+		// already applied its own environment to this world in the same update. Restoring the
+		// resource that was present before the preview was bound is important during a document
+		// switch: scene editor state is restored before edited_scene_changed() recounts the new
+		// scene, so the old document's zero count can briefly bind the preview over the new
+		// document's WorldEnvironment.
 		if (preview_env_bound_world->get_environment() == environment) {
-			preview_env_bound_world->set_environment(Ref<Environment>());
+			preview_env_bound_world->set_environment(preview_env_replaced_environment);
 		}
 		if (camera_attributes.is_valid() && preview_env_bound_world->get_camera_attributes() == camera_attributes) {
-			preview_env_bound_world->set_camera_attributes(Ref<CameraAttributes>());
+			preview_env_bound_world->set_camera_attributes(preview_env_replaced_camera_attributes);
 		}
 		preview_env_bound_world = Ref<World3D>();
+		preview_env_replaced_environment = Ref<Environment>();
+		preview_env_replaced_camera_attributes = Ref<CameraAttributes>();
 	}
 
 	if (env_active && target_world.is_valid()) {
+		if (preview_env_bound_world != target_world) {
+			preview_env_replaced_environment = target_world->get_environment();
+			preview_env_replaced_camera_attributes = target_world->get_camera_attributes();
+		}
 		target_world->set_environment(environment);
 		if (camera_attributes.is_valid()) {
 			target_world->set_camera_attributes(camera_attributes);

@@ -129,6 +129,32 @@ echo
 run_case "open_3d" -e "res://test_3d.tscn"
 run_case "open_2d" -e "res://test_2d.tscn"
 
+# Explore search performs recursive tree and file-list walks. Rapid input should only apply the final
+# query after 150 ms, while Enter and clearing remain synchronous. The plugin observes the actual
+# asset-tree visibility and both mirrored search fields rather than relying on log timing alone.
+cp "$SMOKE_DIR/explore_search_debounce_project.godot" "$WORK/project.godot"
+run_case "explore_search_debounce" -e "res://test_3d.tscn"
+if grep -q 'EXPLORE_SEARCH_DEBOUNCE_OK' "$WORK/explore_search_debounce.log"; then
+	echo "  PASS  explore_search_debounce_assertions (typing delayed; submit + clear immediate)"
+else
+	echo "  FAIL  explore_search_debounce_assertions (debounce behavior did not reach its success marker)"
+	fail=1
+fi
+cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
+
+# The preview environment is a temporary overlay on the active document's World3D. Switch from a
+# preview-lit scene into one with its own WorldEnvironment and require the scene resource to survive
+# the scene-state-restore-before-recount ordering without the "first Environment" warning.
+cp "$SMOKE_DIR/preview_environment_project.godot" "$WORK/project.godot"
+run_case "preview_environment_handoff" -e "res://test_3d.tscn"
+if grep -q 'PREVIEW_ENVIRONMENT_HANDOFF_OK' "$WORK/preview_environment_handoff.log"; then
+	echo "  PASS  preview_environment_handoff_assertions (scene environment restored without conflict)"
+else
+	echo "  FAIL  preview_environment_handoff_assertions (handoff did not reach its success marker)"
+	fail=1
+fi
+cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
+
 # A 3D-root scene can still contain CanvasItems. Exercise the pane-local selector in both directions,
 # assert the matching shared toolbar follows it, and verify each lazily-created surface is retained.
 cp "$SMOKE_DIR/scene_view_toggle_project.godot" "$WORK/project.godot"

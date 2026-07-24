@@ -59,6 +59,7 @@ class RichTextLabel;
 class SceneCreateDialog;
 class ShaderCreateDialog;
 class TextEdit;
+class Timer;
 class DirectoryCreateDialog;
 class EditorResourceTooltipPlugin;
 class VSplitContainer;
@@ -235,6 +236,8 @@ private:
 
 	LineEdit *file_list_search_box = nullptr;
 	MenuButton *file_list_button_sort = nullptr;
+	// Typing only restarts this timer; the search boxes hold the pending query until it fires.
+	Timer *search_debounce_timer = nullptr;
 
 	// Explore categories use the existing folder-color collection model, promoted to a persistent rail.
 	ConfirmationDialog *color_labels_dialog = nullptr;
@@ -242,6 +245,8 @@ private:
 	HashMap<String, MenuButton *> color_icon_buttons;
 	HashMap<String, String> edited_color_icons;
 
+	// The *applied* search: always matches what the tree and file list currently show, which is why
+	// readers of it need no debounce awareness.
 	PackedStringArray searched_tokens;
 	Vector<String> uncollapsed_paths_before_search;
 
@@ -445,6 +450,8 @@ private:
 	void _set_category_layout_narrow(bool p_narrow);
 
 	void _search_changed(const String &p_text, const Control *p_from);
+	void _flush_pending_search();
+	void _apply_pending_search();
 	bool _matches_all_search_tokens(const String &p_text);
 
 	MenuButton *_create_file_menu_button();

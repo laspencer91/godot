@@ -386,8 +386,12 @@ private:
 	Ref<CameraAttributesPractical> camera_attributes;
 	Ref<ProceduralSkyMaterial> sky_material;
 	// Document world currently carrying the preview environment; also keeps that world
-	// alive across a document close until the next rebind clears it.
+	// alive across a document close until the next rebind clears it. The replaced resources
+	// are retained so disabling/rebinding the preview restores the document's scene context
+	// instead of leaving its WorldEnvironment shadowed by an empty world setting.
 	Ref<World3D> preview_env_bound_world;
+	Ref<Environment> preview_env_replaced_environment;
+	Ref<CameraAttributes> preview_env_replaced_camera_attributes;
 
 	bool sun_environ_updating = false;
 
