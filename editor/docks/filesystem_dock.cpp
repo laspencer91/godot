@@ -55,6 +55,7 @@
 #include "editor/gui/directory_create_dialog.h"
 #include "editor/gui/editor_dir_dialog.h"
 #include "editor/gui/editor_simple_markdown.h"
+#include "editor/import/3d/resource_importer_scene.h"
 #include "editor/import/3d/scene_import_settings.h"
 #include "editor/inspector/editor_context_menu_plugin.h"
 #include "editor/inspector/editor_resource_preview.h"
@@ -70,12 +71,14 @@
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
 #include "scene/gui/box_container.h"
+#include "scene/gui/flow_container.h"
 #include "scene/gui/grid_container.h"
 #include "scene/gui/item_list.h"
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/progress_bar.h"
 #include "scene/gui/rich_text_label.h"
+#include "scene/gui/separator.h"
 #include "scene/gui/text_edit.h"
 #include "scene/gui/texture_rect.h"
 #include "scene/main/timer.h"
@@ -116,6 +119,70 @@ const ExploreCategoryIcon *get_explore_category_icon(const String &p_id) {
 		}
 	}
 	return &explore_category_icons[0];
+}
+
+struct ExploreTypeFilter {
+	const char *id;
+	const char *theme_icon;
+	const char *display_name;
+	const char *tooltip;
+	// Extensions the imported resource type cannot disambiguate, space-separated and lowercase. Kept
+	// deliberately short: everything the type already answers is classified from the type instead (see
+	// FileSystemDock::_matches_type_filter), so those formats can never go stale here.
+	const char *ambiguous_extensions;
+};
+
+// Ordered to match FileSystemDock::AssetTypeFilter. `id` is what lands in the editor layout file, so
+// it has to survive any later reordering of the enum.
+static const ExploreTypeFilter explore_type_filters[] = {
+	{ "scenes", "PackedScene", TTRC("Scenes"), TTRC("Show only scenes."), "" },
+	// Model extensions come from the registered scene importers instead of a literal list, so formats
+	// added by modules or GDExtension plugins (USD, VRM, ...) classify correctly too.
+	{ "models", "Mesh", TTRC("Models"), TTRC("Show only 3D models."), "" },
+	{ "images", "Texture2D", TTRC("Images"), TTRC("Show only images."), "" },
+	{ "audio", "AudioStream", TTRC("Audio"), TTRC("Show only audio."), "" },
+	// ShaderInclude, RDShaderFile and GDExtension all derive straight from Resource, so only these
+	// three need naming.
+	{ "code", "Script", TTRC("Code"), TTRC("Show only scripts and shaders."), "gdshaderinc glsl gdextension" },
+};
+
+// Returns the AssetTypeFilter index carrying p_id, or -1. Ids are the stable layout-file spelling, so
+// this is also how a saved layout is resolved back to a bit.
+int get_explore_type_filter_index(const String &p_id) {
+	for (int i = 0; i < (int)std_size(explore_type_filters); i++) {
+		if (p_id == explore_type_filters[i].id) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+// Returns the AssetTypeFilter index for an extension, or -1 when the extension does not settle the
+// question by itself. Extensions only get a say where the imported type is ambiguous: glTF/FBX/Blend
+// all import as PackedScene, which would otherwise make Models and Scenes indistinguishable.
+int get_explore_type_for_extension(const String &p_extension) {
+	// Flattened once so that filtering a large project stays a hash lookup per file.
+	static HashMap<String, int> extension_types;
+	if (unlikely(extension_types.is_empty())) {
+		for (int i = 0; i < (int)std_size(explore_type_filters); i++) {
+			for (const String &extension : String(explore_type_filters[i].ambiguous_extensions).split(" ", false)) {
+				extension_types[extension] = i;
+			}
+		}
+		const int models_index = get_explore_type_filter_index("models");
+		List<String> scene_extensions;
+		ResourceImporterScene::get_scene_importer_extensions(&scene_extensions);
+		for (const String &extension : scene_extensions) {
+			// .escn is an engine-authored scene, not an imported model, despite sharing the importer.
+			const String lower = extension.to_lower();
+			if (lower != "escn") {
+				extension_types[lower] = models_index;
+			}
+		}
+	}
+
+	HashMap<String, int>::Iterator found = extension_types.find(p_extension);
+	return found ? found->value : -1;
 }
 
 } // namespace
@@ -376,6 +443,9 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 				// If type is disabled, file won't be displayed.
 				continue;
 			}
+			if (!_matches_type_filter(p_dir->get_file(i), file_type)) {
+				continue;
+			}
 
 			FileInfo file_info;
 			file_info.name = p_dir->get_file(i);
@@ -528,6 +598,11 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 			text = favorite.get_file();
 			int index;
 			EditorFileSystemDirectory *dir = EditorFileSystem::get_singleton()->find_file(favorite, &index);
+			// Favorite file rows are type-filtered as they are built, exactly like the rows `_create_tree`
+			// makes, so the visibility pass in `_update_filtered_items` never has to re-derive a type.
+			if (!_matches_type_filter(text, dir ? dir->get_file_type(index) : StringName())) {
+				continue;
+			}
 			if (dir) {
 				icon = _get_tree_item_icon(dir->get_file_import_is_valid(index), dir->get_file_type(index), dir->get_file_icon_path(index));
 			} else {
@@ -828,6 +903,7 @@ void FileSystemDock::_notification(int p_what) {
 			description_text_edit->add_theme_font_size_override(SceneStringName(font_size), get_theme_font_size(SNAME("source_size"), EditorStringName(EditorFonts)));
 
 			_rebuild_category_rail();
+			_update_type_filter_buttons();
 			for (const KeyValue<String, MenuButton *> &E : color_icon_buttons) {
 				_update_color_icon_button(E.key);
 			}
@@ -1040,6 +1116,10 @@ bool FileSystemDock::_update_filtered_items(TreeItem *p_tree_item) {
 		keep_visible = _update_filtered_items(child) || keep_visible;
 	}
 
+	// No type-filter handling here on purpose: every file row in the tree is filtered while it is built
+	// (`_create_tree` for directories, `_update_tree` for favorites), so a row that survived to this
+	// point already passed. Re-deriving the type from the path would cost an `EditorFileSystem` lookup
+	// per item, on every keystroke.
 	if (searched_tokens.is_empty()) {
 		item->set_visible(true);
 		// Always uncollapse root (the hidden item above res:// and favorites).
@@ -1257,6 +1337,11 @@ void FileSystemDock::_search(EditorFileSystemDirectory *p_path, List<FileInfo> *
 				// This type is disabled, will not appear here.
 				continue;
 			}
+			if (!_matches_type_filter(file_info.name, file_info.type)) {
+				// Applied here rather than only at the shared convergence point so that p_max_items caps
+				// the results actually shown, instead of being spent on rows that get dropped later.
+				continue;
+			}
 
 			matches->push_back(file_info);
 			if (matches->size() > p_max_items) {
@@ -1467,6 +1552,21 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 		}
 	}
 
+	// Categories, favorites, search results and plain directories all converge on this list, so the
+	// type filter only has to be applied once. Folders were added to the control directly and stay put.
+	// Ahead of the sort, so ordering never gets spent on rows that are about to be dropped.
+	bool type_filtered_out = false;
+	if (_is_type_filter_active()) {
+		for (List<FileInfo>::Element *E = file_list.front(); E;) {
+			List<FileInfo>::Element *next = E->next();
+			if (!_matches_type_filter(E->get().name, E->get().type)) {
+				file_list.erase(E);
+				type_filtered_out = true;
+			}
+			E = next;
+		}
+	}
+
 	// Sort the file list if needed.
 	sort_file_info_list(file_list, file_sort);
 
@@ -1544,7 +1644,10 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 		files->set_current(*valid_selection.begin());
 	}
 
-	_update_category_empty_state();
+	// Only claim the type filter emptied the view when nothing at all is left; folders still showing
+	// means the user can keep browsing and needs no rescue message. Passed rather than stored, so the
+	// other two callers of `_update_category_empty_state` cannot read a value left over from here.
+	_update_category_empty_state(type_filtered_out && files->get_item_count() == 0);
 	_queue_visible_scene_previews_update();
 }
 
@@ -3418,7 +3521,14 @@ void FileSystemDock::_apply_pending_search() {
 
 	searched_tokens = searched_string.split(" ", false);
 
-	if (_is_color_collection_active()) {
+	_refresh_filtered_views();
+}
+
+// Re-runs whichever views are on screen against the currently active filters. `p_rebuild_tree` is for
+// callers whose filter is enforced while the rows are built: hidden rows can be shown again, but rows
+// that were never created only come back with a rebuild.
+void FileSystemDock::_refresh_filtered_views(bool p_rebuild_tree) {
+	if (_is_color_collection_active() || p_rebuild_tree) {
 		_update_tree(get_uncollapsed_paths(), false, false);
 	} else {
 		_update_filtered_items();
@@ -3426,7 +3536,8 @@ void FileSystemDock::_apply_pending_search() {
 	if (display_mode == DISPLAY_MODE_HSPLIT || display_mode == DISPLAY_MODE_VSPLIT) {
 		_update_file_list(false);
 	}
-	if (searched_tokens.is_empty() && !_is_color_collection_active()) {
+	// Navigating restores the unfiltered view, so it may only fire when nothing is filtering at all.
+	if (searched_tokens.is_empty() && !_is_color_collection_active() && !_is_type_filter_active()) {
 		_navigate_to_path(current_path);
 	}
 }
@@ -4336,7 +4447,7 @@ String FileSystemDock::_get_active_category_display_name() const {
 	return count == 1 ? category_name : vformat(TTR("%d selected categories"), count);
 }
 
-void FileSystemDock::_update_category_empty_state() {
+void FileSystemDock::_update_category_empty_state(bool p_type_filter_emptied) {
 	if (!category_result_empty_state) {
 		return;
 	}
@@ -4349,6 +4460,7 @@ void FileSystemDock::_update_category_empty_state() {
 	bool show_empty_state = false;
 	bool show_edit = false;
 	bool show_clear_search = false;
+	bool show_clear_types = false;
 	String message;
 	String hint;
 	if (_is_color_collection_active()) {
@@ -4371,11 +4483,22 @@ void FileSystemDock::_update_category_empty_state() {
 		}
 	}
 
+	// The type filter is orthogonal to categories and can empty out an otherwise populated view, where
+	// the messages above would point at the wrong control. TREE_ONLY keeps its folders either way.
+	// TREE_ONLY still lists folders in the tree, so there is nothing to rescue the user from there.
+	if (!show_empty_state && p_type_filter_emptied && display_mode != DISPLAY_MODE_TREE_ONLY) {
+		show_empty_state = true;
+		show_clear_types = true;
+		message = vformat(TTR("No “%s” assets here."), _get_active_type_filter_display_name());
+		hint = TTR("Every other asset type is hidden by the type filter.");
+	}
+
 	category_result_empty_label->set_text(message);
 	category_result_empty_hint->set_text(hint);
 	category_result_empty_hint->set_visible(!hint.is_empty());
 	category_result_edit_button->set_visible(show_edit);
 	category_result_clear_search_button->set_visible(show_clear_search);
+	category_result_clear_types_button->set_visible(show_clear_types);
 	category_result_empty_state->set_visible(show_empty_state);
 
 	if (display_mode == DISPLAY_MODE_TREE_ONLY) {
@@ -4388,6 +4511,90 @@ void FileSystemDock::_update_category_empty_state() {
 
 void FileSystemDock::_clear_category_search() {
 	file_list_search_box->clear();
+}
+
+bool FileSystemDock::_matches_type_filter(const String &p_file_name, const StringName &p_type) const {
+	static_assert((int)std_size(explore_type_filters) == (int)ASSET_TYPE_MAX, "The type filter table must cover every AssetTypeFilter.");
+
+	if (!_is_type_filter_active()) {
+		return true;
+	}
+
+	int type_index = get_explore_type_for_extension(p_file_name.get_extension().to_lower());
+	if (type_index < 0) {
+		// The extension had nothing to say, so classify by what the file imports as. Each probe takes a
+		// ClassDB read lock and walks an inheritance chain, and a project's set of distinct types is
+		// tiny next to its file count, so the answer is memoized per type. Anything landing in no bucket
+		// at all stays hidden: the user asked for a specific set of types.
+		static HashMap<StringName, int> type_indices;
+		HashMap<StringName, int>::Iterator cached = type_indices.find(p_type);
+		if (cached) {
+			type_index = cached->value;
+		} else {
+			if (ClassDB::is_parent_class(p_type, SNAME("AudioStream"))) {
+				type_index = ASSET_TYPE_AUDIO;
+			} else if (ClassDB::is_parent_class(p_type, SNAME("Texture2D"))) {
+				type_index = ASSET_TYPE_IMAGES;
+			} else if (ClassDB::is_parent_class(p_type, SNAME("Script")) || ClassDB::is_parent_class(p_type, SNAME("Shader"))) {
+				type_index = ASSET_TYPE_CODE;
+			} else if (ClassDB::is_parent_class(p_type, SNAME("Mesh"))) {
+				type_index = ASSET_TYPE_MODELS;
+			} else if (ClassDB::is_parent_class(p_type, SNAME("PackedScene"))) {
+				type_index = ASSET_TYPE_SCENES;
+			} else {
+				type_index = ASSET_TYPE_MAX; // Belongs to no bucket; cached so it stays a single lookup.
+			}
+			type_indices[p_type] = type_index;
+		}
+		if (type_index == ASSET_TYPE_MAX) {
+			return false;
+		}
+	}
+
+	return _is_type_enabled(type_index);
+}
+
+void FileSystemDock::_set_type_filter(int p_type) {
+	// Toggling a type rebuilds the views, so a query still waiting out the debounce has to land first.
+	_flush_pending_search();
+
+	if (p_type < 0 || p_type >= ASSET_TYPE_MAX) {
+		active_type_filter = 0;
+	} else {
+		active_type_filter ^= uint32_t(1) << p_type;
+	}
+
+	_update_type_filter_buttons();
+	// Rebuild rather than re-filter, in every display mode: file rows are dropped as they are built
+	// (`_create_tree` for directories in TREE_ONLY, `_update_tree` for favorites always), so re-showing
+	// hidden rows could never bring them back. A rebuild also preserves the current fold state.
+	_refresh_filtered_views(true);
+	emit_signal(SNAME("display_mode_changed"));
+}
+
+void FileSystemDock::_update_type_filter_buttons() {
+	if (!type_filter_all_button) {
+		return;
+	}
+
+	type_filter_all_button->set_button_icon(get_editor_theme_icon(SNAME("Folder")));
+	type_filter_all_button->set_pressed_no_signal(!_is_type_filter_active());
+	for (int i = 0; i < ASSET_TYPE_MAX; i++) {
+		type_filter_buttons[i]->set_button_icon(get_editor_theme_icon(explore_type_filters[i].theme_icon));
+		type_filter_buttons[i]->set_pressed_no_signal(_is_type_enabled(i));
+	}
+}
+
+String FileSystemDock::_get_active_type_filter_display_name() const {
+	String type_name;
+	int count = 0;
+	for (int i = 0; i < ASSET_TYPE_MAX; i++) {
+		if (_is_type_enabled(i)) {
+			type_name = TTR(explore_type_filters[i].display_name);
+			count++;
+		}
+	}
+	return count == 1 ? type_name : vformat(TTR("%d selected types"), count);
 }
 
 void FileSystemDock::_popup_color_labels_dialog() {
@@ -5388,6 +5595,14 @@ void FileSystemDock::save_layout_to_config(Ref<ConfigFile> &p_layout, const Stri
 		}
 	}
 	p_layout->set_value(p_section, "active_categories", active_categories);
+
+	PackedStringArray active_asset_types;
+	for (int i = 0; i < ASSET_TYPE_MAX; i++) {
+		if (_is_type_enabled(i)) {
+			active_asset_types.push_back(explore_type_filters[i].id);
+		}
+	}
+	p_layout->set_value(p_section, "active_asset_types", active_asset_types);
 	p_layout->set_value(p_section, "category_restore_path", category_restore_state_valid ? category_restore_path : current_path);
 	p_layout->set_value(p_section, "category_scope_path", category_scope_path);
 }
@@ -5554,6 +5769,17 @@ void FileSystemDock::load_layout_from_config(const Ref<ConfigFile> &p_layout, co
 			active_color_filter.insert(color_key);
 		}
 	}
+
+	// Ids that no longer exist are simply dropped, so removing a type can never corrupt a saved layout.
+	active_type_filter = 0;
+	const PackedStringArray active_asset_types = p_layout->get_value(p_section, "active_asset_types", PackedStringArray());
+	for (const String &type_id : active_asset_types) {
+		const int type_index = get_explore_type_filter_index(type_id);
+		if (type_index >= 0) {
+			active_type_filter |= uint32_t(1) << type_index;
+		}
+	}
+	_update_type_filter_buttons();
 	if (_is_color_collection_active()) {
 		category_restore_path = p_layout->get_value(p_section, "category_restore_path", current_path);
 		category_restore_selection = p_layout->get_value(p_section, "selected_paths", PackedStringArray());
@@ -5793,6 +6019,39 @@ FileSystemDock::FileSystemDock() {
 	no_categories_hint->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
 	category_rail_empty_state->add_child(no_categories_hint);
 
+	category_rail->add_child(memnew(HSeparator));
+
+	Label *type_title = memnew(Label);
+	type_title->set_text(TTRC("Types"));
+	category_rail->add_child(type_title);
+
+	// The rail shrinks to 140px wide and to an 80px strip when narrow, so the type buttons have to wrap
+	// and can't afford labels next to their icons.
+	HFlowContainer *type_filter_flow = memnew(HFlowContainer);
+	category_rail->add_child(type_filter_flow);
+
+	type_filter_all_button = memnew(Button);
+	type_filter_all_button->set_theme_type_variation(SceneStringName(FlatButton));
+	type_filter_all_button->set_toggle_mode(true);
+	type_filter_all_button->set_pressed_no_signal(true);
+	type_filter_all_button->set_focus_mode(FOCUS_ACCESSIBILITY);
+	type_filter_all_button->set_accessibility_name(TTRC("All Types"));
+	type_filter_all_button->set_tooltip_text(TTRC("Show every asset type."));
+	type_filter_all_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_set_type_filter).bind((int)ASSET_TYPE_MAX));
+	type_filter_flow->add_child(type_filter_all_button);
+
+	for (int i = 0; i < ASSET_TYPE_MAX; i++) {
+		Button *type_button = memnew(Button);
+		type_button->set_theme_type_variation(SceneStringName(FlatButton));
+		type_button->set_toggle_mode(true);
+		type_button->set_focus_mode(FOCUS_ACCESSIBILITY);
+		type_button->set_accessibility_name(TTR(explore_type_filters[i].display_name));
+		type_button->set_tooltip_text(TTR(explore_type_filters[i].tooltip));
+		type_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_set_type_filter).bind(i));
+		type_filter_flow->add_child(type_button);
+		type_filter_buttons[i] = type_button;
+	}
+
 	MarginContainer *category_edit_margin = memnew(MarginContainer);
 	category_edit_margin->set_theme_type_variation("MarginContainer4px");
 	category_rail->add_child(category_edit_margin);
@@ -5919,6 +6178,11 @@ FileSystemDock::FileSystemDock() {
 	category_result_clear_search_button->set_text(TTRC("Clear Search"));
 	category_result_clear_search_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_clear_category_search));
 	category_result_empty_state->add_child(category_result_clear_search_button);
+
+	category_result_clear_types_button = memnew(Button);
+	category_result_clear_types_button->set_text(TTRC("Show All Types"));
+	category_result_clear_types_button->connect(SceneStringName(pressed), callable_mp(this, &FileSystemDock::_set_type_filter).bind((int)ASSET_TYPE_MAX));
+	category_result_empty_state->add_child(category_result_clear_types_button);
 
 	scanning_vb = memnew(VBoxContainer);
 	scanning_vb->hide();

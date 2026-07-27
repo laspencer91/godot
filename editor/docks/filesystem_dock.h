@@ -168,6 +168,20 @@ private:
 	HashSet<String> active_color_filter;
 	HashSet<String> category_visible_paths;
 
+	// Asset types are the second, orthogonal filter axis: they AND with the categories, so
+	// "Green + Models" means the models that live inside green folders. Files only — folders stay
+	// visible under a type filter so the tree remains navigable.
+	enum AssetTypeFilter {
+		ASSET_TYPE_SCENES,
+		ASSET_TYPE_MODELS,
+		ASSET_TYPE_IMAGES,
+		ASSET_TYPE_AUDIO,
+		ASSET_TYPE_CODE,
+		ASSET_TYPE_MAX,
+	};
+
+	uint32_t active_type_filter = 0; // Bitmask of AssetTypeFilter; 0 == All Types.
+
 	struct CategoryCollectionStats {
 		int assigned_folder_count = 0;
 		int total_file_count = 0;
@@ -192,6 +206,8 @@ private:
 	VBoxContainer *category_rail = nullptr;
 	Tree *category_tree = nullptr;
 	VBoxContainer *category_rail_empty_state = nullptr;
+	Button *type_filter_all_button = nullptr;
+	Button *type_filter_buttons[ASSET_TYPE_MAX] = {};
 	Button *category_edit_button = nullptr;
 	SplitContainer *split_box = nullptr;
 	MarginContainer *tree_mc = nullptr;
@@ -204,6 +220,7 @@ private:
 	Label *category_result_empty_hint = nullptr;
 	Button *category_result_edit_button = nullptr;
 	Button *category_result_clear_search_button = nullptr;
+	Button *category_result_clear_types_button = nullptr;
 
 	int split_box_offset_h = 0;
 	int split_box_offset_v = 0;
@@ -452,6 +469,7 @@ private:
 	void _search_changed(const String &p_text, const Control *p_from);
 	void _flush_pending_search();
 	void _apply_pending_search();
+	void _refresh_filtered_views(bool p_rebuild_tree = false);
 	bool _matches_all_search_tokens(const String &p_text);
 
 	MenuButton *_create_file_menu_button();
@@ -475,9 +493,17 @@ private:
 	void _update_color_filter_view();
 	bool _is_color_collection_active() const { return !active_color_filter.is_empty(); }
 	void _gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches, CategoryCollectionStats *r_stats);
-	void _update_category_empty_state();
+	void _update_category_empty_state(bool p_type_filter_emptied = false);
 	String _get_active_category_display_name() const;
 	void _clear_category_search();
+
+	// G4: asset-type filter.
+	bool _is_type_filter_active() const { return active_type_filter != 0; }
+	bool _is_type_enabled(int p_type) const { return (active_type_filter & (uint32_t(1) << p_type)) != 0; }
+	bool _matches_type_filter(const String &p_file_name, const StringName &p_type) const;
+	void _set_type_filter(int p_type);
+	void _update_type_filter_buttons();
+	String _get_active_type_filter_display_name() const;
 	void _popup_color_labels_dialog();
 	void _category_icon_selected(int p_id, const String &p_color_key);
 	void _update_color_icon_button(const String &p_color_key);
