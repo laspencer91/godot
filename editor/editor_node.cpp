@@ -4743,6 +4743,12 @@ void EditorNode::open_file_drawer() {
 	}
 }
 
+void EditorNode::close_file_drawer() {
+	if (workspace_file_drawer) {
+		workspace_file_drawer->set_open(false);
+	}
+}
+
 SubViewport *EditorNode::get_scene_root() {
 	// G1: the active document owns the live SubViewport that its scene renders into.
 	// Before any document exists (early editor startup), fall back to the placeholder.

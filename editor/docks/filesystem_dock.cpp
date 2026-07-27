@@ -1650,6 +1650,10 @@ void FileSystemDock::_select_file(const String &p_path, bool p_select_in_favorit
 		} else {
 			EditorNode::get_singleton()->load_resource(fpath);
 		}
+		// G4: reached only once the file has been handed to an editor or an import dialog -- directories,
+		// Favorites and the import-disabled warning above all skip it. The drawer hosting this dock covers
+		// the editor, so it has to dismiss itself now that something else has the user's attention.
+		EditorNode::get_singleton()->close_file_drawer();
 	}
 	if (p_navigate) {
 		_navigate_to_path(fpath, p_select_in_favorites);
