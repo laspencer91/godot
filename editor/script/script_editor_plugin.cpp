@@ -2292,10 +2292,14 @@ bool ScriptEditor::edit(const Ref<Resource> &p_resource, int p_line, int p_col, 
 			editor_menus.push_back(editor_edit_menu);
 			menu_hb->add_child(editor_edit_menu);
 			menu_hb->move_child(editor_edit_menu, 1);
+			// The menu is attached after reveal() may already have mounted the shared chrome in a
+			// workspace DocumentView. Use that live chrome host as the shortcut context so focus in
+			// either the editor surface or the shared find bar is considered local to these menus.
+			Node *chrome_context = menu_hb->get_parent();
 			for (int i = 0; i < editor_edit_menu->get_child_count(); ++i) {
 				Control *c = Object::cast_to<Control>(editor_edit_menu->get_child(i));
 				if (c) {
-					c->set_shortcut_context(this);
+					c->set_shortcut_context(chrome_context);
 				}
 			}
 		}

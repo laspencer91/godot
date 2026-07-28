@@ -129,6 +129,20 @@ echo
 run_case "open_3d" -e "res://test_3d.tscn"
 run_case "open_2d" -e "res://test_2d.tscn"
 
+# A newly opened script's editor-specific Search menu is attached after its shared menu strip has
+# moved into the workspace DocumentView. Require Ctrl+F to use that live shortcut context and focus
+# the inline Find field on the first visit, without needing a tab switch to refresh the context.
+cp "$SMOKE_DIR/script_find_shortcut_project.godot" "$WORK/project.godot"
+rm -f "$WORK/.godot/editor/editor_layout.cfg"
+run_case "script_find_shortcut" -e
+if grep -q 'SCRIPT_CTRL_F_FIND_BAR_OK' "$WORK/script_find_shortcut.log"; then
+	echo "  PASS  script_find_shortcut_assertions (Ctrl+F focused the inline Find field)"
+else
+	echo "  FAIL  script_find_shortcut_assertions (shortcut did not reach the inline Find field)"
+	fail=1
+fi
+cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
+
 # Explore search performs recursive tree and file-list walks. Rapid input should only apply the final
 # query after 150 ms, while Enter and clearing remain synchronous. The plugin observes the actual
 # asset-tree visibility and both mirrored search fields rather than relying on log timing alone.
