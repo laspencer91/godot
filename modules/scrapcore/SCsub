@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+import os
+
+Import("env")
+Import("env_modules")
+
+env_scrapcore = env_modules.Clone()
+
+# D1: the canonical ScrapCore core (motor, state, params, codec, math) lives in
+# the GAME repo -- native/ScrapCore -- beside the parity harness and golden
+# traces that gate it. There is deliberately NO vendored copy here: the module
+# compiles the core FROM that path, so an engine build can never silently drift
+# from the source the traces certify.
+scrapcore_path = env.get("scrapcore_path", "../../games/scrapline/native/ScrapCore")
+engine_root = Dir("#").abspath
+if os.path.isabs(scrapcore_path):
+    core_dir = os.path.normpath(scrapcore_path)
+else:
+    core_dir = os.path.normpath(os.path.join(engine_root, scrapcore_path))
+probe = os.path.join(core_dir, "include", "scrapcore", "movement_motor.h")
+if not os.path.isfile(probe):
+    print(
+        "\nmodules/scrapcore: ScrapCore core not found.\n"
+        "  looked at: %s\n"
+        "  missing:   %s\n"
+        "The canonical ScrapCore source lives in the GAME repo (native/ScrapCore);\n"
+        "point the build at it with the scons option, e.g.:\n"
+        "  scrapcore_path=C:/Development/games/scrapline/native/ScrapCore\n" % (core_dir, probe)
+    )
+    Exit(255)
+
+# include/ for the public headers; the core root so the wrapper TU below can
+# reach src/movement_motor.cpp without writing object files into the game repo.
+env_scrapcore.Prepend(CPPPATH=[os.path.join(core_dir, "include"), core_dir])
+
+# The core is engine-agnostic C++17 with no engine headers. Keep Windows'
+# min/max macros out of its translation units (guards stay local to the module;
+# ScrapCore core files are never edited from the engine side).
+if env.msvc:
+    env_scrapcore.Append(CPPDEFINES=["NOMINMAX"])
+
+module_obj = []
+env_scrapcore.add_source_files(module_obj, "*.cpp")
+env.modules_sources += module_obj
