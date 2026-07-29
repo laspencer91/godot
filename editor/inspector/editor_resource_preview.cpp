@@ -481,7 +481,7 @@ bool EditorResourcePreview::_sanitize_scene_variant(Variant &r_variant, HashSet<
 			Variant key = keys[i];
 			Object *key_object = nullptr;
 			if (key.get_type() == Variant::OBJECT) {
-				key_object = key;
+				key_object = key.get_validated_object();
 			}
 			if (Object::cast_to<Script>(key_object)) {
 				values.erase(key);
@@ -504,7 +504,11 @@ bool EditorResourcePreview::_sanitize_scene_variant(Variant &r_variant, HashSet<
 		return true;
 	}
 
-	Object *object = r_variant;
+	// get_validated_object() rather than the raw Object * conversion: a variant can still carry the id of an
+	// object that has already been freed, and the raw conversion hands back that dangling pointer, which the
+	// cast_to<> calls below then dereference. This resolves through ObjectDB and yields nullptr for a dead id,
+	// so a stale reference is skipped instead of faulting the preview.
+	Object *object = r_variant.get_validated_object();
 	if (!object) {
 		return true;
 	}
