@@ -338,13 +338,28 @@ double Box3DPawnBody::_apply_capsule_dimensions(double p_height, double p_radius
 	if (pawn_capsule == nullptr) {
 		return resolved;
 	}
+	// SAME-VALUE WRITES ARE NOT FREE: a Shape3D height/radius write fires the
+	// resource-changed chain into the physics server, and that shape rebuild's
+	// cost SCALES WITH BROADPHASE POPULATION (measured 84 -> 165 us per write
+	// going from 4 to 16 pawns). The motor resizes twice per pawn per tick, and
+	// at steady state the incoming values land on what the shape already stores
+	// at its float32 width -- skip writes that would store what is already
+	// there. Guard BOTH branches, operation-for-operation with the GDScript
+	// twin (PlayerPawn._shape_dims_unchanged): a future collider swap must not
+	// resurrect the cost silently on either path.
 	Ref<Shape3D> shape = pawn_capsule->get_shape();
 	double shape_height = 0.0;
 	if (Ref<CapsuleShape3D> capsule = shape; capsule.is_valid()) {
+		if (float(resolved) == capsule->get_height() && float(p_radius) == capsule->get_radius()) {
+			return double(capsule->get_height());
+		}
 		capsule->set_height(resolved);
 		capsule->set_radius(p_radius);
 		shape_height = double(capsule->get_height());
 	} else if (Ref<CylinderShape3D> cylinder = shape; cylinder.is_valid()) {
+		if (float(p_height) == cylinder->get_height() && float(p_radius) == cylinder->get_radius()) {
+			return double(cylinder->get_height());
+		}
 		cylinder->set_height(p_height);
 		cylinder->set_radius(p_radius);
 		shape_height = double(cylinder->get_height());
