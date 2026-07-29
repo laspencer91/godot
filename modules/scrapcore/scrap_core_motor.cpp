@@ -235,7 +235,21 @@ void ScrapCoreMotor::setup(Object *p_body, const Dictionary &p_params) {
 	state.current_height = params.stand_height;
 	state.eye_y = params.stand_eye_offset;
 	state.was_on_floor = true;
+	// The sticky injection input survives re-initialization (it belongs to the
+	// equipped weapon, not the timeline).
+	state.ads_move_speed_mult = ads_move_speed_mult_input;
+	// A (re)setup starts a fresh timeline, which owns its outputs: the old
+	// timeline's undrained events and unpresented step pops die with it.
+	// (configure() above already zeroed the body's step mailbox.)
+	pending_events.clear();
 	ready = true;
+}
+
+void ScrapCoreMotor::update_params(const Dictionary &p_params) {
+	// Live tuning: params only. _apply_params_dict validates the complete set
+	// and commits only on success; state, events, and the mailbox are untouched.
+	ERR_FAIL_COND_MSG(!ready, "ScrapCoreMotor.update_params: call setup() first.");
+	_apply_params_dict(p_params);
 }
 
 void ScrapCoreMotor::register_ladder(int p_id, const Vector3 &p_position, const Vector3 &p_outward_normal, const Vector3 &p_side_dir, double p_height, double p_half_width, double p_attach_depth) {
@@ -259,6 +273,9 @@ void ScrapCoreMotor::clear_ladders() {
 }
 
 void ScrapCoreMotor::set_ads_move_speed_mult(double p_mult) {
+	// Sticky: stored, then re-applied before every tick and after every state
+	// reset -- a reconciliation can never silently revert to the 0.75 default.
+	ads_move_speed_mult_input = p_mult;
 	state.ads_move_speed_mult = p_mult;
 }
 
@@ -287,6 +304,9 @@ void ScrapCoreMotor::simulate(int p_tick, double p_delta, const PackedByteArray 
 	// The frozen ingest guard: a NaN/Inf is never honest. Drop the tick, never
 	// clamp -- exactly what the server-side wire check would have dropped.
 	ERR_FAIL_COND_MSG(!command.wire_valid(), "ScrapCoreMotor.simulate: command failed wire_valid (non-finite aim/move) -- tick dropped.");
+	// The controller's per-sim refresh (player_controller.gd:827): the sticky
+	// injection input lands in state before every tick.
+	state.ads_move_speed_mult = ads_move_speed_mult_input;
 	motor.simulate(body, state, command, params, int32_t(p_tick), p_delta, result);
 	for (const scrap::MovementEvent &event : result.events) {
 		pending_events.push_back(event);
@@ -318,6 +338,10 @@ void ScrapCoreMotor::reset_state(const PackedByteArray &p_packed, bool p_refresh
 	const scrap::MovementState decoded = scrap::codec::unpack_movement_state(reader);
 	ERR_FAIL_COND_MSG(!reader.ok(), "ScrapCoreMotor.reset_state: truncated packed state -- state unchanged.");
 	state = decoded;
+	// The controller's pre-reconcile re-inject (player_controller.gd:1778):
+	// the packed form never carries the multiplier, so the sticky input
+	// re-lands here or a reconciliation would silently run at the default.
+	state.ads_move_speed_mult = ads_move_speed_mult_input;
 	// A reset discards the prediction any undrained events belonged to (the
 	// GDScript replay path counts replayed events but never presents them).
 	pending_events.clear();
@@ -403,6 +427,7 @@ bool ScrapCoreMotor::motor_smoke() const {
 
 void ScrapCoreMotor::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("setup", "body", "params"), &ScrapCoreMotor::setup);
+	ClassDB::bind_method(D_METHOD("update_params", "params"), &ScrapCoreMotor::update_params);
 	ClassDB::bind_method(D_METHOD("register_ladder", "id", "position", "outward_normal", "side_dir", "height", "half_width", "attach_depth"), &ScrapCoreMotor::register_ladder);
 	ClassDB::bind_method(D_METHOD("clear_ladders"), &ScrapCoreMotor::clear_ladders);
 	ClassDB::bind_method(D_METHOD("set_ads_move_speed_mult", "mult"), &ScrapCoreMotor::set_ads_move_speed_mult);

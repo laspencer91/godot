@@ -30,6 +30,12 @@ class ScrapCoreMotor : public RefCounted {
 	LocalVector<ScrapLadderVolume> ladders;
 	LocalVector<scrap::MovementEvent> pending_events;
 	bool ready = false;
+	// STICKY injection input (not state): the last value set_ads_move_speed_mult
+	// stored. Re-applied to state at the top of every simulate() and after every
+	// reset_state() decode, mirroring the controller's per-sim refresh
+	// (player_controller.gd:827) and pre-reconcile re-inject (:1778) -- so a
+	// state reset can never silently fall back to the 0.75 default.
+	double ads_move_speed_mult_input = 0.75;
 
 	bool _apply_params_dict(const Dictionary &p_params);
 
@@ -37,15 +43,20 @@ protected:
 	static void _bind_methods();
 
 public:
-	// Once per body (re-callable for live tuning): binds the CharacterBody3D
-	// this motor drives (must be inside the tree) and fills MovementParams from
-	// a name->value Dictionary (MovementConfig.to_param_dict(), game side).
-	// Unknown keys AND missing keys are HARD errors: the boundary demands the
-	// complete param set, because silence is how a config field drifts out of
-	// the native motor. Seeds state from the live pawn exactly like the
-	// controller's _ready (position/velocity/yaw, stand height/eye, on-floor),
-	// so a simulate() before any reset_state() starts where the pawn stands.
+	// One-shot (RE)INITIALIZATION -- calling it again starts a fresh timeline:
+	// state is reseeded from the live pawn exactly like the controller's _ready
+	// (position/velocity/yaw, stand height/eye, on-floor), and the previous
+	// timeline's outputs are discarded (pending events + collision mailbox).
+	// Live tuning of params WITHOUT touching state is update_params below.
+	// Param validation: unknown keys AND missing keys are HARD errors -- the
+	// boundary demands the complete MovementConfig.to_param_dict() set, because
+	// silence is how a config field drifts out of the native motor. The sticky
+	// ads multiplier survives (it is an injection input, not state).
 	void setup(Object *p_body, const Dictionary &p_params);
+
+	// Live tuning: replaces MovementParams only, same strict complete-set
+	// validation as setup(). Never touches state, events, or the mailbox.
+	void update_params(const Dictionary &p_params);
 
 	// Map-load ladder wiring. Axes arrive pre-resolved from LadderVolume
 	// (outward_normal()/side_dir()); extents stay double end to end. CALL ORDER
@@ -57,8 +68,10 @@ public:
 	void clear_ladders();
 
 	// --- Out-of-motor state inputs (the controller-side writes) --------------
-	// Not packed; injected before sim from the authoritative equipped weapon
-	// (player_controller.gd _prepare_movement_state_for_sim). Call on change.
+	// Not packed; from the authoritative equipped weapon. STICKY until changed:
+	// the stored value is re-applied before every tick and after every state
+	// reset (the controller's per-sim refresh + pre-reconcile re-inject), so
+	// call this when the equipped weapon changes and the lifecycle is covered.
 	void set_ads_move_speed_mult(double p_mult);
 	// The per-shot kick (player_controller.gd _apply_recoil_kick_to): offset
 	// AND debt take the kick; recovery rate re-stamped; fire window re-armed.
