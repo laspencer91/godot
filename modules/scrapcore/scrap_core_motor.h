@@ -37,7 +37,7 @@ class ScrapCoreMotor : public RefCounted {
 	// state reset can never silently fall back to the 0.75 default.
 	double ads_move_speed_mult_input = 0.75;
 
-	bool _apply_params_dict(const Dictionary &p_params);
+	bool _apply_params_dict(const Dictionary &p_params, const char *p_context);
 
 protected:
 	static void _bind_methods();

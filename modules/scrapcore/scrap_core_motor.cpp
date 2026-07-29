@@ -168,7 +168,7 @@ const MaskParamEntry MASK_PARAMS[] = {
 
 } // namespace
 
-bool ScrapCoreMotor::_apply_params_dict(const Dictionary &p_params) {
+bool ScrapCoreMotor::_apply_params_dict(const Dictionary &p_params, const char *p_context) {
 	scrap::MovementParams next; // defaults, then every provided key over them
 	for (const KeyValue<Variant, Variant> &kv : p_params) {
 		const String name = kv.key;
@@ -190,18 +190,18 @@ bool ScrapCoreMotor::_apply_params_dict(const Dictionary &p_params) {
 			}
 		}
 		ERR_FAIL_COND_V_MSG(!known, false,
-				vformat("ScrapCoreMotor.setup: unknown param '%s' -- the native MovementParams has no such field. Add it to the module's param table (drift must be loud, never silent).", name));
+				vformat("%s: unknown param '%s' -- the native MovementParams has no such field. Add it to the module's param table (drift must be loud, never silent).", p_context, name));
 	}
 	// Symmetric completeness check: a MISSING key would silently run on the
 	// C++ default -- the exact drift the unknown-key error exists to prevent,
-	// from the other direction. Setup demands the complete set.
+	// from the other direction. The caller demands the complete set.
 	for (const ScalarParamEntry &entry : SCALAR_PARAMS) {
 		ERR_FAIL_COND_V_MSG(!p_params.has(entry.name), false,
-				vformat("ScrapCoreMotor.setup: param '%s' missing -- the complete MovementConfig.to_param_dict() set is required.", String(entry.name)));
+				vformat("%s: param '%s' missing -- the complete MovementConfig.to_param_dict() set is required.", p_context, String(entry.name)));
 	}
 	for (const MaskParamEntry &entry : MASK_PARAMS) {
 		ERR_FAIL_COND_V_MSG(!p_params.has(entry.name), false,
-				vformat("ScrapCoreMotor.setup: param '%s' missing -- the complete MovementConfig.to_param_dict() set is required.", String(entry.name)));
+				vformat("%s: param '%s' missing -- the complete MovementConfig.to_param_dict() set is required.", p_context, String(entry.name)));
 	}
 	params = next;
 	return true;
@@ -214,7 +214,7 @@ void ScrapCoreMotor::setup(Object *p_body, const Dictionary &p_params) {
 	CharacterBody3D *character = Object::cast_to<CharacterBody3D>(p_body);
 	ERR_FAIL_NULL_MSG(character, "ScrapCoreMotor.setup: body must be a CharacterBody3D.");
 	ERR_FAIL_COND_MSG(!character->is_inside_tree(), "ScrapCoreMotor.setup: body must be inside the tree (the mover needs its world space).");
-	if (!_apply_params_dict(p_params)) {
+	if (!_apply_params_dict(p_params, "ScrapCoreMotor.setup")) {
 		return;
 	}
 	body.configure(character, params);
@@ -249,7 +249,7 @@ void ScrapCoreMotor::update_params(const Dictionary &p_params) {
 	// Live tuning: params only. _apply_params_dict validates the complete set
 	// and commits only on success; state, events, and the mailbox are untouched.
 	ERR_FAIL_COND_MSG(!ready, "ScrapCoreMotor.update_params: call setup() first.");
-	_apply_params_dict(p_params);
+	_apply_params_dict(p_params, "ScrapCoreMotor.update_params");
 }
 
 void ScrapCoreMotor::register_ladder(int p_id, const Vector3 &p_position, const Vector3 &p_outward_normal, const Vector3 &p_side_dir, double p_height, double p_half_width, double p_attach_depth) {
