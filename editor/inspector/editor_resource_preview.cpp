@@ -661,6 +661,21 @@ bool EditorResourcePreview::_sanitize_proxy_node(Node *p_node, int &r_node_count
 
 	for (int i = p_node->get_child_count() - 1; i >= 0; i--) {
 		Node *child = p_node->get_child(i);
+		// A Window child is NOT safe to delete. Several built-in controls keep a raw pointer to an internal
+		// Window they created -- OptionButton::popup, MenuButton, ColorPickerButton -- and freeing it here
+		// leaves that pointer dangling; the very next layout or notification pass dereferences it and the
+		// editor dies. (OptionButton::get_minimum_size() reads popup->get_contents_minimum_size() whenever
+		// fit_to_longest_item is set, which is the default, so merely adding the scene to the preview
+		// viewport was enough.) A Window contributes nothing to a thumbnail anyway -- it is a separate
+		// surface and starts hidden -- so hide it and sanitise its contents instead of freeing it.
+		if (Window *window = Object::cast_to<Window>(child)) {
+			window->hide();
+			if (!_sanitize_proxy_node(child, r_node_count, r_failure_reason)) {
+				return false;
+			}
+			continue;
+		}
+		// A plain Viewport/SubViewport is a nested render target with no such owner, so it still goes.
 		if (Object::cast_to<Viewport>(child)) {
 			p_node->remove_child(child);
 			memdelete(child);
@@ -878,6 +893,9 @@ void EditorResourcePreview::_begin_scene_preview(const SceneQueueItem &p_item) {
 	viewport->set_as_audio_listener_2d(false);
 	viewport->set_as_audio_listener_3d(false);
 	viewport->set_use_own_world_3d(true);
+	// Window children now survive sanitising (see _sanitize_proxy_node), so the preview viewport has to be
+	// able to host them: without embedding, a Window here has no embedder and no OS window to attach to.
+	viewport->set_embedding_subwindows(true);
 	viewport->add_child(scene);
 	active_scene_preview.viewport = viewport;
 	add_child(viewport);
