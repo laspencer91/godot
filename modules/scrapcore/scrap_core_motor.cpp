@@ -192,54 +192,101 @@ bool ScrapCoreMotor::_apply_params_dict(const Dictionary &p_params) {
 		ERR_FAIL_COND_V_MSG(!known, false,
 				vformat("ScrapCoreMotor.setup: unknown param '%s' -- the native MovementParams has no such field. Add it to the module's param table (drift must be loud, never silent).", name));
 	}
+	// Symmetric completeness check: a MISSING key would silently run on the
+	// C++ default -- the exact drift the unknown-key error exists to prevent,
+	// from the other direction. Setup demands the complete set.
+	for (const ScalarParamEntry &entry : SCALAR_PARAMS) {
+		ERR_FAIL_COND_V_MSG(!p_params.has(entry.name), false,
+				vformat("ScrapCoreMotor.setup: param '%s' missing -- the complete MovementConfig.to_param_dict() set is required.", String(entry.name)));
+	}
+	for (const MaskParamEntry &entry : MASK_PARAMS) {
+		ERR_FAIL_COND_V_MSG(!p_params.has(entry.name), false,
+				vformat("ScrapCoreMotor.setup: param '%s' missing -- the complete MovementConfig.to_param_dict() set is required.", String(entry.name)));
+	}
 	params = next;
 	return true;
 }
 
 void ScrapCoreMotor::setup(Object *p_body, const Dictionary &p_params) {
+	// Any refusal path leaves the motor NOT ready -- never a stale ready flag
+	// over a stale body pointer.
+	ready = false;
 	CharacterBody3D *character = Object::cast_to<CharacterBody3D>(p_body);
 	ERR_FAIL_NULL_MSG(character, "ScrapCoreMotor.setup: body must be a CharacterBody3D.");
+	ERR_FAIL_COND_MSG(!character->is_inside_tree(), "ScrapCoreMotor.setup: body must be inside the tree (the mover needs its world space).");
 	if (!_apply_params_dict(p_params)) {
-		ready = false;
 		return;
 	}
 	body.configure(character, params);
 	body.set_ladders(&ladders);
-	ready = body.is_configured();
+	if (!body.is_configured()) {
+		return;
+	}
+	// Seed state from the live pawn, mirroring the controller's _ready
+	// (player_controller.gd:218): a simulate() before any reset_state() starts
+	// where the pawn stands instead of teleporting it to origin.
+	state = scrap::MovementState();
+	const Vector3 seed_position = character->get_global_position();
+	const Vector3 seed_velocity = character->get_velocity();
+	state.position = scrap::Vec3{ seed_position.x, seed_position.y, seed_position.z };
+	state.velocity = scrap::Vec3{ seed_velocity.x, seed_velocity.y, seed_velocity.z };
+	state.yaw = double(character->get_rotation().y);
+	state.pitch = 0.0;
+	state.current_height = params.stand_height;
+	state.eye_y = params.stand_eye_offset;
+	state.was_on_floor = true;
+	ready = true;
 }
 
-void ScrapCoreMotor::register_ladder(int p_id, const Vector3 &p_position, const Vector3 &p_outward_normal, const Vector3 &p_side_dir, float p_height, float p_half_width, float p_attach_depth) {
-	ERR_FAIL_COND_MSG(p_id <= 0, "ScrapCoreMotor.register_ladder: id must be > 0 (the authored-or-index runtime id).");
+void ScrapCoreMotor::register_ladder(int p_id, const Vector3 &p_position, const Vector3 &p_outward_normal, const Vector3 &p_side_dir, double p_height, double p_half_width, double p_attach_depth) {
 	ScrapLadderVolume ladder;
-	ladder.id = p_id;
+	// PlayerPawn._ladder_runtime_id: an authored id > 0 is kept verbatim; any
+	// other authored id maps to index + 1. Registration order IS the contract
+	// (node-path-sorted, like _sorted_ladders) -- no re-sorting here, because
+	// authored non-sequential ids must not reorder the probe walk.
+	ladder.id = p_id > 0 ? p_id : int(ladders.size()) + 1;
 	ladder.position = p_position;
 	ladder.outward = p_outward_normal;
 	ladder.side = p_side_dir;
 	ladder.ladder_height = p_height;
 	ladder.ladder_half_width = p_half_width;
 	ladder.ladder_attach_depth = p_attach_depth;
-	// Keep the vector sorted by id: iteration order stands in for the
-	// GDScript's node-path-sorted runtime-id walk.
-	uint32_t at = ladders.size();
-	for (uint32_t i = 0; i < ladders.size(); i++) {
-		if (ladders[i].id > p_id) {
-			at = i;
-			break;
-		}
-	}
-	ladders.insert(at, ladder);
+	ladders.push_back(ladder);
 }
 
 void ScrapCoreMotor::clear_ladders() {
 	ladders.clear();
 }
 
+void ScrapCoreMotor::set_ads_move_speed_mult(double p_mult) {
+	state.ads_move_speed_mult = p_mult;
+}
+
+void ScrapCoreMotor::add_recoil_kick(double p_pitch, double p_yaw, double p_recovery_rate) {
+	// player_controller.gd _apply_recoil_kick_to, same ops in the same order so
+	// live apply and reconcile re-apply stay bit-exact by construction.
+	state.recoil_offset_pitch += p_pitch;
+	state.recoil_offset_yaw += p_yaw;
+	state.recoil_debt_pitch += p_pitch;
+	state.recoil_debt_yaw += p_yaw;
+	state.recoil_recovery_rate = p_recovery_rate;
+	state.recoil_fire_timer = params.recoil_fire_window;
+}
+
+void ScrapCoreMotor::set_active_slot(int p_slot) {
+	state.active_slot = p_slot;
+}
+
 void ScrapCoreMotor::simulate(int p_tick, double p_delta, const PackedByteArray &p_command) {
 	ERR_FAIL_COND_MSG(!ready, "ScrapCoreMotor.simulate: call setup() first.");
+	ERR_FAIL_COND_MSG(!body.body_valid(), "ScrapCoreMotor.simulate: the bound body is gone or left the tree.");
 	ERR_FAIL_COND_MSG(p_command.size() != scrap::InputCommand::PACKED_SIZE,
 			vformat("ScrapCoreMotor.simulate: command must be the %d-byte packed InputCommand (got %d bytes).", scrap::InputCommand::PACKED_SIZE, p_command.size()));
 	scrap::codec::ByteReader reader(p_command.ptr(), size_t(p_command.size()));
 	const scrap::InputCommand command = scrap::codec::unpack_input_command(reader);
+	// The frozen ingest guard: a NaN/Inf is never honest. Drop the tick, never
+	// clamp -- exactly what the server-side wire check would have dropped.
+	ERR_FAIL_COND_MSG(!command.wire_valid(), "ScrapCoreMotor.simulate: command failed wire_valid (non-finite aim/move) -- tick dropped.");
 	motor.simulate(body, state, command, params, int32_t(p_tick), p_delta, result);
 	for (const scrap::MovementEvent &event : result.events) {
 		pending_events.push_back(event);
@@ -262,12 +309,33 @@ PackedByteArray ScrapCoreMotor::state_packed() const {
 	return out;
 }
 
-void ScrapCoreMotor::reset_state(const PackedByteArray &p_packed) {
+void ScrapCoreMotor::reset_state(const PackedByteArray &p_packed, bool p_refresh_ground_contact) {
 	ERR_FAIL_COND_MSG(!ready, "ScrapCoreMotor.reset_state: call setup() first.");
+	ERR_FAIL_COND_MSG(!body.body_valid(), "ScrapCoreMotor.reset_state: the bound body is gone or left the tree.");
+	// Decode into a local and commit only on a clean read -- a truncated
+	// payload must not leave split-brain state.
 	scrap::codec::ByteReader reader(p_packed.ptr(), size_t(p_packed.size()));
-	state = scrap::codec::unpack_movement_state(reader);
-	ERR_FAIL_COND_MSG(!reader.ok(), "ScrapCoreMotor.reset_state: truncated packed state.");
-	body.apply_movement_state(state, params);
+	const scrap::MovementState decoded = scrap::codec::unpack_movement_state(reader);
+	ERR_FAIL_COND_MSG(!reader.ok(), "ScrapCoreMotor.reset_state: truncated packed state -- state unchanged.");
+	state = decoded;
+	// A reset discards the prediction any undrained events belonged to (the
+	// GDScript replay path counts replayed events but never presents them).
+	pending_events.clear();
+	// PlayerPawn.teleport_to_state: mailbox cleared, state pushed, physics
+	// interpolation reset.
+	body.teleport_to_state(state, params);
+	if (p_refresh_ground_contact) {
+		// The replay entry (player_prediction_runner.gd:91): rebuild contact at
+		// the authoritative position, then copy the snapped position/velocity
+		// back into state so the replay proceeds from what the body settled to.
+		body.refresh_ground_contact_after_teleport(params);
+		state.position = body.get_position();
+		state.velocity = body.get_velocity();
+	}
+}
+
+double ScrapCoreMotor::consume_collision_step_delta_y() {
+	return body.consume_step_delta_y();
 }
 
 Array ScrapCoreMotor::drain_events() {
@@ -277,6 +345,37 @@ Array ScrapCoreMotor::drain_events() {
 		entry["kind"] = event.kind;
 		entry["tick"] = event.tick;
 		entry["input_seq"] = event.input_seq;
+		// data keyed exactly like player_movement_event.gd's per-kind payloads,
+		// rebuilt from the typed EventData slots. WALL_JUMPED/LADDER_JUMPED
+		// carry impulse (and position) in the GDScript dictionary that the
+		// typed envelope has no slots for; the keys the envelope CAN carry are
+		// emitted, nothing is fabricated.
+		Dictionary data;
+		switch (scrap::EventKind(event.kind)) {
+			case scrap::EventKind::LANDED:
+				data["impact_velocity"] = event.data.scalar_a;
+				break;
+			case scrap::EventKind::FOOTSTEP:
+				data["position"] = Vector3(event.data.vec.x, event.data.vec.y, event.data.vec.z);
+				break;
+			case scrap::EventKind::POSE_CHANGED:
+				data["pose"] = event.data.int_a;
+				break;
+			case scrap::EventKind::MANTLE_STARTED:
+				data["target_pitch"] = event.data.scalar_a;
+				data["duration"] = event.data.scalar_b;
+				data["climb_weight"] = double(event.data.vec.x);
+				break;
+			case scrap::EventKind::WALL_JUMPED:
+			case scrap::EventKind::LADDER_JUMPED:
+				data["normal"] = Vector3(event.data.vec.x, event.data.vec.y, event.data.vec.z);
+				break;
+			default:
+				break;
+		}
+		entry["data"] = data;
+		entry["replay_safe"] = event.replay_safe;
+		entry["network_relevant"] = event.network_relevant;
 		out.push_back(entry);
 	}
 	pending_events.clear();
@@ -306,11 +405,15 @@ void ScrapCoreMotor::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("setup", "body", "params"), &ScrapCoreMotor::setup);
 	ClassDB::bind_method(D_METHOD("register_ladder", "id", "position", "outward_normal", "side_dir", "height", "half_width", "attach_depth"), &ScrapCoreMotor::register_ladder);
 	ClassDB::bind_method(D_METHOD("clear_ladders"), &ScrapCoreMotor::clear_ladders);
+	ClassDB::bind_method(D_METHOD("set_ads_move_speed_mult", "mult"), &ScrapCoreMotor::set_ads_move_speed_mult);
+	ClassDB::bind_method(D_METHOD("add_recoil_kick", "pitch", "yaw", "recovery_rate"), &ScrapCoreMotor::add_recoil_kick);
+	ClassDB::bind_method(D_METHOD("set_active_slot", "slot"), &ScrapCoreMotor::set_active_slot);
 	ClassDB::bind_method(D_METHOD("simulate", "tick", "delta", "command"), &ScrapCoreMotor::simulate);
 	ClassDB::bind_method(D_METHOD("get_position"), &ScrapCoreMotor::get_position);
 	ClassDB::bind_method(D_METHOD("get_velocity"), &ScrapCoreMotor::get_velocity);
 	ClassDB::bind_method(D_METHOD("state_packed"), &ScrapCoreMotor::state_packed);
-	ClassDB::bind_method(D_METHOD("reset_state", "packed"), &ScrapCoreMotor::reset_state);
+	ClassDB::bind_method(D_METHOD("reset_state", "packed", "refresh_ground_contact"), &ScrapCoreMotor::reset_state, DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("consume_collision_step_delta_y"), &ScrapCoreMotor::consume_collision_step_delta_y);
 	ClassDB::bind_method(D_METHOD("drain_events"), &ScrapCoreMotor::drain_events);
 	ClassDB::bind_method(D_METHOD("pack_version"), &ScrapCoreMotor::pack_version);
 	ClassDB::bind_method(D_METHOD("motor_smoke"), &ScrapCoreMotor::motor_smoke);

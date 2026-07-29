@@ -62,6 +62,8 @@ class Box3DPawnBody final : public scrap::IPawnBody {
 public:
 	// Mirror of PlayerCollisionResult: the cached contact state every
 	// is_on_floor / is_on_wall / get_wall_normal read serves from.
+	// step_delta_y is double like the GDScript's bare float fields
+	// (player_collision_result.gd / the pawn's mailbox accumulator).
 	struct CollisionResult {
 		Vector3 position;
 		Vector3 velocity;
@@ -69,7 +71,7 @@ public:
 		bool on_wall = false;
 		Vector3 floor_normal;
 		Vector3 wall_normal;
-		real_t step_delta_y = 0.0;
+		double step_delta_y = 0.0;
 	};
 
 private:
@@ -77,14 +79,16 @@ private:
 	static constexpr double SNAP_UPWARD_LIMIT = 0.05;
 
 	CharacterBody3D *pawn = nullptr;
+	ObjectID pawn_id;
 	CollisionShape3D *pawn_capsule = nullptr;
+	ObjectID pawn_capsule_id;
 	Ref<Box3DCharacterMover> mover;
 	scrap::MovementParams cfg; // _config: refreshed at the calls that pass params
 	double collision_height = 1.8;
 	double mover_height = 1.8;
 	double capsule_radius = 0.35;
 	CollisionResult last_result;
-	real_t pending_step_delta_y = 0.0; // presentation mailbox (unused by the motor)
+	double pending_step_delta_y = 0.0; // presentation mailbox (unused by the motor)
 
 	const LocalVector<ScrapLadderVolume> *ladders = nullptr; // owned by ScrapCoreMotor
 
@@ -112,9 +116,23 @@ public:
 	// contact (floor probe when not moving upward).
 	void configure(CharacterBody3D *p_pawn, const scrap::MovementParams &p_params);
 	void set_ladders(const LocalVector<ScrapLadderVolume> *p_ladders) { ladders = p_ladders; }
-	bool is_configured() const { return pawn != nullptr && pawn_capsule != nullptr; }
+	// A null collider is tolerated like the reference (feet offset 0, clamped
+	// fallback dims), so configuration requires only the body.
+	bool is_configured() const { return pawn != nullptr; }
 	CharacterBody3D *get_pawn() const { return pawn; }
-	real_t consume_step_delta_y(); // presentation mailbox drain (PlayerPawn.consume_collision_step_delta_y)
+	// Lifetime guard for the caller's entry points: the cached raw pointers are
+	// only dereferenced behind this (ObjectDB validity + in-tree; a freed
+	// capsule degrades to the tolerated-null path rather than dangling).
+	bool body_valid();
+	double consume_step_delta_y(); // presentation mailbox drain (PlayerPawn.consume_collision_step_delta_y)
+	// Backend.refresh_ground_contact_after_teleport: rebuild floor/wall contact
+	// at the current (teleported) position -- probe, snap-down fallback, plane
+	// collide -- mirroring the result onto the live body. The reconcile path's
+	// replay entry (player_prediction_runner.gd:91) calls this.
+	bool refresh_ground_contact_after_teleport(const scrap::MovementParams &p_params);
+	// PlayerPawn.teleport_to_state: a replay/teleport starts a new collision
+	// solve timeline -- do not carry an unpresented stair delta into it.
+	void teleport_to_state(const scrap::MovementState &p_state, const scrap::MovementParams &p_params);
 
 	// --- scrap::IPawnBody ---
 	void apply_movement_state(const scrap::MovementState &p_state, const scrap::MovementParams &p_params) override;

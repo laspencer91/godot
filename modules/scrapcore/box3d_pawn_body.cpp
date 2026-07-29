@@ -42,14 +42,16 @@ Vector3 ScrapLadderVolume::climb_normal_gd(const Vector3 &p_world_point) const {
 	const real_t dn = delta.dot(n);
 	const real_t ds = delta.dot(s);
 	if (scrap::absf(double(dn)) / scrap::maxf(ladder_attach_depth, 0.0001) >= scrap::absf(double(ds)) / scrap::maxf(ladder_half_width, 0.0001)) {
-		return dn >= 0.0f ? n : -n;
+		return double(dn) >= 0.0 ? n : -n;
 	}
-	return ds >= 0.0f ? s : -s;
+	return double(ds) >= 0.0 ? s : -s;
 }
 
 Vector3 ScrapLadderVolume::climb_side_for_normal_gd(const Vector3 &p_normal) const {
+	// Comparison literals promote to double exactly where the GDScript does
+	// (float lhs vs binary64 literal) -- here and throughout this file.
 	Vector3 s = p_normal.cross(Vector3(0, 1, 0));
-	if (s.length_squared() <= 0.001f) {
+	if (double(s.length_squared()) <= 0.001) {
 		return side; // side_dir() fallback: the registered side axis
 	}
 	return s.normalized();
@@ -108,16 +110,14 @@ bool ScrapLadderVolume::accepts_top_descent(const Vector3 &p_world_point, double
 
 void Box3DPawnBody::configure(CharacterBody3D *p_pawn, const scrap::MovementParams &p_params) {
 	pawn = p_pawn;
+	pawn_id = pawn != nullptr ? pawn->get_instance_id() : ObjectID();
 	cfg = p_params;
-	pawn_capsule = nullptr;
-	for (int i = 0; i < pawn->get_child_count(); i++) {
-		CollisionShape3D *shape = Object::cast_to<CollisionShape3D>(pawn->get_child(i));
-		if (shape != nullptr) {
-			pawn_capsule = shape;
-			break;
-		}
-	}
-	ERR_FAIL_NULL_MSG(pawn_capsule, "Box3DPawnBody.configure: the body has no CollisionShape3D child.");
+	// PlayerPawn: @onready pawn_capsule = get_node_or_null("CollisionShape3D")
+	// -- the direct child NAMED "CollisionShape3D", and a null collider is
+	// tolerated (feet offset 0, clamped fallback dims), exactly like the
+	// reference. Never "the first shape child".
+	pawn_capsule = Object::cast_to<CollisionShape3D>(pawn->get_node_or_null(NodePath("CollisionShape3D")));
+	pawn_capsule_id = pawn_capsule != nullptr ? pawn_capsule->get_instance_id() : ObjectID();
 
 	if (mover.is_null()) {
 		mover.instantiate();
@@ -139,10 +139,69 @@ void Box3DPawnBody::configure(CharacterBody3D *p_pawn, const scrap::MovementPara
 	pending_step_delta_y = 0.0;
 }
 
-real_t Box3DPawnBody::consume_step_delta_y() {
-	const real_t delta_y = pending_step_delta_y;
+bool Box3DPawnBody::body_valid() {
+	if (pawn == nullptr || ObjectDB::get_instance(pawn_id) != pawn || !pawn->is_inside_tree()) {
+		return false;
+	}
+	// A freed collider degrades to the tolerated-null path instead of dangling.
+	if (pawn_capsule != nullptr && ObjectDB::get_instance(pawn_capsule_id) != pawn_capsule) {
+		pawn_capsule = nullptr;
+		pawn_capsule_id = ObjectID();
+	}
+	return true;
+}
+
+double Box3DPawnBody::consume_step_delta_y() {
+	const double delta_y = pending_step_delta_y;
 	pending_step_delta_y = 0.0;
 	return delta_y;
+}
+
+bool Box3DPawnBody::refresh_ground_contact_after_teleport(const scrap::MovementParams &p_params) {
+	// Backend.refresh_ground_contact_after_teleport, 1:1: floor probe at the
+	// teleported feet, snap-down fallback when the previous contact claimed
+	// floor, wall normal from a plane collide, mirror onto the live body.
+	cfg = p_params;
+	_prepare_mover(p_params);
+
+	const bool was_grounded = last_result.on_floor;
+	Vector3 feet = _node_position_to_feet(pawn->get_global_position());
+	const Vector3 saved_velocity = pawn->get_velocity();
+	Vector3 floor_normal;
+	if (double(saved_velocity.y) <= SNAP_UPWARD_LIMIT) {
+		floor_normal = _floor_normal_at(feet);
+		if (floor_normal == Vector3() && was_grounded) {
+			Vector3 snapped_feet;
+			Vector3 snapped_normal;
+			if (_snap_down(feet, p_params.floor_snap_length, snapped_feet, snapped_normal)) {
+				feet = snapped_feet;
+				floor_normal = snapped_normal;
+			}
+		}
+	}
+
+	const Array planes = mover->collide(feet);
+	CollisionResult result;
+	result.position = _feet_position_to_node(feet);
+	result.velocity = saved_velocity;
+	result.on_floor = floor_normal != Vector3();
+	result.floor_normal = floor_normal;
+	result.wall_normal = _wall_normal_from_planes(planes, saved_velocity, p_params.floor_max_angle);
+	result.on_wall = result.wall_normal != Vector3();
+
+	if (pawn->get_global_position() != result.position) {
+		pawn->set_global_position(result.position);
+	}
+	last_result = result;
+	return result.on_floor;
+}
+
+void Box3DPawnBody::teleport_to_state(const scrap::MovementState &p_state, const scrap::MovementParams &p_params) {
+	// A replay/teleport starts a new collision solve timeline. Do not carry an
+	// unpresented stair delta into it.
+	pending_step_delta_y = 0.0;
+	apply_movement_state(p_state, p_params);
+	pawn->reset_physics_interpolation();
 }
 
 void Box3DPawnBody::_prepare_mover(const scrap::MovementParams &p_params) {
@@ -337,16 +396,26 @@ void Box3DPawnBody::move_body(const scrap::Vec3 &p_next_velocity, const scrap::M
 			was_grounded);
 	CollisionResult result;
 	if (raw.is_empty()) {
+		// The empty-mover answer still flows through PlayerPawn.move_body's
+		// mirror in the reference: position is unchanged (write no-ops) but the
+		// live body's velocity becomes next_velocity.
 		result.position = pawn->get_global_position();
 		result.velocity = next_velocity;
 		last_result = result;
+		pending_step_delta_y += result.step_delta_y;
+		if (pawn->get_global_position() != result.position) {
+			pawn->set_global_position(result.position);
+		}
+		if (pawn->get_velocity() != result.velocity) {
+			pawn->set_velocity(result.velocity);
+		}
 		return;
 	}
 
 	const Vector3 solved_feet = raw.get("position", start_feet);
 	const Array planes = raw.get("planes", Array());
 	if (bool(raw.get("stepped", false)) || bool(raw.get("stepped_down", false))) {
-		result.step_delta_y = real_t(double(raw.get("step_delta_y", solved_feet.y - start_feet.y)));
+		result.step_delta_y = double(raw.get("step_delta_y", solved_feet.y - start_feet.y));
 	}
 	result.position = solved_feet - feet_offset;
 	result.velocity = raw.get("velocity", next_velocity);
@@ -411,7 +480,7 @@ bool Box3DPawnBody::can_stand_up(scrap::Scalar p_current_height, const scrap::Mo
 	for (int i = 0; i < planes.size(); i++) {
 		const Dictionary plane = planes[i];
 		const Vector3 normal = plane.get("normal", Vector3(0, 1, 0));
-		if (normal.y < -0.1f) {
+		if (double(normal.y) < -0.1) {
 			clear = false;
 			break;
 		}
@@ -441,7 +510,7 @@ bool Box3DPawnBody::raycast_blocked(const scrap::Vec3 &p_from, const scrap::Vec3
 
 scrap::MantleProbe Box3DPawnBody::check_mantle_opportunity(const scrap::Vec2 &p_input, const scrap::MovementState &p_state, const scrap::MovementParams &p_params) const {
 	// PlayerPawn.check_mantle_opportunity, 1:1.
-	if (p_input.y <= 0.5f) {
+	if (double(p_input.y) <= 0.5) {
 		return {};
 	}
 	if (scrap::absf(double(p_input.x)) > scrap::absf(double(p_input.y)) * 1.1) {
@@ -564,7 +633,7 @@ scrap::LadderProbe Box3DPawnBody::check_ladder_opportunity(const scrap::Vec2 &p_
 	const Basis yaw_basis = Basis(Vector3(0, 1, 0), real_t(p_state.yaw));
 	Vector3 forward = -yaw_basis.get_column(2);
 	forward.y = 0.0f;
-	if (forward.length_squared() <= 0.001f) {
+	if (double(forward.length_squared()) <= 0.001) {
 		return {};
 	}
 	forward = forward.normalized();
@@ -590,7 +659,7 @@ scrap::LadderProbe Box3DPawnBody::check_ladder_opportunity(const scrap::Vec2 &p_
 			continue;
 		}
 		const Vector3 face_normal = ladder.climb_normal_gd(pawn_position);
-		if (face_normal.dot(out) < -0.5f) {
+		if (double(face_normal.dot(out)) < -0.5) {
 			continue;
 		}
 		if (double(forward.dot(-face_normal)) < p_params.ladder_enter_facing_dot) {
@@ -637,8 +706,12 @@ scrap::WallJumpProbe Box3DPawnBody::check_wall_jump(const scrap::MovementState &
 		for (int i = 0; i < count; i++) {
 			// Out-of-range reads mirror GDScript's zero-normal answers (the
 			// maxi(count, 1) quirk): a zero normal is skipped by the gate below.
+			// DELIBERATE DIAGNOSTIC DIFFERENCE: on a zero-collision report the
+			// GDScript's get_collision_normal(0) also emits an engine index
+			// error; here the zero normal is synthesized silently. The state
+			// outcome is identical -- only the log line differs.
 			Vector3 normal = i < result.collision_count ? result.collisions[i].normal : Vector3();
-			if (normal.length_squared() <= 0.001f) {
+			if (double(normal.length_squared()) <= 0.001) {
 				continue;
 			}
 			if (scrap::absf(double(normal.y)) > p_params.wall_jump_max_normal_y) {
@@ -680,12 +753,12 @@ bool Box3DPawnBody::_wall_jump_face_reaches_min_height(const Vector3 &p_directio
 
 void Box3DPawnBody::_append_unique_wall_probe_dir(LocalVector<Vector3> &r_directions, Vector3 p_direction) {
 	p_direction.y = 0.0f;
-	if (p_direction.length_squared() <= 0.001f) {
+	if (double(p_direction.length_squared()) <= 0.001) {
 		return;
 	}
 	p_direction = p_direction.normalized();
 	for (uint32_t i = 0; i < r_directions.size(); i++) {
-		if (r_directions[i].dot(p_direction) > 0.98f) {
+		if (double(r_directions[i].dot(p_direction)) > 0.98) {
 			return;
 		}
 	}
