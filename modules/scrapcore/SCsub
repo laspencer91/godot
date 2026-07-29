@@ -35,6 +35,10 @@ if not os.path.isfile(probe):
 # reach src/movement_motor.cpp without writing object files into the game repo.
 env_scrapcore.Prepend(CPPPATH=[os.path.join(core_dir, "include"), core_dir])
 
+# The Box3DPawnBody adapter includes modules/box3d_physics/box3d_character_mover.h,
+# whose own header pulls the Box3D thirdparty API -- mirror that module's include.
+env_scrapcore.Prepend(CPPPATH=["#thirdparty/box3d/include"])
+
 # The core is engine-agnostic C++17 with no engine headers. Keep Windows'
 # min/max macros out of its translation units (guards stay local to the module;
 # ScrapCore core files are never edited from the engine side).
