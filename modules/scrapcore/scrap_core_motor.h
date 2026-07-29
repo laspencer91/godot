@@ -86,6 +86,22 @@ public:
 	Vector3 get_position() const;
 	Vector3 get_velocity() const;
 
+	// The adapter's CACHED floor contact -- the C++ twin of the GDScript
+	// backend's last-result cache that PlayerPawn.is_grounded() serves. This is
+	// deliberately NOT state.was_on_floor: transitions that write was_on_floor
+	// without re-probing (ladder grab/jump) make the two answers differ for a
+	// tick, and external consumers (camera, viewmodel) read the backend cache.
+	bool grounded_contact() const;
+
+	// Full-precision placement (the controller's place_at): assigns
+	// position/yaw exactly and zeroes velocity -- NO codec round-trip, so an
+	// authored spawn at x=1.2344 stays x=1.2344, matching the GDScript path.
+	// Carries reset_state's teleport semantics (state pushed to the body, step
+	// mailbox cleared, physics interpolation reset) but, like the GDScript
+	// place_at, does not touch pending events. Reconcile stays reset_state:
+	// server state arrives packed on both paths, so quantizing THERE is correct.
+	void place_at(const Vector3 &p_position, double p_yaw);
+
 	// Reconcile path: the v18 packed MovementState both ways. reset_state
 	// implements PlayerPawn.teleport_to_state (mailbox cleared, physics
 	// interpolation reset) and, when p_refresh_ground_contact is true, the

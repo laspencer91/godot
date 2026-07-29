@@ -321,6 +321,20 @@ Vector3 ScrapCoreMotor::get_velocity() const {
 	return Vector3(state.velocity.x, state.velocity.y, state.velocity.z);
 }
 
+bool ScrapCoreMotor::grounded_contact() const {
+	// Pure cached read (Box3DPawnBody::last_result.on_floor); no physics query.
+	return body.is_grounded();
+}
+
+void ScrapCoreMotor::place_at(const Vector3 &p_position, double p_yaw) {
+	ERR_FAIL_COND_MSG(!ready, "ScrapCoreMotor.place_at: call setup() first.");
+	ERR_FAIL_COND_MSG(!body.body_valid(), "ScrapCoreMotor.place_at: the bound body is gone or left the tree.");
+	state.position = scrap::Vec3{ p_position.x, p_position.y, p_position.z };
+	state.velocity = scrap::Vec3::zero();
+	state.yaw = p_yaw;
+	body.teleport_to_state(state, params);
+}
+
 PackedByteArray ScrapCoreMotor::state_packed() const {
 	const scrap::codec::Bytes packed = scrap::codec::pack_movement_state(state);
 	PackedByteArray out;
@@ -436,6 +450,8 @@ void ScrapCoreMotor::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("simulate", "tick", "delta", "command"), &ScrapCoreMotor::simulate);
 	ClassDB::bind_method(D_METHOD("get_position"), &ScrapCoreMotor::get_position);
 	ClassDB::bind_method(D_METHOD("get_velocity"), &ScrapCoreMotor::get_velocity);
+	ClassDB::bind_method(D_METHOD("grounded_contact"), &ScrapCoreMotor::grounded_contact);
+	ClassDB::bind_method(D_METHOD("place_at", "position", "yaw"), &ScrapCoreMotor::place_at);
 	ClassDB::bind_method(D_METHOD("state_packed"), &ScrapCoreMotor::state_packed);
 	ClassDB::bind_method(D_METHOD("reset_state", "packed", "refresh_ground_contact"), &ScrapCoreMotor::reset_state, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("consume_collision_step_delta_y"), &ScrapCoreMotor::consume_collision_step_delta_y);
