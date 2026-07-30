@@ -30,8 +30,10 @@
 
 #include "ao_baker_3d.h"
 
+#include "core/io/config_file.h"
 #include "core/io/dir_access.h"
 #include "core/io/image.h"
+#include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "scene/3d/lightmapper.h"
@@ -117,16 +119,24 @@ void AOBaker3D::get_bake_candidates(Vector<MeshInstance3D *> &r_ready, Vector<Me
 	_collect_candidates(get_parent() ? get_parent() : (Node *)this, r_ready, r_missing_uv2);
 }
 
-AOBaker3D::BakeError AOBaker3D::bake() {
+AOBaker3D::BakeError AOBaker3D::_bake_error(BakeError p_error, const String &p_message) {
+	last_bake_error_message = p_message;
+	ERR_PRINT(vformat("AOBaker3D: %s", p_message));
+	return p_error;
+}
+
+AOBaker3D::BakeError AOBaker3D::bake(const String &p_atlas_path) {
+	last_bake_error_message.clear();
+
 	Vector<MeshFound> meshes;
 	_find_meshes(get_parent() ? get_parent() : (Node *)this, meshes);
 	if (meshes.is_empty()) {
-		return BAKE_ERROR_NO_MESHES;
+		return _bake_error(BAKE_ERROR_NO_MESHES, "No visible GI-static meshes with normals and UV2 were found in the bake scope.");
 	}
 
 	Ref<Lightmapper> lightmapper = Lightmapper::create();
 	if (lightmapper.is_null()) {
-		return BAKE_ERROR_NO_LIGHTMAPPER;
+		return _bake_error(BAKE_ERROR_NO_LIGHTMAPPER, "No lightmapper backend is available.");
 	}
 
 	for (int m = 0; m < meshes.size(); m++) {
@@ -140,6 +150,18 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 		Size2i tex_size = Size2i(Size2(hint) * mf.lightmap_scale * ao_texel_scale);
 		tex_size.x = MAX(tex_size.x, 1);
 		tex_size.y = MAX(tex_size.y, 1);
+
+		// AO is a secondary mask, so an unusually large UV2 chart should gracefully lose density
+		// instead of failing the entire level bake. Leave room for the atlas packer's denoiser padding
+		// and preserve the chart's aspect ratio while fitting it to the configured texture limit.
+		const int chart_limit = MAX(max_texture_size - MAX(2, denoiser_range), 1);
+		if (tex_size.x > chart_limit || tex_size.y > chart_limit) {
+			const Size2i requested_size = tex_size;
+			const float fit_scale = MIN((float)chart_limit / tex_size.x, (float)chart_limit / tex_size.y);
+			tex_size.x = MAX((int)Math::floor(tex_size.x * fit_scale), 1);
+			tex_size.y = MAX((int)Math::floor(tex_size.y * fit_scale), 1);
+			print_line(vformat("AOBaker3D: fitted oversized AO chart %s from %dx%d to %dx%d (Max Texture Size: %d).", mf.node_path, requested_size.x, requested_size.y, tex_size.x, tex_size.y, max_texture_size));
+		}
 
 		Lightmapper::MeshData md;
 		{
@@ -208,7 +230,25 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 
 	Lightmapper::BakeError err = lightmapper->bake_ao(ao_ray_count, ao_max_distance, bias, max_texture_size, use_denoiser, denoiser_strength, denoiser_range, 1.0f);
 	if (err != Lightmapper::BAKE_OK) {
-		return BAKE_ERROR_BAKE_FAILED;
+		String reason;
+		switch (err) {
+			case Lightmapper::BAKE_ERROR_TEXTURE_EXCEEDS_MAX_SIZE:
+				reason = vformat("A mesh's AO chart exceeds Max Texture Size (%d). Lower AO Texel Scale or raise Max Texture Size.", max_texture_size);
+				break;
+			case Lightmapper::BAKE_ERROR_LIGHTMAP_CANT_PRE_BAKE_MESHES:
+				reason = "The GPU lightmapper could not prepare the AO bake. Check RenderingDevice errors and ensure the editor is using Forward+ or Mobile rendering.";
+				break;
+			case Lightmapper::BAKE_ERROR_ATLAS_TOO_SMALL:
+				reason = vformat("The AO charts could not fit in Max Texture Size (%d). Lower AO Texel Scale or raise Max Texture Size.", max_texture_size);
+				break;
+			case Lightmapper::BAKE_ERROR_USER_ABORTED:
+				reason = "The AO bake was cancelled.";
+				break;
+			default:
+				reason = vformat("The lightmapper returned an unknown bake error (%d).", err);
+				break;
+		}
+		return _bake_error(BAKE_ERROR_BAKE_FAILED, reason);
 	}
 
 	// Keep the whole scene-space atlas (all slices) as ONE Texture2DArray, and record each mesh's
@@ -223,16 +263,14 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 		}
 	}
 	if (slice_images.is_empty()) {
-		return BAKE_ERROR_BAKE_FAILED;
+		return _bake_error(BAKE_ERROR_BAKE_FAILED, "The lightmapper completed without producing an AO atlas image.");
 	}
 
 	Ref<Texture2DArray> atlas;
 	atlas.instantiate();
 	if (atlas->create_from_images(slice_images) != OK) {
-		return BAKE_ERROR_BAKE_FAILED;
+		return _bake_error(BAKE_ERROR_BAKE_FAILED, "The baked AO atlas layers have incompatible dimensions or formats.");
 	}
-	ao_atlas = atlas;
-
 	Dictionary new_transforms;
 	const int mesh_count = lightmapper->get_bake_mesh_count();
 	for (int i = 0; i < mesh_count; i++) {
@@ -248,6 +286,67 @@ AOBaker3D::BakeError AOBaker3D::bake() {
 		entry.push_back(slice);
 		new_transforms[np] = entry;
 	}
+
+	Ref<TextureLayered> stored_atlas = atlas;
+
+	// The editor supplies an external PNG path so the atlas payload does not become Base64 inside a
+	// text scene. The source image is imported as a Texture2DArray, matching the lightmap pipeline and
+	// keeping the scene reference small. Keep the empty-path behavior for programmatic in-memory bakes.
+	if (!p_atlas_path.is_empty()) {
+		ERR_FAIL_COND_V_MSG(!p_atlas_path.begins_with("res://") || p_atlas_path.get_extension().to_lower() != "png", BAKE_ERROR_CANT_CREATE_DATA, "AO bake data path must be a res:// PNG path.");
+		ERR_FAIL_NULL_V_MSG(ResourceLoader::import, BAKE_ERROR_CANT_CREATE_DATA, "AO bake data can only be imported while running in the editor.");
+		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
+		ERR_FAIL_COND_V_MSG(da.is_null(), BAKE_ERROR_CANT_CREATE_DATA, "Could not access the project resource directory for AO bake data.");
+		const String relative_dir = p_atlas_path.get_base_dir().trim_prefix("res://");
+		ERR_FAIL_COND_V_MSG(!relative_dir.is_empty() && da->make_dir_recursive(relative_dir) != OK, BAKE_ERROR_CANT_CREATE_DATA, "Could not create the AO bake data directory.");
+
+		const int slice_width = slice_images[0]->get_width();
+		const int slice_height = slice_images[0]->get_height();
+		const int max_columns = Image::MAX_WIDTH / slice_width;
+		const int max_rows = Image::MAX_HEIGHT / slice_height;
+		ERR_FAIL_COND_V_MSG(max_columns < 1 || max_rows < 1 || slice_images.size() > (int64_t)max_columns * max_rows, BAKE_ERROR_CANT_CREATE_DATA, "AO bake atlas is too large to store in one imported Texture2DArray.");
+
+		int columns = MIN((int)Math::ceil(Math::sqrt((double)slice_images.size())), max_columns);
+		int rows = (slice_images.size() + columns - 1) / columns;
+		if (rows > max_rows) {
+			columns = (slice_images.size() + max_rows - 1) / max_rows;
+			rows = (slice_images.size() + columns - 1) / columns;
+		}
+
+		Ref<Image> source_image = Image::create_empty(slice_width * columns, slice_height * rows, false, Image::FORMAT_L8);
+		for (int i = 0; i < slice_images.size(); i++) {
+			// AO readback is R8. Image::convert(R8 -> L8) applies RGB luminance weights and would
+			// incorrectly cap fully open texels at the red coefficient (~0.2126). Reinterpret the
+			// single-channel bytes as L8 instead so the PNG preserves openness exactly.
+			Ref<Image> red_slice = slice_images[i]->duplicate();
+			red_slice->convert(Image::FORMAT_R8);
+			Ref<Image> slice = Image::create_from_data(slice_width, slice_height, false, Image::FORMAT_L8, red_slice->get_data());
+			const Point2i destination((i % columns) * slice_width, (i / columns) * slice_height);
+			source_image->blit_rect(slice, Rect2i(0, 0, slice_width, slice_height), destination);
+		}
+
+		Ref<ConfigFile> import_config;
+		import_config.instantiate();
+		const String import_path = p_atlas_path + ".import";
+		if (FileAccess::exists(import_path)) {
+			import_config->load(import_path);
+		}
+		import_config->set_value("remap", "importer", "2d_array_texture");
+		import_config->set_value("remap", "type", "CompressedTexture2DArray");
+		import_config->set_value("params", "compress/mode", 0);
+		import_config->set_value("params", "compress/channel_pack", 1);
+		import_config->set_value("params", "mipmaps/generate", false);
+		import_config->set_value("params", "slices/horizontal", columns);
+		import_config->set_value("params", "slices/vertical", rows);
+		ERR_FAIL_COND_V_MSG(import_config->save(import_path) != OK, BAKE_ERROR_CANT_CREATE_DATA, "Could not save the AO Texture2DArray import configuration.");
+		ERR_FAIL_COND_V_MSG(source_image->save_png(p_atlas_path) != OK, BAKE_ERROR_CANT_CREATE_DATA, "Could not save the AO atlas source PNG.");
+		ERR_FAIL_COND_V_MSG(ResourceLoader::import(p_atlas_path) != OK, BAKE_ERROR_CANT_CREATE_DATA, "Could not import the AO atlas source as a Texture2DArray.");
+
+		stored_atlas = ResourceLoader::load(p_atlas_path, "TextureLayered", ResourceLoader::CACHE_MODE_REPLACE);
+		ERR_FAIL_COND_V_MSG(stored_atlas.is_null() || stored_atlas->get_layered_type() != TextureLayered::LAYERED_TYPE_2D_ARRAY, BAKE_ERROR_CANT_CREATE_DATA, "Imported AO bake data is not a Texture2DArray.");
+	}
+
+	ao_atlas = stored_atlas;
 	ao_transforms = new_transforms;
 
 	// Debug: dump each mesh's rect (sliced out of the atlas) to a PNG so the AO can be eyeballed in
@@ -329,10 +428,11 @@ int AOBaker3D::get_max_texture_size() const { return max_texture_size; }
 void AOBaker3D::set_debug_output_directory(const String &p_dir) { debug_output_directory = p_dir; }
 String AOBaker3D::get_debug_output_directory() const { return debug_output_directory; }
 
-void AOBaker3D::set_ao_atlas(const Ref<Texture2DArray> &p_atlas) { ao_atlas = p_atlas; }
-Ref<Texture2DArray> AOBaker3D::get_ao_atlas() const { return ao_atlas; }
+void AOBaker3D::set_ao_atlas(const Ref<TextureLayered> &p_atlas) { ao_atlas = p_atlas; }
+Ref<TextureLayered> AOBaker3D::get_ao_atlas() const { return ao_atlas; }
 void AOBaker3D::set_ao_transforms(const Dictionary &p_transforms) { ao_transforms = p_transforms; }
 Dictionary AOBaker3D::get_ao_transforms() const { return ao_transforms; }
+String AOBaker3D::get_last_bake_error_message() const { return last_bake_error_message; }
 
 void AOBaker3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_ao_ray_count", "ao_ray_count"), &AOBaker3D::set_ao_ray_count);
@@ -357,8 +457,9 @@ void AOBaker3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_ao_atlas"), &AOBaker3D::get_ao_atlas);
 	ClassDB::bind_method(D_METHOD("set_ao_transforms", "transforms"), &AOBaker3D::set_ao_transforms);
 	ClassDB::bind_method(D_METHOD("get_ao_transforms"), &AOBaker3D::get_ao_transforms);
+	ClassDB::bind_method(D_METHOD("get_last_bake_error_message"), &AOBaker3D::get_last_bake_error_message);
 	ClassDB::bind_method(D_METHOD("apply_to_meshes"), &AOBaker3D::apply_to_meshes);
-	ClassDB::bind_method(D_METHOD("bake"), &AOBaker3D::bake);
+	ClassDB::bind_method(D_METHOD("bake", "atlas_path"), &AOBaker3D::bake, DEFVAL(String()));
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "ao_ray_count", PROPERTY_HINT_RANGE, "16,8192,1"), "set_ao_ray_count", "get_ao_ray_count");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ao_max_distance", PROPERTY_HINT_RANGE, "0.0,10.0,0.01,or_greater,suffix:m"), "set_ao_max_distance", "get_ao_max_distance");
@@ -372,13 +473,14 @@ void AOBaker3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_texture_size", PROPERTY_HINT_RANGE, "256,16384,1"), "set_max_texture_size", "get_max_texture_size");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "debug_output_directory", PROPERTY_HINT_DIR), "set_debug_output_directory", "get_debug_output_directory");
 	// Baked output: stored/loaded with the scene, hidden from the inspector, no undo churn.
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "ao_atlas", PROPERTY_HINT_RESOURCE_TYPE, "Texture2DArray", PROPERTY_USAGE_NO_EDITOR), "set_ao_atlas", "get_ao_atlas");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "ao_atlas", PROPERTY_HINT_RESOURCE_TYPE, "TextureLayered", PROPERTY_USAGE_NO_EDITOR), "set_ao_atlas", "get_ao_atlas");
 	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "ao_transforms", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NO_EDITOR), "set_ao_transforms", "get_ao_transforms");
 
 	BIND_ENUM_CONSTANT(BAKE_ERROR_OK);
 	BIND_ENUM_CONSTANT(BAKE_ERROR_NO_MESHES);
 	BIND_ENUM_CONSTANT(BAKE_ERROR_NO_LIGHTMAPPER);
 	BIND_ENUM_CONSTANT(BAKE_ERROR_BAKE_FAILED);
+	BIND_ENUM_CONSTANT(BAKE_ERROR_CANT_CREATE_DATA);
 }
 
 void AOBaker3D::_notification(int p_what) {

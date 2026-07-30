@@ -3091,6 +3091,30 @@ void Node3DEditor::_viewport_clicked(Node3DEditorView *p_view, int p_viewport_id
 	p_view->set_last_used_viewport_index(p_viewport_idx);
 }
 
+void Node3DEditor::_adjust_new_node_position(Node *p_node) {
+	Node3D *node_3d = Object::cast_to<Node3D>(p_node);
+	Node *scene_root = get_tree()->get_edited_scene_root();
+	if (!node_3d || !scene_root || node_3d == scene_root || !scene_root->is_ancestor_of(node_3d)) {
+		return;
+	}
+
+	// Preserve authored transforms on instantiated scenes and the position retained by UndoRedo on
+	// redo. Plain nodes created by the Add Node dialog start at the origin and receive viewport-aware
+	// placement once, immediately after SceneTreeDock adds them to the live scene.
+	if (!node_3d->get_scene_file_path().is_empty() || !node_3d->get_position().is_zero_approx()) {
+		return;
+	}
+
+	for (Node3DEditorView *view : editor_views) {
+		Node3DEditorViewport *viewport_3d = view->get_last_used_viewport();
+		Vector3 placement_position;
+		if (viewport_3d && viewport_3d->get_center_placement_position(scene_root, placement_position)) {
+			node_3d->set_global_position(placement_position);
+			return;
+		}
+	}
+}
+
 void Node3DEditor::_node_added(Node *p_node) {
 	if (EditorNode::get_singleton()->get_scene_root()->is_ancestor_of(p_node)) {
 		if (Object::cast_to<WorldEnvironment>(p_node)) {
@@ -3610,6 +3634,7 @@ Node3DEditor::Node3DEditor() {
 	singleton = this;
 	editor_selection = EditorNode::get_singleton()->get_editor_selection();
 	editor_selection->add_editor_plugin(this);
+	SceneTreeDock::get_singleton()->connect("node_created", callable_mp(this, &Node3DEditor::_adjust_new_node_position));
 
 	MarginContainer *toolbar_margin = memnew(MarginContainer);
 	toolbar_margin->set_theme_type_variation("MainToolBarMargin");

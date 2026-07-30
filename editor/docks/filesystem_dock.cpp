@@ -1224,7 +1224,11 @@ void FileSystemDock::_update_visible_scene_previews() {
 
 	for (int i = 0; i < files->get_item_count(); i++) {
 		const String path = files->get_item_metadata(i);
-		if (path.ends_with("/") || EditorFileSystem::get_singleton()->get_file_type(path) != SNAME("PackedScene") || !files->get_item_rect(i).intersects(visible_rect)) {
+		// Open scenes already have a live, fully realized document in memory. Deep-loading another isolated
+		// copy just for a thumbnail can briefly double the resource and renderer footprint of a large level.
+		// Its save-time preview still arrives through the generic resource-preview request above; when that
+		// cache is absent, keep the generic scene icon instead of risking an out-of-memory editor exit.
+		if (path.ends_with("/") || EditorFileSystem::get_singleton()->get_file_type(path) != SNAME("PackedScene") || EditorNode::get_singleton()->is_scene_open(path) || !files->get_item_rect(i).intersects(visible_rect)) {
 			continue;
 		}
 		visible_scenes.insert(path);

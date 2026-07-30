@@ -437,6 +437,8 @@ private:
 		CONTEXT_MENU_PLAY_SCENE = 1,
 		CONTEXT_MENU_STOP_SCENE,
 		CONTEXT_MENU_CREATE_CSG_BOX,
+		CONTEXT_MENU_CREATE_OMNI_LIGHT,
+		CONTEXT_MENU_CREATE_AREA_LIGHT,
 	};
 
 	Dictionary _build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths);
@@ -444,7 +446,7 @@ private:
 	void _context_menu_hide();
 	void _context_menu_option(int p_option);
 	void _context_create_option(int p_option);
-	void _create_csg_box_at_context();
+	void _create_node_at_context(const StringName &p_class_name, const String &p_undo_action, bool p_offset_from_surface = false);
 
 	enum TransformMode {
 		TRANSFORM_NONE,
@@ -660,6 +662,7 @@ public:
 
 	Vector3 get_ray_pos(const Vector2 &p_pos) const;
 	Vector3 get_ray(const Vector2 &p_pos) const;
+	bool get_center_placement_position(Node *p_scene_root, Vector3 &r_position);
 	Point2 point_to_screen(const Vector3 &p_point);
 
 	void focus_selection();

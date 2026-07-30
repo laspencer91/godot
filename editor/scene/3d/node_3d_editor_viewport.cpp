@@ -959,6 +959,17 @@ Vector3 Node3DEditorViewport::get_ray(const Vector2 &p_pos) const {
 	return camera->project_ray_normal(p_pos);
 }
 
+bool Node3DEditorViewport::get_center_placement_position(Node *p_scene_root, Vector3 &r_position) {
+	if (!is_visible_in_tree() || !_domain_pane_accepts_input() || _get_edited_scene_root() != p_scene_root) {
+		return false;
+	}
+
+	Vector<String> paths;
+	const Dictionary context = _build_context_menu_context(surface->get_size() * 0.5, paths);
+	r_position = context.get("placement_position", Vector3());
+	return true;
+}
+
 void Node3DEditorViewport::_clear_selected() {
 	if (previewing) {
 		return;
@@ -2476,10 +2487,14 @@ void Node3DEditorViewport::_popup_context_menu(const Point2 &p_position) {
 
 	context_menu->clear();
 
-	if (_get_edited_scene_root() && ClassDB::class_exists(SNAME("CSGBox3D"))) {
+	if (_get_edited_scene_root()) {
 		PopupMenu *create_menu = memnew(PopupMenu);
 		create_menu->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditorViewport::_context_create_option));
-		create_menu->add_icon_item(get_editor_theme_icon(SNAME("CSGBox3D")), TTRC("CSG Box"), CONTEXT_MENU_CREATE_CSG_BOX);
+		if (ClassDB::class_exists(SNAME("CSGBox3D"))) {
+			create_menu->add_icon_item(get_editor_theme_icon(SNAME("CSGBox3D")), TTRC("CSG Box"), CONTEXT_MENU_CREATE_CSG_BOX);
+		}
+		create_menu->add_icon_item(get_editor_theme_icon(SNAME("OmniLight3D")), TTRC("Omni Light"), CONTEXT_MENU_CREATE_OMNI_LIGHT);
+		create_menu->add_icon_item(get_editor_theme_icon(SNAME("AreaLight3D")), TTRC("Area Light"), CONTEXT_MENU_CREATE_AREA_LIGHT);
 		context_menu->add_submenu_node_item(TTRC("Create"), create_menu);
 	}
 
@@ -2540,43 +2555,51 @@ void Node3DEditorViewport::_context_menu_option(int p_option) {
 }
 
 void Node3DEditorViewport::_context_create_option(int p_option) {
-	if (p_option == CONTEXT_MENU_CREATE_CSG_BOX) {
-		_create_csg_box_at_context();
+	switch (p_option) {
+		case CONTEXT_MENU_CREATE_CSG_BOX:
+			_create_node_at_context(SNAME("CSGBox3D"), TTR("Create CSG Box"), true);
+			break;
+		case CONTEXT_MENU_CREATE_OMNI_LIGHT:
+			_create_node_at_context(SNAME("OmniLight3D"), TTR("Create Omni Light"));
+			break;
+		case CONTEXT_MENU_CREATE_AREA_LIGHT:
+			_create_node_at_context(SNAME("AreaLight3D"), TTR("Create Area Light"));
+			break;
 	}
 }
 
-void Node3DEditorViewport::_create_csg_box_at_context() {
+void Node3DEditorViewport::_create_node_at_context(const StringName &p_class_name, const String &p_undo_action, bool p_offset_from_surface) {
 	Variant root_value = context_menu_context.get("scene_root", Variant());
 	Node *scene_root = Object::cast_to<Node>(root_value.get_validated_object());
 	if (!scene_root || !scene_root->is_inside_tree()) {
 		return;
 	}
 
-	Object *instance = ClassDB::instantiate(SNAME("CSGBox3D"));
-	Node3D *box = Object::cast_to<Node3D>(instance);
-	if (!box) {
+	Object *instance = ClassDB::instantiate(p_class_name);
+	Node3D *node = Object::cast_to<Node3D>(instance);
+	if (!node) {
 		if (instance) {
 			memdelete(instance);
 		}
 		return;
 	}
 
-	EditorNode::get_singleton()->get_editor_data().instantiate_object_properties(box);
-	String node_name = scene_root->validate_child_name(box);
+	EditorNode::get_singleton()->get_editor_data().instantiate_object_properties(node);
+	String node_name = scene_root->validate_child_name(node);
 	if (GLOBAL_GET("editor/naming/node_name_casing").operator int() != NAME_CASING_PASCAL_CASE) {
 		node_name = Node::adjust_name_casing(node_name);
 	}
-	box->set_name(node_name);
+	node->set_name(node_name);
 
 	Vector3 placement_position = context_menu_context.get("placement_position", Vector3());
-	if (context_menu_context.get("physics_hit", false)) {
+	if (p_offset_from_surface && context_menu_context.get("physics_hit", false)) {
 		Vector3 hit_normal = context_menu_context.get("hit_normal", Vector3());
 		hit_normal.normalize();
-		const Variant size_value = box->get("size");
+		const Variant size_value = node->get("size");
 		if (size_value.get_type() == Variant::VECTOR3 && !hit_normal.is_zero_approx()) {
 			Vector3 half_size = size_value;
 			half_size *= 0.5;
-			Basis world_basis = box->get_transform().basis;
+			Basis world_basis = node->get_transform().basis;
 			if (Node3D *parent_3d = Object::cast_to<Node3D>(scene_root)) {
 				world_basis = parent_3d->get_global_transform().basis * world_basis;
 			}
@@ -2595,18 +2618,18 @@ void Node3DEditorViewport::_create_csg_box_at_context() {
 	}
 
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->create_action_for_history(TTR("Create CSG Box"), history_id);
-	undo_redo->add_do_method(scene_root, "add_child", box, true);
-	undo_redo->add_do_method(box, "set_owner", scene_root);
-	undo_redo->add_do_method(box, "set_global_position", placement_position);
-	undo_redo->add_do_reference(box);
-	undo_redo->add_undo_method(scene_root, "remove_child", box);
+	undo_redo->create_action_for_history(p_undo_action, history_id);
+	undo_redo->add_do_method(scene_root, "add_child", node, true);
+	undo_redo->add_do_method(node, "set_owner", scene_root);
+	undo_redo->add_do_method(node, "set_global_position", placement_position);
+	undo_redo->add_do_reference(node);
+	undo_redo->add_undo_method(scene_root, "remove_child", node);
 	undo_redo->commit_action();
 
 	EditorDocument *active_document = EditorNode::get_singleton()->get_editor_data().get_active_document();
 	if (!active_document || active_document->get_root() == scene_root) {
 		editor_selection->clear();
-		editor_selection->add_node(box);
+		editor_selection->add_node(node);
 	}
 }
 

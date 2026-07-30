@@ -212,8 +212,9 @@ void SceneTreeDock::shortcut_input(const Ref<InputEvent> &p_event) {
 		return;
 	}
 
-	// These shortcuts allow echo events for continuous execution.
-	if (ED_IS_SHORTCUT("scene_tree/duplicate", p_event)) {
+	// Movement and paste shortcuts allow echo events for continuous execution. Duplication must only
+	// run on the initial press, or the first OS key-repeat event creates an unintended second copy.
+	if (ED_IS_SHORTCUT("scene_tree/duplicate", p_event) && !p_event->is_echo()) {
 		_tool_selected(TOOL_DUPLICATE);
 	} else if (ED_IS_SHORTCUT("scene_tree/move_up", p_event)) {
 		_tool_selected(TOOL_MOVE_UP);

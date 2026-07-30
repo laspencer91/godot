@@ -34,15 +34,19 @@
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
+#include "editor/editor_interface.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/editor_file_dialog.h"
 #include "scene/3d/ao_baker_3d.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/gui/button.h"
 #include "scene/gui/dialogs.h"
+#include "scene/main/scene_tree.h"
 #include "scene/resources/3d/primitive_meshes.h"
 #include "scene/resources/mesh.h"
+#include "scene/resources/texture.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -138,6 +142,39 @@ void AOBaker3DEditorPlugin::_bake() {
 		return;
 	}
 
+	// Reuse an existing external atlas path on rebake. Inline/foreign/imported resources are never
+	// overwritten: they go through the first-bake save dialog and become local external bake data.
+	Ref<TextureLayered> current_atlas = baker->get_ao_atlas();
+	if (current_atlas.is_valid()) {
+		const String current_path = current_atlas->get_path();
+		if (current_path.is_resource_file() && current_path.get_extension().to_lower() == "png") {
+			pending_atlas_path = current_path;
+			_prepare_bake();
+			return;
+		}
+	}
+
+	Node *scene_root = get_tree()->get_edited_scene_root();
+	const String scene_path = scene_root ? scene_root->get_scene_file_path() : String();
+	if (scene_path.is_empty()) {
+		EditorNode::get_singleton()->show_warning(TTR("Save the scene before choosing where to store its AO bake data."));
+		return;
+	}
+
+	atlas_file->set_current_path(scene_path.get_basename() + "_ao.png");
+	atlas_file->popup_file_dialog();
+}
+
+void AOBaker3DEditorPlugin::_atlas_path_selected(const String &p_path) {
+	pending_atlas_path = p_path;
+	_prepare_bake();
+}
+
+void AOBaker3DEditorPlugin::_prepare_bake() {
+	if (!baker || pending_atlas_path.is_empty()) {
+		return;
+	}
+
 	Vector<MeshInstance3D *> ready;
 	Vector<MeshInstance3D *> missing_uv2;
 	baker->get_bake_candidates(ready, missing_uv2);
@@ -225,16 +262,16 @@ void AOBaker3DEditorPlugin::_do_bake() {
 		return;
 	}
 	const uint64_t time_started = OS::get_singleton()->get_ticks_msec();
-	AOBaker3D::BakeError err = baker->bake();
+	AOBaker3D::BakeError err = baker->bake(pending_atlas_path);
 	const int time_taken = OS::get_singleton()->get_ticks_msec() - time_started;
 
 	switch (err) {
 		case AOBaker3D::BAKE_ERROR_OK: {
-			// The atlas + per-mesh transforms have STORAGE usage, so they persist on save (Ctrl+S).
-			// bake() already pushed the per-instance AO map to the RenderingServer; any material that
-			// reads the AO_MAP built-in now shows it.
+			// The atlas is an external resource; only its reference and the compact per-mesh transforms
+			// persist in the scene. Mark the scene dirty so Ctrl+S records both.
 			const int wired = baker->get_ao_transforms().size();
-			print_line(vformat("Done baking AO in %d ms (%d meshes into shared atlas; AO_MAP wired via the per-instance channel).", time_taken, wired));
+			EditorInterface::get_singleton()->mark_scene_as_unsaved();
+			print_line(vformat("Done baking AO in %d ms (%d meshes into %s; AO_MAP wired via the per-instance channel).", time_taken, wired, pending_atlas_path));
 		} break;
 		case AOBaker3D::BAKE_ERROR_NO_MESHES: {
 			EditorNode::get_singleton()->show_warning(TTR("No meshes to bake AO for. Meshes need UV2 data and their Global Illumination property set to Static."));
@@ -243,7 +280,11 @@ void AOBaker3DEditorPlugin::_do_bake() {
 			EditorNode::get_singleton()->show_warning(TTR("AO baking is not supported on this GPU or build."));
 		} break;
 		case AOBaker3D::BAKE_ERROR_BAKE_FAILED: {
-			EditorNode::get_singleton()->show_warning(TTR("AO bake failed. See the output log for details."));
+			const String reason = baker->get_last_bake_error_message();
+			EditorNode::get_singleton()->show_warning(reason.is_empty() ? TTR("AO bake failed. See the output log for details.") : vformat(TTR("AO bake failed:\n\n%s"), reason));
+		} break;
+		case AOBaker3D::BAKE_ERROR_CANT_CREATE_DATA: {
+			EditorNode::get_singleton()->show_warning(TTR("The AO bake completed, but its external Texture2DArray source could not be saved or imported. Check that the destination is a writable res:// path ending in .png."));
 		} break;
 	}
 }
@@ -271,6 +312,13 @@ void AOBaker3DEditorPlugin::_bind_methods() {
 }
 
 AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
+	atlas_file = memnew(EditorFileDialog);
+	atlas_file->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
+	atlas_file->add_filter("*.png", TTR("PNG Image"));
+	atlas_file->set_title(TTR("Select Path for AO Bake Data"));
+	atlas_file->connect("file_selected", callable_mp(this, &AOBaker3DEditorPlugin::_atlas_path_selected));
+	EditorInterface::get_singleton()->get_base_control()->add_child(atlas_file);
+
 	uv2_prompt = memnew(ConfirmationDialog);
 	uv2_prompt->set_title(TTR("Bake AO"));
 	uv2_prompt->get_ok_button()->set_text(TTR("Unwrap & Bake"));

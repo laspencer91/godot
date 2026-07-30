@@ -844,6 +844,18 @@ void EditorResourcePreview::_begin_scene_preview(const SceneQueueItem &p_item) {
 		}
 	}
 
+	// The Explore dock filters these requests before they reach the service, but a scene can become an
+	// open document while its cache probe is in flight (and other callers may use this API later). An
+	// isolated CACHE_MODE_IGNORE_DEEP load duplicates the entire resource graph; doing that beside the
+	// live document can exhaust memory for large levels. A cached thumbnail was returned above when one
+	// existed, so fall back to the generic scene icon without negatively caching this transient state.
+	if (EditorNode::get_singleton() && EditorNode::get_singleton()->is_scene_open(p_item.path)) {
+		if (p_item.callback.is_valid()) {
+			p_item.callback.call_deferred(p_item.path, Ref<Texture2D>(), Ref<Texture2D>());
+		}
+		return;
+	}
+
 	active_scene_preview = ActiveScenePreview();
 	active_scene_preview.item = p_item;
 	active_scene_preview.source_modified_time = _get_preview_modified_time(p_item.path);
