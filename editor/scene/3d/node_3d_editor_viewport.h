@@ -442,7 +442,7 @@ private:
 		CONTEXT_MENU_CREATE_AREA_LIGHT,
 	};
 
-	Dictionary _build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths);
+	Dictionary _build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths, const HashSet<RID> &p_exclude = HashSet<RID>());
 	void _popup_context_menu(const Point2 &p_position);
 	void _context_menu_hide();
 	void _context_menu_option(int p_option);
@@ -673,6 +673,7 @@ public:
 	Vector3 get_ray_pos(const Vector2 &p_pos) const;
 	Vector3 get_ray(const Vector2 &p_pos) const;
 	bool get_center_placement_position(Node *p_scene_root, Vector3 &r_position);
+	bool get_center_raycast_position(Node *p_scene_root, Vector3 &r_position, bool p_exclude_selection = false);
 	Point2 point_to_screen(const Vector3 &p_point);
 
 	void focus_selection();

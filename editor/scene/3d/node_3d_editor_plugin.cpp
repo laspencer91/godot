@@ -993,7 +993,26 @@ void Node3DEditor::_set_selection_meta_flag(const String &p_action_name, const S
 }
 
 void Node3DEditor::_snap_selected_nodes_to_grid() {
-	struct SnapChange {
+	Vector<Node3D *> nodes;
+	Vector<Vector3> positions;
+	const real_t step = get_configured_translate_snap();
+	for (Node *selected_node : editor_selection->get_top_selected_node_list()) {
+		Node3D *node = Object::cast_to<Node3D>(selected_node);
+		if (!node || !node->is_inside_tree() || node->has_meta("_edit_lock_")) {
+			continue;
+		}
+
+		nodes.push_back(node);
+		positions.push_back(editor_grid_snap_position(node->get_global_position(), step));
+	}
+
+	_apply_selection_global_positions(nodes, positions, TTR("Snap Selection to Grid"));
+}
+
+void Node3DEditor::_apply_selection_global_positions(const Vector<Node3D *> &p_nodes, const Vector<Vector3> &p_positions, const String &p_action_name) {
+	ERR_FAIL_COND(p_nodes.size() != p_positions.size());
+
+	struct PositionChange {
 		struct ChildGlobal {
 			Node3D *node = nullptr;
 			Transform3D global;
@@ -1005,22 +1024,17 @@ void Node3DEditor::_snap_selected_nodes_to_grid() {
 		Vector<ChildGlobal> children;
 	};
 
-	Vector<SnapChange> changes;
-	const real_t step = get_configured_translate_snap();
+	Vector<PositionChange> changes;
 	const bool preserve_children = is_preserve_children_transform_enabled();
-	for (Node *selected_node : editor_selection->get_top_selected_node_list()) {
-		Node3D *node = Object::cast_to<Node3D>(selected_node);
-		if (!node || !node->is_inside_tree() || node->has_meta("_edit_lock_")) {
-			continue;
-		}
-
+	for (int i = 0; i < p_nodes.size(); i++) {
+		Node3D *node = p_nodes[i];
 		const Vector3 before_global = node->get_global_position();
-		const Vector3 after_global = editor_grid_snap_position(before_global, step);
+		const Vector3 after_global = p_positions[i];
 		if (after_global.is_equal_approx(before_global)) {
 			continue;
 		}
 
-		SnapChange change;
+		PositionChange change;
 		change.node = node;
 		change.before = node->get_transform();
 		// Only the origin moves: the local basis is carried over verbatim rather
@@ -1043,12 +1057,12 @@ void Node3DEditor::_snap_selected_nodes_to_grid() {
 	}
 
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->create_action(TTR("Snap Selection to Grid"));
-	for (const SnapChange &change : changes) {
+	undo_redo->create_action(p_action_name);
+	for (const PositionChange &change : changes) {
 		undo_redo->add_do_method(change.node, "set_transform", change.after);
 		undo_redo->add_undo_method(change.node, "set_transform", change.before);
 		// Children keep their world placement, so do and undo replay the same value.
-		for (const SnapChange::ChildGlobal &child : change.children) {
+		for (const PositionChange::ChildGlobal &child : change.children) {
 			undo_redo->add_do_method(child.node, "set_global_transform", child.global);
 			undo_redo->add_undo_method(child.node, "set_global_transform", child.global);
 		}
@@ -1056,6 +1070,46 @@ void Node3DEditor::_snap_selected_nodes_to_grid() {
 	undo_redo->add_do_method(this, "update_transform_gizmo");
 	undo_redo->add_undo_method(this, "update_transform_gizmo");
 	undo_redo->commit_action();
+}
+
+void Node3DEditor::_snap_selected_nodes_to_view() {
+	Node3DEditorViewport *target_viewport = _get_toolbar_target_viewport();
+	Node3DEditorView *target_view = target_viewport ? target_viewport->get_editor_view() : nullptr;
+	EditorDocument *document = target_view ? target_view->get_document() : nullptr;
+	Node *scene_root = document ? document->get_root() : nullptr;
+	if (!scene_root) {
+		return;
+	}
+
+	Vector3 hit_position;
+	if (!target_viewport->get_center_raycast_position(scene_root, hit_position, true)) {
+		return;
+	}
+
+	Vector<Node3D *> nodes;
+	Vector3 selection_center;
+	for (Node *selected_node : editor_selection->get_top_selected_node_list()) {
+		Node3D *node = Object::cast_to<Node3D>(selected_node);
+		if (!node || !node->is_inside_tree() || node->has_meta("_edit_lock_") || (node != scene_root && !scene_root->is_ancestor_of(node))) {
+			continue;
+		}
+
+		nodes.push_back(node);
+		selection_center += node->get_global_position();
+	}
+	if (nodes.is_empty()) {
+		return;
+	}
+
+	selection_center /= nodes.size();
+	const Vector3 offset = hit_position - selection_center;
+	Vector<Vector3> positions;
+	positions.resize(nodes.size());
+	for (int i = 0; i < nodes.size(); i++) {
+		positions.write[i] = nodes[i]->get_global_position() + offset;
+	}
+
+	_apply_selection_global_positions(nodes, positions, TTR("Snap Selection to View"));
 }
 
 void Node3DEditor::_menu_item_pressed(int p_option) {
@@ -1087,6 +1141,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 		} break;
 		case MENU_SNAP_SELECTION_TO_GRID: {
 			_snap_selected_nodes_to_grid();
+		} break;
+		case MENU_SNAP_SELECTION_TO_VIEW: {
+			_snap_selected_nodes_to_view();
 		} break;
 		case MENU_VERTEX_SNAP_BASE_VERTEX: {
 			vertex_snap_origin_mode = false;
@@ -4197,6 +4254,8 @@ Node3DEditor::Node3DEditor() {
 	p->add_shortcut(ED_SHORTCUT("spatial_editor/snap_to_floor", TTRC("Snap Object to Floor"), Key::PAGEDOWN), MENU_SNAP_TO_FLOOR);
 	p->add_shortcut(ED_SHORTCUT("spatial_editor/snap_selection_to_grid", TTRC("Snap Selection to Grid")), MENU_SNAP_SELECTION_TO_GRID);
 	p->set_item_tooltip(p->get_item_index(MENU_SNAP_SELECTION_TO_GRID), TTRC("Move each selected Node3D origin to the nearest world grid point. Rotation and scale are unchanged."));
+	p->add_shortcut(ED_SHORTCUT("spatial_editor/snap_selection_to_view", TTRC("Snap Selection to View")), MENU_SNAP_SELECTION_TO_VIEW);
+	p->set_item_tooltip(p->get_item_index(MENU_SNAP_SELECTION_TO_VIEW), TTRC("Cast a ray from the center of the active 3D viewport and move the selection as a group to the first collision. Relative offsets, rotation, and scale are unchanged."));
 	p->add_shortcut(ED_SHORTCUT("spatial_editor/transform_dialog", TTRC("Transform Dialog...")), MENU_TRANSFORM_DIALOG);
 
 	p->add_separator();

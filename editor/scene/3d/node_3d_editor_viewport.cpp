@@ -959,6 +959,8 @@ Vector3 Node3DEditorViewport::get_ray(const Vector2 &p_pos) const {
 	return camera->project_ray_normal(p_pos);
 }
 
+static void _insert_collision_object_rid_recursive(Node *p_node, HashSet<RID> &p_col_obj_rids);
+
 bool Node3DEditorViewport::get_center_placement_position(Node *p_scene_root, Vector3 &r_position) {
 	if (!is_visible_in_tree() || !_domain_pane_accepts_input() || _get_edited_scene_root() != p_scene_root) {
 		return false;
@@ -967,6 +969,31 @@ bool Node3DEditorViewport::get_center_placement_position(Node *p_scene_root, Vec
 	Vector<String> paths;
 	const Dictionary context = _build_context_menu_context(surface->get_size() * 0.5, paths);
 	r_position = context.get("placement_position", Vector3());
+	return true;
+}
+
+bool Node3DEditorViewport::get_center_raycast_position(Node *p_scene_root, Vector3 &r_position, bool p_exclude_selection) {
+	if (!is_visible_in_tree() || !_domain_pane_accepts_input() || _get_edited_scene_root() != p_scene_root) {
+		return false;
+	}
+
+	HashSet<RID> excluded;
+	if (p_exclude_selection) {
+		for (Node *selected_node : editor_selection->get_top_selected_node_list()) {
+			Node3D *selected_node_3d = Object::cast_to<Node3D>(selected_node);
+			if (_is_node_in_edited_scene(selected_node_3d) && !selected_node_3d->has_meta("_edit_lock_")) {
+				_insert_collision_object_rid_recursive(selected_node_3d, excluded);
+			}
+		}
+	}
+
+	Vector<String> paths;
+	const Dictionary context = _build_context_menu_context(surface->get_size() * 0.5, paths, excluded);
+	if (!(bool)context.get("physics_hit", false)) {
+		return false;
+	}
+
+	r_position = context.get("hit_position", Vector3());
 	return true;
 }
 
@@ -2382,7 +2409,7 @@ void Node3DEditorViewport::_list_select(Ref<InputEventMouseButton> b) {
 	}
 }
 
-Dictionary Node3DEditorViewport::_build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths) {
+Dictionary Node3DEditorViewport::_build_context_menu_context(const Point2 &p_position, Vector<String> &r_paths, const HashSet<RID> &p_exclude) {
 	static constexpr real_t MAX_GROUND_DISTANCE = 50.0;
 	static constexpr real_t FALLBACK_DISTANCE = 5.0;
 
@@ -2441,6 +2468,7 @@ Dictionary Node3DEditorViewport::_build_context_menu_context(const Point2 &p_pos
 		PS3DT::RayParameters ray_parameters;
 		ray_parameters.from = ray_origin;
 		ray_parameters.to = ray_origin + ray_direction * input_camera->get_far();
+		ray_parameters.exclude = p_exclude;
 
 		PS3DT::RayResult result;
 		if (space_state->intersect_ray(ray_parameters, result)) {
@@ -6285,7 +6313,7 @@ void Node3DEditorViewport::assign_pending_data_pointers(Node3D *p_preview_node, 
 	accept = p_accept;
 }
 
-void _insert_collision_object_rid_recursive(Node *p_node, HashSet<RID> &p_col_obj_rids) {
+static void _insert_collision_object_rid_recursive(Node *p_node, HashSet<RID> &p_col_obj_rids) {
 	CollisionObject3D *col_obj = Object::cast_to<CollisionObject3D>(p_node);
 
 	if (col_obj) {
