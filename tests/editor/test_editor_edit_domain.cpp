@@ -37,6 +37,7 @@ TEST_FORCE_LINK(test_editor_edit_domain)
 #include "core/input/input_event.h"
 #include "editor/gui/editor_edit_domain.h"
 #include "editor/gui/editor_viewport_chrome.h"
+#include "editor/scene/3d/editor_grid_3d.h"
 #include "scene/gui/control.h"
 #include "scene/main/scene_tree.h"
 
@@ -67,6 +68,8 @@ public:
 	bool gesture_active = false;
 	bool toggle_handled = true;
 	bool tool_toggled = false;
+	bool provides_working_frame = false;
+	EditorGridFrame3D working_frame;
 
 	virtual void enter(const EditorEditDomainContext &p_context) override {
 		stats->entered++;
@@ -112,6 +115,14 @@ public:
 			tool_toggled = !tool_toggled;
 		}
 		return toggle_handled;
+	}
+
+	virtual bool get_working_grid_frame(EditorGridFrame3D &r_frame) const override {
+		if (!provides_working_frame) {
+			return false;
+		}
+		r_frame = working_frame;
+		return true;
 	}
 
 	virtual Control *build_tool_rail() override {
@@ -257,9 +268,24 @@ TEST_CASE("[Editor][EditorEditDomain] Hosts own independent sessions per view") 
 		CHECK(static_cast<TestDomainSession *>(host_b.get_active_session())->entered_view == view_b);
 		CHECK(stats.created == 2);
 		CHECK(stats.entered == 2);
+		TestDomainSession *session_a = static_cast<TestDomainSession *>(host_a.get_active_session());
+		TestDomainSession *session_b = static_cast<TestDomainSession *>(host_b.get_active_session());
+		EditorGridFrame3D queried_frame;
+		CHECK_FALSE(host_a.get_working_grid_frame(queried_frame));
+		session_a->provides_working_frame = true;
+		session_a->working_frame = EditorGridFrame3D::world_xz();
+		session_a->working_frame.anchor = Vector3(1, 2, 3);
+		session_b->provides_working_frame = true;
+		session_b->working_frame = EditorGridFrame3D::world_xz();
+		session_b->working_frame.anchor = Vector3(9, 8, 7);
+		REQUIRE(host_a.get_working_grid_frame(queried_frame));
+		CHECK(queried_frame.anchor == Vector3(1, 2, 3));
+		REQUIRE(host_b.get_working_grid_frame(queried_frame));
+		CHECK(queried_frame.anchor == Vector3(9, 8, 7));
 
 		host_a.exit_domain();
 		CHECK_FALSE(host_a.is_active());
+		CHECK_FALSE(host_a.get_working_grid_frame(queried_frame));
 		CHECK(host_b.is_active());
 		CHECK(stats.exited == 1);
 		CHECK(stats.destroyed == 1);

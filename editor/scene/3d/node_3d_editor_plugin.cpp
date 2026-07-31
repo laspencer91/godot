@@ -2195,7 +2195,12 @@ void Node3DEditor::update_grid() {
 
 void Node3DEditorView::update_grid(Node3DEditorViewport *p_viewport) {
 	ERR_FAIL_NULL(p_viewport);
-	p_viewport->update_grid_renderer();
+	EditorGridFrame3D working_frame;
+	if (edit_domain_host && edit_domain_host->get_working_grid_frame(working_frame) && working_frame.is_valid()) {
+		p_viewport->update_grid_renderer(&working_frame);
+	} else {
+		p_viewport->update_grid_renderer();
+	}
 }
 
 void Node3DEditorView::set_origin_enabled(bool p_enabled) {

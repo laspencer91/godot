@@ -40,6 +40,7 @@ class EditorDocument;
 class InputEvent;
 class Node3DEditorView;
 class Node3DEditorViewport;
+struct EditorGridFrame3D;
 template <typename T>
 class Ref;
 
@@ -76,6 +77,7 @@ public:
 	virtual bool handle_escape() { return false; }
 	virtual bool handle_tool_toggle() { return false; }
 	virtual void draw_overlay(Node3DEditorViewport *p_viewport) {}
+	virtual bool get_working_grid_frame(EditorGridFrame3D &r_frame) const { return false; }
 
 	virtual Control *build_tool_rail() { return nullptr; }
 	virtual Control *build_contextual_panel() { return nullptr; }
@@ -140,6 +142,7 @@ public:
 
 	EditorEditDomainInput route_input(Node3DEditorViewport *p_viewport, Camera3D *p_camera, const Ref<InputEvent> &p_event);
 	void route_draw(Node3DEditorViewport *p_viewport);
+	bool get_working_grid_frame(EditorGridFrame3D &r_frame) const;
 
 	void notify_provider_unregistered(EditorEditDomainProvider *p_provider);
 

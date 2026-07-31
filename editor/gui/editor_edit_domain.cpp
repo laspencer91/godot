@@ -218,6 +218,10 @@ void EditorEditDomainHost::route_draw(Node3DEditorViewport *p_viewport) {
 	active_session->draw_overlay(p_viewport);
 }
 
+bool EditorEditDomainHost::get_working_grid_frame(EditorGridFrame3D &r_frame) const {
+	return active_session && active_session->get_working_grid_frame(r_frame);
+}
+
 void EditorEditDomainHost::notify_provider_unregistered(EditorEditDomainProvider *p_provider) {
 	if (p_provider == active_provider) {
 		exit_domain();
