@@ -157,7 +157,9 @@ CSGDrawBoxResult csg_draw_box_from_rect(const CSGDrawRect &p_rect, real_t p_heig
 	result.size = Vector3(p_rect.max.x - p_rect.min.x, height, p_rect.max.y - p_rect.min.y);
 	const Vector2 rect_center = (p_rect.min + p_rect.max) * 0.5;
 	const Vector3 world_center = p_plane_origin + p_plane_u * rect_center.x + p_plane_v * rect_center.y + p_plane_normal * (height * 0.5);
-	result.world_transform = Transform3D(Basis(p_plane_u, p_plane_normal, p_plane_v), world_center);
+	// EditorGridFrame3D is ordered U/V/N, while the authored box uses X/Y/Z =
+	// U/N/-V so its basis remains right-handed as local Y grows outward.
+	result.world_transform = Transform3D(Basis(p_plane_u, p_plane_normal, p_plane_u.cross(p_plane_normal).normalized()), world_center);
 	return result;
 }
 
@@ -484,6 +486,74 @@ void CSGSurfaceSession::_clear_pick_state() {
 	pick_mesh_generation = UINT64_MAX;
 	hover_hit = CSGSurfaceHit();
 	has_hover = false;
+	hover_point_world = Vector3();
+	hover_normal_world = Vector3();
+	has_hover_grid_frame = false;
+}
+
+bool CSGSurfaceSession::_build_grid_frame(const Vector3 &p_point_world, const Vector3 &p_normal_world, CSGPrimitive3D *p_source, uint32_t p_semantic_surface, EditorGridFrame3D &r_frame) const {
+	Transform3D space_to_world;
+	Vector3 tangent_hint;
+	switch (grid_space) {
+		case GridSpace::LOCAL:
+			if (!p_source) {
+				return false;
+			}
+			space_to_world = p_source->get_global_transform();
+			if (p_semantic_surface < p_source->get_surface_schema_size()) {
+				Vector3 local_u;
+				Vector3 local_v;
+				p_source->get_surface_uv_basis(p_semantic_surface, local_u, local_v);
+				tangent_hint = space_to_world.basis.xform(local_u);
+			}
+			break;
+		case GridSpace::CSG_ROOT: {
+			CSGShape3D *root = _get_active_root();
+			if (!root) {
+				return false;
+			}
+			space_to_world = root->get_global_transform();
+		} break;
+		case GridSpace::WORLD:
+			space_to_world = Transform3D();
+			break;
+	}
+	if (tangent_hint.is_zero_approx()) {
+		tangent_hint = space_to_world.basis.get_column(0);
+	}
+	return EditorGridFrame3D::from_plane_in_space(p_point_world, p_normal_world, space_to_world, tangent_hint, r_frame);
+}
+
+void CSGSurfaceSession::_refresh_hover_grid_frame() {
+	has_hover_grid_frame = false;
+	if (!has_hover) {
+		return;
+	}
+	CSGPrimitive3D *source = ObjectDB::get_instance<CSGPrimitive3D>(hover_hit.surface.source_shape);
+	if (!source) {
+		return;
+	}
+	has_hover_grid_frame = _build_grid_frame(hover_point_world, hover_normal_world, source, hover_hit.surface.semantic_surface, hover_grid_frame);
+}
+
+void CSGSurfaceSession::set_grid_space(GridSpace p_space) {
+	if (p_space < GridSpace::LOCAL || p_space > GridSpace::WORLD) {
+		return;
+	}
+	if (gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING || draw_phase != DrawPhase::IDLE) {
+		return;
+	}
+	grid_space = p_space;
+	_refresh_hover_grid_frame();
+	_update_context_panel();
+	_queue_redraw(_get_active_viewport());
+}
+
+void CSGSurfaceSession::_grid_space_selected(int p_index) {
+	set_grid_space((GridSpace)p_index);
+	if (OptionButton *option = ObjectDB::get_instance<OptionButton>(grid_space_option_id)) {
+		option->select((int)grid_space);
+	}
 }
 
 void CSGSurfaceSession::_clear_selection() {
@@ -491,6 +561,7 @@ void CSGSurfaceSession::_clear_selection() {
 	selected_hit = CSGSurfaceHit();
 	has_selection = false;
 	has_ghost = false;
+	has_locked_grid_frame = false;
 	extrude_gesture = false; // CSG-5: Do not leak a canceled mode into numeric entry.
 	gesture_state = has_hover ? GestureState::HOVER : GestureState::IDLE;
 	_update_context_panel();
@@ -507,6 +578,7 @@ void CSGSurfaceSession::_set_tool_mode(ToolMode p_mode) {
 	tool_mode = p_mode;
 	if (tool_mode == ToolMode::OPERAND) {
 		has_hover = false;
+		has_hover_grid_frame = false;
 	}
 	_update_tool_buttons();
 	_update_context_panel();
@@ -786,6 +858,7 @@ bool CSGSurfaceSession::_pick(Node3DEditorViewport *p_viewport, const Vector2 &p
 	CSGShape3D *root = _get_active_root();
 	if (!root || !p_viewport) {
 		has_hover = false;
+		has_hover_grid_frame = false;
 		return false;
 	}
 
@@ -805,6 +878,7 @@ bool CSGSurfaceSession::_pick(Node3DEditorViewport *p_viewport, const Vector2 &p
 
 	if (pick_mesh.is_null() || !pick_mesh->is_valid()) {
 		has_hover = false;
+		has_hover_grid_frame = false;
 		return false;
 	}
 
@@ -816,6 +890,7 @@ bool CSGSurfaceSession::_pick(Node3DEditorViewport *p_viewport, const Vector2 &p
 	int32_t face_index = -1;
 	if (!pick_mesh->intersect_ray(ray_position, ray_direction, hit_position, hit_normal, nullptr, &face_index) || face_index < 0) {
 		has_hover = false;
+		has_hover_grid_frame = false;
 		return false;
 	}
 
@@ -823,6 +898,7 @@ bool CSGSurfaceSession::_pick(Node3DEditorViewport *p_viewport, const Vector2 &p
 	uint32_t face_id = 0;
 	if (!root->resolve_result_triangle((uint32_t)face_index, result_generation, surface, face_id)) {
 		has_hover = false;
+		has_hover_grid_frame = false;
 		return false;
 	}
 
@@ -831,6 +907,17 @@ bool CSGSurfaceSession::_pick(Node3DEditorViewport *p_viewport, const Vector2 &p
 	hover_hit.face_id = face_id;
 	hover_hit.triangle = (uint32_t)face_index;
 	has_hover = true;
+	hover_point_world = root->get_global_transform().xform(hit_position);
+	hover_normal_world = root->get_global_transform().basis.inverse().transposed().xform(hit_normal).normalized();
+	if (CSGBox3D *box = Object::cast_to<CSGBox3D>(ObjectDB::get_instance<CSGPrimitive3D>(surface.source_shape))) {
+		int axis = 0;
+		real_t sign = 1.0;
+		Vector3 outward;
+		if (_get_box_surface_axis(surface.semantic_surface, axis, sign, outward)) {
+			hover_normal_world = box->get_global_transform().basis.inverse().transposed().xform(outward).normalized();
+		}
+	}
+	_refresh_hover_grid_frame();
 	return true;
 }
 
@@ -859,10 +946,8 @@ void CSGSurfaceSession::_reset_draw_state(bool p_update) {
 	draw_phase = DrawPhase::IDLE;
 	draw_cut_mode = false;
 	draw_ctrl_pressed = false;
-	draw_plane_origin_world = Vector3();
-	draw_plane_normal_world = Vector3();
-	draw_plane_u_world = Vector3();
-	draw_plane_v_world = Vector3();
+	draw_grid_frame = EditorGridFrame3D();
+	has_draw_grid_frame = false;
 	draw_parent_operand_id = ObjectID();
 	draw_rect_min = Vector2();
 	draw_rect_max = Vector2();
@@ -892,17 +977,17 @@ real_t CSGSurfaceSession::_active_translate_snap_step() const {
 }
 
 bool CSGSurfaceSession::_project_draw_point(Node3DEditorViewport *p_viewport, const Vector2 &p_position, Vector2 &r_plane_position) const {
-	if (!p_viewport || draw_plane_normal_world.is_zero_approx()) {
+	if (!p_viewport || !has_draw_grid_frame || !draw_grid_frame.is_valid()) {
 		return false;
 	}
 	Vector3 intersection;
 	const Vector3 ray_direction = p_viewport->get_ray(p_position).normalized();
-	if (!Plane(draw_plane_normal_world, draw_plane_origin_world).intersects_ray(p_viewport->get_ray_pos(p_position), ray_direction, &intersection)) {
+	if (!draw_grid_frame.plane().intersects_ray(p_viewport->get_ray_pos(p_position), ray_direction, &intersection)) {
 		return false;
 	}
 
-	const Vector3 offset = intersection - draw_plane_origin_world;
-	r_plane_position = Vector2(offset.dot(draw_plane_u_world), offset.dot(draw_plane_v_world));
+	const Vector3 coordinates = draw_grid_frame.to_coordinates(intersection);
+	r_plane_position = Vector2(coordinates.x, coordinates.y);
 	const real_t snap_step = _active_translate_snap_step();
 	if (snap_step > 0.0) {
 		r_plane_position.x = Math::snapped(r_plane_position.x, snap_step);
@@ -925,40 +1010,15 @@ bool CSGSurfaceSession::_resolve_draw_plane(Node3DEditorViewport *p_viewport, co
 			return false;
 		}
 		draw_parent_operand_id = source->get_instance_id();
-		draw_plane_origin_world = root->get_global_transform().xform(hit_position_root);
-		draw_plane_normal_world = root->get_global_transform().basis.inverse().transposed().xform(hit_normal_root).normalized();
-
-		// An authored box face supplies an exact axis even when the visible fragment is triangulated.
-		if (CSGBox3D *box = Object::cast_to<CSGBox3D>(source)) {
-			int axis = 0;
-			real_t sign = 1.0;
-			Vector3 outward;
-			if (_get_box_surface_axis(hover_hit.surface.semantic_surface, axis, sign, outward)) {
-				draw_plane_normal_world = box->get_global_transform().basis.inverse().transposed().xform(outward).normalized();
-			}
-		}
-		if (draw_plane_normal_world.is_zero_approx()) {
+		if (!_build_grid_frame(hover_point_world, hover_normal_world, source, hover_hit.surface.semantic_surface, draw_grid_frame)) {
 			return false;
 		}
-
-		Vector3 seed;
-		const Vector3 abs_normal = draw_plane_normal_world.abs();
-		if (abs_normal.x <= abs_normal.y && abs_normal.x <= abs_normal.z) {
-			seed = Vector3(1, 0, 0);
-		} else if (abs_normal.y <= abs_normal.z) {
-			seed = Vector3(0, 1, 0);
-		} else {
-			seed = Vector3(0, 0, 1);
-		}
-		draw_plane_u_world = seed.cross(draw_plane_normal_world).normalized();
-		draw_plane_v_world = draw_plane_normal_world.cross(draw_plane_u_world).normalized();
+		has_draw_grid_frame = true;
 	} else {
 		// No visible CSG hit means the world XZ ground plane and a future standalone root.
 		draw_parent_operand_id = ObjectID();
-		draw_plane_origin_world = Vector3();
-		draw_plane_normal_world = Vector3(0, 1, 0);
-		draw_plane_u_world = Vector3(1, 0, 0);
-		draw_plane_v_world = Vector3(0, 0, 1);
+		draw_grid_frame = EditorGridFrame3D::world_xz();
+		has_draw_grid_frame = true;
 	}
 
 	Vector2 first_corner;
@@ -997,8 +1057,8 @@ void CSGSurfaceSession::_begin_draw_height(Node3DEditorViewport *p_viewport, con
 		return;
 	}
 	const Vector2 rect_center = (draw_rect_min + draw_rect_max) * 0.5;
-	draw_height_line_origin_world = draw_plane_origin_world + draw_plane_u_world * rect_center.x + draw_plane_v_world * rect_center.y;
-	draw_height_line_direction_world = draw_plane_normal_world;
+	draw_height_line_origin_world = draw_grid_frame.to_world(Vector3(rect_center.x, rect_center.y, draw_grid_frame.plane_coordinate));
+	draw_height_line_direction_world = draw_grid_frame.n;
 	draw_height_start_parameter = _closest_parameter_on_line_to_ray(
 			draw_height_line_origin_world,
 			draw_height_line_direction_world,
@@ -1020,12 +1080,12 @@ void CSGSurfaceSession::_update_draw_height(Node3DEditorViewport *p_viewport, co
 			draw_height_line_direction_world,
 			p_viewport->get_ray_pos(p_position),
 			p_viewport->get_ray(p_position).normalized());
-	draw_height = MAX(current_parameter - draw_height_start_parameter, (real_t)0.0);
+	real_t target_coordinate = draw_grid_frame.plane_coordinate + current_parameter - draw_height_start_parameter;
 	const real_t snap_step = _active_translate_snap_step();
 	if (snap_step > 0.0) {
-		// CSG-7: Snap the absolute height, never an accumulated mouse delta.
-		draw_height = Math::snapped(draw_height, snap_step);
+		target_coordinate = Math::snapped(target_coordinate, snap_step);
 	}
+	draw_height = MAX(target_coordinate - draw_grid_frame.plane_coordinate, (real_t)0.0);
 	_update_context_panel();
 	_queue_redraw(p_viewport);
 }
@@ -1056,7 +1116,7 @@ void CSGSurfaceSession::_commit_draw() {
 			return;
 		}
 	}
-	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, draw_height, draw_plane_origin_world, draw_plane_u_world, draw_plane_normal_world, draw_plane_v_world);
+	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, draw_height, draw_grid_frame.plane_origin(), draw_grid_frame.u, draw_grid_frame.n, draw_grid_frame.v);
 	CSGBox3D *new_box = csg_draw_commit_box(undo_redo, root, edited_root, parent_operand, box, _is_draw_cut_effective());
 	if (!new_box) {
 		_reset_draw_state();
@@ -1147,7 +1207,12 @@ bool CSGSurfaceSession::_begin_gesture(Node3DEditorViewport *p_viewport, const R
 	start_size = box->get_size();
 	start_transform = box->get_transform();
 	start_global_transform = box->get_global_transform();
-	start_plane_coordinate = drag_axis_sign * start_size[drag_axis] * 0.5;
+	if (!has_hover_grid_frame || !_build_grid_frame(hover_point_world, hover_normal_world, box, hover_hit.surface.semantic_surface, locked_grid_frame)) {
+		_cancel_gesture();
+		return false;
+	}
+	has_locked_grid_frame = true;
+	start_plane_coordinate = locked_grid_frame.plane_coordinate;
 	target_plane_coordinate = start_plane_coordinate;
 	drag_displacement = 0.0;
 	ghost_result.size = start_size;
@@ -1156,12 +1221,13 @@ bool CSGSurfaceSession::_begin_gesture(Node3DEditorViewport *p_viewport, const R
 
 	drag_line_origin_world = start_global_transform.xform(outward * (start_size[drag_axis] * 0.5));
 	const Vector3 world_axis = start_global_transform.basis.xform(outward);
-	drag_axis_world_scale = world_axis.length();
-	if (Math::is_zero_approx(drag_axis_world_scale)) {
+	const real_t world_axis_length = world_axis.length();
+	drag_axis_plane_scale = locked_grid_frame.n.dot(world_axis);
+	if (Math::is_zero_approx(world_axis_length) || drag_axis_plane_scale <= CMP_EPSILON) {
 		_cancel_gesture();
 		return false;
 	}
-	drag_line_direction_world = world_axis / drag_axis_world_scale;
+	drag_line_direction_world = world_axis / world_axis_length;
 	drag_start_parameter = _closest_parameter_on_line_to_ray(
 			drag_line_origin_world,
 			drag_line_direction_world,
@@ -1186,22 +1252,21 @@ void CSGSurfaceSession::_update_drag(Node3DEditorViewport *p_viewport, const Vec
 			drag_line_direction_world,
 			p_viewport->get_ray_pos(p_position),
 			p_viewport->get_ray(p_position).normalized());
-	const real_t outward_displacement = (current_parameter - drag_start_parameter) / drag_axis_world_scale;
-	target_plane_coordinate = start_plane_coordinate + drag_axis_sign * outward_displacement;
+	target_plane_coordinate = start_plane_coordinate + (current_parameter - drag_start_parameter) * locked_grid_frame.n.dot(drag_line_direction_world);
 	const real_t snap_step = _active_translate_snap_step();
-	if (snap_space == SnapSpace::LOCAL && snap_step > 0.0) {
+	if (snap_step > 0.0) {
 		target_plane_coordinate = Math::snapped(target_plane_coordinate, snap_step);
 	}
 
 	// CSG-4: Pointer and numeric input share the same post-clamp recompute.
-	_apply_displacement();
+	_apply_displacement((target_plane_coordinate - start_plane_coordinate) / drag_axis_plane_scale);
 	has_ghost = true;
 	_update_context_panel();
 	_queue_redraw(p_viewport);
 }
 
-void CSGSurfaceSession::_apply_displacement() {
-	drag_displacement = (target_plane_coordinate - start_plane_coordinate) * drag_axis_sign;
+void CSGSurfaceSession::_apply_displacement(real_t p_local_outward_displacement) {
+	drag_displacement = p_local_outward_displacement;
 	if (extrude_gesture) {
 		// CSG-5: Inward depth stays non-committable while the ghost remains outward.
 		extrude_ghost = csg_extrude_box_face(start_size, selected_hit.surface.semantic_surface, MAX(drag_displacement, (real_t)0.0));
@@ -1212,12 +1277,13 @@ void CSGSurfaceSession::_apply_displacement() {
 	ghost_result = csg_push_pull_apply(start_size, start_transform, selected_hit.surface.semantic_surface, drag_displacement, symmetric_drag);
 	const real_t multiplier = symmetric_drag ? 2.0 : 1.0;
 	drag_displacement = (ghost_result.size[drag_axis] - start_size[drag_axis]) / multiplier;
-	target_plane_coordinate = start_plane_coordinate + drag_axis_sign * drag_displacement;
+	target_plane_coordinate = start_plane_coordinate + drag_displacement * drag_axis_plane_scale;
 }
 
 void CSGSurfaceSession::_cancel_gesture() {
 	// CSG-4: Cancellation clears only session-local transient state.
 	has_ghost = false;
+	has_locked_grid_frame = false;
 	extrude_gesture = false; // CSG-5: Escape leaves no captured extrusion mode.
 	drag_displacement = 0.0;
 	target_plane_coordinate = start_plane_coordinate;
@@ -1229,6 +1295,7 @@ void CSGSurfaceSession::_cancel_gesture() {
 void CSGSurfaceSession::_finish_without_commit() {
 	// CSG-4: A threshold miss or no-op creates no undo history.
 	has_ghost = false;
+	has_locked_grid_frame = false;
 	extrude_gesture = false; // CSG-5: Ghost-only release has no persistent state.
 	gesture_state = has_hover ? GestureState::HOVER : GestureState::IDLE;
 	_update_context_panel();
@@ -1294,7 +1361,9 @@ void CSGSurfaceSession::_commit_gesture() {
 		selected_hit.result_generation = root->get_result_generation();
 		has_selection = true;
 		has_ghost = false;
+		has_locked_grid_frame = false;
 		has_hover = false;
+		has_hover_grid_frame = false;
 		extrude_gesture = false;
 		gesture_state = GestureState::IDLE;
 		drag_displacement = 0.0;
@@ -1351,7 +1420,9 @@ void CSGSurfaceSession::_commit_gesture() {
 	undo_redo->commit_action();
 
 	has_ghost = false;
+	has_locked_grid_frame = false;
 	has_hover = false;
+	has_hover_grid_frame = false;
 	gesture_state = GestureState::IDLE;
 	drag_displacement = 0.0;
 	start_size = box->get_size();
@@ -1374,6 +1445,10 @@ void CSGSurfaceSession::_update_context_panel() {
 	}
 	if (paint_context) {
 		paint_context->set_visible(tool_mode == ToolMode::PAINT);
+	}
+	if (OptionButton *option = ObjectDB::get_instance<OptionButton>(grid_space_option_id)) {
+		option->select((int)grid_space);
+		option->set_disabled(gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING || draw_phase != DrawPhase::IDLE);
 	}
 	if (tool_mode == ToolMode::DRAW) {
 		if (Button *button = ObjectDB::get_instance<Button>(draw_add_button_id)) {
@@ -1520,14 +1595,25 @@ void CSGSurfaceSession::_numeric_coordinate_submitted(const String &p_text) {
 		start_size = box->get_size();
 		start_transform = box->get_transform();
 		start_global_transform = box->get_global_transform();
-		start_plane_coordinate = drag_axis_sign * start_size[drag_axis] * 0.5;
+		const Vector3 world_axis = start_global_transform.basis.xform(outward);
+		const Vector3 face_point_world = start_global_transform.xform(outward * (start_size[drag_axis] * 0.5));
+		const Vector3 face_normal_world = start_global_transform.basis.inverse().transposed().xform(outward).normalized();
+		if (!_build_grid_frame(face_point_world, face_normal_world, box, selected_hit.surface.semantic_surface, locked_grid_frame)) {
+			return;
+		}
+		drag_axis_plane_scale = locked_grid_frame.n.dot(world_axis);
+		if (drag_axis_plane_scale <= CMP_EPSILON) {
+			return;
+		}
+		has_locked_grid_frame = true;
+		start_plane_coordinate = locked_grid_frame.plane_coordinate;
 		extrude_gesture = false; // CSG-5: Fresh numeric entry remains push/pull.
 		symmetric_drag = false;
 	}
 
 	target_plane_coordinate = p_text.to_float();
 	// CSG-4: Numeric entry uses the pointer path's post-clamp recompute.
-	_apply_displacement();
+	_apply_displacement((target_plane_coordinate - start_plane_coordinate) / drag_axis_plane_scale);
 	gesture_state = GestureState::DRAGGING;
 	has_ghost = true;
 	_update_context_panel();
@@ -1717,7 +1803,7 @@ void CSGSurfaceSession::_draw_draw_ghost(Node3DEditorViewport *p_viewport) const
 		Vector<Point2> outline;
 		outline.resize(5);
 		for (int i = 0; i < 4; i++) {
-			const Vector3 world_corner = draw_plane_origin_world + draw_plane_u_world * plane_corners[i].x + draw_plane_v_world * plane_corners[i].y;
+			const Vector3 world_corner = draw_grid_frame.to_world(Vector3(plane_corners[i].x, plane_corners[i].y, draw_grid_frame.plane_coordinate));
 			if (camera->is_position_behind(world_corner)) {
 				return;
 			}
@@ -1729,7 +1815,7 @@ void CSGSurfaceSession::_draw_draw_ghost(Node3DEditorViewport *p_viewport) const
 	}
 
 	const CSGDrawRect rect = { draw_rect_min, draw_rect_max, false };
-	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, draw_height, draw_plane_origin_world, draw_plane_u_world, draw_plane_normal_world, draw_plane_v_world);
+	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, draw_height, draw_grid_frame.plane_origin(), draw_grid_frame.u, draw_grid_frame.n, draw_grid_frame.v);
 	Vector3 corners[8];
 	for (int corner_i = 0; corner_i < 8; corner_i++) {
 		const Vector3 local_corner(
@@ -2138,6 +2224,32 @@ void CSGSurfaceSession::draw_overlay(Node3DEditorViewport *p_viewport) {
 	}
 }
 
+bool CSGSurfaceSession::get_working_grid_frame(EditorGridFrame3D &r_frame) const {
+	if (!entered || tool_mode == ToolMode::OPERAND) {
+		return false;
+	}
+	if (draw_phase != DrawPhase::IDLE && has_draw_grid_frame && draw_grid_frame.is_valid()) {
+		r_frame = draw_grid_frame;
+		if (draw_phase == DrawPhase::HEIGHT) {
+			r_frame.plane_coordinate += draw_height;
+		}
+		return r_frame.is_valid();
+	}
+	if (tool_mode != ToolMode::SURFACE) {
+		return false;
+	}
+	if ((gesture_state == GestureState::PRESSED || gesture_state == GestureState::DRAGGING) && has_locked_grid_frame && locked_grid_frame.is_valid()) {
+		r_frame = locked_grid_frame;
+		r_frame.plane_coordinate = target_plane_coordinate;
+		return r_frame.is_valid();
+	}
+	if (has_hover_grid_frame && hover_grid_frame.is_valid()) {
+		r_frame = hover_grid_frame;
+		return true;
+	}
+	return false;
+}
+
 Control *CSGSurfaceSession::build_tool_rail() {
 	PanelContainer *rail_panel = memnew(PanelContainer);
 	rail_panel->set_name("CSGSurfaceToolRailPanel");
@@ -2211,6 +2323,20 @@ Control *CSGSurfaceSession::build_contextual_panel() {
 	panel->set_theme_type_variation(SNAME("ViewportPanel"));
 	VBoxContainer *contents = memnew(VBoxContainer);
 	panel->add_child(contents);
+	HBoxContainer *grid_space_row = memnew(HBoxContainer);
+	contents->add_child(grid_space_row);
+	Label *grid_space_label = memnew(Label);
+	grid_space_label->set_text(TTR("Grid Space"));
+	grid_space_row->add_child(grid_space_label);
+	OptionButton *grid_space_option = memnew(OptionButton);
+	grid_space_option->set_name("CSGGridSpace");
+	grid_space_option->add_item(TTR("Local"), (int)GridSpace::LOCAL);
+	grid_space_option->add_item(TTR("CSG Root"), (int)GridSpace::CSG_ROOT);
+	grid_space_option->add_item(TTR("World"), (int)GridSpace::WORLD);
+	grid_space_option->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	grid_space_option->connect(SceneStringName(item_selected), callable_mp(this, &CSGSurfaceSession::_grid_space_selected));
+	grid_space_option_id = grid_space_option->get_instance_id();
+	grid_space_row->add_child(grid_space_option);
 
 	VBoxContainer *surface_contents = memnew(VBoxContainer);
 	surface_context_id = surface_contents->get_instance_id();

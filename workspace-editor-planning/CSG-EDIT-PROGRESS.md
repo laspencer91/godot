@@ -37,6 +37,16 @@ Orchestration state for the phased implementation of `CSG-EDIT-PLAN.md`. Updated
 | 7 | Draw tool | DONE — committed (simplify: all 6 concerns PASS, zero edits needed; orchestrator applied §23 cut-mode persistence across commit) |
 | 8 | Long tail | DONE — committed (simplify: all 5 concerns PASS, zero edits; dual-hook world-UV fallback proven required). FEATURE COMPLETE |
 
+### 2026-07-31 first-class grid integration
+
+- Added a shared `Grid Space` selector with Local, CSG Root, and World choices. The choice is session-local and cannot change during a Surface or Draw transaction.
+- Semantic face hits now produce one orthonormal `EditorGridFrame3D`; nonuniform scale, shear, and mirror are removed from the displayed basis while the actual semantic outward normal and absolute plane coordinate are retained.
+- Surface push/pull, symmetric edits, extrusion, and numeric entry lock that frame at press and snap the absolute N coordinate with `EditorSnapModifierEffect::NONE`. The snapped world-meter delta is converted back through the authored box-axis scale before existing box-local mutation math runs.
+- Draw rectangle U/V and height N are absolute coordinates in the same locked frame. The preview and committed box consume the identical frame; a no-hit draw starts on canonical world XZ.
+- `get_working_grid_frame()` supplies the moving ghost plane during Surface/Draw work and the hover plane in Surface mode. Paint, Operand, cancellation, exit, retarget, root loss, and successful commits fall back to the canonical editor grid.
+- Added focused coverage for the three-space selector, inactive-session fallback, distinct Local/World absolute lattices under nonuniform scale, and Draw geometry from absolute frame coordinates.
+- Verification: `*CSGEditDomain*` passed 16 cases / 267 assertions; grid + generic edit-domain + per-view state passed 34 / 420; `*CSG*` passed 53 / 1,462. The test-enabled dev editor rebuilt and linked successfully.
+
 ## LIVE STATE (update before any compaction; read first on resume)
 
 As of 2026-07-22 ~19:30Z:

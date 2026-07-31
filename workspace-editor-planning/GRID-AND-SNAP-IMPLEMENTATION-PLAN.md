@@ -1,8 +1,8 @@
 # First-Class 3D Grid and Snap Tooling - Revised Implementation Plan
 
-Status: revised for implementation after the original 2026-07-23 review and a current-source/Phase-0 audit on 2026-07-31.
+Status: implemented on `fork-master` in dependency order on 2026-07-31; focused and full CSG regression suites are green. The production editor object graph compiles, and a test-enabled dev editor has been rebuilt and linked.
 
-This document covers the 3D editor grid, translate-snap presentation, per-viewport isolation, generic edit-domain work grids, and CSG integration. It does not implement the feature.
+This document covers the 3D editor grid, translate-snap presentation, per-viewport isolation, generic edit-domain work grids, and CSG integration. It is retained as the implementation and acceptance record for the landed feature.
 
 Implementation note: `origin/archive/document-grid-phase0-1a04382f05` contains the original Phase 0 math and tests. It is not merged into current `master` and is superseded where this revision changes LOD bounds, orthographic projected-density calculation, rebuild-key stability, and invalid-setting behavior. Reuse it as a starting point only; do not cherry-pick it as an accepted implementation without those corrections.
 
@@ -348,14 +348,12 @@ Fix preview-camera state while touching this path: `Node3DEditorViewport::get_st
 Forward-declare `EditorGridFrame3D` in `editor/gui/editor_edit_domain.h` and add one optional query:
 
 ```cpp
-virtual bool get_working_grid_frame(
-        Node3DEditorViewport *p_viewport,
-        EditorGridFrame3D &r_frame) const {
+virtual bool get_working_grid_frame(EditorGridFrame3D &r_frame) const {
     return false;
 }
 ```
 
-`Node3DEditorView::update_grid(Node3DEditorViewport *p_viewport)` asks the active session. False means canonical world grid. The query is const, side-effect free, and may vary by viewport. There is no capability dictionary, registration metadata, or CSG type check.
+`Node3DEditorView::update_grid(Node3DEditorViewport *p_viewport)` asks its per-view active session. False means canonical world grid. The query is const and side-effect free. A viewport argument is unnecessary because each `Node3DEditorView` owns an independent domain host/session; the renderer target remains the explicit argument to `update_grid()`. There is no capability dictionary, registration metadata, or CSG type check.
 
 Extend the existing dummy session in `tests/editor/test_editor_edit_domain.cpp` to return a rotated frame. Test true, false/fallback, two independent hosts, and session destruction. This is the second client that keeps the seam generic.
 

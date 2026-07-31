@@ -35,6 +35,7 @@
 #include "core/math/triangle_mesh.h"
 #include "core/object/undo_redo.h"
 #include "editor/gui/editor_edit_domain.h"
+#include "editor/scene/3d/editor_grid_3d.h"
 
 class EditorUndoRedoManager;
 
@@ -81,6 +82,11 @@ public:
 		PAINT,
 		OPERAND,
 	};
+	enum class GridSpace {
+		LOCAL,
+		CSG_ROOT,
+		WORLD,
+	};
 
 private:
 	enum class GestureState {
@@ -89,11 +95,6 @@ private:
 		PRESSED,
 		DRAGGING,
 		COMMIT,
-	};
-	enum class SnapSpace {
-		LOCAL,
-		ROOT,
-		WORLD,
 	};
 	enum class DrawPhase {
 		IDLE,
@@ -107,12 +108,16 @@ private:
 	ObjectID edited_scene_root_id;
 	bool entered = false;
 	ToolMode tool_mode = ToolMode::SURFACE;
-	SnapSpace snap_space = SnapSpace::LOCAL;
+	GridSpace grid_space = GridSpace::LOCAL;
 	Ref<TriangleMesh> pick_mesh;
 	Vector<Vector3> pick_faces;
 	uint64_t pick_mesh_generation = UINT64_MAX;
 	CSGSurfaceHit hover_hit;
 	bool has_hover = false;
+	Vector3 hover_point_world;
+	Vector3 hover_normal_world;
+	EditorGridFrame3D hover_grid_frame;
+	bool has_hover_grid_frame = false;
 	CSGSurfaceHit selected_hit;
 	bool has_selection = false;
 	GestureState gesture_state = GestureState::IDLE;
@@ -129,9 +134,11 @@ private:
 	real_t target_plane_coordinate = 0.0;
 	Vector3 drag_line_origin_world;
 	Vector3 drag_line_direction_world;
-	real_t drag_axis_world_scale = 1.0;
+	real_t drag_axis_plane_scale = 1.0;
 	real_t drag_start_parameter = 0.0;
 	real_t drag_displacement = 0.0;
+	EditorGridFrame3D locked_grid_frame;
+	bool has_locked_grid_frame = false;
 	CSGPushPullResult ghost_result;
 	CSGExtrusionResult extrude_ghost; // CSG-5: View-only child prism during drag.
 	bool has_ghost = false;
@@ -144,10 +151,8 @@ private:
 	DrawPhase draw_phase = DrawPhase::IDLE;
 	bool draw_cut_mode = false;
 	bool draw_ctrl_pressed = false;
-	Vector3 draw_plane_origin_world;
-	Vector3 draw_plane_normal_world;
-	Vector3 draw_plane_u_world;
-	Vector3 draw_plane_v_world;
+	EditorGridFrame3D draw_grid_frame;
+	bool has_draw_grid_frame = false;
 	ObjectID draw_parent_operand_id;
 	Vector2 draw_rect_min;
 	Vector2 draw_rect_max;
@@ -181,6 +186,7 @@ private:
 	ObjectID paint_texture_lock_id;
 	ObjectID paint_selection_label_id;
 	ObjectID paint_eyedropper_button_id;
+	ObjectID grid_space_option_id;
 
 	void _resolve_active_root(const EditorEditDomainContext &p_context);
 	void _capture_edited_scene_root(const EditorEditDomainContext &p_context);
@@ -201,6 +207,9 @@ private:
 	void _draw_ghost(Node3DEditorViewport *p_viewport) const;
 	void _draw_draw_ghost(Node3DEditorViewport *p_viewport) const;
 	void _reset_draw_state(bool p_update = true);
+	bool _build_grid_frame(const Vector3 &p_point_world, const Vector3 &p_normal_world, CSGPrimitive3D *p_source, uint32_t p_semantic_surface, EditorGridFrame3D &r_frame) const;
+	void _refresh_hover_grid_frame();
+	void _grid_space_selected(int p_index);
 	bool _is_draw_cut_effective() const;
 	real_t _active_translate_snap_step() const; // CSG-8: Shared viewport translate-snap lookup.
 	bool _resolve_draw_plane(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
@@ -212,7 +221,7 @@ private:
 	real_t _get_draw_min_extent() const;
 	bool _begin_gesture(Node3DEditorViewport *p_viewport, const Ref<InputEventMouseButton> &p_event);
 	void _update_drag(Node3DEditorViewport *p_viewport, const Vector2 &p_position);
-	void _apply_displacement(); // CSG-4: Shared post-clamp push/pull recompute.
+	void _apply_displacement(real_t p_local_outward_displacement); // CSG-4: Shared post-clamp push/pull recompute.
 	void _cancel_gesture();
 	void _finish_without_commit();
 	void _commit_gesture();
@@ -253,12 +262,15 @@ public:
 	virtual bool handle_escape() override;
 	virtual bool handle_tool_toggle() override;
 	virtual void draw_overlay(Node3DEditorViewport *p_viewport) override;
+	virtual bool get_working_grid_frame(EditorGridFrame3D &r_frame) const override;
 	virtual Control *build_tool_rail() override;
 	virtual Control *build_contextual_panel() override;
 
 	ObjectID get_active_root_id() const { return active_root_id; }
 	ToolMode get_tool_mode() const { return tool_mode; }
 	bool get_draw_cut_mode() const { return draw_cut_mode; }
+	GridSpace get_grid_space() const { return grid_space; }
+	void set_grid_space(GridSpace p_space);
 	const CSGSurfaceSetting &get_paint_well() const { return paint_well; }
 	bool lift_paint_setting(const CSGSurfaceKey &p_surface) { return _lift_paint_setting(p_surface); }
 	void select_paint_surface(const CSGSurfaceKey &p_surface, bool p_add) { _select_paint_surface(p_surface, p_add); }

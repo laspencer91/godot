@@ -38,6 +38,7 @@ TEST_FORCE_LINK(test_csg_edit_domain)
 #include "editor/gui/editor_edit_domain.h"
 #include "scene/3d/node_3d.h"
 #include "scene/gui/button.h"
+#include "scene/gui/option_button.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
 
@@ -105,6 +106,20 @@ TEST_CASE("[Editor][CSGEditDomain] Tool mode keeps Draw and Paint out of the Tab
 	Control *context_panel = session.build_contextual_panel();
 	REQUIRE(rail_root != nullptr);
 	REQUIRE(context_panel != nullptr);
+	OptionButton *grid_space = Object::cast_to<OptionButton>(context_panel->find_child("CSGGridSpace", true, false));
+	REQUIRE(grid_space != nullptr);
+	CHECK_EQ(grid_space->get_item_count(), 3);
+	CHECK_EQ(grid_space->get_item_text(0), String("Local"));
+	CHECK_EQ(grid_space->get_item_text(1), String("CSG Root"));
+	CHECK_EQ(grid_space->get_item_text(2), String("World"));
+	CHECK(session.get_grid_space() == CSGSurfaceSession::GridSpace::LOCAL);
+	session.set_grid_space(CSGSurfaceSession::GridSpace::CSG_ROOT);
+	CHECK(session.get_grid_space() == CSGSurfaceSession::GridSpace::CSG_ROOT);
+	CHECK_EQ(grid_space->get_selected(), 1);
+	session.set_grid_space(CSGSurfaceSession::GridSpace::WORLD);
+	CHECK_EQ(grid_space->get_selected(), 2);
+	EditorGridFrame3D inactive_frame;
+	CHECK_FALSE(session.get_working_grid_frame(inactive_frame));
 	Control *rail = Object::cast_to<Control>(rail_root->find_child("CSGSurfaceToolRail", true, false));
 	REQUIRE(rail != nullptr);
 	REQUIRE_EQ(rail->get_child_count(), 4);
@@ -357,12 +372,53 @@ TEST_CASE("[Editor][CSGEditDomain] Draw box construction follows the workplane f
 	CHECK(tilted_box.size.is_equal_approx(Vector3(4, 2.5, 6)));
 	CHECK(tilted_box.world_transform.basis.get_column(0).is_equal_approx(u));
 	CHECK(tilted_box.world_transform.basis.get_column(1).is_equal_approx(normal));
-	CHECK(tilted_box.world_transform.basis.get_column(2).is_equal_approx(v));
+	CHECK(tilted_box.world_transform.basis.get_column(2).is_equal_approx(-v));
 	CHECK(tilted_box.world_transform.origin.is_equal_approx(plane_origin + u * 3.0 + v * 5.0 + normal * 1.25));
 
 	const CSGDrawBoxResult clamped_box = csg_draw_box_from_rect(ground_rect, 0.0, Vector3(), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1));
 	CHECK(clamped_box.size.y == doctest::Approx(0.001));
 	CHECK(clamped_box.world_transform.origin.y == doctest::Approx(0.0005));
+}
+
+TEST_CASE("[Editor][CSGEditDomain] Grid spaces snap one face against distinct absolute lattices") {
+	const Transform3D operand_space(Basis().scaled(Vector3(-2, 3, 4)), Vector3(10, 5, -2));
+	const Vector3 face_point = operand_space.xform(Vector3(1, 0, 0));
+	const Vector3 face_normal = operand_space.basis.inverse().transposed().xform(Vector3(1, 0, 0)).normalized();
+	EditorGridFrame3D local_frame;
+	EditorGridFrame3D world_frame;
+	REQUIRE(EditorGridFrame3D::from_plane_in_space(face_point, face_normal, operand_space, operand_space.basis.get_column(1), local_frame));
+	REQUIRE(EditorGridFrame3D::from_plane_in_space(face_point, face_normal, Transform3D(), Vector3(0, 1, 0), world_frame));
+	CHECK(local_frame.plane_coordinate == doctest::Approx(2.0));
+	CHECK(world_frame.plane_coordinate == doctest::Approx(-8.0));
+
+	const real_t step = 1.5;
+	const real_t local_target = Math::snapped(local_frame.plane_coordinate, step);
+	const real_t world_target = Math::snapped(world_frame.plane_coordinate, step);
+	CHECK(local_target == doctest::Approx(1.5));
+	CHECK(world_target == doctest::Approx(-7.5));
+	// The Surface tool converts the absolute world-meter plane delta back through
+	// the dragged authored axis scale before applying box-local push/pull.
+	CHECK((local_target - local_frame.plane_coordinate) / 2.0 == doctest::Approx(-0.25));
+	CHECK((world_target - world_frame.plane_coordinate) / 2.0 == doctest::Approx(0.25));
+}
+
+TEST_CASE("[Editor][CSGEditDomain] Draw footprint uses absolute frame coordinates") {
+	const Transform3D root_space(Basis(Vector3(0, 1, 0), Math::deg_to_rad(30.0)), Vector3(7, 2, -5));
+	const Vector3 normal = root_space.basis.xform(Vector3(0, 1, 0)).normalized();
+	const Vector3 face_point = root_space.origin + normal * 2.25;
+	EditorGridFrame3D frame;
+	REQUIRE(EditorGridFrame3D::from_plane_in_space(face_point, normal, root_space, root_space.basis.get_column(0), frame));
+	const Vector2 first(Math::snapped(1.2, 0.5), Math::snapped(-2.2, 0.5));
+	const Vector2 second(Math::snapped(4.1, 0.5), Math::snapped(0.8, 0.5));
+	const CSGDrawRect rect = csg_draw_rectangle_bounds(first, second, 0.001);
+	const CSGDrawBoxResult box = csg_draw_box_from_rect(rect, 3.0, frame.plane_origin(), frame.u, frame.n, frame.v);
+	const Vector2 center = (rect.min + rect.max) * 0.5;
+	const Vector3 expected_center = frame.to_world(Vector3(center.x, center.y, frame.plane_coordinate + 1.5));
+	CHECK(box.world_transform.origin.is_equal_approx(expected_center));
+	CHECK(box.world_transform.basis.get_column(0).normalized().is_equal_approx(frame.u));
+	CHECK(box.world_transform.basis.get_column(1).normalized().is_equal_approx(frame.n));
+	CHECK(box.world_transform.basis.get_column(2).normalized().is_equal_approx(-frame.v));
+	CHECK(box.world_transform.basis.determinant() == doctest::Approx(1.0));
 }
 
 // CSG-7: Pin the under-face structural action, operation, local transform, and editability gate.
