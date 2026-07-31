@@ -471,7 +471,7 @@ void Node3DEditor::set_state(const Dictionary &p_state) {
 	}
 
 	if (d.has("translate_snap")) {
-		snap_translate_value = d["translate_snap"];
+		set_translate_snap(d["translate_snap"]);
 	}
 
 	if (d.has("rotate_snap")) {
@@ -664,11 +664,10 @@ void Node3DEditor::edit(Node3D *p_spatial) {
 }
 
 void Node3DEditor::_snap_changed() {
-	snap_translate_value = snap_translate->get_value();
+	set_translate_snap(snap_translate->get_value());
 	snap_rotate_value = snap_rotate->get_value();
 	snap_scale_value = snap_scale->get_value();
 
-	EditorSettings::get_singleton()->set_project_metadata("3d_editor", "snap_translate_value", snap_translate_value);
 	EditorSettings::get_singleton()->set_project_metadata("3d_editor", "snap_rotate_value", snap_rotate_value);
 	EditorSettings::get_singleton()->set_project_metadata("3d_editor", "snap_scale_value", snap_scale_value);
 }
@@ -2365,7 +2364,7 @@ void Node3DEditor::shortcut_input(const Ref<InputEvent> &p_event) {
 		return;
 	}
 
-	snap_key_enabled = Input::get_singleton()->is_key_pressed(Key::CMD_OR_CTRL);
+	update_snap_modifier_state(p_event);
 }
 
 void Node3DEditor::_sun_environ_settings_pressed() {
@@ -2872,6 +2871,10 @@ void Node3DEditorView::_notification(int p_what) {
 }
 
 void Node3DEditorView::input(const Ref<InputEvent> &p_event) {
+	if (is_visible_in_tree()) {
+		Node3DEditor::get_singleton()->update_snap_modifier_state(p_event);
+	}
+
 	if (!document || _is_active_document() || !is_visible_in_tree()) {
 		return;
 	}
@@ -3220,7 +3223,7 @@ void Node3DEditor::clear() {
 	settings_znear->set_value(EDITOR_GET("editors/3d/default_z_near"));
 	settings_zfar->set_value(EDITOR_GET("editors/3d/default_z_far"));
 
-	snap_translate_value = EditorSettings::get_singleton()->get_project_metadata("3d_editor", "snap_translate_value", 1);
+	set_translate_snap(EditorSettings::get_singleton()->get_project_metadata("3d_editor", "snap_translate_value", 1));
 	snap_rotate_value = EditorSettings::get_singleton()->get_project_metadata("3d_editor", "snap_rotate_value", 15);
 	snap_scale_value = EditorSettings::get_singleton()->get_project_metadata("3d_editor", "snap_scale_value", 10);
 	_snap_update();
@@ -4383,8 +4386,8 @@ Size2i Node3DEditor::get_camera_viewport_size(Camera3D *p_camera) {
 }
 
 Vector3 Node3DEditor::snap_point(Vector3 p_target, Vector3 p_start) const {
-	if (is_snap_enabled()) {
-		real_t snap = get_translate_snap();
+	if (is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+		real_t snap = get_translate_snap(EditorSnapModifierEffect::NATIVE);
 		p_target.snapf(snap);
 	}
 	return p_target;
@@ -4422,31 +4425,46 @@ bool Node3DEditor::is_preserve_children_transform_enabled() const {
 }
 
 bool Node3DEditor::is_vertex_snap_use_collision() const {
-	return vertex_snap_use_collision != Input::get_singleton()->is_key_pressed(Key::SHIFT);
+	return vertex_snap_use_collision != snap_shift_pressed;
 }
 
-real_t Node3DEditor::get_translate_snap() const {
-	real_t snap_value = snap_translate_value;
-	if (Input::get_singleton()->is_key_pressed(Key::SHIFT)) {
-		snap_value /= 10.0f;
+void Node3DEditor::update_snap_modifier_state(const Ref<InputEvent> &p_event) {
+	Ref<InputEventWithModifiers> modifiers = p_event;
+	if (modifiers.is_null()) {
+		return;
 	}
-	return snap_value;
+	snap_ctrl_pressed = modifiers->is_command_or_control_pressed();
+	snap_shift_pressed = modifiers->is_shift_pressed();
 }
 
-real_t Node3DEditor::get_rotate_snap() const {
-	real_t snap_value = snap_rotate_value;
-	if (Input::get_singleton()->is_key_pressed(Key::SHIFT)) {
-		snap_value /= 3.0f;
-	}
-	return snap_value;
+void Node3DEditor::clear_snap_modifier_state() {
+	snap_ctrl_pressed = false;
+	snap_shift_pressed = false;
 }
 
-real_t Node3DEditor::get_scale_snap() const {
-	real_t snap_value = snap_scale_value;
-	if (Input::get_singleton()->is_key_pressed(Key::SHIFT)) {
-		snap_value /= 2.0f;
+bool Node3DEditor::is_snap_enabled(EditorSnapModifierEffect p_effects) const {
+	return editor_snap_is_enabled(snap_enabled, snap_ctrl_pressed, p_effects);
+}
+
+real_t Node3DEditor::get_translate_snap(EditorSnapModifierEffect p_effects) const {
+	return editor_snap_apply_fine_step(get_configured_translate_snap(), snap_shift_pressed, 10.0, p_effects);
+}
+
+real_t Node3DEditor::get_rotate_snap(EditorSnapModifierEffect p_effects) const {
+	return editor_snap_apply_fine_step(snap_rotate_value, snap_shift_pressed, 3.0, p_effects);
+}
+
+real_t Node3DEditor::get_scale_snap(EditorSnapModifierEffect p_effects) const {
+	return editor_snap_apply_fine_step(snap_scale_value, snap_shift_pressed, 2.0, p_effects);
+}
+
+void Node3DEditor::set_translate_snap(real_t p_value) {
+	snap_translate_value = editor_grid_normalize_translate_snap(p_value);
+	EditorSettings::get_singleton()->set_project_metadata("3d_editor", "snap_translate_value", snap_translate_value);
+	if (snap_translate) {
+		snap_translate->set_value(snap_translate_value);
 	}
-	return snap_value;
+	update_grid();
 }
 
 struct _GizmoPluginPriorityComparator {

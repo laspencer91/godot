@@ -101,8 +101,8 @@ void Gizmo3DHelper::box_set_handle(const Vector3 p_segment[2], int p_id, Vector3
 	}
 
 	// Snap to grid.
-	if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-		r_box_size[axis] = Math::snapped(r_box_size[axis], Node3DEditor::get_singleton()->get_translate_snap());
+	if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+		r_box_size[axis] = Math::snapped(r_box_size[axis], Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE));
 	}
 	r_box_size[axis] = MAX(r_box_size[axis], 0.001);
 
@@ -182,8 +182,8 @@ void Gizmo3DHelper::_cylinder_or_capsule_or_cone_frustum_set_handle(const Vector
 	float d = axis_vector.dot(ra);
 
 	// Snap to grid.
-	if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-		d = Math::snapped(d, Node3DEditor::get_singleton()->get_translate_snap());
+	if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+		d = Math::snapped(d, Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE));
 	}
 
 	if (p_id < 2) {

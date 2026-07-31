@@ -143,8 +143,8 @@ void Path3DGizmo::set_handle(int p_id, bool p_secondary, Camera3D *p_camera, con
 			// Will continue and do the plane intersect_ray if doesn't hit anything.
 		}
 		if (p.intersects_ray(ray_from, ray_dir, &inters)) {
-			if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-				float snap = Node3DEditor::get_singleton()->get_translate_snap();
+			if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+				float snap = Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE);
 				inters.snapf(snap);
 			}
 
@@ -172,8 +172,8 @@ void Path3DGizmo::set_handle(int p_id, bool p_secondary, Camera3D *p_camera, con
 				}
 
 				Vector3 local = gi.xform(inters) - base;
-				if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-					float snap = Node3DEditor::get_singleton()->get_translate_snap();
+				if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+					float snap = Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE);
 					local.snapf(snap);
 				}
 
@@ -229,8 +229,8 @@ void Path3DGizmo::set_handle(int p_id, bool p_secondary, Camera3D *p_camera, con
 				Vector3 direction = gi.xform(intersection) - position;
 				real_t tilt_angle = up.signed_angle_to(direction, tangent);
 
-				if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-					real_t snap_degrees = Node3DEditor::get_singleton()->get_rotate_snap();
+				if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+					real_t snap_degrees = Node3DEditor::get_singleton()->get_rotate_snap(EditorSnapModifierEffect::NATIVE);
 					tilt_angle = Math::deg_to_rad(Math::snapped(Math::rad_to_deg(tilt_angle), snap_degrees));
 				}
 

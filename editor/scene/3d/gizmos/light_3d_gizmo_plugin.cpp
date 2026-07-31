@@ -117,8 +117,8 @@ void Light3DGizmoPlugin::set_handle(const EditorNode3DGizmo *p_gizmo, int p_id, 
 			Geometry3D::get_closest_points_between_segments(Vector3(), Vector3(0, 0, -4096), s[0], s[1], ra, rb);
 
 			float d = -ra.z;
-			if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-				d = Math::snapped(d, Node3DEditor::get_singleton()->get_translate_snap());
+			if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+				d = Math::snapped(d, Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE));
 			}
 
 			if (d <= 0) { // Equal is here for negative zero.
@@ -132,8 +132,8 @@ void Light3DGizmoPlugin::set_handle(const EditorNode3DGizmo *p_gizmo, int p_id, 
 			Vector3 inters;
 			if (cp.intersects_ray(ray_from, ray_dir, &inters)) {
 				float r = inters.distance_to(gt.origin);
-				if (Node3DEditor::get_singleton()->is_snap_enabled()) {
-					r = Math::snapped(r, Node3DEditor::get_singleton()->get_translate_snap());
+				if (Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+					r = Math::snapped(r, Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE));
 				}
 
 				light->set_param(Light3D::PARAM_RANGE, r);

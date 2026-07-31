@@ -69,6 +69,17 @@
 // user-facing tuning knob; this constant only sets the neutral point.
 #define EDITOR_GRID_DEFAULT_REFERENCE_PIXELS ((real_t)64.0)
 
+enum class EditorSnapModifierEffect : uint8_t {
+	NONE = 0,
+	CTRL_INVERT_ENABLED = 1 << 0,
+	SHIFT_FINE_STEP = 1 << 1,
+	NATIVE = (1 << 0) | (1 << 1),
+};
+
+bool editor_snap_modifier_effect_enabled(EditorSnapModifierEffect p_effects, EditorSnapModifierEffect p_effect);
+bool editor_snap_is_enabled(bool p_configured_enabled, bool p_ctrl_pressed, EditorSnapModifierEffect p_effects);
+real_t editor_snap_apply_fine_step(real_t p_configured_step, bool p_shift_pressed, real_t p_divisor, EditorSnapModifierEffect p_effects);
+
 struct Editor3DViewportLayerLease {
 	uint64_t scenario_key = 0;
 	int layer = -1;

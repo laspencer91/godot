@@ -172,6 +172,8 @@ private:
 	real_t snap_translate_value = 0;
 	real_t snap_rotate_value = 0;
 	real_t snap_scale_value = 0;
+	bool snap_ctrl_pressed = false;
+	bool snap_shift_pressed = false;
 
 	Ref<ArrayMesh> active_selection_box_xray;
 	Ref<ArrayMesh> active_selection_box;
@@ -256,7 +258,6 @@ private:
 	ConfirmationDialog *settings_dialog = nullptr;
 
 	bool snap_enabled = false;
-	bool snap_key_enabled = false;
 	bool vertex_snap_origin_mode = false;
 	bool vertex_snap_use_collision = false;
 	EditorSpinSlider *snap_translate = nullptr;
@@ -486,13 +487,22 @@ public:
 	bool are_local_coords_enabled() const;
 	void set_local_coords_enabled(bool on) const;
 	bool is_preserve_children_transform_enabled() const;
-	bool is_snap_enabled() const { return snap_enabled ^ snap_key_enabled; }
+	void update_snap_modifier_state(const Ref<InputEvent> &p_event);
+	void clear_snap_modifier_state();
+	bool is_raw_ctrl_pressed() const { return snap_ctrl_pressed; }
+	bool is_raw_shift_pressed() const { return snap_shift_pressed; }
+	bool is_snap_enabled(EditorSnapModifierEffect p_effects) const;
+	bool is_snap_enabled() const { return is_snap_enabled(EditorSnapModifierEffect::NATIVE); }
 	bool is_vertex_snap_origin_mode() const { return vertex_snap_origin_mode; }
 	bool is_vertex_snap_use_collision() const;
-	real_t get_translate_snap() const;
+	real_t get_translate_snap(EditorSnapModifierEffect p_effects) const;
+	real_t get_translate_snap() const { return get_translate_snap(EditorSnapModifierEffect::NATIVE); }
 	real_t get_configured_translate_snap() const { return editor_grid_normalize_translate_snap(snap_translate_value); }
-	real_t get_rotate_snap() const;
-	real_t get_scale_snap() const;
+	real_t get_rotate_snap(EditorSnapModifierEffect p_effects) const;
+	real_t get_rotate_snap() const { return get_rotate_snap(EditorSnapModifierEffect::NATIVE); }
+	real_t get_scale_snap(EditorSnapModifierEffect p_effects) const;
+	real_t get_scale_snap() const { return get_scale_snap(EditorSnapModifierEffect::NATIVE); }
+	void set_translate_snap(real_t p_value);
 
 	bool is_trackball_enabled() const { return trackball_enabled; }
 

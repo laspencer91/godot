@@ -596,6 +596,17 @@ TEST_CASE("[EditorGrid3D] Translate-snap normalization keeps the base step posit
 	CHECK(editor_grid_normalize_translate_snap(2.5) == doctest::Approx(2.5));
 }
 
+TEST_CASE("[EditorGrid3D] Snap modifier effects distinguish native and domain policy") {
+	CHECK(editor_snap_is_enabled(false, true, EditorSnapModifierEffect::NATIVE));
+	CHECK_FALSE(editor_snap_is_enabled(true, true, EditorSnapModifierEffect::NATIVE));
+	CHECK_FALSE(editor_snap_is_enabled(false, true, EditorSnapModifierEffect::NONE));
+	CHECK(editor_snap_is_enabled(true, true, EditorSnapModifierEffect::NONE));
+
+	CHECK(editor_snap_apply_fine_step(1.0, true, 10.0, EditorSnapModifierEffect::NATIVE) == doctest::Approx(0.1));
+	CHECK(editor_snap_apply_fine_step(1.0, true, 10.0, EditorSnapModifierEffect::NONE) == doctest::Approx(1.0));
+	CHECK(editor_snap_apply_fine_step(1.0, false, 10.0, EditorSnapModifierEffect::NATIVE) == doctest::Approx(1.0));
+}
+
 TEST_CASE("[EditorGrid3D] Private viewport layers are unique per scenario and fail closed") {
 	Editor3DViewportLayerPool pool;
 	Editor3DViewportLayerLease leases[Editor3DViewportLayerPool::LAYER_COUNT];

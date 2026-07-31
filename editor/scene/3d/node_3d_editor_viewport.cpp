@@ -2114,7 +2114,7 @@ void Node3DEditorViewport::_transform_gizmo_apply(Node3D *p_node, const Transfor
 Transform3D Node3DEditorViewport::_compute_transform(TransformMode p_mode, const Transform3D &p_original, const Transform3D &p_original_local, Vector3 p_motion, double p_extra, bool p_local, bool p_orthogonal, bool p_view_axis) {
 	switch (p_mode) {
 		case TRANSFORM_SCALE: {
-			if (spatial_editor->is_snap_enabled()) {
+			if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
 				p_motion.snapf(p_extra);
 			}
 			Transform3D s;
@@ -2135,7 +2135,7 @@ Transform3D Node3DEditorViewport::_compute_transform(TransformMode p_mode, const
 			return s;
 		}
 		case TRANSFORM_TRANSLATE: {
-			if (spatial_editor->is_snap_enabled()) {
+			if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
 				p_motion.snapf(p_extra);
 			}
 
@@ -2664,6 +2664,7 @@ static bool _redirect_freelook_input(const Ref<InputEvent> &p_event, Node3DEdito
 // to capture and wrap mouse events outside the control.
 void Node3DEditorViewport::input(const Ref<InputEvent> &p_event) {
 	ERR_FAIL_COND(!_edit.instant);
+	spatial_editor->update_snap_modifier_state(p_event);
 	Ref<InputEventMouseMotion> m = p_event;
 
 	if (m.is_valid()) {
@@ -2673,6 +2674,7 @@ void Node3DEditorViewport::input(const Ref<InputEvent> &p_event) {
 }
 
 void Node3DEditorViewport::_sinput(const Ref<InputEvent> &p_event) {
+	spatial_editor->update_snap_modifier_state(p_event);
 	const Ref<InputEventKey> k = p_event;
 
 	if (k.is_valid() && k->is_pressed()) {
@@ -4533,6 +4535,7 @@ void Node3DEditorViewport::_notification(int p_what) {
 
 		case NOTIFICATION_APPLICATION_FOCUS_OUT:
 		case NOTIFICATION_WM_WINDOW_FOCUS_OUT: {
+			spatial_editor->clear_snap_modifier_state();
 			view_3d_controller->set_freelook_enabled(false);
 			view_3d_controller->cursor.region_select = false;
 			surface->queue_redraw();
@@ -7216,8 +7219,8 @@ void Node3DEditorViewport::update_transform(bool p_shift) {
 
 			motion /= click.distance_to(_edit.center);
 
-			if (spatial_editor->is_snap_enabled()) {
-				snap = spatial_editor->get_scale_snap() / 100;
+			if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+				snap = spatial_editor->get_scale_snap(EditorSnapModifierEffect::NATIVE) / 100;
 			}
 			Vector3 motion_snapped = motion;
 			motion_snapped.snapf(snap);
@@ -7284,8 +7287,8 @@ void Node3DEditorViewport::update_transform(bool p_shift) {
 				}
 			}
 
-			if (spatial_editor->is_snap_enabled()) {
-				snap = spatial_editor->get_translate_snap();
+			if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+				snap = spatial_editor->get_translate_snap(EditorSnapModifierEffect::NATIVE);
 			}
 			Vector3 motion_snapped = motion;
 			motion_snapped.snapf(snap);
@@ -7325,8 +7328,8 @@ void Node3DEditorViewport::update_transform(bool p_shift) {
 				if (rotation_angle > 0.0f) {
 					rotation_axis /= rotation_angle;
 
-					if (spatial_editor->is_snap_enabled()) {
-						double snap_step = spatial_editor->get_rotate_snap();
+					if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+						double snap_step = spatial_editor->get_rotate_snap(EditorSnapModifierEffect::NATIVE);
 						double angle_deg = Math::rad_to_deg(rotation_angle);
 						angle_deg = Math::snapped(angle_deg, snap_step);
 						rotation_angle = Math::deg_to_rad(angle_deg);
@@ -7400,8 +7403,8 @@ void Node3DEditorViewport::update_transform(bool p_shift) {
 			}
 			_edit.previous_rotation_vector = current_rotation_vector;
 
-			if (spatial_editor->is_snap_enabled()) {
-				snap = spatial_editor->get_rotate_snap();
+			if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+				snap = spatial_editor->get_rotate_snap(EditorSnapModifierEffect::NATIVE);
 				snap_step_decimals = Math::range_step_decimals(snap);
 			}
 
@@ -7411,12 +7414,12 @@ void Node3DEditorViewport::update_transform(bool p_shift) {
 				Vector3 delta = intersection - click;
 				float projection = delta.dot(projection_axis);
 				double orth_angle = (projection * (Math::PI / 2.0f)) / (gizmo_scale * GIZMO_CIRCLE_SIZE);
-				_edit.rotation_angle = spatial_editor->is_snap_enabled()
+				_edit.rotation_angle = spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)
 						? Math::deg_to_rad(Math::snapped(Math::rad_to_deg(orth_angle), snap))
 						: orth_angle;
 			} else {
 				_edit.show_rotation_line = true;
-				_edit.rotation_angle = spatial_editor->is_snap_enabled()
+				_edit.rotation_angle = spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)
 						? Math::deg_to_rad(Math::snapped(Math::rad_to_deg(_edit.accumulated_rotation_angle), snap))
 						: _edit.accumulated_rotation_angle;
 			}

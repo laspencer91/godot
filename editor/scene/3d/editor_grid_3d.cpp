@@ -307,6 +307,21 @@ real_t editor_grid_normalize_translate_snap(real_t p_step) {
 	return MAX(p_step, EDITOR_GRID_MIN_TRANSLATE_SNAP);
 }
 
+bool editor_snap_modifier_effect_enabled(EditorSnapModifierEffect p_effects, EditorSnapModifierEffect p_effect) {
+	return (uint8_t(p_effects) & uint8_t(p_effect)) != 0;
+}
+
+bool editor_snap_is_enabled(bool p_configured_enabled, bool p_ctrl_pressed, EditorSnapModifierEffect p_effects) {
+	return p_configured_enabled ^ (editor_snap_modifier_effect_enabled(p_effects, EditorSnapModifierEffect::CTRL_INVERT_ENABLED) && p_ctrl_pressed);
+}
+
+real_t editor_snap_apply_fine_step(real_t p_configured_step, bool p_shift_pressed, real_t p_divisor, EditorSnapModifierEffect p_effects) {
+	if (p_shift_pressed && p_divisor > 0.0 && editor_snap_modifier_effect_enabled(p_effects, EditorSnapModifierEffect::SHIFT_FINE_STEP)) {
+		return p_configured_step / p_divisor;
+	}
+	return p_configured_step;
+}
+
 EditorGridLodSettings EditorGridLodSettings::normalized() const {
 	EditorGridLodSettings s = *this;
 	s.base_translate_snap = editor_grid_normalize_translate_snap(base_translate_snap);

@@ -114,8 +114,8 @@ void OccluderInstance3DGizmoPlugin::set_handle(const EditorNode3DGizmo *p_gizmo,
 
 	Vector3 sg[2] = { gi.xform(ray_from), gi.xform(ray_from + ray_dir * 4096) };
 
-	bool snap_enabled = Node3DEditor::get_singleton()->is_snap_enabled();
-	float snap = Node3DEditor::get_singleton()->get_translate_snap();
+	bool snap_enabled = Node3DEditor::get_singleton()->is_snap_enabled(EditorSnapModifierEffect::NATIVE);
+	float snap = Node3DEditor::get_singleton()->get_translate_snap(EditorSnapModifierEffect::NATIVE);
 
 	if (Object::cast_to<SphereOccluder3D>(*o)) {
 		Ref<SphereOccluder3D> so = o;

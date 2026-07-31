@@ -878,15 +878,15 @@ void CSGSurfaceSession::_reset_draw_state(bool p_update) {
 }
 
 bool CSGSurfaceSession::_is_draw_cut_effective() const {
-	const Input *input = Input::get_singleton();
-	const bool ctrl_pressed = input ? input->is_key_pressed(Key::CTRL) : draw_ctrl_pressed;
+	const Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
+	const bool ctrl_pressed = node_3d_editor ? node_3d_editor->is_raw_ctrl_pressed() : draw_ctrl_pressed;
 	return draw_cut_mode ^ ctrl_pressed;
 }
 
 real_t CSGSurfaceSession::_active_translate_snap_step() const {
 	Node3DEditor *node_3d_editor = Node3DEditor::get_singleton();
-	if (node_3d_editor && node_3d_editor->is_snap_enabled()) {
-		return node_3d_editor->get_translate_snap();
+	if (node_3d_editor && node_3d_editor->is_snap_enabled(EditorSnapModifierEffect::NONE)) {
+		return node_3d_editor->get_translate_snap(EditorSnapModifierEffect::NONE);
 	}
 	return 0.0;
 }
