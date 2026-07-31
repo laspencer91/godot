@@ -266,10 +266,12 @@ void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 	// set_current() done while the host is being built and placed into a pane, and not the
 	// reselect that follows dropping a tab mid scene-close (suppress_activation).
 	if (is_inside_tree() && !suppress_activation) {
-		_activate_document(p_idx);
 		WorkspacePane *pane = _owning_pane();
 		EditorWorkspace *workspace = pane ? pane->get_workspace() : nullptr;
-		if (workspace && workspace->get_focused_pane() == pane) {
+		// Hosts used outside EditorWorkspace retain their legacy activation behavior. Inside a
+		// workspace, only the focused pane may change global editor context.
+		if (!workspace || workspace->get_focused_pane() == pane) {
+			_activate_document(p_idx);
 			// G2 M7.2b-fix: the "follow the focused pane" services (ScriptEditor / Shader current-surface,
 			// shared 2D/3D toolbar) must only re-point when THIS pane is the focused one. A programmatic
 			// tab change in a *background* pane (set_current() re-emitting tab_selected, the background reveal

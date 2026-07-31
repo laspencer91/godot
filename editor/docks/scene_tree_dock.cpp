@@ -86,6 +86,9 @@ void SceneTreeDock::_nodes_drag_begin() {
 }
 
 void SceneTreeDock::_quick_open(const String &p_file_path) {
+	if (bound_document && !document_context_active) {
+		return;
+	}
 	instantiate_scenes({ p_file_path }, scene_tree->get_selected());
 }
 
@@ -190,6 +193,9 @@ void SceneTreeDock::input(const Ref<InputEvent> &p_event) {
 
 void SceneTreeDock::shortcut_input(const Ref<InputEvent> &p_event) {
 	ERR_FAIL_COND(p_event.is_null());
+	if (bound_document && !document_context_active) {
+		return;
+	}
 
 	Control *focus_owner = get_viewport()->gui_get_focus_owner();
 	if (focus_owner && focus_owner->is_text_field()) {
@@ -403,7 +409,7 @@ void SceneTreeDock::_perform_instantiate_scenes(const Vector<String> &p_files, N
 	}
 
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->create_action_for_history(TTRN("Instantiate Scene", "Instantiate Scenes", instances.size()), editor_data->get_current_edited_scene_history_id());
+	undo_redo->create_action_for_history(TTRN("Instantiate Scene", "Instantiate Scenes", instances.size()), _doc_history_id());
 	undo_redo->add_do_method(editor_selection, "clear");
 
 	for (int i = 0; i < instances.size(); i++) {
@@ -476,7 +482,7 @@ void SceneTreeDock::_perform_create_audio_stream_players(const Vector<String> &p
 	}
 
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->create_action_for_history(TTRN("Create AudioStreamPlayer", "Create AudioStreamPlayers", nodes.size()), editor_data->get_current_edited_scene_history_id());
+	undo_redo->create_action_for_history(TTRN("Create AudioStreamPlayer", "Create AudioStreamPlayers", nodes.size()), _doc_history_id());
 	undo_redo->add_do_method(editor_selection, "clear");
 
 	for (int i = 0; i < nodes.size(); i++) {
@@ -648,6 +654,9 @@ bool SceneTreeDock::_track_inherit(const String &p_target_scene_path, Node *p_de
 }
 
 void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
+	if (bound_document && !document_context_active) {
+		return;
+	}
 	current_option = p_tool;
 
 	switch (p_tool) {
@@ -1718,8 +1727,12 @@ void SceneTreeDock::_perform_property_drop(Node *p_node, const String &p_propert
 }
 
 void SceneTreeDock::add_root_node(Node *p_node) {
+	if (bound_document) {
+		const int bound_document_index = editor_data->find_document_index(bound_document);
+		ERR_FAIL_COND_MSG(!document_context_active || bound_document_index < 0 || bound_document_index != editor_data->get_edited_scene(), "Cannot create a scene root from an inactive document.");
+	}
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->create_action_for_history(TTR("New Scene Root"), editor_data->get_current_edited_scene_history_id());
+	undo_redo->create_action_for_history(TTR("New Scene Root"), _doc_history_id());
 	undo_redo->add_do_method(EditorNode::get_singleton(), "set_edited_scene", p_node);
 	undo_redo->add_do_method(scene_tree, "update_tree");
 	undo_redo->add_do_reference(p_node);
@@ -3203,6 +3216,10 @@ void SceneTreeDock::_selection_changed() {
 }
 
 Node *SceneTreeDock::_do_create(Node *p_parent) {
+	if (bound_document && !document_context_active) {
+		return nullptr;
+	}
+
 	Variant c = create_dialog->instantiate_selected();
 	Node *child = Object::cast_to<Node>(c);
 	ERR_FAIL_NULL_V(child, nullptr);
@@ -3214,7 +3231,7 @@ Node *SceneTreeDock::_do_create(Node *p_parent) {
 	child->set_name(new_name);
 
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-	undo_redo->create_action_for_history(TTR("Create Node"), editor_data->get_current_edited_scene_history_id());
+	undo_redo->create_action_for_history(TTR("Create Node"), _doc_history_id());
 
 	if (edited_scene) {
 		undo_redo->add_do_method(p_parent, "add_child", child, true);
@@ -3227,6 +3244,12 @@ Node *SceneTreeDock::_do_create(Node *p_parent) {
 		undo_redo->add_undo_method(ed, "live_debug_remove_node", NodePath(String(edited_scene->get_path_to(p_parent)).path_join(new_name)));
 
 	} else {
+		// Root creation still uses EditorNode's global compatibility path. A bound dock may only
+		// enter it while its document is the active scene, otherwise that call would retarget the root.
+		if (bound_document) {
+			const int bound_document_index = editor_data->find_document_index(bound_document);
+			ERR_FAIL_COND_V_MSG(bound_document_index < 0 || bound_document_index != editor_data->get_edited_scene(), nullptr, "Cannot create a scene root from an inactive document.");
+		}
 		undo_redo->add_do_method(EditorNode::get_singleton(), "set_edited_scene", child);
 		undo_redo->add_do_method(scene_tree, "update_tree");
 		undo_redo->add_do_reference(child);
@@ -3264,6 +3287,12 @@ void SceneTreeDock::_post_do_create(Node *p_child) {
 }
 
 void SceneTreeDock::_create() {
+	// CreateDialog is modal and may outlive the focus that opened it. Never let confirmation migrate
+	// to another tab after this document surface has been deactivated.
+	if (bound_document && !document_context_active) {
+		return;
+	}
+
 	if (current_option == TOOL_NEW) {
 		Node *parent = nullptr;
 
@@ -3355,7 +3384,7 @@ void SceneTreeDock::_create() {
 		}
 
 		EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
-		undo_redo->create_action_for_history(TTR("Reparent to New Node"), editor_data->get_current_edited_scene_history_id());
+		undo_redo->create_action_for_history(TTR("Reparent to New Node"), _doc_history_id());
 
 		Node *last_created = _do_create(parent);
 
@@ -5147,16 +5176,63 @@ EditorSelectionHistory *SceneTreeDock::_doc_history() const {
 	return doc_history ? doc_history : EditorNode::get_singleton()->get_editor_selection_history();
 }
 
+int SceneTreeDock::_doc_history_id() const {
+	return bound_document ? bound_document->get_history_id() : editor_data->get_current_edited_scene_history_id();
+}
+
 InspectorDock *SceneTreeDock::_doc_inspector() const {
 	return bound_inspector ? bound_inspector : InspectorDock::get_singleton();
 }
 
 void SceneTreeDock::set_bound_document(EditorDocument *p_document) {
 	bound_document = p_document;
+	document_context_active = p_document == nullptr;
 	if (EditorSelection *doc_selection = p_document ? p_document->get_selection() : nullptr) {
 		// The bound dock reads/writes the document's own selection directly (the proxy is only for the
 		// active-document globals); scene root + history follow via the resolvers above.
 		editor_selection = doc_selection;
+	}
+}
+
+static void _scene_tree_dock_set_shortcut_context_recursive(Node *p_node, Node *p_context) {
+	if (Control *control = Object::cast_to<Control>(p_node)) {
+		control->set_shortcut_context(p_context);
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		_scene_tree_dock_set_shortcut_context_recursive(p_node->get_child(i), p_context);
+	}
+}
+
+void SceneTreeDock::set_document_shortcut_context(Node *p_context) {
+	_scene_tree_dock_set_shortcut_context_recursive(this, p_context);
+}
+
+void SceneTreeDock::set_context_active(bool p_active) {
+	document_context_active = p_active;
+	if (!p_active) {
+		// Do not leave deferred operations alive after their originating tab loses context.
+		if (create_dialog) {
+			create_dialog->hide();
+		}
+		if (rename_dialog) {
+			rename_dialog->hide();
+		}
+		if (script_create_dialog) {
+			script_create_dialog->hide();
+		}
+		if (shader_create_dialog) {
+			shader_create_dialog->hide();
+		}
+		if (delete_dialog) {
+			delete_dialog->hide();
+		}
+		if (reparent_dialog) {
+			reparent_dialog->hide();
+		}
+		if (new_scene_from_dialog) {
+			new_scene_from_dialog->hide();
+		}
+		current_option = -1;
 	}
 }
 

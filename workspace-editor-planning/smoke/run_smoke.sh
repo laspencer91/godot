@@ -240,6 +240,19 @@ cp "$SMOKE_DIR/context_routes_project.godot" "$WORK/project.godot"
 cp "$SMOKE_DIR/restore_workspace.cfg" "$WORK/.godot/editor/editor_layout.cfg"
 run_case "context_routes" -e
 
+# Scene Tree keyboard commands belong to the current scene tab in the focused pane. Exercise both
+# visible scenes, the folded-dock fallback, a background programmatic tab change, CodeEdit's Ctrl+A,
+# per-document undo, and the one-dialog-per-shortcut invariant.
+cp "$SMOKE_DIR/scene_tree_shortcut_routing_project.godot" "$WORK/project.godot"
+cp "$SMOKE_DIR/restore_workspace.cfg" "$WORK/.godot/editor/editor_layout.cfg"
+run_case "scene_tree_shortcut_routing" -e
+if grep -q 'SCENE_TREE_SHORTCUT_ROUTING_OK' "$WORK/scene_tree_shortcut_routing.log"; then
+	echo "  PASS  scene_tree_shortcut_routing_assertions (focused document + dialog + undo routing verified)"
+else
+	echo "  FAIL  scene_tree_shortcut_routing_assertions (routing sequence did not reach its success marker)"
+	fail=1
+fi
+
 # Pane SceneTree selection timing: a click must commit its node to the paired Inspector on release,
 # while the same press becoming a drag must preserve the previously inspected object as the property
 # drop target. This case does not depend on the preceding route case's restored split, and native-

@@ -149,11 +149,15 @@ class SceneTreeDock : public EditorDock {
 	// root / selection / history from that document instead of the active-scene globals. Null on the
 	// global dock => resolvers return exactly today's globals, so the change is inert until D7a.
 	EditorDocument *bound_document = nullptr;
+	// Per-document docks only accept commands while their DocumentView owns the workspace context.
+	// The global dock keeps legacy behavior unless it is explicitly retired by EditorDockManager.
+	bool document_context_active = true;
 	// The Inspector paired with this embedded SceneTree. Null on the global dock, which preserves the
 	// existing active/global Inspector routing.
 	InspectorDock *bound_inspector = nullptr;
 	Node *_doc_scene_root() const;
 	EditorSelectionHistory *_doc_history() const;
+	int _doc_history_id() const;
 	InspectorDock *_doc_inspector() const;
 	LocalVector<ObjectID> node_previous_selection;
 	bool update_script_button_queued = false;
@@ -394,6 +398,10 @@ public:
 	// G2 D4: bind this dock instance to a specific document (D7a). Repoints the selection at the
 	// document's own EditorSelection; scene root / history follow via the resolvers.
 	void set_bound_document(EditorDocument *p_document);
+	// Scope both this dock's direct shortcut_input() callback and every shortcut-bearing child
+	// Control to the owning DocumentView. Recursing also covers controls added in the future.
+	void set_document_shortcut_context(Node *p_context);
+	void set_context_active(bool p_active);
 	void set_bound_inspector(InspectorDock *p_inspector) { bound_inspector = p_inspector; }
 	// Immediately make the paired Inspector follow the current document selection. Used when
 	// unlocking an Inspector after selection changed behind the locked target.

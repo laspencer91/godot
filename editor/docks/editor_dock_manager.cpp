@@ -621,6 +621,9 @@ void EditorDockManager::load_docks_from_config(Ref<ConfigFile> p_layout, const S
 void EditorDockManager::mark_dock_retired(EditorDock *p_dock) {
 	ERR_FAIL_NULL(p_dock);
 	p_dock->retired = true;
+	// Retired singleton docks remain alive for legacy callers, but must not compete with their
+	// per-document replacements for direct keyboard shortcuts.
+	p_dock->set_process_shortcut_input(false);
 }
 
 void EditorDockManager::set_dock_slot_highlighted(int p_slot, bool p_highlighted) {

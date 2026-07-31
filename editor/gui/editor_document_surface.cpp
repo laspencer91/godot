@@ -635,6 +635,9 @@ public:
 
 	virtual void set_context_active(bool p_active) override {
 		context_active = p_active;
+		if (scene_tree_dock) {
+			scene_tree_dock->set_context_active(p_active);
+		}
 		if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {
 			canvas_view->set_context_active(p_active);
 		}
@@ -670,6 +673,7 @@ public:
 
 	virtual void pre_delete_cleanup() override {
 		if (scene_tree_dock) {
+			scene_tree_dock->set_context_active(false);
 			scene_tree_dock->set_bound_inspector(nullptr);
 		}
 		if (animation_editor) {
@@ -750,6 +754,7 @@ public:
 			scene_tree_dock = memnew(SceneTreeDock(p_context.document->get_root(), p_context.document->get_selection(), ed, false));
 			scene_tree_dock->set_bound_document(p_context.document);
 			scene_tree_dock->set_edited_scene(p_context.document->get_root());
+			scene_tree_dock->set_document_shortcut_context(host_view);
 			_add_accordion_section(dock_column, scene_tree_dock, TTR("Scene Tree"), SNAME("PackedScene"), true);
 
 			inspector_dock = memnew(InspectorDock(ed, false));
