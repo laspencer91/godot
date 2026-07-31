@@ -80,6 +80,11 @@ bool editor_snap_modifier_effect_enabled(EditorSnapModifierEffect p_effects, Edi
 bool editor_snap_is_enabled(bool p_configured_enabled, bool p_ctrl_pressed, EditorSnapModifierEffect p_effects);
 real_t editor_snap_apply_fine_step(real_t p_configured_step, bool p_shift_pressed, real_t p_divisor, EditorSnapModifierEffect p_effects);
 
+// One-shot absolute world-grid alignment used by the 3D editor's "Snap
+// Selection to Grid" action. Only a position is snapped, so the caller's
+// rotation and scale are untouched by construction.
+Vector3 editor_grid_snap_position(const Vector3 &p_position, real_t p_step);
+
 struct Editor3DViewportLayerLease {
 	uint64_t scenario_key = 0;
 	int layer = -1;

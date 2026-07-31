@@ -607,6 +607,16 @@ TEST_CASE("[EditorGrid3D] Snap modifier effects distinguish native and domain po
 	CHECK(editor_snap_apply_fine_step(1.0, false, 10.0, EditorSnapModifierEffect::NATIVE) == doctest::Approx(1.0));
 }
 
+TEST_CASE("[EditorGrid3D] One-shot position snapping removes the absolute world-grid offset") {
+	const Vector3 original(1.24, -1.26, 2.74);
+	CHECK(editor_grid_snap_position(original, 0.5).is_equal_approx(Vector3(1.0, -1.5, 2.5)));
+
+	// Unusable steps pass the position through instead of collapsing it to zero.
+	CHECK(editor_grid_snap_position(original, 0.0).is_equal_approx(original));
+	CHECK(editor_grid_snap_position(original, -1.0).is_equal_approx(original));
+	CHECK(editor_grid_snap_position(original, Math::NaN).is_equal_approx(original));
+}
+
 TEST_CASE("[EditorGrid3D] Private viewport layers are unique per scenario and fail closed") {
 	Editor3DViewportLayerPool pool;
 	Editor3DViewportLayerLease leases[Editor3DViewportLayerPool::LAYER_COUNT];

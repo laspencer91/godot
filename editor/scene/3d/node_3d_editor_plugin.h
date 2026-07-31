@@ -234,6 +234,7 @@ private:
 		MENU_UNLOCK_SELECTED,
 		MENU_GROUP_SELECTED,
 		MENU_UNGROUP_SELECTED,
+		MENU_SNAP_SELECTION_TO_GRID,
 		MENU_SNAP_TO_FLOOR,
 		MENU_RULER,
 		MENU_VERTEX_SNAP_BASE_VERTEX,
@@ -307,6 +308,7 @@ private:
 	void _menu_item_pressed(int p_option);
 	void _update_view_layout_menu_checkmarks(int p_checked_option);
 	void _set_selection_meta_flag(const String &p_action_name, const String &p_meta_name, const String &p_signal_name, bool p_enable, bool p_update_transform_gizmo = false);
+	void _snap_selected_nodes_to_grid();
 	void _menu_item_toggled(bool pressed, int p_option);
 	void _menu_gizmo_toggled(int p_option);
 	// Used for secondary menu items which are displayed depending on the currently selected node

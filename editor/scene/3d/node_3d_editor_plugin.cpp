@@ -772,6 +772,9 @@ void Node3DEditor::_grid_step_menu_pressed(int p_option) {
 		case MENU_GRID_STEP_LARGER:
 			set_translate_snap(get_configured_translate_snap() * 2.0);
 			break;
+		case MENU_SNAP_SELECTION_TO_GRID:
+			_menu_item_pressed(p_option);
+			break;
 		case MENU_GRID_CONFIGURE_SNAP:
 			_menu_item_pressed(MENU_TRANSFORM_CONFIGURE_SNAP);
 			break;
@@ -989,6 +992,72 @@ void Node3DEditor::_set_selection_meta_flag(const String &p_action_name, const S
 	undo_redo->commit_action();
 }
 
+void Node3DEditor::_snap_selected_nodes_to_grid() {
+	struct SnapChange {
+		struct ChildGlobal {
+			Node3D *node = nullptr;
+			Transform3D global;
+		};
+
+		Node3D *node = nullptr;
+		Transform3D before;
+		Transform3D after;
+		Vector<ChildGlobal> children;
+	};
+
+	Vector<SnapChange> changes;
+	const real_t step = get_configured_translate_snap();
+	const bool preserve_children = is_preserve_children_transform_enabled();
+	for (Node *selected_node : editor_selection->get_top_selected_node_list()) {
+		Node3D *node = Object::cast_to<Node3D>(selected_node);
+		if (!node || !node->is_inside_tree() || node->has_meta("_edit_lock_")) {
+			continue;
+		}
+
+		const Vector3 before_global = node->get_global_position();
+		const Vector3 after_global = editor_grid_snap_position(before_global, step);
+		if (after_global.is_equal_approx(before_global)) {
+			continue;
+		}
+
+		SnapChange change;
+		change.node = node;
+		change.before = node->get_transform();
+		// Only the origin moves: the local basis is carried over verbatim rather
+		// than re-derived from the snapped global transform.
+		Node3D *parent = node->get_parent_node_3d();
+		change.after = change.before;
+		change.after.origin = parent ? parent->get_global_transform().affine_inverse().xform(after_global) : after_global;
+		if (preserve_children) {
+			for (int child_index = 0; child_index < node->get_child_count(); child_index++) {
+				if (Node3D *child = Object::cast_to<Node3D>(node->get_child(child_index))) {
+					change.children.push_back({ child, child->get_global_transform() });
+				}
+			}
+		}
+		changes.push_back(change);
+	}
+
+	if (changes.is_empty()) {
+		return;
+	}
+
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	undo_redo->create_action(TTR("Snap Selection to Grid"));
+	for (const SnapChange &change : changes) {
+		undo_redo->add_do_method(change.node, "set_transform", change.after);
+		undo_redo->add_undo_method(change.node, "set_transform", change.before);
+		// Children keep their world placement, so do and undo replay the same value.
+		for (const SnapChange::ChildGlobal &child : change.children) {
+			undo_redo->add_do_method(child.node, "set_global_transform", child.global);
+			undo_redo->add_undo_method(child.node, "set_global_transform", child.global);
+		}
+	}
+	undo_redo->add_do_method(this, "update_transform_gizmo");
+	undo_redo->add_undo_method(this, "update_transform_gizmo");
+	undo_redo->commit_action();
+}
+
 void Node3DEditor::_menu_item_pressed(int p_option) {
 	switch (p_option) {
 		case MENU_TOOL_TRANSFORM:
@@ -1015,6 +1084,9 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 		} break;
 		case MENU_TRANSFORM_CONFIGURE_SNAP: {
 			snap_dialog->popup_centered(Size2(200, 180));
+		} break;
+		case MENU_SNAP_SELECTION_TO_GRID: {
+			_snap_selected_nodes_to_grid();
 		} break;
 		case MENU_VERTEX_SNAP_BASE_VERTEX: {
 			vertex_snap_origin_mode = false;
@@ -3991,6 +4063,9 @@ Node3DEditor::Node3DEditor() {
 	grid_step_popup->add_radio_check_item(TTRC("5 m"), MENU_GRID_STEP_5_M);
 	grid_step_popup->add_radio_check_item(TTRC("10 m"), MENU_GRID_STEP_10_M);
 	grid_step_popup->add_separator();
+	grid_step_popup->add_item(TTRC("Snap Selection to Grid"), MENU_SNAP_SELECTION_TO_GRID);
+	grid_step_popup->set_item_tooltip(grid_step_popup->get_item_index(MENU_SNAP_SELECTION_TO_GRID), TTRC("Move each selected Node3D origin to the nearest world grid point. Rotation and scale are unchanged."));
+	grid_step_popup->add_separator();
 	grid_step_popup->add_item(TTRC("Configure Snap..."), MENU_GRID_CONFIGURE_SNAP);
 	grid_step_popup->add_item(TTRC("3D Grid Settings..."), MENU_GRID_EDITOR_SETTINGS);
 	grid_step_popup->connect(SNAME("about_to_popup"), callable_mp(this, &Node3DEditor::_refresh_grid_toolbar));
@@ -4120,6 +4195,8 @@ Node3DEditor::Node3DEditor() {
 
 	p = transform_menu->get_popup();
 	p->add_shortcut(ED_SHORTCUT("spatial_editor/snap_to_floor", TTRC("Snap Object to Floor"), Key::PAGEDOWN), MENU_SNAP_TO_FLOOR);
+	p->add_shortcut(ED_SHORTCUT("spatial_editor/snap_selection_to_grid", TTRC("Snap Selection to Grid")), MENU_SNAP_SELECTION_TO_GRID);
+	p->set_item_tooltip(p->get_item_index(MENU_SNAP_SELECTION_TO_GRID), TTRC("Move each selected Node3D origin to the nearest world grid point. Rotation and scale are unchanged."));
 	p->add_shortcut(ED_SHORTCUT("spatial_editor/transform_dialog", TTRC("Transform Dialog...")), MENU_TRANSFORM_DIALOG);
 
 	p->add_separator();

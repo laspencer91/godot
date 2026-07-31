@@ -322,6 +322,13 @@ real_t editor_snap_apply_fine_step(real_t p_configured_step, bool p_shift_presse
 	return p_configured_step;
 }
 
+Vector3 editor_grid_snap_position(const Vector3 &p_position, real_t p_step) {
+	if (p_step <= 0.0 || !Math::is_finite(p_step)) {
+		return p_position;
+	}
+	return p_position.snappedf(p_step);
+}
+
 EditorGridLodSettings EditorGridLodSettings::normalized() const {
 	EditorGridLodSettings s = *this;
 	s.base_translate_snap = editor_grid_normalize_translate_snap(base_translate_snap);
