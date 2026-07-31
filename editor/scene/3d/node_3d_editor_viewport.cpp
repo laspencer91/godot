@@ -3937,6 +3937,7 @@ void Node3DEditorViewport::_notification(int p_what) {
 
 		case NOTIFICATION_VISIBILITY_CHANGED: {
 			bool vp_visible = is_visible_in_tree();
+			_sync_private_editor_layer();
 
 			set_process(vp_visible);
 			set_physics_process(vp_visible);
@@ -3957,6 +3958,9 @@ void Node3DEditorViewport::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_PROCESS: {
+			if (private_editor_layer_world.is_valid() && !private_editor_layer_lease.is_valid()) {
+				_sync_private_editor_layer();
+			}
 			if (ruler->is_inside_tree()) {
 				Vector3 start_pos = ruler_start_point->get_global_position();
 				Vector3 end_pos = ruler_end_point->get_global_position();
@@ -4550,6 +4554,7 @@ void Node3DEditorViewport::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_ENTER_TREE: {
+			_sync_private_editor_layer();
 			// One-time setup, guarded so moving this viewport between panes (which re-fires
 			// ENTER_TREE) does not re-connect the surface signals or rebuild gizmo instances.
 			if (!viewport_signals_connected) {
@@ -4570,14 +4575,19 @@ void Node3DEditorViewport::_notification(int p_what) {
 				// instances didn't exist yet). Now that _init_gizmo_instance() has created them in the
 				// singleton scenario, re-apply the already-bound world to migrate them into it — else
 				// the gizmos render in an invisible scenario and never show over the pane's scene.
-				if (gizmo_layer_world.is_valid()) {
-					set_editor_world(gizmo_layer_world);
+				if (private_editor_layer_world.is_valid()) {
+					set_editor_world(private_editor_layer_world);
 				}
 			}
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
 			// Gizmo instances persist across reparenting; they are freed in the destructor.
+			if (private_editor_layer_lease.is_valid()) {
+				spatial_editor->release_private_editor_layer(private_editor_layer_lease);
+				private_editor_layer_lease.clear();
+				_apply_private_editor_layer();
+			}
 		} break;
 
 		case NOTIFICATION_THEME_CHANGED: {
@@ -5269,9 +5279,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			bool current = view_display_menu->get_popup()->is_item_checked(idx);
 			current = !current;
 			uint32_t layers = camera->get_cull_mask();
-			layers &= ~(1 << GIZMO_EDIT_LAYER);
+			layers &= ~(uint32_t(1) << GIZMO_EDIT_LAYER);
 			if (current) {
-				layers |= (1 << GIZMO_EDIT_LAYER);
+				layers |= (uint32_t(1) << GIZMO_EDIT_LAYER);
 			}
 			camera->set_cull_mask(layers);
 			view_display_menu->get_popup()->set_item_checked(idx, current);
@@ -5308,9 +5318,9 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			bool current = view_display_menu->get_popup()->is_item_checked(idx);
 			current = !current;
 			uint32_t layers = camera->get_cull_mask();
-			layers &= ~(1 << GIZMO_GRID_LAYER);
+			layers &= ~(uint32_t(1) << GIZMO_GRID_LAYER);
 			if (current) {
-				layers |= (1 << GIZMO_GRID_LAYER);
+				layers |= (uint32_t(1) << GIZMO_GRID_LAYER);
 			}
 			camera->set_cull_mask(layers);
 			view_display_menu->get_popup()->set_item_checked(idx, current);
@@ -5471,8 +5481,52 @@ void Node3DEditorViewport::_update_centered_labels() {
 	}
 }
 
+void Node3DEditorViewport::_apply_private_editor_layer() {
+	static constexpr int PRIVATE_LAYERS[] = { 20, 21, 22, 23, 27, 28, 29, 30, 31 };
+	const uint32_t private_mask = private_editor_layer_lease.is_valid() ? (uint32_t(1) << private_editor_layer_lease.layer) : 0;
+
+	if (camera) {
+		uint32_t camera_mask = camera->get_cull_mask();
+		for (int layer : PRIVATE_LAYERS) {
+			camera_mask &= ~(uint32_t(1) << layer);
+		}
+		camera->set_cull_mask(camera_mask | private_mask);
+	}
+
+	if (gizmo_instances_initialized) {
+		for (int i = 0; i < 3; i++) {
+			RS::get_singleton()->instance_set_layer_mask(move_gizmo_instance[i], private_mask);
+			RS::get_singleton()->instance_set_layer_mask(move_plane_gizmo_instance[i], private_mask);
+			RS::get_singleton()->instance_set_layer_mask(scale_gizmo_instance[i], private_mask);
+			RS::get_singleton()->instance_set_layer_mask(scale_plane_gizmo_instance[i], private_mask);
+			RS::get_singleton()->instance_set_layer_mask(axis_gizmo_instance[i], private_mask);
+		}
+		for (int i = 0; i < 4; i++) {
+			RS::get_singleton()->instance_set_layer_mask(rotate_gizmo_instance[i], private_mask);
+		}
+		RS::get_singleton()->instance_set_layer_mask(trackball_sphere_instance, private_mask);
+	}
+
+	if (private_overlays_warning) {
+		private_overlays_warning->set_visible(is_visible_in_tree() && private_editor_layer_world.is_valid() && !private_editor_layer_lease.is_valid());
+	}
+}
+
+void Node3DEditorViewport::_sync_private_editor_layer() {
+	const bool should_lease = is_inside_tree() && is_visible_in_tree() && private_editor_layer_world.is_valid() && private_editor_layer_world->get_scenario().is_valid();
+	const uint64_t desired_key = should_lease ? private_editor_layer_world->get_scenario().get_id() : 0;
+	if (private_editor_layer_lease.is_valid() && (!should_lease || private_editor_layer_lease.scenario_key != desired_key)) {
+		spatial_editor->release_private_editor_layer(private_editor_layer_lease);
+		private_editor_layer_lease.clear();
+	}
+	if (should_lease && !private_editor_layer_lease.is_valid()) {
+		private_editor_layer_lease = spatial_editor->acquire_private_editor_layer(private_editor_layer_world);
+	}
+	_apply_private_editor_layer();
+}
+
 void Node3DEditorViewport::_init_gizmo_instance() {
-	uint32_t layer = 1 << gizmo_layer;
+	const uint32_t layer = private_editor_layer_lease.is_valid() ? (uint32_t(1) << private_editor_layer_lease.layer) : 0;
 
 	for (int i = 0; i < 3; i++) {
 		move_gizmo_instance[i] = RS::get_singleton()->instance_create();
@@ -5551,29 +5605,27 @@ void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
 	// the 5-layer budget is per-document. Only on an actual world change: rebinding to the same
 	// world is a no-op (no churn). The camera cull mask is rewritten to see the new layer; the
 	// gizmo instances' layer masks are updated below alongside their scenario migration.
-	if (p_world != gizmo_layer_world) {
+	if (p_world != private_editor_layer_world) {
 		// A click captured against the previous document can no longer resolve meaningfully.
 		clicked = ObjectID();
-		if (gizmo_layer_world.is_valid()) {
-			spatial_editor->free_gizmo_layer(gizmo_layer_world, gizmo_layer);
+		if (private_editor_layer_lease.is_valid()) {
+			spatial_editor->release_private_editor_layer(private_editor_layer_lease);
+			private_editor_layer_lease.clear();
 		}
-		gizmo_layer_world = p_world;
-		gizmo_layer = p_world.is_valid() ? spatial_editor->allocate_gizmo_layer(p_world) : GIZMO_BASE_LAYER;
-		if (camera) {
-			camera->set_cull_mask(((1 << 20) - 1) | (1 << gizmo_layer) | (1 << GIZMO_EDIT_LAYER) | (1 << GIZMO_GRID_LAYER) | (1 << MISC_TOOL_LAYER));
-		}
+		private_editor_layer_world = p_world;
 	}
 
 	// Render this viewport through the active document's world, and migrate this
 	// viewport's own gizmo instances into that world's scenario so transform gizmos
 	// keep showing over the switched-to scene.
 	viewport->set_world_3d(p_world);
+	_sync_private_editor_layer();
 
 	if (!move_gizmo_instance[0].is_valid()) {
 		return; // Gizmo instances not created yet (viewport not in tree); nothing to migrate.
 	}
 	const RID scenario = p_world.is_valid() ? p_world->get_scenario() : RID();
-	const uint32_t layer = 1 << gizmo_layer;
+	const uint32_t layer = private_editor_layer_lease.is_valid() ? (uint32_t(1) << private_editor_layer_lease.layer) : 0;
 	for (int i = 0; i < 3; i++) {
 		RS::get_singleton()->instance_set_scenario(move_gizmo_instance[i], scenario);
 		RS::get_singleton()->instance_set_scenario(move_plane_gizmo_instance[i], scenario);
@@ -7529,7 +7581,7 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	surface->set_clip_contents(true);
 	camera = memnew(Camera3D);
 	camera->set_disable_gizmos(true);
-	camera->set_cull_mask(((1 << 20) - 1) | (1 << gizmo_layer) | (1 << GIZMO_EDIT_LAYER) | (1 << GIZMO_GRID_LAYER) | (1 << MISC_TOOL_LAYER));
+	camera->set_cull_mask(((uint32_t(1) << 20) - 1) | (uint32_t(1) << GIZMO_EDIT_LAYER) | (uint32_t(1) << GIZMO_GRID_LAYER) | (uint32_t(1) << MISC_TOOL_LAYER));
 	viewport->add_child(camera);
 	camera->make_current();
 	surface->set_focus_mode(FOCUS_ALL);
@@ -7771,6 +7823,14 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, Node3
 	locked_label->set_text(TTRC("View Rotation Locked"));
 	locked_label->hide();
 
+	private_overlays_warning = memnew(Label);
+	private_overlays_warning->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	private_overlays_warning->set_h_size_flags(SIZE_SHRINK_CENTER);
+	private_overlays_warning->set_text(TTRC("Editor overlays unavailable: too many 3D views share this scene."));
+	private_overlays_warning->set_tooltip_text(TTRC("Hide another 3D view of this scene to restore grid, origin, and transform overlays."));
+	private_overlays_warning->hide();
+	bottom_center_vbox->add_child(private_overlays_warning);
+
 	zoom_limit_label = memnew(Label);
 	zoom_limit_label->set_text(TTRC(U"To zoom further, change the camera's clipping planes (View → Settings...)"));
 	zoom_limit_label->set_name("ZoomLimitMessageLabel");
@@ -7980,9 +8040,9 @@ Node3DEditorViewport::~Node3DEditorViewport() {
 		// Freed here rather than on EXIT_TREE so instances survive reparenting between panes.
 		_finish_gizmo_instances();
 	}
-	if (spatial_editor && gizmo_layer_world.is_valid()) {
-		// Return the layer to the world it was claimed from (no-op if never bound a world).
-		spatial_editor->free_gizmo_layer(gizmo_layer_world, gizmo_layer);
+	if (spatial_editor && private_editor_layer_lease.is_valid()) {
+		spatial_editor->release_private_editor_layer(private_editor_layer_lease);
+		private_editor_layer_lease.clear();
 	}
 	memdelete(ruler);
 }

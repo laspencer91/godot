@@ -30,6 +30,7 @@
 
 #include "editor_grid_3d.h"
 
+#include "core/error/error_macros.h"
 #include "core/math/basis.h"
 #include "core/math/math_funcs.h"
 
@@ -77,6 +78,68 @@ static bool grid_vector_equal_tolerance(const Vector3 &p_a, const Vector3 &p_b, 
 }
 
 } // namespace
+
+int Editor3DViewportLayerPool::get_layer_for_slot(int p_slot) {
+	static constexpr int PRIVATE_LAYERS[LAYER_COUNT] = { 20, 21, 22, 23, 27, 28, 29, 30, 31 };
+	ERR_FAIL_INDEX_V(p_slot, LAYER_COUNT, -1);
+	return PRIVATE_LAYERS[p_slot];
+}
+
+Editor3DViewportLayerLease Editor3DViewportLayerPool::acquire(uint64_t p_scenario_key) {
+	Editor3DViewportLayerLease lease;
+	if (p_scenario_key == 0) {
+		return lease;
+	}
+	uint32_t &used = used_masks[p_scenario_key];
+	for (int slot = 0; slot < LAYER_COUNT; slot++) {
+		const uint32_t slot_mask = uint32_t(1) << slot;
+		if (!(used & slot_mask)) {
+			used |= slot_mask;
+			lease.scenario_key = p_scenario_key;
+			lease.layer = get_layer_for_slot(slot);
+			return lease;
+		}
+	}
+	return lease;
+}
+
+void Editor3DViewportLayerPool::release(const Editor3DViewportLayerLease &p_lease) {
+	if (!p_lease.is_valid()) {
+		return;
+	}
+	int slot = -1;
+	for (int i = 0; i < LAYER_COUNT; i++) {
+		if (get_layer_for_slot(i) == p_lease.layer) {
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0) {
+		return;
+	}
+	HashMap<uint64_t, uint32_t>::Iterator it = used_masks.find(p_lease.scenario_key);
+	if (!it) {
+		return;
+	}
+	it->value &= ~(uint32_t(1) << slot);
+	if (it->value == 0) {
+		used_masks.remove(it);
+	}
+}
+
+int Editor3DViewportLayerPool::get_active_count(uint64_t p_scenario_key) const {
+	HashMap<uint64_t, uint32_t>::ConstIterator it = used_masks.find(p_scenario_key);
+	if (!it) {
+		return 0;
+	}
+	int count = 0;
+	for (int slot = 0; slot < LAYER_COUNT; slot++) {
+		if (it->value & (uint32_t(1) << slot)) {
+			count++;
+		}
+	}
+	return count;
+}
 
 EditorGridFrame3D EditorGridFrame3D::world_xz() {
 	EditorGridFrame3D frame;

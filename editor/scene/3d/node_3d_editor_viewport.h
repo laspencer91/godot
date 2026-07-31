@@ -31,6 +31,7 @@
 #pragma once
 
 #include "editor/plugins/editor_plugin.h"
+#include "editor/scene/3d/editor_grid_3d.h"
 #include "editor/scene/3d/node_3d_editor_gizmos.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/debugger/view_3d_controller.h"
@@ -528,13 +529,12 @@ private:
 	bool viewport_signals_connected = false;
 	bool gizmo_instances_initialized = false;
 
-	// G2: transform-gizmo cull-mask layer, allocated from Node3DEditor rather than derived
-	// from the quad-slot index, so this viewport is not tied to a fixed 0..3 slot. Claimed
-	// from the BOUND WORLD's freelist in set_editor_world (not the ctor), so the 5-layer
-	// budget is per-document; gizmo_layer_world records which world's freelist to return it
-	// to when this viewport rebinds or is destroyed.
-	int gizmo_layer = GIZMO_BASE_LAYER;
-	Ref<World3D> gizmo_layer_world;
+	Editor3DViewportLayerLease private_editor_layer_lease;
+	Ref<World3D> private_editor_layer_world;
+	Label *private_overlays_warning = nullptr;
+
+	void _sync_private_editor_layer();
+	void _apply_private_editor_layer();
 
 	String last_message;
 	String message;

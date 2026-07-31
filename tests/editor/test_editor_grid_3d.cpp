@@ -596,6 +596,37 @@ TEST_CASE("[EditorGrid3D] Translate-snap normalization keeps the base step posit
 	CHECK(editor_grid_normalize_translate_snap(2.5) == doctest::Approx(2.5));
 }
 
+TEST_CASE("[EditorGrid3D] Private viewport layers are unique per scenario and fail closed") {
+	Editor3DViewportLayerPool pool;
+	Editor3DViewportLayerLease leases[Editor3DViewportLayerPool::LAYER_COUNT];
+	uint32_t layer_mask = 0;
+	for (int i = 0; i < Editor3DViewportLayerPool::LAYER_COUNT; i++) {
+		leases[i] = pool.acquire(101);
+		REQUIRE(leases[i].is_valid());
+		const uint32_t bit = uint32_t(1) << leases[i].layer;
+		CHECK((layer_mask & bit) == 0);
+		layer_mask |= bit;
+	}
+	CHECK(leases[Editor3DViewportLayerPool::LAYER_COUNT - 1].layer == 31);
+	CHECK((layer_mask & (uint32_t(1) << 31)) != 0);
+	CHECK(pool.get_active_count(101) == 9);
+	CHECK_FALSE(pool.acquire(101).is_valid());
+
+	// A different scenario has its own independent slots.
+	const Editor3DViewportLayerLease other = pool.acquire(202);
+	REQUIRE(other.is_valid());
+	CHECK(other.layer == 20);
+
+	// Release is balanced and idempotent; the freed slot is reused.
+	pool.release(leases[3]);
+	pool.release(leases[3]);
+	CHECK(pool.get_active_count(101) == 8);
+	const Editor3DViewportLayerLease reused = pool.acquire(101);
+	REQUIRE(reused.is_valid());
+	CHECK(reused.layer == leases[3].layer);
+	CHECK(pool.get_active_count(101) == 9);
+}
+
 } // namespace TestEditorGrid3D
 
 #endif // TOOLS_ENABLED

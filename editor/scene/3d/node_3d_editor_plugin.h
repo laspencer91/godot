@@ -32,6 +32,8 @@
 
 #include "core/math/dynamic_bvh.h"
 #include "core/templates/hash_map.h"
+#include "core/templates/hash_set.h"
+#include "editor/scene/3d/editor_grid_3d.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/scene/3d/node_3d_editor_gizmos.h"
 #include "scene/debugger/view_3d_controller.h"
@@ -147,7 +149,8 @@ private:
 	// So the budget is "5 views of the same document" (never hit) instead of "5 panes total"
 	// (a dual-monitor user hits it). Keyed on the world's scenario RID id; one bit per offset
 	// 0..4; empty buckets are removed on free. See ARCHITECTURE.md seam rule #4.
-	HashMap<uint64_t, uint32_t> gizmo_layer_used_masks;
+	Editor3DViewportLayerPool private_editor_layer_pool;
+	HashSet<uint64_t> private_editor_layer_warned_scenarios;
 
 	Ref<ArrayMesh> move_gizmo[3], move_plane_gizmo[3], rotate_gizmo[4], scale_gizmo[3], scale_plane_gizmo[3], axis_gizmo[3];
 	Ref<ArrayMesh> trackball_sphere_gizmo;
@@ -465,8 +468,8 @@ public:
 	// freelist. Returns a distinct layer while any of the 5 are free within that world; degrades
 	// to sharing the base layer past 5 simultaneous views OF THE SAME world (gizmos overlap but
 	// remain functional). Different worlds reuse the same layer bits safely (separate scenarios).
-	int allocate_gizmo_layer(const Ref<World3D> &p_world);
-	void free_gizmo_layer(const Ref<World3D> &p_world, int p_layer);
+	Editor3DViewportLayerLease acquire_private_editor_layer(const Ref<World3D> &p_world);
+	void release_private_editor_layer(const Editor3DViewportLayerLease &p_lease);
 
 	static Size2i get_camera_viewport_size(Camera3D *p_camera);
 

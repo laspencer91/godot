@@ -45,6 +45,7 @@
 #include "core/math/transform_3d.h"
 #include "core/math/vector2.h"
 #include "core/math/vector3.h"
+#include "core/templates/hash_map.h"
 #include "core/typedefs.h"
 
 // The centralized translate-snap minimum from the plan (section 5.2). Values
@@ -65,6 +66,32 @@
 // "an intentional visible behavior change"). The bias setting remains the
 // user-facing tuning knob; this constant only sets the neutral point.
 #define EDITOR_GRID_DEFAULT_REFERENCE_PIXELS ((real_t)64.0)
+
+struct Editor3DViewportLayerLease {
+	uint64_t scenario_key = 0;
+	int layer = -1;
+
+	bool is_valid() const { return scenario_key != 0 && layer >= 0; }
+	void clear() {
+		scenario_key = 0;
+		layer = -1;
+	}
+};
+
+// Pure checked allocator for viewport-private editor render layers. Slots are
+// independent per scenario and exhaustion returns an invalid lease; aliases
+// are never manufactured.
+class Editor3DViewportLayerPool {
+	HashMap<uint64_t, uint32_t> used_masks;
+
+public:
+	static constexpr int LAYER_COUNT = 9;
+	static int get_layer_for_slot(int p_slot);
+
+	Editor3DViewportLayerLease acquire(uint64_t p_scenario_key);
+	void release(const Editor3DViewportLayerLease &p_lease);
+	int get_active_count(uint64_t p_scenario_key) const;
+};
 
 // An orthonormal, right-handed work frame plus a separate plane coordinate.
 //

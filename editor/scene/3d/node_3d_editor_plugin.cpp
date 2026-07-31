@@ -278,8 +278,8 @@ Object *Node3DEditor::_get_editor_data(Object *p_what) {
 			RSE::SHADOW_CASTING_SETTING_OFF);
 	// Use the Edit layer to hide the selection box when View Gizmos is disabled, since it is a bit distracting.
 	// It's still possible to approximately guess what is selected by looking at the manipulation gizmo position.
-	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance, 1 << Node3DEditorViewport::GIZMO_EDIT_LAYER);
-	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance_offset, 1 << Node3DEditorViewport::GIZMO_EDIT_LAYER);
+	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance, uint32_t(1) << Node3DEditorViewport::GIZMO_EDIT_LAYER);
+	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance_offset, uint32_t(1) << Node3DEditorViewport::GIZMO_EDIT_LAYER);
 	RS::get_singleton()->instance_geometry_set_flag(si->sbox_instance, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
 	RS::get_singleton()->instance_geometry_set_flag(si->sbox_instance, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
 	RS::get_singleton()->instance_geometry_set_flag(si->sbox_instance_offset, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
@@ -298,8 +298,8 @@ Object *Node3DEditor::_get_editor_data(Object *p_what) {
 			RSE::SHADOW_CASTING_SETTING_OFF);
 	// Use the Edit layer to hide the selection box when View Gizmos is disabled, since it is a bit distracting.
 	// It's still possible to approximately guess what is selected by looking at the manipulation gizmo position.
-	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance_xray, 1 << Node3DEditorViewport::GIZMO_EDIT_LAYER);
-	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance_xray_offset, 1 << Node3DEditorViewport::GIZMO_EDIT_LAYER);
+	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance_xray, uint32_t(1) << Node3DEditorViewport::GIZMO_EDIT_LAYER);
+	RS::get_singleton()->instance_set_layer_mask(si->sbox_instance_xray_offset, uint32_t(1) << Node3DEditorViewport::GIZMO_EDIT_LAYER);
 	RS::get_singleton()->instance_geometry_set_flag(si->sbox_instance_xray, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
 	RS::get_singleton()->instance_geometry_set_flag(si->sbox_instance_xray, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
 	RS::get_singleton()->instance_geometry_set_flag(si->sbox_instance_xray_offset, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
@@ -1142,38 +1142,30 @@ void Node3DEditorView::_deferred_first_bind() {
 	_reconcile_decorations();
 }
 
-int Node3DEditor::allocate_gizmo_layer(const Ref<World3D> &p_world) {
-	const int layer_count = 32 - Node3DEditorViewport::GIZMO_BASE_LAYER; // Bits 27..31 => 5.
-	// Key on the world's scenario: layers only need to be unique within a scenario, so each
-	// document gets its own independent 5-layer budget. Key 0 = the no-world/unbound bucket.
-	const uint64_t key = p_world.is_valid() ? p_world->get_scenario().get_id() : 0;
-	uint32_t &mask = gizmo_layer_used_masks[key]; // Inserts a 0 mask for a new world.
-	for (int offset = 0; offset < layer_count; offset++) {
-		if (!(mask & (1u << offset))) {
-			mask |= (1u << offset);
-			return Node3DEditorViewport::GIZMO_BASE_LAYER + offset;
-		}
+Editor3DViewportLayerLease Node3DEditor::acquire_private_editor_layer(const Ref<World3D> &p_world) {
+	Editor3DViewportLayerLease lease;
+	if (p_world.is_null() || !p_world->get_scenario().is_valid()) {
+		return lease;
 	}
-	// All 5 layers for THIS world are in use: degrade by sharing the base layer (gizmos of the
-	// extra views overlap but stay functional). Reached only past 5 simultaneous views of the
-	// SAME document — different documents each have their own budget.
-	WARN_PRINT_ONCE("More than 5 simultaneous 3D views of the same document: transform gizmos share a cull-mask layer and may overlap.");
-	return Node3DEditorViewport::GIZMO_BASE_LAYER;
+	// Layers only need to be unique within one scenario, so each document gets
+	// an independent nine-layer budget.
+	const uint64_t scenario_key = p_world->get_scenario().get_id();
+	lease = private_editor_layer_pool.acquire(scenario_key);
+	if (lease.is_valid()) {
+		return lease;
+	}
+	// All private layers for this world are in use. Fail closed and warn once.
+	// The viewport retries later without borrowing another view's live lease.
+	if (!private_editor_layer_warned_scenarios.has(scenario_key)) {
+		private_editor_layer_warned_scenarios.insert(scenario_key);
+		WARN_PRINT("More than 9 simultaneous 3D subviewports share one scene: private editor overlays are unavailable in additional views.");
+	}
+	lease.clear();
+	return lease;
 }
 
-void Node3DEditor::free_gizmo_layer(const Ref<World3D> &p_world, int p_layer) {
-	const int offset = p_layer - Node3DEditorViewport::GIZMO_BASE_LAYER;
-	if (offset < 0 || offset >= 32 - Node3DEditorViewport::GIZMO_BASE_LAYER) {
-		return;
-	}
-	const uint64_t key = p_world.is_valid() ? p_world->get_scenario().get_id() : 0;
-	HashMap<uint64_t, uint32_t>::Iterator it = gizmo_layer_used_masks.find(key);
-	if (it) {
-		it->value &= ~(1u << offset);
-		if (it->value == 0) {
-			gizmo_layer_used_masks.remove(it); // Drop the bucket once this world has no views.
-		}
-	}
+void Node3DEditor::release_private_editor_layer(const Editor3DViewportLayerLease &p_lease) {
+	private_editor_layer_pool.release(p_lease);
 }
 
 void Node3DEditorView::init_decorations() {
