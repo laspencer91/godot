@@ -867,6 +867,7 @@ public:
 	EditorSelectionHistory *get_editor_selection_history() { return &editor_history; }
 
 	ProjectSettingsEditor *get_project_settings() { return project_settings_editor; }
+	void popup_editor_settings(const String &p_section = String());
 	// G4: show/dismiss the unmanaged FileSystem drawer. Callers must use these instead of asking
 	// EditorDockManager to focus FileSystem, which intentionally isn't registered there.
 	void open_file_drawer();

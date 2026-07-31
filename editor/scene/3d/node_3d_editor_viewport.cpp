@@ -5332,17 +5332,10 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 			view_display_menu->get_popup()->set_item_checked(idx, !current);
 		} break;
 		case VIEW_GRID: {
+			spatial_editor->set_toolbar_viewport(viewport);
 			int idx = view_display_menu->get_popup()->get_item_index(VIEW_GRID);
 			bool current = view_display_menu->get_popup()->is_item_checked(idx);
-			current = !current;
-			uint32_t layers = camera->get_cull_mask();
-			layers &= ~(uint32_t(1) << GIZMO_GRID_LAYER);
-			if (current) {
-				layers |= (uint32_t(1) << GIZMO_GRID_LAYER);
-			}
-			camera->set_cull_mask(layers);
-			set_grid_visible(current);
-			view_display_menu->get_popup()->set_item_checked(idx, current);
+			set_grid_visible(!current);
 		} break;
 		case VIEW_DISPLAY_NORMAL:
 		case VIEW_DISPLAY_WIREFRAME:
@@ -5559,6 +5552,25 @@ void Node3DEditorViewport::update_grid_renderer(const EditorGridFrame3D *p_worki
 		return;
 	}
 	grid_renderer.update(camera, viewport->get_visible_rect().size, spatial_editor->get_configured_translate_snap(), p_working_frame);
+}
+
+void Node3DEditorViewport::set_grid_visible(bool p_visible) {
+	grid_renderer.set_grid_visible(p_visible);
+	if (camera) {
+		uint32_t layers = camera->get_cull_mask();
+		layers &= ~(uint32_t(1) << GIZMO_GRID_LAYER);
+		if (p_visible) {
+			layers |= uint32_t(1) << GIZMO_GRID_LAYER;
+		}
+		camera->set_cull_mask(layers);
+	}
+	if (view_display_menu) {
+		const int menu_index = view_display_menu->get_popup()->get_item_index(VIEW_GRID);
+		if (menu_index >= 0) {
+			view_display_menu->get_popup()->set_item_checked(menu_index, p_visible);
+		}
+	}
+	spatial_editor->refresh_grid_toolbar();
 }
 
 void Node3DEditorViewport::_init_gizmo_instance() {
@@ -6094,11 +6106,7 @@ void Node3DEditorViewport::set_state(const Dictionary &p_state) {
 	}
 	if (p_state.has("grid")) {
 		bool grid = p_state["grid"];
-
-		int idx = view_display_menu->get_popup()->get_item_index(VIEW_GRID);
-		if (view_display_menu->get_popup()->is_item_checked(idx) != grid) {
-			_menu_option(VIEW_GRID);
-		}
+		set_grid_visible(grid);
 	}
 	if (p_state.has("information")) {
 		bool information = p_state["information"];

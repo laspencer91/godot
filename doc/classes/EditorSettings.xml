@@ -421,16 +421,16 @@
 			If [code]true[/code], freelook speed is linked to the zoom value used in the camera orbit mode in the 3D editor.
 		</member>
 		<member name="editors/3d/grid_division_level_bias" type="float" setter="" getter="">
-			The grid division bias to use in the 3D editor. Negative values will cause small grid divisions to appear earlier, whereas positive values will cause small grid divisions to appear later.
+			The adaptive grid level bias to use in the 3D editor. Negative values make finer snap-aligned divisions appear earlier, whereas positive values keep coarser divisions visible longer.
 		</member>
 		<member name="editors/3d/grid_division_level_max" type="int" setter="" getter="">
-			The largest grid division to use in the 3D editor. Together with [member editors/3d/primary_grid_steps], this determines how large the grid divisions can be. The grid divisions will not be able to get larger than [code]primary_grid_steps ^ grid_division_level_max[/code] units. By default, when [member editors/3d/primary_grid_steps] is [code]8[/code], this means grid divisions cannot get larger than [code]64[/code] units each (so primary grid lines are [code]512[/code] units apart), no matter how far away the camera is from the grid.
+			Defines the coarsest preferred physical spacing envelope for the adaptive 3D grid. The editor rounds this envelope outward to a level aligned with the configured translate snap step and always keeps that base snap level reachable.
 		</member>
 		<member name="editors/3d/grid_division_level_min" type="int" setter="" getter="">
-			The smallest grid division to use in the 3D editor. Together with [member editors/3d/primary_grid_steps], this determines how small the grid divisions can be. The grid divisions will not be able to get smaller than [code]primary_grid_steps ^ grid_division_level_min[/code] units. By default, this means grid divisions cannot get smaller than 1 unit each, no matter how close the camera is from the grid.
+			Defines the finest preferred physical spacing envelope for the adaptive 3D grid. The editor rounds this envelope outward to a level aligned with the configured translate snap step, so coarse snap profiles can still display useful subdivisions.
 		</member>
 		<member name="editors/3d/grid_size" type="int" setter="" getter="">
-			The grid size in units. Higher values prevent the grid from appearing "cut off" at certain angles, but make the grid more demanding to render. Depending on the camera's position, the grid may not be fully visible since a shader is used to fade it progressively.
+			The grid half-extent in generated minor cells. Higher values prevent the grid from appearing cut off at certain angles, but generate more line geometry. The physical size changes with the adaptive, snap-aligned minor spacing, and the outer cells fade progressively.
 		</member>
 		<member name="editors/3d/grid_xy_plane" type="bool" setter="" getter="">
 			If [code]true[/code], renders the grid on the XY plane in perspective view. This can be useful for 3D side-scrolling games.
@@ -513,7 +513,7 @@
 			The color to use for the primary 3D grid. The color's alpha channel affects the grid's opacity.
 		</member>
 		<member name="editors/3d/primary_grid_steps" type="int" setter="" getter="">
-			If set above 0, where a primary grid line should be drawn. By default, primary lines are configured to be more visible than secondary lines. This helps with measurements in the 3D editor. See also [member editors/3d/primary_grid_color] and [member editors/3d/secondary_grid_color].
+			The number of minor cells between primary grid lines and the scale factor between adaptive grid levels. Every visible minor spacing is the configured translate snap step multiplied by an integer power of this value. See also [member editors/3d/primary_grid_color] and [member editors/3d/secondary_grid_color].
 		</member>
 		<member name="editors/3d/secondary_grid_color" type="Color" setter="" getter="">
 			The color to use for the secondary 3D grid. This is generally a less visible color than [member editors/3d/primary_grid_color]. The color's alpha channel affects the grid's opacity.

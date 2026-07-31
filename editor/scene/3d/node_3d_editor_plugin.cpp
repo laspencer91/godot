@@ -676,6 +676,127 @@ void Node3DEditor::_snap_update() {
 	snap_translate->set_value(snap_translate_value);
 	snap_rotate->set_value(snap_rotate_value);
 	snap_scale->set_value(snap_scale_value);
+	_refresh_grid_toolbar();
+}
+
+static String _format_grid_step(real_t p_step) {
+	return vformat("%s m", String::num(editor_grid_normalize_translate_snap(p_step), 3));
+}
+
+Node3DEditorViewport *Node3DEditor::_get_toolbar_target_viewport() const {
+	Node3DEditorViewport *target = ObjectDB::get_instance<Node3DEditorViewport>(toolbar_viewport_id);
+	if (target) {
+		return target;
+	}
+	return main_view ? main_view->get_last_used_viewport() : nullptr;
+}
+
+void Node3DEditor::_refresh_grid_toolbar() {
+	Node3DEditorViewport *target = _get_toolbar_target_viewport();
+	const bool grid_visible = target ? target->is_grid_visible() : false;
+	if (grid_visibility_button) {
+		grid_visibility_button->set_pressed_no_signal(grid_visible);
+	}
+	if (view_layout_menu) {
+		const int index = view_layout_menu->get_popup()->get_item_index(MENU_VIEW_GRID);
+		if (index >= 0) {
+			view_layout_menu->get_popup()->set_item_checked(index, grid_visible);
+		}
+	}
+	if (tool_option_button[TOOL_OPT_USE_SNAP]) {
+		tool_option_button[TOOL_OPT_USE_SNAP]->set_pressed_no_signal(snap_enabled);
+	}
+	if (!grid_step_menu) {
+		return;
+	}
+
+	const real_t step = get_configured_translate_snap();
+	grid_step_menu->set_text(_format_grid_step(step));
+	String tooltip = vformat(TTR("Snap: %s"), _format_grid_step(step));
+	if (target && target->get_visible_grid_spacing() > 0.0) {
+		tooltip = vformat(TTR("Snap: %s; visible grid: %s"), _format_grid_step(step), _format_grid_step(target->get_visible_grid_spacing()));
+	}
+	grid_step_menu->set_tooltip_text(tooltip);
+
+	static const int ids[] = { MENU_GRID_STEP_1_MM, MENU_GRID_STEP_1_CM, MENU_GRID_STEP_10_CM, MENU_GRID_STEP_25_CM, MENU_GRID_STEP_50_CM, MENU_GRID_STEP_1_M, MENU_GRID_STEP_2_M, MENU_GRID_STEP_5_M, MENU_GRID_STEP_10_M };
+	static const real_t values[] = { 0.001, 0.01, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0 };
+	PopupMenu *popup = grid_step_menu->get_popup();
+	for (uint32_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+		const int index = popup->get_item_index(ids[i]);
+		if (index >= 0) {
+			popup->set_item_checked(index, Math::is_equal_approx(step, values[i]));
+		}
+	}
+}
+
+void Node3DEditor::_grid_visibility_toggled(bool p_pressed) {
+	if (Node3DEditorViewport *target = _get_toolbar_target_viewport()) {
+		target->set_grid_visible(p_pressed);
+	} else {
+		_refresh_grid_toolbar();
+	}
+}
+
+void Node3DEditor::_grid_step_menu_pressed(int p_option) {
+	switch (p_option) {
+		case MENU_GRID_STEP_1_MM:
+			set_translate_snap(0.001);
+			break;
+		case MENU_GRID_STEP_1_CM:
+			set_translate_snap(0.01);
+			break;
+		case MENU_GRID_STEP_10_CM:
+			set_translate_snap(0.1);
+			break;
+		case MENU_GRID_STEP_25_CM:
+			set_translate_snap(0.25);
+			break;
+		case MENU_GRID_STEP_50_CM:
+			set_translate_snap(0.5);
+			break;
+		case MENU_GRID_STEP_1_M:
+			set_translate_snap(1.0);
+			break;
+		case MENU_GRID_STEP_2_M:
+			set_translate_snap(2.0);
+			break;
+		case MENU_GRID_STEP_5_M:
+			set_translate_snap(5.0);
+			break;
+		case MENU_GRID_STEP_10_M:
+			set_translate_snap(10.0);
+			break;
+		case MENU_GRID_STEP_SMALLER:
+			set_translate_snap(get_configured_translate_snap() * 0.5);
+			break;
+		case MENU_GRID_STEP_LARGER:
+			set_translate_snap(get_configured_translate_snap() * 2.0);
+			break;
+		case MENU_GRID_CONFIGURE_SNAP:
+			_menu_item_pressed(MENU_TRANSFORM_CONFIGURE_SNAP);
+			break;
+		case MENU_GRID_EDITOR_SETTINGS:
+			EditorNode::get_singleton()->popup_editor_settings("editors/3d");
+			break;
+	}
+}
+
+bool Node3DEditor::_is_text_input_focused() const {
+	Control *focus_owner = get_viewport() ? get_viewport()->gui_get_focus_owner() : nullptr;
+	return focus_owner && focus_owner->is_text_field();
+}
+
+bool Node3DEditor::_is_toolbar_shortcut_context_active() const {
+	Node *context = ObjectDB::get_instance<Node>(toolbar_shortcut_context_id);
+	if (!context) {
+		return false;
+	}
+	if (context == this) {
+		return is_visible_in_tree();
+	}
+	Control *context_control = Object::cast_to<Control>(context);
+	Control *focus_owner = get_viewport() ? get_viewport()->gui_get_focus_owner() : nullptr;
+	return context_control && context_control->is_visible_in_tree() && focus_owner && (focus_owner == context_control || context_control->is_ancestor_of(focus_owner));
 }
 
 void Node3DEditor::_update_vertex_snap_tooltips() {
@@ -750,8 +871,9 @@ void Node3DEditor::_menu_item_toggled(bool pressed, int p_option) {
 		} break;
 
 		case MENU_TOOL_USE_SNAP: {
-			tool_option_button[TOOL_OPT_USE_SNAP]->set_pressed(pressed);
+			tool_option_button[TOOL_OPT_USE_SNAP]->set_pressed_no_signal(pressed);
 			snap_enabled = pressed;
+			_refresh_grid_toolbar();
 		} break;
 
 		case MENU_TOOL_USE_TRACKBALL: {
@@ -989,13 +1111,11 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), main_view->is_origin_enabled());
 		} break;
 		case MENU_VIEW_GRID: {
-			bool is_checked = view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(p_option));
-			Node3DEditorViewport *target = main_view->get_last_used_viewport();
+			Node3DEditorViewport *target = _get_toolbar_target_viewport();
 			if (target) {
-				target->set_grid_visible(!is_checked);
+				target->set_grid_visible(!target->is_grid_visible());
 			}
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), !is_checked);
-
+			_refresh_grid_toolbar();
 		} break;
 		case MENU_VIEW_CAMERA_SETTINGS: {
 			settings_dialog->popup_centered(settings_vbc->get_combined_minimum_size() + Size2(50, 50));
@@ -2360,11 +2480,32 @@ void Node3DEditor::_snap_selected_nodes_to_floor() {
 void Node3DEditor::shortcut_input(const Ref<InputEvent> &p_event) {
 	ERR_FAIL_COND(p_event.is_null());
 
-	if (!is_visible_in_tree()) {
+	if (!_is_toolbar_shortcut_context_active()) {
 		return;
 	}
 
 	update_snap_modifier_state(p_event);
+	Ref<InputEventKey> key_event = p_event;
+	if (key_event.is_null() || !key_event->is_pressed() || key_event->is_echo() || _is_text_input_focused()) {
+		return;
+	}
+
+	bool handled = true;
+	if (ED_IS_SHORTCUT("spatial_editor/view_grid", p_event)) {
+		Node3DEditorViewport *target = _get_toolbar_target_viewport();
+		_grid_visibility_toggled(target ? !target->is_grid_visible() : false);
+	} else if (ED_IS_SHORTCUT("spatial_editor/snap", p_event)) {
+		_menu_item_toggled(!snap_enabled, MENU_TOOL_USE_SNAP);
+	} else if (ED_IS_SHORTCUT("spatial_editor/grid_step_smaller", p_event)) {
+		_grid_step_menu_pressed(MENU_GRID_STEP_SMALLER);
+	} else if (ED_IS_SHORTCUT("spatial_editor/grid_step_larger", p_event)) {
+		_grid_step_menu_pressed(MENU_GRID_STEP_LARGER);
+	} else {
+		handled = false;
+	}
+	if (handled) {
+		get_viewport()->set_input_as_handled();
+	}
 }
 
 void Node3DEditor::_sun_environ_settings_pressed() {
@@ -2454,9 +2595,12 @@ void Node3DEditor::_update_theme() {
 	tool_button[TOOL_RULER]->set_button_icon(get_editor_theme_icon(SNAME("Ruler")));
 
 	tool_option_button[TOOL_OPT_LOCAL_COORDS]->set_button_icon(get_editor_theme_icon(SNAME("Object")));
+	grid_visibility_button->set_button_icon(get_editor_theme_icon(SNAME("GridToggle")));
 	tool_option_button[TOOL_OPT_USE_SNAP]->set_button_icon(get_editor_theme_icon(SNAME("Snap")));
 	tool_option_button[TOOL_OPT_USE_TRACKBALL]->set_button_icon(get_editor_theme_icon(SNAME("Trackball")));
 	tool_option_button[TOOL_OPT_PRESERVE_CHILDREN_TRANSFORM]->set_button_icon(get_editor_theme_icon(SNAME("Pin")));
+	grid_step_menu->get_popup()->set_item_icon(grid_step_menu->get_popup()->get_item_index(MENU_GRID_CONFIGURE_SNAP), get_editor_theme_icon(SNAME("Snap")));
+	grid_step_menu->get_popup()->set_item_icon(grid_step_menu->get_popup()->get_item_index(MENU_GRID_EDITOR_SETTINGS), get_editor_theme_icon(SNAME("EditorSettings")));
 
 	view_layout_menu->get_popup()->set_item_icon(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_1_VIEWPORT), get_editor_theme_icon(SNAME("Panels1")));
 	view_layout_menu->get_popup()->set_item_icon(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_USE_2_VIEWPORTS), get_editor_theme_icon(SNAME("Panels2")));
@@ -2751,9 +2895,29 @@ void Node3DEditor::set_toolbar_shortcut_context(Node *p_context) {
 	// G2 M7.2a-fix: the tool buttons set_shortcut_context(this) at creation, so their Q/W/E/R (and
 	// snap / view-menu) shortcuts only fire while this singleton is in the focus path. Re-point them at
 	// the focused scene pane while the toolbar is mounted there, so shortcuts work in the pane.
+	Node *context = p_context ? p_context : this;
+	toolbar_shortcut_context_id = context->get_instance_id();
 	if (main_flow) {
-		_set_shortcut_context_recursive(main_flow, p_context ? p_context : this);
+		_set_shortcut_context_recursive(main_flow, context);
 	}
+}
+
+void Node3DEditor::set_toolbar_viewport(SubViewport *p_viewport) {
+	toolbar_viewport_id = ObjectID();
+	if (p_viewport) {
+		for (Node3DEditorView *view : editor_views) {
+			for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+				Node3DEditorViewport *candidate = view->get_editor_viewport(i);
+				if (candidate && candidate->get_viewport_node() == p_viewport) {
+					toolbar_viewport_id = candidate->get_instance_id();
+					view->set_last_used_viewport_index(i);
+					_refresh_grid_toolbar();
+					return;
+				}
+			}
+		}
+	}
+	_refresh_grid_toolbar();
 }
 
 void Node3DEditor::_scene_view_button_pressed(bool p_2d) {
@@ -3064,6 +3228,10 @@ void Node3DEditor::_toggle_maximize_view(Object *p_viewport) {
 void Node3DEditor::_viewport_clicked(Node3DEditorView *p_view, int p_viewport_idx) {
 	ERR_FAIL_NULL(p_view);
 	p_view->set_last_used_viewport_index(p_viewport_idx);
+	if (Node3DEditorViewport *viewport = p_view->get_editor_viewport(p_viewport_idx)) {
+		toolbar_viewport_id = viewport->get_instance_id();
+	}
+	_refresh_grid_toolbar();
 }
 
 void Node3DEditor::_adjust_new_node_position(Node *p_node) {
@@ -3610,6 +3778,7 @@ Node3DEditor::Node3DEditor() {
 	main_flow = memnew(HFlowContainer);
 	toolbar_margin->add_child(main_flow);
 	toolbar_home = toolbar_margin; // G2 M7.2a: park target when no scene pane hosts the toolbar.
+	toolbar_shortcut_context_id = get_instance_id();
 
 	// Main toolbars.
 	HBoxContainer *main_menu_hbox = memnew(HBoxContainer);
@@ -3734,14 +3903,53 @@ Node3DEditor::Node3DEditor() {
 	tool_option_button[TOOL_OPT_LOCAL_COORDS]->set_shortcut_context(this);
 	tool_option_button[TOOL_OPT_LOCAL_COORDS]->set_accessibility_name(TTRC("Use Local Space"));
 
+	main_menu_hbox->add_child(memnew(VSeparator));
+
+	grid_visibility_button = memnew(Button);
+	main_menu_hbox->add_child(grid_visibility_button);
+	grid_visibility_button->set_toggle_mode(true);
+	grid_visibility_button->set_theme_type_variation(SceneStringName(FlatButton));
+	grid_visibility_button->set_tooltip_text(TTRC("Show or hide the grid in the active 3D viewport. (#)"));
+	grid_visibility_button->set_accessibility_name(TTRC("View Grid"));
+	grid_visibility_button->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditor::_grid_visibility_toggled));
+	ED_SHORTCUT("spatial_editor/view_grid", TTRC("View Grid"), Key::NUMBERSIGN);
+
 	tool_option_button[TOOL_OPT_USE_SNAP] = memnew(Button);
 	main_menu_hbox->add_child(tool_option_button[TOOL_OPT_USE_SNAP]);
 	tool_option_button[TOOL_OPT_USE_SNAP]->set_toggle_mode(true);
 	tool_option_button[TOOL_OPT_USE_SNAP]->set_theme_type_variation(SceneStringName(FlatButton));
 	tool_option_button[TOOL_OPT_USE_SNAP]->connect(SceneStringName(toggled), callable_mp(this, &Node3DEditor::_menu_item_toggled).bind(MENU_TOOL_USE_SNAP));
-	tool_option_button[TOOL_OPT_USE_SNAP]->set_shortcut(ED_SHORTCUT("spatial_editor/snap", TTRC("Use Snap"), Key::Y));
-	tool_option_button[TOOL_OPT_USE_SNAP]->set_shortcut_context(this);
+	ED_SHORTCUT("spatial_editor/snap", TTRC("Use Snap"), Key::Y);
+	tool_option_button[TOOL_OPT_USE_SNAP]->set_tooltip_text(TTRC("Toggle transform snapping. (Y)"));
 	tool_option_button[TOOL_OPT_USE_SNAP]->set_accessibility_name(TTRC("Use Snap"));
+
+	grid_step_menu = memnew(MenuButton);
+	main_menu_hbox->add_child(grid_step_menu);
+	grid_step_menu->set_flat(false);
+	grid_step_menu->set_theme_type_variation("FlatMenuButton");
+	grid_step_menu->set_accessibility_name(TTRC("Translate Snap Step"));
+	PopupMenu *grid_step_popup = grid_step_menu->get_popup();
+	grid_step_popup->add_shortcut(ED_SHORTCUT("spatial_editor/grid_step_smaller", TTRC("Smaller Grid and Snap Step"), Key::BRACKETLEFT), MENU_GRID_STEP_SMALLER);
+	grid_step_popup->set_item_shortcut_disabled(grid_step_popup->get_item_index(MENU_GRID_STEP_SMALLER), true);
+	grid_step_popup->add_shortcut(ED_SHORTCUT("spatial_editor/grid_step_larger", TTRC("Larger Grid and Snap Step"), Key::BRACKETRIGHT), MENU_GRID_STEP_LARGER);
+	grid_step_popup->set_item_shortcut_disabled(grid_step_popup->get_item_index(MENU_GRID_STEP_LARGER), true);
+	grid_step_popup->add_separator();
+	grid_step_popup->add_radio_check_item(TTRC("0.001 m"), MENU_GRID_STEP_1_MM);
+	grid_step_popup->add_radio_check_item(TTRC("0.01 m"), MENU_GRID_STEP_1_CM);
+	grid_step_popup->add_radio_check_item(TTRC("0.1 m"), MENU_GRID_STEP_10_CM);
+	grid_step_popup->add_radio_check_item(TTRC("0.25 m"), MENU_GRID_STEP_25_CM);
+	grid_step_popup->add_radio_check_item(TTRC("0.5 m"), MENU_GRID_STEP_50_CM);
+	grid_step_popup->add_radio_check_item(TTRC("1 m"), MENU_GRID_STEP_1_M);
+	grid_step_popup->add_radio_check_item(TTRC("2 m"), MENU_GRID_STEP_2_M);
+	grid_step_popup->add_radio_check_item(TTRC("5 m"), MENU_GRID_STEP_5_M);
+	grid_step_popup->add_radio_check_item(TTRC("10 m"), MENU_GRID_STEP_10_M);
+	grid_step_popup->add_separator();
+	grid_step_popup->add_item(TTRC("Configure Snap..."), MENU_GRID_CONFIGURE_SNAP);
+	grid_step_popup->add_item(TTRC("3D Grid Settings..."), MENU_GRID_EDITOR_SETTINGS);
+	grid_step_popup->connect(SNAME("about_to_popup"), callable_mp(this, &Node3DEditor::_refresh_grid_toolbar));
+	grid_step_popup->connect(SceneStringName(id_pressed), callable_mp(this, &Node3DEditor::_grid_step_menu_pressed));
+
+	main_menu_hbox->add_child(memnew(VSeparator));
 
 	tool_option_button[TOOL_OPT_USE_TRACKBALL] = memnew(Button);
 	main_menu_hbox->add_child(tool_option_button[TOOL_OPT_USE_TRACKBALL]);
@@ -3931,6 +4139,7 @@ Node3DEditor::Node3DEditor() {
 	p->add_separator();
 	p->add_check_shortcut(ED_SHORTCUT("spatial_editor/view_origin", TTRC("View Origin")), MENU_VIEW_ORIGIN);
 	p->add_check_shortcut(ED_SHORTCUT("spatial_editor/view_grid", TTRC("View Grid"), Key::NUMBERSIGN), MENU_VIEW_GRID);
+	p->set_item_shortcut_disabled(p->get_item_index(MENU_VIEW_GRID), true);
 
 	p->add_separator();
 	p->add_submenu_node_item(TTRC("Preview Translation"), memnew(EditorTranslationPreviewMenu));
@@ -4465,6 +4674,7 @@ void Node3DEditor::set_translate_snap(real_t p_value) {
 		snap_translate->set_value(snap_translate_value);
 	}
 	update_grid();
+	_refresh_grid_toolbar();
 }
 
 struct _GizmoPluginPriorityComparator {

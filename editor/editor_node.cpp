@@ -4786,6 +4786,13 @@ void EditorNode::_ensure_active_scene_tab() {
 	}
 }
 
+void EditorNode::popup_editor_settings(const String &p_section) {
+	editor_settings_dialog->popup_edit_settings();
+	if (!p_section.is_empty()) {
+		editor_settings_dialog->set_current_section(p_section);
+	}
+}
+
 void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 	// G2 M7.2a: the shared 2D/3D toolbar follows the focused scene pane. Reparent the matching one into
 	// the current pane's header slot and park the other; park both when the current surface is not a
@@ -4812,6 +4819,7 @@ void EditorNode::update_scene_pane_toolbar(DocumentView *p_view) {
 	}
 
 	if (host && is_3d && spatial) {
+		spatial->set_toolbar_viewport(p_view->get_scene_viewport());
 		Control *tb = spatial->get_shared_toolbar();
 		if (tb && tb->get_parent() != host) {
 			tb->reparent(host);

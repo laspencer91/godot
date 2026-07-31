@@ -61,6 +61,7 @@ class PanelContainer;
 class PhysicsDirectSpaceState3D;
 class ProceduralSkyMaterial;
 class SpinBox;
+class SubViewport;
 class World3D;
 class VSeparator;
 class VSplitContainer;
@@ -239,6 +240,19 @@ private:
 		MENU_VERTEX_SNAP_BASE_ORIGIN,
 		MENU_VERTEX_SNAP_SOURCE_MESH,
 		MENU_VERTEX_SNAP_SOURCE_COLLISION,
+		MENU_GRID_STEP_SMALLER,
+		MENU_GRID_STEP_LARGER,
+		MENU_GRID_STEP_1_MM,
+		MENU_GRID_STEP_1_CM,
+		MENU_GRID_STEP_10_CM,
+		MENU_GRID_STEP_25_CM,
+		MENU_GRID_STEP_50_CM,
+		MENU_GRID_STEP_1_M,
+		MENU_GRID_STEP_2_M,
+		MENU_GRID_STEP_5_M,
+		MENU_GRID_STEP_10_M,
+		MENU_GRID_CONFIGURE_SNAP,
+		MENU_GRID_EDITOR_SETTINGS,
 	};
 
 	Button *tool_button[TOOL_MAX];
@@ -250,6 +264,10 @@ private:
 	MenuButton *transform_menu = nullptr;
 	PopupMenu *gizmos_menu = nullptr;
 	MenuButton *view_layout_menu = nullptr;
+	Button *grid_visibility_button = nullptr;
+	MenuButton *grid_step_menu = nullptr;
+	ObjectID toolbar_viewport_id;
+	ObjectID toolbar_shortcut_context_id;
 
 	AcceptDialog *accept = nullptr;
 
@@ -278,6 +296,12 @@ private:
 
 	void _snap_changed();
 	void _snap_update();
+	void _grid_visibility_toggled(bool p_pressed);
+	void _grid_step_menu_pressed(int p_option);
+	Node3DEditorViewport *_get_toolbar_target_viewport() const;
+	void _refresh_grid_toolbar();
+	bool _is_text_input_focused() const;
+	bool _is_toolbar_shortcut_context_active() const;
 	void _update_vertex_snap_tooltips();
 	void _xform_dialog_action();
 	void _menu_item_pressed(int p_option);
@@ -597,6 +621,8 @@ public:
 	// G2 M7.2a-fix: re-point the toolbar's shortcut contexts (tool Q/W/E/R, snap, view menu) at the
 	// focused pane so its keyboard shortcuts fire there; null resets to this singleton.
 	void set_toolbar_shortcut_context(Node *p_context);
+	void set_toolbar_viewport(SubViewport *p_viewport);
+	void refresh_grid_toolbar() { _refresh_grid_toolbar(); }
 	void set_scene_view_button_state(bool p_2d);
 
 	void set_freelook_viewport(Node3DEditorViewport *p_viewport);
