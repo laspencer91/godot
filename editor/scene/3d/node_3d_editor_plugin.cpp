@@ -2208,6 +2208,48 @@ void Node3DEditorView::set_origin_enabled(bool p_enabled) {
 	}
 }
 
+Dictionary Node3DEditorView::capture_view_state() const {
+	Dictionary state;
+	state["layout"] = int(viewport_base->get_view());
+	state["viewport_splits"] = viewport_base->get_split_state();
+	state["last_used_viewport"] = last_used_viewport;
+	state["origin"] = origin_enabled;
+	Array viewport_states;
+	for (uint32_t i = 0; i < Node3DEditor::VIEWPORTS_COUNT; i++) {
+		viewport_states.push_back(viewports[i] ? viewports[i]->get_state() : Dictionary());
+	}
+	state["viewports"] = viewport_states;
+	return state;
+}
+
+void Node3DEditorView::apply_view_state(const Dictionary &p_state) {
+	if (p_state.has("layout")) {
+		const int layout = p_state["layout"];
+		if (layout >= Node3DEditorViewportContainer::VIEW_USE_1_VIEWPORT && layout <= Node3DEditorViewportContainer::VIEW_USE_4_VIEWPORTS) {
+			viewport_base->set_view(Node3DEditorViewportContainer::View(layout));
+		}
+	}
+	if (p_state.has("viewport_splits")) {
+		viewport_base->set_split_state(p_state["viewport_splits"]);
+	}
+	if (p_state.has("origin")) {
+		set_origin_enabled(p_state["origin"]);
+	}
+	if (p_state.has("viewports")) {
+		const Array viewport_states = p_state["viewports"];
+		const uint32_t count = MIN(uint32_t(viewport_states.size()), Node3DEditor::VIEWPORTS_COUNT);
+		for (uint32_t i = 0; i < count; i++) {
+			if (viewports[i] && viewport_states[i].get_type() == Variant::DICTIONARY) {
+				viewports[i]->set_state(viewport_states[i]);
+			}
+		}
+	}
+	if (p_state.has("last_used_viewport")) {
+		last_used_viewport = CLAMP(int(p_state["last_used_viewport"]), 0, int(Node3DEditor::VIEWPORTS_COUNT) - 1);
+	}
+	editor->refresh_grid_toolbar();
+}
+
 void Node3DEditor::_selection_changed() {
 	_refresh_menu_icons();
 

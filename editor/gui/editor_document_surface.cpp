@@ -364,6 +364,21 @@ class EditorSceneDocumentSurfaceInstance : public EditorBuiltinDocumentSurfaceIn
 		return spatial_editor ? spatial_editor->create_view_bound_to(document) : nullptr;
 	}
 
+	Control *_ensure_scene_surface(bool p_2d) {
+		Control *&surface = p_2d ? scene_surface_2d : scene_surface_3d;
+		if (surface || !scene_surface_stack) {
+			return surface;
+		}
+		surface = _create_scene_surface(p_2d);
+		if (surface) {
+			surface->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			surface->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+			surface->hide();
+			scene_surface_stack->add_child(surface);
+		}
+		return surface;
+	}
+
 	FoldableContainer *_add_accordion_section(VBoxContainer *p_column, Control *p_dock, const String &p_title, const StringName &p_icon, bool p_expanded) {
 		// Build one GDStudio-style dock "card": a raised rounded header (leading icon + top-edge highlight)
 		// over a recessed content panel. Colors are read from the editor theme at construction time - they
@@ -546,6 +561,24 @@ protected:
 	static void _bind_methods() {}
 
 public:
+	virtual void capture_view_state(Dictionary &r_state) const override {
+		r_state[SNAME("scene_view_2d")] = scene_view_2d;
+		if (const Node3DEditorView *spatial_view = Object::cast_to<Node3DEditorView>(scene_surface_3d)) {
+			r_state[SNAME("node_3d")] = spatial_view->capture_view_state();
+		}
+	}
+
+	virtual void apply_view_state(const Dictionary &p_state) override {
+		if (p_state.has(SNAME("node_3d"))) {
+			if (Node3DEditorView *spatial_view = Object::cast_to<Node3DEditorView>(_ensure_scene_surface(false))) {
+				spatial_view->apply_view_state(p_state[SNAME("node_3d")]);
+			}
+		}
+		if (p_state.has(SNAME("scene_view_2d"))) {
+			set_scene_view_2d(p_state[SNAME("scene_view_2d")]);
+		}
+	}
+
 	virtual SubViewport *get_scene_viewport() const override {
 		if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {
 			return canvas_view->get_scene_viewport();
@@ -577,16 +610,9 @@ public:
 			return true;
 		}
 
-		Control *&next_surface = p_2d ? scene_surface_2d : scene_surface_3d;
+		Control *next_surface = _ensure_scene_surface(p_2d);
 		if (!next_surface) {
-			next_surface = _create_scene_surface(p_2d);
-			if (!next_surface) {
-				return false;
-			}
-			next_surface->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-			next_surface->set_v_size_flags(Control::SIZE_EXPAND_FILL);
-			next_surface->hide();
-			scene_surface_stack->add_child(next_surface);
+			return false;
 		}
 
 		if (CanvasItemEditorView *canvas_view = Object::cast_to<CanvasItemEditorView>(document_surface)) {

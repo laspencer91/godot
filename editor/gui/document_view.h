@@ -88,6 +88,8 @@ public:
 	bool is_scene_view_2d() const;
 	bool set_scene_view_2d(bool p_2d);
 	void set_context_active(bool p_active);
+	void capture_editor_state();
+	void apply_editor_state();
 
 	// G2 S7 / CSG-3A: user-close side effects are not teardown side effects. Tab moves
 	// deliberately skip this hook and keep the same live instance.

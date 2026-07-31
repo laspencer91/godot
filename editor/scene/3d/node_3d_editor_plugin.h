@@ -719,6 +719,8 @@ public:
 	void update_grid(Node3DEditorViewport *p_viewport);
 	bool is_origin_enabled() const { return origin_enabled; }
 	void set_origin_enabled(bool p_enabled);
+	Dictionary capture_view_state() const;
+	void apply_view_state(const Dictionary &p_state);
 
 	Node3DEditorViewportContainer *get_viewport_base() const { return viewport_base; }
 	void activate_viewport_chrome();

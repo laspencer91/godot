@@ -73,6 +73,8 @@ public:
 	virtual void document_view_entered_tree() {}
 	virtual void document_view_theme_changed() {}
 	virtual void document_view_ready() {}
+	virtual void capture_view_state(Dictionary &r_state) const {}
+	virtual void apply_view_state(const Dictionary &p_state) {}
 
 	// Typed adapters preserve DocumentView's existing scene-facing API without a
 	// capability dictionary or knowledge of concrete built-in instance classes.

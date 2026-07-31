@@ -44,17 +44,61 @@ static bool cleanup_called[2] = {};
 
 class TestSurfaceInstance : public EditorDocumentSurfaceInstance {
 	int index = 0;
+	int state_value = 0;
 
 public:
+	virtual void capture_view_state(Dictionary &r_state) const override {
+		r_state[SNAME("test_value")] = state_value;
+	}
+
+	virtual void apply_view_state(const Dictionary &p_state) override {
+		if (p_state.has(SNAME("test_value"))) {
+			state_value = p_state[SNAME("test_value")];
+		}
+	}
+
 	virtual void pre_delete_cleanup() override {
 		cleanup_called[index] = true;
 	}
+
+	void set_state_value(int p_value) { state_value = p_value; }
+	int get_state_value() const { return state_value; }
 
 	TestSurfaceInstance(int p_index) {
 		index = p_index;
 		set_root_control(memnew(Control));
 	}
 };
+
+TEST_CASE("[Editor][EditorDocumentSurface] Generic view-state hooks keep pane dictionaries independent") {
+	EditorDocumentView first_view;
+	EditorDocumentView second_view;
+	TestSurfaceInstance *first = memnew(TestSurfaceInstance(0));
+	TestSurfaceInstance *second = memnew(TestSurfaceInstance(1));
+	first->set_state_value(11);
+	second->set_state_value(22);
+	first->capture_view_state(first_view.get_editor_states());
+	second->capture_view_state(second_view.get_editor_states());
+
+	CHECK(int(first_view.get_editor_states()[SNAME("test_value")]) == 11);
+	CHECK(int(second_view.get_editor_states()[SNAME("test_value")]) == 22);
+	first_view.get_editor_states()[SNAME("test_value")] = 33;
+	CHECK(int(second_view.get_editor_states()[SNAME("test_value")]) == 22);
+
+	first->set_state_value(0);
+	second->set_state_value(0);
+	first->apply_view_state(first_view.get_editor_states());
+	second->apply_view_state(second_view.get_editor_states());
+	CHECK(first->get_state_value() == 33);
+	CHECK(second->get_state_value() == 22);
+
+	Control *first_root = first->get_root_control();
+	Control *second_root = second->get_root_control();
+	memdelete(first);
+	memdelete(second);
+	memdelete(first_root);
+	memdelete(second_root);
+}
 
 class TestSurfaceProvider : public EditorDocumentSurfaceProvider {
 public:

@@ -6148,7 +6148,8 @@ void Node3DEditorViewport::set_state(const Dictionary &p_state) {
 		preview_camera->disconnect(SceneStringName(toggled), callable_mp(this, &Node3DEditorViewport::_toggle_camera_preview));
 	}
 	if (p_state.has("previewing")) {
-		Node *pv = EditorNode::get_singleton()->get_edited_scene()->get_node(p_state["previewing"]);
+		Node *scene_root = editor_view && editor_view->get_document() ? editor_view->get_document()->get_root() : EditorNode::get_singleton()->get_edited_scene();
+		Node *pv = scene_root ? scene_root->get_node_or_null(p_state["previewing"]) : nullptr;
 		if (Object::cast_to<Camera3D>(pv)) {
 			previewing = Object::cast_to<Camera3D>(pv);
 			previewing->connect(SceneStringName(tree_exiting), callable_mp(this, &Node3DEditorViewport::_preview_exited_scene));
@@ -6208,7 +6209,10 @@ Dictionary Node3DEditorViewport::get_state() const {
 	d["half_res"] = view_display_menu->get_popup()->is_item_checked(view_display_menu->get_popup()->get_item_index(VIEW_HALF_RESOLUTION));
 	d["cinematic_preview"] = view_display_menu->get_popup()->is_item_checked(view_display_menu->get_popup()->get_item_index(VIEW_CINEMATIC_PREVIEW));
 	if (previewing) {
-		d["previewing"] = EditorNode::get_singleton()->get_edited_scene()->get_path_to(previewing);
+		Node *scene_root = editor_view && editor_view->get_document() ? editor_view->get_document()->get_root() : EditorNode::get_singleton()->get_edited_scene();
+		if (scene_root && (scene_root == previewing || scene_root->is_ancestor_of(previewing))) {
+			d["previewing"] = scene_root->get_path_to(previewing);
+		}
 	}
 	d["lock_rotation"] = view_3d_controller->is_locking_rotation();
 
@@ -8200,7 +8204,7 @@ void Node3DEditorViewportContainer::set_view(View p_view) {
 	}
 }
 
-Node3DEditorViewportContainer::View Node3DEditorViewportContainer::get_view() {
+Node3DEditorViewportContainer::View Node3DEditorViewportContainer::get_view() const {
 	return view;
 }
 

@@ -108,12 +108,30 @@ void DocumentView::set_context_active(bool p_active) {
 	if (context_active == p_active) {
 		return;
 	}
+	if (!p_active) {
+		capture_editor_state();
+	}
 	context_active = p_active;
 	if (doc_view) {
 		doc_view->set_active(p_active);
 	}
 	if (surface_instance) {
 		surface_instance->set_context_active(p_active);
+	}
+	if (p_active) {
+		apply_editor_state();
+	}
+}
+
+void DocumentView::capture_editor_state() {
+	if (doc_view && surface_instance) {
+		surface_instance->capture_view_state(doc_view->get_editor_states());
+	}
+}
+
+void DocumentView::apply_editor_state() {
+	if (doc_view && surface_instance) {
+		surface_instance->apply_view_state(doc_view->get_editor_states());
 	}
 }
 
@@ -140,13 +158,18 @@ void DocumentView::_notification(int p_what) {
 		if (surface_instance) {
 			surface_instance->document_view_ready();
 		}
+		apply_editor_state();
 		return;
 	}
 	if (p_what != NOTIFICATION_PREDELETE) {
 		return;
 	}
 
-	set_context_active(false);
+	if (context_active) {
+		set_context_active(false);
+	} else {
+		capture_editor_state();
+	}
 	if (surface_instance) {
 		// PREDELETE dispatches derived-first, so this runs BEFORE Node's handler frees the children -
 		// the last moment the surface is guaranteed alive (the destructor is too late: children are

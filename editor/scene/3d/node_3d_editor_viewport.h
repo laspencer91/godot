@@ -718,7 +718,7 @@ protected:
 
 public:
 	void set_view(View p_view);
-	View get_view();
+	View get_view() const;
 
 	void add_viewport(Node3DEditorViewport *p_viewport, int p_index);
 
