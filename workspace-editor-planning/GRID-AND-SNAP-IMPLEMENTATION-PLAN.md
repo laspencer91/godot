@@ -1,8 +1,10 @@
-# First-Class 3D Grid and Snap Tooling - Frozen Implementation Plan
+# First-Class 3D Grid and Snap Tooling - Revised Implementation Plan
 
-Status: design frozen for implementation after code review by Claude Opus and an independent source audit on 2026-07-23.
+Status: revised for implementation after the original 2026-07-23 review and a current-source/Phase-0 audit on 2026-07-31.
 
 This document covers the 3D editor grid, translate-snap presentation, per-viewport isolation, generic edit-domain work grids, and CSG integration. It does not implement the feature.
+
+Implementation note: `origin/archive/document-grid-phase0-1a04382f05` contains the original Phase 0 math and tests. It is not merged into current `master` and is superseded where this revision changes LOD bounds, orthographic projected-density calculation, rebuild-key stability, and invalid-setting behavior. Reuse it as a starting point only; do not cherry-pick it as an accepted implementation without those corrections.
 
 ## 1. Executive verdict
 
@@ -158,6 +160,7 @@ Lease lifecycle in `Node3DEditorViewport::_sync_private_editor_layer()`:
 - release before world change, on visibility loss, and during destruction;
 - after acquire/release, rewrite camera cull mask plus all private gizmo/grid/origin instance masks;
 - on exhaustion, set private instance masks to zero, leave the scene camera usable, warn once per scenario, and retry on a later visibility/world synchronization;
+- while a visible viewport has no lease, show a small non-modal viewport warning that editor overlays are unavailable; remove it immediately after acquisition succeeds;
 - a failed acquire is never passed to release.
 
 This also fixes the current allocator's untracked bit-27 fallback.
@@ -242,18 +245,32 @@ minor_step = base_translate_snap * primary_grid_steps ^ level
 major_step = minor_step * primary_grid_steps
 ```
 
-Compute projected pixels per base step at a stable sample on the working plane. Orthographic cameras use their size and viewport height; perspective cameras may project `sample`, `sample + U * step`, and `sample + V * step`. Clamp invalid/horizon cases.
+The base snap level (`level == 0`) must always be reachable. Negative levels are permitted when the configured physical minimum calls for visible subdivisions of a coarse snap lattice; the base snap lattice remains a coarser member of the same nested hierarchy.
 
-Choose a continuous level using the existing division bias and min/max settings. Its floor selects the minor mesh step; its fraction drives the small/large color fade. Rebuild only when one of these semantic keys changes:
+Compute projected pixels per base step at a stable sample on the working plane. Use the full camera view/projection transform for both perspective and orthographic cameras: project `sample`, `sample + U * step`, and `sample + V * step`, then derive an isotropic density from both screen-space vectors. This is required for tilted and nearly edge-on edit-domain planes; orthographic size/viewport height alone is insufficient because it ignores foreshortening. Prefer a finite center-view-ray/plane intersection as the sample. Fall back deterministically and clamp invalid, behind-camera, and horizon cases.
+
+The existing division-level settings retain their documented role as an absolute world-space spacing envelope, rather than being multiplied blindly by an arbitrary snap step. After applying the existing primary-step compatibility interpretation, derive absolute `configured_min_spacing` and `configured_max_spacing`, then convert that envelope to snap-lattice exponent bounds:
+
+```text
+level_min = min(0, floor(log_primary(configured_min_spacing / base_translate_snap)))
+level_max = max(0, ceil (log_primary(configured_max_spacing / base_translate_snap)))
+```
+
+This deliberately rounds outward: the grid remains aligned to the snap lattice, includes the base level, can show useful subdivisions for a coarse snap value, and can still become physically coarse enough when the snap value is very small. For example, a `0.001 m` snap must not cap the far-view grid at `0.064 m` cells and a roughly `12.8 m` half-extent.
+
+Choose a continuous level using projected density and division bias, then clamp it to the derived exponent bounds. Its floor selects the minor mesh step; its fraction drives the small/large color fade. Rebuild geometry only when one of these canonical semantic keys changes:
 
 - frame basis, anchor, or plane coordinate;
 - floor LOD;
 - camera-centered major-cell coordinate in U/V;
 - grid extent, plane settings, colors, or primary step count;
-- viewport projection or dimensions where they change layout;
 - base translate snap step.
 
-Material-only fade changes do not rebuild geometry. `primary_grid_steps <= 1` gets a guarded fallback factor of 2 and a corrected editor-setting hint; no logarithm may divide by zero.
+Projection type, viewport dimensions, FOV/orthographic size, and camera motion are inputs to LOD and material telemetry, but they are not raw geometry-key fields. They cause a rebuild only when their derived floor LOD or centered major cell changes. Resizing a pane by one pixel while those decisions stay constant must not clear and rebuild the mesh.
+
+Working frames must be canonicalized from stable semantic geometry whenever possible (for example, the authored CSG face plane rather than a raw ray-hit point). Rebuild-key comparison uses a documented finite tolerance for basis and plane values, scaled conservatively by the current minor step. Sub-pixel ray jitter on one semantic plane must not rebuild geometry; a real plane, anchor, or orientation change must.
+
+Material-only fade changes do not rebuild geometry. `primary_grid_steps <= 1` gets a guarded fallback factor of 2 and a corrected editor-setting hint; no logarithm may divide by zero. Normalize non-finite bias/reference inputs, enforce ordered finite bounds, and clamp the fade radius to a finite non-negative value. `grid_half_extent_cells <= primary_grid_steps` is legal and must never produce a negative shader radius.
 
 The existing `editors/3d/grid_size` key remains. Rename the local variable to `grid_half_extent_cells` and update `EditorSettings.xml` to explain that physical extent changes with visible cell spacing.
 
@@ -405,9 +422,9 @@ Files:
 - new `editor/scene/3d/editor_grid_3d.{h,cpp}`;
 - new `tests/editor/test_editor_grid_3d.cpp`.
 
-Implement and test `EditorGridFrame3D`, projected-density/LOD selection, semantic rebuild keys, finite/degenerate handling, and snap-lattice centering. No renderer or UI change.
+Implement and test `EditorGridFrame3D`, projected-density/LOD selection, semantic rebuild keys, finite/degenerate handling, and snap-lattice centering. Rework, rather than accepting unchanged, the archived Phase 0 implementation identified at the top of this document. No renderer or UI change.
 
-Gate: rotated, translated, nonuniform, mirrored, arbitrary-plane, absolute U/V/N, perspective/ortho layout, `primary_grid_steps == 1`, and LOD boundary tests pass.
+Gate: rotated, translated, nonuniform, mirrored, arbitrary-plane, absolute U/V/N, perspective/ortho layout including oblique orthographic planes, snap steps from `0.001 m` through large values, `primary_grid_steps == 1`, invalid setting combinations, stable jitter/resize rebuild keys, and LOD boundary tests pass.
 
 ### Phase 1 - Harden the private viewport layer lease
 
@@ -419,22 +436,9 @@ Files:
 
 Replace `allocate_gizmo_layer/free_gizmo_layer` with the noncontiguous checked pool, rename viewport members from gizmo-layer to private-editor-layer, make leases visibility/world aware, migrate transform-gizmo masks, use unsigned shifts, and remove alias fallback.
 
-Gate: nine unique leases per scenario; independent reuse across scenarios; tenth invalid; no double-free; hidden viewport releases; reacquire restores masks; bit 31 safe.
+Gate: nine unique leases per scenario; independent reuse across scenarios; tenth invalid; no double-free; hidden viewport releases; reacquire restores masks and clears the viewport warning; bit 31 safe.
 
-### Phase 2 - Make snap policy explicit
-
-Files:
-
-- `editor/scene/3d/node_3d_editor_plugin.{h,cpp}`;
-- `editor/scene/3d/node_3d_editor_viewport.cpp`;
-- `modules/csg/editor/csg_edit_domain.{h,cpp}`;
-- `tests/editor/test_csg_edit_domain.cpp` and snap policy tests.
-
-Add event-sourced raw modifiers, explicit effect masks, central positive-step setter, and migrate internal call sites. CSG's active step uses `NONE`; cut uses raw Ctrl state without changing snap.
-
-Gate: native Ctrl inversion and Shift fine-snap remain; CSG Ctrl/Shift do not affect enable/step; focus loss clears modifiers; zero state normalizes safely.
-
-### Phase 3 - Move rendering to each subviewport
+### Phase 2 - Move rendering to each subviewport
 
 Files:
 
@@ -444,9 +448,24 @@ Files:
 
 Implement `EditorGrid3DRenderer`, move grid/origin RIDs out of `Node3DEditorView`, use the viewport's private layer and camera, preserve deferred scenario binding, route the viewport process call through its owning `editor_view`, fan editor-setting changes to all live renderers, and reuse RIDs with `mesh_clear()`.
 
+The renderer reads the configured raw translate step through a narrow accessor that does not apply temporary modifier effects. Existing snap-change paths invalidate all live renderers; Phase 3 centralizes those paths without changing this contract.
+
 Remove every built-in grid-instance assignment to `GIZMO_GRID_LAYER`; bit 25 remains only a temporary compatibility mask as described above.
 
-Gate: non-main pane grid appears; quad cameras each get correct centering/LOD; two same-world panes show exactly one private grid each; toggle independence; world rebind; hidden cleanup; no RID churn.
+Gate: non-main pane grid appears; quad cameras each get correct centering/LOD; two same-world panes show exactly one private grid each; toggle independence; world rebind; hidden cleanup; no RID churn; tiny and large snap steps retain useful near/far grids.
+
+### Phase 3 - Make snap policy explicit
+
+Files:
+
+- `editor/scene/3d/node_3d_editor_plugin.{h,cpp}`;
+- `editor/scene/3d/node_3d_editor_viewport.cpp`;
+- `modules/csg/editor/csg_edit_domain.{h,cpp}`;
+- `tests/editor/test_csg_edit_domain.cpp` and snap policy tests.
+
+Add event-sourced raw modifiers, explicit effect masks, central positive-step setter, and migrate internal call sites. CSG's active step uses `NONE`; cut uses raw Ctrl state without changing snap. The central setter retains the renderer invalidation introduced in Phase 2.
+
+Gate: native Ctrl inversion and Shift fine-snap remain; CSG Ctrl/Shift do not affect enable/step; focus loss clears modifiers; zero state normalizes safely; every step mutation invalidates all live renderer telemetry/layout exactly once.
 
 ### Phase 4 - First-class Grid toolbar and coherent aliases
 
@@ -515,7 +534,10 @@ Run focused tests first, then the repository production build script. Do not sta
 - Local/Root/World anchors and projected tangents are deterministic.
 - Mirrored and nonuniform transforms do not skew cells.
 - LOD remains on powers of `primary_grid_steps` relative to base snap.
-- Center-cell and LOD boundaries rebuild exactly once; fade-only changes do not rebuild.
+- Tiny and large snap steps retain the base level while reaching a useful physical near/far spacing envelope.
+- Perspective and orthographic projected density account for U/V foreshortening on arbitrary planes.
+- Center-cell and LOD boundaries rebuild exactly once; fade-only, sub-tolerance hit jitter, and same-LOD viewport resizing do not rebuild.
+- `grid_half_extent_cells <= primary_grid_steps`, reversed bounds, and non-finite inputs stay finite and never produce a negative fade radius.
 - Invalid camera/frame inputs do not emit NaNs.
 - Layer pool covers all nine bits, is per scenario, fails closed, and balances acquire/free.
 - Snap policy native/none behavior and modifier focus reset.
@@ -538,6 +560,8 @@ Run focused tests first, then the repository production build script. Do not sta
 - Two visible panes on one world have independent visibility and cameras.
 - Quad view has four correctly centered grids, not viewport-0 copies.
 - Perspective and every orthographic direction.
+- Oblique edit-domain planes in orthographic and perspective views, including nearly edge-on angle fade.
+- Snap steps `0.001`, `0.01`, `0.1`, `1`, and `10 m` at near and far camera distances; the grid neither truncates near the camera nor loses snap alignment.
 - Forward+, Mobile, and Compatibility rendering.
 - Toggle grid from toolbar, shared View menu, and viewport View menu.
 - `#`, `Y`, `[`, `]`; then type those characters in CSG numeric and ordinary text fields.
@@ -562,7 +586,7 @@ Final production verification uses only:
 
 ## 12. Edge and failure behavior
 
-- More than nine simultaneously visible subviewports on one scenario: additional viewports render the scene but no private transform gizmo/grid/origin, warn once, and retry when a lease frees. Never overlap another viewport's private layer.
+- More than nine simultaneously visible subviewports on one scenario: additional viewports render the scene but no private transform gizmo/grid/origin, warn once, show the non-modal unavailable-overlays indicator in each affected viewport, and retry when a lease frees. Never overlap another viewport's private layer.
 - Hidden quad slots and background tabs release leases but retain renderer RIDs for cheap reactivation.
 - Invalid world/scenario: detach instances and release the old lease.
 - Invalid frame: canonical world fallback outside a locked gesture; cancel the gesture if its locked frame becomes invalid.
@@ -577,7 +601,7 @@ Final production verification uses only:
 
 - Keep `editors/3d/grid_size`, `primary_grid_steps`, and division-level keys. Update documentation; do not migrate or duplicate keys.
 - `grid_size` changes only in description/local naming. Existing numeric values load.
-- Division levels become relative to the configured base snap lattice. This is an intentional visible behavior change and must be noted in release notes.
+- Visible divisions remain powers of `primary_grid_steps` relative to the configured base snap lattice. The existing division-level settings continue to define an absolute physical spacing envelope, rounded outward to reachable snap-lattice levels while always including the base level. This is an intentional visible behavior refinement and must be noted in release notes.
 - Existing `#` and `Y` shortcuts keep their paths and defaults. Bracket shortcuts are additive and user-remappable.
 - Keep public no-argument snap accessors as native-policy compatibility wrappers where external editor modules require them; internal code uses explicit effects.
 - Keep a no-argument `Node3DEditor::update_grid()` compatibility forwarder temporarily, but no internal viewport may call it.
@@ -602,8 +626,8 @@ Each implementation commit must build and pass its focused gate before the next:
 
 1. `grid: add working-frame and snap-lattice layout math`
 2. `editor: harden private 3D viewport layer leases`
-3. `snap: make modifier effects explicit for native and domain tools`
-4. `grid: render grid and origin per 3D subviewport`
+3. `grid: render grid and origin per 3D subviewport`
+4. `snap: make modifier effects explicit for native and domain tools`
 5. `grid: add first-class toolbar controls and snap-aligned LOD`
 6. `workspace: capture and restore generic per-view surface state`
 7. `edit-domain: add optional working-grid-frame query`
@@ -613,7 +637,7 @@ Documentation and tests travel with the commit whose behavior they describe. The
 
 ## 16. Worktree prerequisite and staging discipline
 
-At freeze time, `master` is clean at `146ae83ee0` (`csg-edit: fix async redraw and polish editor tooling`) and is 49 commits ahead of `origin/master`.
+The original freeze-time base (`146ae83ee0`) and its ahead-of-origin count are historical only. Before implementation, start from the then-current clean `master`/tracking branch, fetch its remote, record the actual base commit in the implementation handoff, and compare the archived Phase 0 files against that base before reusing them.
 
 The tree is shared. Before every implementation phase:
 
@@ -624,4 +648,4 @@ The tree is shared. Before every implementation phase:
 - check for a running SCons process before any build;
 - use the dev/test namespace for focused tests and `build_editor.ps1` for the final production build.
 
-This plan document itself should be committed alone before implementation begins.
+Commit this revised plan independently before implementation begins so the archived Phase 0 behavior cannot be mistaken for the accepted specification.
