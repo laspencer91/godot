@@ -532,9 +532,12 @@ private:
 	Editor3DViewportLayerLease private_editor_layer_lease;
 	Ref<World3D> private_editor_layer_world;
 	Label *private_overlays_warning = nullptr;
+	EditorGrid3DRenderer grid_renderer;
+	bool grid_renderer_initialized = false;
 
 	void _sync_private_editor_layer();
 	void _apply_private_editor_layer();
+	void _deferred_grid_bind();
 
 	String last_message;
 	String message;
@@ -653,6 +656,12 @@ public:
 
 	// G1: re-point this viewport (and its gizmo instances) at the active document's world.
 	void set_editor_world(const Ref<World3D> &p_world);
+	void update_grid_renderer(const EditorGridFrame3D *p_working_frame = nullptr);
+	void invalidate_grid_renderer() { grid_renderer.invalidate(); }
+	void set_grid_visible(bool p_visible) { grid_renderer.set_grid_visible(p_visible); }
+	bool is_grid_visible() const { return grid_renderer.is_grid_visible(); }
+	real_t get_visible_grid_spacing() const { return grid_renderer.get_visible_minor_spacing(); }
+	void set_origin_visible(bool p_visible) { grid_renderer.set_origin_visible(p_visible); }
 
 	void set_can_preview(Camera3D *p_preview);
 	void switch_preview_camera(Camera3D *p_new_camera);

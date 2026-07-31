@@ -33,6 +33,11 @@
 #include "core/error/error_macros.h"
 #include "core/math/basis.h"
 #include "core/math/math_funcs.h"
+#include "editor/settings/editor_settings.h"
+#include "scene/3d/camera_3d.h"
+#include "scene/resources/material.h"
+#include "scene/resources/shader.h"
+#include "servers/rendering/rendering_server.h"
 
 #include <climits>
 
@@ -550,4 +555,299 @@ EditorGridRebuildKey editor_grid_make_rebuild_key(
 	key.base_translate_snap = s.base_translate_snap;
 	key.frame_tolerance = MAX((real_t)1e-6, p_lod.minor_step * (real_t)1e-5);
 	return key;
+}
+
+struct EditorGrid3DRenderer::Data {
+	RID grid_mesh[3];
+	RID grid_instance[3];
+	RID origin_mesh;
+	RID origin_instance;
+	Ref<ShaderMaterial> grid_material[3];
+	Ref<StandardMaterial3D> origin_material;
+	EditorGridRebuildKey rebuild_key[3];
+	bool rebuild_key_valid[3] = { false, false, false };
+	bool slot_enabled[3] = { false, false, false };
+	RID scenario;
+	bool bindable = false;
+	bool grid_visible = true;
+	bool origin_visible = true;
+	int private_layer = -1;
+	real_t visible_minor_spacing = 0.0;
+};
+
+static void grid_renderer_apply_binding(EditorGrid3DRenderer::Data *p_data) {
+	const RID scenario = p_data->bindable ? p_data->scenario : RID();
+	const uint32_t layer_mask = p_data->private_layer >= 0 ? (uint32_t(1) << p_data->private_layer) : 0;
+	for (int i = 0; i < 3; i++) {
+		RS::get_singleton()->instance_set_scenario(p_data->grid_instance[i], scenario);
+		RS::get_singleton()->instance_set_layer_mask(p_data->grid_instance[i], layer_mask);
+		RS::get_singleton()->instance_set_visible(p_data->grid_instance[i], p_data->grid_visible && p_data->slot_enabled[i] && layer_mask != 0);
+	}
+	RS::get_singleton()->instance_set_scenario(p_data->origin_instance, scenario);
+	RS::get_singleton()->instance_set_layer_mask(p_data->origin_instance, layer_mask);
+	RS::get_singleton()->instance_set_visible(p_data->origin_instance, p_data->origin_visible && layer_mask != 0);
+}
+
+EditorGrid3DRenderer::~EditorGrid3DRenderer() {
+	finish();
+}
+
+void EditorGrid3DRenderer::initialize(const Color p_axis_colors[3]) {
+	if (data) {
+		return;
+	}
+	data = memnew(Data);
+
+	Ref<Shader> grid_shader;
+	grid_shader.instantiate();
+	grid_shader->set_code(R"(
+shader_type spatial;
+render_mode unshaded, fog_disabled;
+
+uniform bool orthogonal;
+uniform float fade_distance;
+uniform float lod_fade;
+uniform vec4 primary_color : source_color;
+uniform vec4 secondary_color : source_color;
+uniform vec3 plane_origin_world;
+uniform vec3 plane_normal_world;
+uniform vec3 camera_direction_world;
+
+void fragment() {
+	vec3 world_pos = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 world_normal = normalize(plane_normal_world);
+	vec3 camera_world_pos = INV_VIEW_MATRIX[3].xyz;
+	vec3 view_dir_world = orthogonal ? -normalize(camera_direction_world) : normalize(camera_world_pos - world_pos);
+	float angle_fade = smoothstep(0.05, 0.2, abs(dot(view_dir_world, world_normal)));
+	vec3 camera_on_plane = camera_world_pos - world_normal * dot(camera_world_pos - plane_origin_world, world_normal);
+	float safe_distance = max(fade_distance, 0.0001);
+	float dist_fade = smoothstep(0.02, 0.3, 1.0 - distance(world_pos, camera_on_plane) / safe_distance);
+	vec4 line_color = COLOR.r > 0.5 ? mix(primary_color, secondary_color, lod_fade) : vec4(secondary_color.rgb, secondary_color.a * (1.0 - lod_fade));
+	ALBEDO = line_color.rgb;
+	ALPHA = line_color.a * dist_fade * angle_fade;
+}
+)");
+
+	for (int i = 0; i < 3; i++) {
+		data->grid_material[i].instantiate();
+		data->grid_material[i]->set_shader(grid_shader);
+		data->grid_mesh[i] = RS::get_singleton()->mesh_create();
+		data->grid_instance[i] = RS::get_singleton()->instance_create2(data->grid_mesh[i], RID());
+		RS::get_singleton()->instance_geometry_set_cast_shadows_setting(data->grid_instance[i], RSE::SHADOW_CASTING_SETTING_OFF);
+		RS::get_singleton()->instance_geometry_set_flag(data->grid_instance[i], RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
+		RS::get_singleton()->instance_geometry_set_flag(data->grid_instance[i], RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
+	}
+
+	data->origin_material.instantiate();
+	data->origin_material->set_shading_mode(StandardMaterial3D::SHADING_MODE_UNSHADED);
+	data->origin_material->set_flag(StandardMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+	data->origin_material->set_transparency(StandardMaterial3D::TRANSPARENCY_ALPHA);
+	Vector<Vector3> origin_points;
+	Vector<Color> origin_colors;
+	origin_points.resize(6);
+	origin_colors.resize(6);
+	for (int axis = 0; axis < 3; axis++) {
+		Vector3 from;
+		Vector3 to;
+		from[axis] = -1000000.0;
+		to[axis] = 1000000.0;
+		origin_points.write[axis * 2] = from;
+		origin_points.write[axis * 2 + 1] = to;
+		origin_colors.write[axis * 2] = p_axis_colors[axis];
+		origin_colors.write[axis * 2 + 1] = p_axis_colors[axis];
+	}
+	Array origin_arrays;
+	origin_arrays.resize(RSE::ARRAY_MAX);
+	origin_arrays[RSE::ARRAY_VERTEX] = origin_points;
+	origin_arrays[RSE::ARRAY_COLOR] = origin_colors;
+	data->origin_mesh = RS::get_singleton()->mesh_create();
+	RS::get_singleton()->mesh_add_surface_from_arrays(data->origin_mesh, RSE::PRIMITIVE_LINES, origin_arrays);
+	RS::get_singleton()->mesh_surface_set_material(data->origin_mesh, 0, data->origin_material->get_rid());
+	data->origin_instance = RS::get_singleton()->instance_create2(data->origin_mesh, RID());
+	RS::get_singleton()->instance_geometry_set_cast_shadows_setting(data->origin_instance, RSE::SHADOW_CASTING_SETTING_OFF);
+	RS::get_singleton()->instance_geometry_set_flag(data->origin_instance, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
+	RS::get_singleton()->instance_geometry_set_flag(data->origin_instance, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
+	grid_renderer_apply_binding(data);
+}
+
+void EditorGrid3DRenderer::finish() {
+	if (!data || !RenderingServer::get_singleton()) {
+		return;
+	}
+	for (int i = 0; i < 3; i++) {
+		if (data->grid_instance[i].is_valid()) {
+			RS::get_singleton()->free_rid(data->grid_instance[i]);
+		}
+		if (data->grid_mesh[i].is_valid()) {
+			RS::get_singleton()->free_rid(data->grid_mesh[i]);
+		}
+	}
+	if (data->origin_instance.is_valid()) {
+		RS::get_singleton()->free_rid(data->origin_instance);
+	}
+	if (data->origin_mesh.is_valid()) {
+		RS::get_singleton()->free_rid(data->origin_mesh);
+	}
+	memdelete(data);
+	data = nullptr;
+}
+
+void EditorGrid3DRenderer::set_bindable(bool p_bindable) {
+	if (data) {
+		data->bindable = p_bindable;
+		grid_renderer_apply_binding(data);
+	}
+}
+
+void EditorGrid3DRenderer::set_scenario(const RID &p_scenario) {
+	if (data) {
+		data->scenario = p_scenario;
+		grid_renderer_apply_binding(data);
+	}
+}
+
+void EditorGrid3DRenderer::set_private_layer(int p_layer) {
+	if (data) {
+		data->private_layer = p_layer;
+		grid_renderer_apply_binding(data);
+	}
+}
+
+void EditorGrid3DRenderer::set_grid_visible(bool p_visible) {
+	if (data) {
+		data->grid_visible = p_visible;
+		grid_renderer_apply_binding(data);
+	}
+}
+
+bool EditorGrid3DRenderer::is_grid_visible() const {
+	return data && data->grid_visible;
+}
+
+void EditorGrid3DRenderer::set_origin_visible(bool p_visible) {
+	if (data) {
+		data->origin_visible = p_visible;
+		grid_renderer_apply_binding(data);
+	}
+}
+
+void EditorGrid3DRenderer::invalidate() {
+	if (data) {
+		for (int i = 0; i < 3; i++) {
+			data->rebuild_key_valid[i] = false;
+		}
+	}
+}
+
+static EditorGridFrame3D grid_renderer_canonical_frame(int p_slot) {
+	EditorGridFrame3D frame;
+	const int a = p_slot;
+	const int b = (p_slot + 1) % 3;
+	const int c = (p_slot + 2) % 3;
+	frame.u[a] = 1.0;
+	frame.v[b] = 1.0;
+	frame.n[c] = 1.0;
+	return frame;
+}
+
+void EditorGrid3DRenderer::update(Camera3D *p_camera, const Vector2i &p_viewport_size, real_t p_base_translate_snap, const EditorGridFrame3D *p_working_frame) {
+	if (!data || !p_camera || p_viewport_size.x <= 0 || p_viewport_size.y <= 0) {
+		return;
+	}
+	EditorGridLodSettings settings;
+	settings.base_translate_snap = p_base_translate_snap;
+	settings.primary_grid_steps = EDITOR_GET("editors/3d/primary_grid_steps");
+	settings.division_level_bias = EDITOR_GET("editors/3d/grid_division_level_bias");
+	settings.division_level_min = EDITOR_GET("editors/3d/grid_division_level_min");
+	settings.division_level_max = EDITOR_GET("editors/3d/grid_division_level_max");
+	settings.grid_half_extent_cells = EDITOR_GET("editors/3d/grid_size");
+	settings = settings.normalized();
+	const Color primary_color = EDITOR_GET("editors/3d/primary_grid_color");
+	const Color secondary_color = EDITOR_GET("editors/3d/secondary_grid_color");
+
+	EditorGridCameraSample camera_sample;
+	camera_sample.orthogonal = p_camera->get_projection() == Camera3D::PROJECTION_ORTHOGONAL;
+	camera_sample.camera_transform = p_camera->get_global_transform();
+	camera_sample.projection = p_camera->get_camera_projection();
+	camera_sample.ortho_size = p_camera->get_size();
+	camera_sample.viewport_width = p_viewport_size.x;
+	camera_sample.viewport_height = p_viewport_size.y;
+	const Vector3 camera_direction = -camera_sample.camera_transform.basis.get_column(2);
+
+	for (int slot = 0; slot < 3; slot++) {
+		EditorGridFrame3D frame = p_working_frame ? *p_working_frame : grid_renderer_canonical_frame(slot);
+		bool enabled = p_working_frame ? slot == 0 : (camera_sample.orthogonal || (bool)EDITOR_GET(slot == 0 ? "editors/3d/grid_xy_plane" : slot == 1 ? "editors/3d/grid_yz_plane" : "editors/3d/grid_xz_plane"));
+		if (!frame.is_valid()) {
+			enabled = false;
+		}
+		data->slot_enabled[slot] = enabled;
+		if (!enabled) {
+			continue;
+		}
+
+		Vector3 focus;
+		if (frame.plane().intersects_ray(camera_sample.camera_transform.origin, camera_direction, &focus) && focus.is_finite()) {
+			camera_sample.has_focus_point = true;
+			camera_sample.focus_point = focus;
+		} else {
+			camera_sample.has_focus_point = false;
+		}
+		const EditorGridLodResult lod = editor_grid_compute_lod(settings, camera_sample, frame);
+		data->visible_minor_spacing = lod.minor_step;
+		const EditorGridRebuildKey key = editor_grid_make_rebuild_key(settings, camera_sample, frame, lod, p_working_frame ? 8u : (uint32_t(1) << slot), primary_color, secondary_color);
+		if (!data->rebuild_key_valid[slot] || data->rebuild_key[slot] != key) {
+			Vector<Vector3> points;
+			Vector<Vector3> normals;
+			Vector<Color> flags;
+			const int line_count = settings.grid_half_extent_cells * 2 + 1;
+			points.resize(line_count * 4);
+			normals.resize(line_count * 4);
+			flags.resize(line_count * 4);
+			const real_t center_u = lod.major_step * lod.center_cell_u;
+			const real_t center_v = lod.major_step * lod.center_cell_v;
+			const real_t begin_u = center_u - settings.grid_half_extent_cells * lod.minor_step;
+			const real_t end_u = center_u + settings.grid_half_extent_cells * lod.minor_step;
+			const real_t begin_v = center_v - settings.grid_half_extent_cells * lod.minor_step;
+			const real_t end_v = center_v + settings.grid_half_extent_cells * lod.minor_step;
+			int write = 0;
+			for (int i = -settings.grid_half_extent_cells; i <= settings.grid_half_extent_cells; i++) {
+				const real_t u = center_u + i * lod.minor_step;
+				const real_t v = center_v + i * lod.minor_step;
+				const Color major_flag = i % settings.primary_grid_steps == 0 ? Color(1, 0, 0, 1) : Color(0, 0, 0, 1);
+				points.write[write] = frame.to_world(Vector3(u, begin_v, frame.plane_coordinate));
+				points.write[write + 1] = frame.to_world(Vector3(u, end_v, frame.plane_coordinate));
+				points.write[write + 2] = frame.to_world(Vector3(begin_u, v, frame.plane_coordinate));
+				points.write[write + 3] = frame.to_world(Vector3(end_u, v, frame.plane_coordinate));
+				for (int j = 0; j < 4; j++) {
+					normals.write[write + j] = frame.n;
+					flags.write[write + j] = major_flag;
+				}
+				write += 4;
+			}
+			Array arrays;
+			arrays.resize(RSE::ARRAY_MAX);
+			arrays[RSE::ARRAY_VERTEX] = points;
+			arrays[RSE::ARRAY_NORMAL] = normals;
+			arrays[RSE::ARRAY_COLOR] = flags;
+			RS::get_singleton()->mesh_clear(data->grid_mesh[slot]);
+			RS::get_singleton()->mesh_add_surface_from_arrays(data->grid_mesh[slot], RSE::PRIMITIVE_LINES, arrays);
+			RS::get_singleton()->mesh_surface_set_material(data->grid_mesh[slot], 0, data->grid_material[slot]->get_rid());
+			data->rebuild_key[slot] = key;
+			data->rebuild_key_valid[slot] = true;
+		}
+
+		data->grid_material[slot]->set_shader_parameter("orthogonal", camera_sample.orthogonal);
+		data->grid_material[slot]->set_shader_parameter("fade_distance", lod.fade_distance);
+		data->grid_material[slot]->set_shader_parameter("lod_fade", lod.fade);
+		data->grid_material[slot]->set_shader_parameter("primary_color", primary_color);
+		data->grid_material[slot]->set_shader_parameter("secondary_color", secondary_color);
+		data->grid_material[slot]->set_shader_parameter("plane_origin_world", frame.plane_origin());
+		data->grid_material[slot]->set_shader_parameter("plane_normal_world", frame.n);
+		data->grid_material[slot]->set_shader_parameter("camera_direction_world", camera_direction);
+	}
+	grid_renderer_apply_binding(data);
+}
+
+real_t EditorGrid3DRenderer::get_visible_minor_spacing() const {
+	return data ? data->visible_minor_spacing : 0.0;
 }

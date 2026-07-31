@@ -44,7 +44,9 @@
 #include "core/math/projection.h"
 #include "core/math/transform_3d.h"
 #include "core/math/vector2.h"
+#include "core/math/vector2i.h"
 #include "core/math/vector3.h"
+#include "core/templates/rid.h"
 #include "core/templates/hash_map.h"
 #include "core/typedefs.h"
 
@@ -259,6 +261,32 @@ struct EditorGridRebuildKey {
 
 	bool operator==(const EditorGridRebuildKey &p_other) const;
 	bool operator!=(const EditorGridRebuildKey &p_other) const { return !(*this == p_other); }
+};
+
+class Camera3D;
+
+class EditorGrid3DRenderer {
+public:
+	struct Data;
+
+private:
+	Data *data = nullptr;
+
+public:
+	EditorGrid3DRenderer() = default;
+	~EditorGrid3DRenderer();
+
+	void initialize(const Color p_axis_colors[3]);
+	void finish();
+	void set_bindable(bool p_bindable);
+	void set_scenario(const RID &p_scenario);
+	void set_private_layer(int p_layer);
+	void set_grid_visible(bool p_visible);
+	bool is_grid_visible() const;
+	void set_origin_visible(bool p_visible);
+	void invalidate();
+	void update(Camera3D *p_camera, const Vector2i &p_viewport_size, real_t p_base_translate_snap, const EditorGridFrame3D *p_working_frame = nullptr);
+	real_t get_visible_minor_spacing() const;
 };
 
 // Normalize a loaded base snap step: zero/negative/non-finite -> the supported

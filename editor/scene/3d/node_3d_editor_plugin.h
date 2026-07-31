@@ -490,6 +490,7 @@ public:
 	bool is_vertex_snap_origin_mode() const { return vertex_snap_origin_mode; }
 	bool is_vertex_snap_use_collision() const;
 	real_t get_translate_snap() const;
+	real_t get_configured_translate_snap() const { return editor_grid_normalize_translate_snap(snap_translate_value); }
 	real_t get_rotate_snap() const;
 	real_t get_scale_snap() const;
 
@@ -642,7 +643,7 @@ class Node3DEditorView : public MarginContainer {
 	RID origin_mesh;
 	RID origin_multimesh;
 	RID origin_instance;
-	bool origin_enabled = false;
+	bool origin_enabled = true;
 	RID grid[3];
 	RID grid_instance[3];
 	bool grid_visible[3] = { false, false, false }; // currently visible
@@ -679,7 +680,9 @@ public:
 
 	void init_decorations();
 	void finish_decorations();
-	void update_grid();
+	void update_grid(Node3DEditorViewport *p_viewport);
+	bool is_origin_enabled() const { return origin_enabled; }
+	void set_origin_enabled(bool p_enabled);
 
 	Node3DEditorViewportContainer *get_viewport_base() const { return viewport_base; }
 	void activate_viewport_chrome();

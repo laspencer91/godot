@@ -3750,7 +3750,9 @@ void Node3DEditorViewport::_cursor_interpolated() {
 	position_control->queue_redraw();
 	look_control->queue_redraw();
 	surface->queue_redraw();
-	spatial_editor->update_grid();
+	if (editor_view) {
+		editor_view->update_grid(this);
+	}
 }
 
 void Node3DEditorViewport::_cursor_distance_scaled() {
@@ -4579,6 +4581,19 @@ void Node3DEditorViewport::_notification(int p_what) {
 					set_editor_world(private_editor_layer_world);
 				}
 			}
+			if (!grid_renderer_initialized) {
+				Color axis_colors[3] = {
+					get_theme_color(SNAME("axis_x_color"), EditorStringName(Editor)),
+					get_theme_color(SNAME("axis_y_color"), EditorStringName(Editor)),
+					get_theme_color(SNAME("axis_z_color"), EditorStringName(Editor)),
+				};
+				grid_renderer.initialize(axis_colors);
+				grid_renderer_initialized = true;
+				grid_renderer.set_scenario(private_editor_layer_world.is_valid() ? private_editor_layer_world->get_scenario() : RID());
+				grid_renderer.set_private_layer(private_editor_layer_lease.is_valid() ? private_editor_layer_lease.layer : -1);
+				grid_renderer.set_origin_visible(editor_view ? editor_view->is_origin_enabled() : true);
+				callable_mp(this, &Node3DEditorViewport::_deferred_grid_bind).call_deferred();
+			}
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
@@ -5323,6 +5338,7 @@ void Node3DEditorViewport::_menu_option(int p_option) {
 				layers |= (uint32_t(1) << GIZMO_GRID_LAYER);
 			}
 			camera->set_cull_mask(layers);
+			set_grid_visible(current);
 			view_display_menu->get_popup()->set_item_checked(idx, current);
 		} break;
 		case VIEW_DISPLAY_NORMAL:
@@ -5510,6 +5526,9 @@ void Node3DEditorViewport::_apply_private_editor_layer() {
 	if (private_overlays_warning) {
 		private_overlays_warning->set_visible(is_visible_in_tree() && private_editor_layer_world.is_valid() && !private_editor_layer_lease.is_valid());
 	}
+	if (grid_renderer_initialized) {
+		grid_renderer.set_private_layer(private_editor_layer_lease.is_valid() ? private_editor_layer_lease.layer : -1);
+	}
 }
 
 void Node3DEditorViewport::_sync_private_editor_layer() {
@@ -5523,6 +5542,20 @@ void Node3DEditorViewport::_sync_private_editor_layer() {
 		private_editor_layer_lease = spatial_editor->acquire_private_editor_layer(private_editor_layer_world);
 	}
 	_apply_private_editor_layer();
+}
+
+void Node3DEditorViewport::_deferred_grid_bind() {
+	if (grid_renderer_initialized) {
+		grid_renderer.set_bindable(true);
+		update_grid_renderer();
+	}
+}
+
+void Node3DEditorViewport::update_grid_renderer(const EditorGridFrame3D *p_working_frame) {
+	if (!grid_renderer_initialized || !camera || !viewport) {
+		return;
+	}
+	grid_renderer.update(camera, viewport->get_visible_rect().size, spatial_editor->get_configured_translate_snap(), p_working_frame);
 }
 
 void Node3DEditorViewport::_init_gizmo_instance() {
@@ -5620,6 +5653,9 @@ void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
 	// keep showing over the switched-to scene.
 	viewport->set_world_3d(p_world);
 	_sync_private_editor_layer();
+	if (grid_renderer_initialized) {
+		grid_renderer.set_scenario(p_world.is_valid() ? p_world->get_scenario() : RID());
+	}
 
 	if (!move_gizmo_instance[0].is_valid()) {
 		return; // Gizmo instances not created yet (viewport not in tree); nothing to migrate.

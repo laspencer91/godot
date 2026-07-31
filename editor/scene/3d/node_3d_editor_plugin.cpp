@@ -566,7 +566,7 @@ void Node3DEditor::set_state(const Dictionary &p_state) {
 
 		if (use != view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_ORIGIN))) {
 			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_ORIGIN), use);
-			RenderingServer::get_singleton()->instance_set_visible(main_view->origin_instance, use);
+			main_view->set_origin_enabled(use);
 		}
 	}
 
@@ -986,31 +986,16 @@ void Node3DEditor::_menu_item_pressed(int p_option) {
 		} break;
 		case MENU_VIEW_ORIGIN: {
 			bool is_checked = view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(p_option));
-
-			main_view->origin_enabled = !is_checked;
-			RenderingServer::get_singleton()->instance_set_visible(main_view->origin_instance, main_view->origin_enabled);
-			// Update the grid since its appearance depends on whether the origin is enabled
-			main_view->_finish_grid();
-			main_view->_init_grid();
-			main_view->_reconcile_decorations();
-
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), main_view->origin_enabled);
+			main_view->set_origin_enabled(!is_checked);
+			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), main_view->is_origin_enabled());
 		} break;
 		case MENU_VIEW_GRID: {
 			bool is_checked = view_layout_menu->get_popup()->is_item_checked(view_layout_menu->get_popup()->get_item_index(p_option));
-
-			main_view->grid_enabled = !is_checked;
-
-			for (int i = 0; i < 3; ++i) {
-				if (main_view->grid_enable[i]) {
-					main_view->grid_visible[i] = main_view->grid_enabled;
-				}
+			Node3DEditorViewport *target = main_view->get_last_used_viewport();
+			if (target) {
+				target->set_grid_visible(!is_checked);
 			}
-			main_view->_finish_grid();
-			main_view->_init_grid();
-			main_view->_reconcile_decorations();
-
-			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), main_view->grid_enabled);
+			view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(p_option), !is_checked);
 
 		} break;
 		case MENU_VIEW_CAMERA_SETTINGS: {
@@ -1116,7 +1101,6 @@ void Node3DEditorView::set_active_world(const Ref<World3D> &p_world) {
 	for (uint32_t i = 0; i < Node3DEditor::VIEWPORTS_COUNT; i++) {
 		get_editor_viewport(i)->set_editor_world(p_world);
 	}
-	_reconcile_decorations();
 }
 
 void Node3DEditorView::_reconcile_decorations() {
@@ -1294,7 +1278,7 @@ void fragment() {
 		// Created detached (no scenario); _reconcile_decorations() attaches it to the world once
 		// the material has registered, avoiding a same-frame "material is null" in a live scene.
 		origin_instance = RenderingServer::get_singleton()->instance_create2(origin_multimesh, RID());
-		RS::get_singleton()->instance_set_layer_mask(origin_instance, 1 << Node3DEditorViewport::GIZMO_GRID_LAYER);
+		RS::get_singleton()->instance_set_layer_mask(origin_instance, 0);
 		RS::get_singleton()->instance_geometry_set_flag(origin_instance, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
 		RS::get_singleton()->instance_geometry_set_flag(origin_instance, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
 
@@ -2018,7 +2002,7 @@ void Node3DEditorView::_init_grid() {
 		// Yes, the end of this line is supposed to be a.
 		RenderingServer::get_singleton()->instance_set_visible(grid_instance[c], grid_visible[a]);
 		RenderingServer::get_singleton()->instance_geometry_set_cast_shadows_setting(grid_instance[c], RSE::SHADOW_CASTING_SETTING_OFF);
-		RS::get_singleton()->instance_set_layer_mask(grid_instance[c], 1 << Node3DEditorViewport::GIZMO_GRID_LAYER);
+		RS::get_singleton()->instance_set_layer_mask(grid_instance[c], 0);
 		RS::get_singleton()->instance_geometry_set_flag(grid_instance[c], RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
 		RS::get_singleton()->instance_geometry_set_flag(grid_instance[c], RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
 	}
@@ -2058,10 +2042,6 @@ void Node3DEditorView::_finish_grid() {
 }
 
 void Node3DEditor::update_gizmo_opacity() {
-	if (!main_view->origin_instance.is_valid()) {
-		return;
-	}
-
 	const float opacity = EDITOR_GET("editors/3d/manipulator_gizmo_opacity");
 
 	for (int i = 0; i < 3; i++) {
@@ -2084,28 +2064,28 @@ void Node3DEditor::update_gizmo_opacity() {
 }
 
 void Node3DEditor::update_grid() {
-	main_view->update_grid();
+	for (Node3DEditorView *editor_view : editor_views) {
+		for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+			Node3DEditorViewport *viewport = editor_view->get_editor_viewport(i);
+			if (viewport && viewport->is_visible_in_tree()) {
+				editor_view->update_grid(viewport);
+			}
+		}
+	}
 }
 
-void Node3DEditorView::update_grid() {
-	const Camera3D::ProjectionType current_projection = get_editor_viewport(0)->camera->get_projection();
+void Node3DEditorView::update_grid(Node3DEditorViewport *p_viewport) {
+	ERR_FAIL_NULL(p_viewport);
+	p_viewport->update_grid_renderer();
+}
 
-	if (current_projection != grid_camera_last_update_perspective) {
-		grid_init_draw = false; // redraw
-		grid_camera_last_update_perspective = current_projection;
-	}
-
-	// Gets a orthogonal or perspective position correctly (for the grid comparison)
-	const Vector3 camera_position = get_editor_viewport(0)->camera->get_position();
-
-	if (!grid_init_draw || grid_camera_last_update_position.distance_squared_to(camera_position) >= 100.0f) {
-		_finish_grid();
-		_init_grid();
-		// Grid instances are created detached; attach them to the bound world (no-op until the
-		// deferred first bind has made decorations bindable).
-		_reconcile_decorations();
-		grid_init_draw = true;
-		grid_camera_last_update_position = camera_position;
+void Node3DEditorView::set_origin_enabled(bool p_enabled) {
+	origin_enabled = p_enabled;
+	for (uint32_t i = 0; i < Node3DEditor::VIEWPORTS_COUNT; i++) {
+		if (viewports[i]) {
+			viewports[i]->set_origin_visible(p_enabled);
+			viewports[i]->invalidate_grid_renderer();
+		}
 	}
 }
 
@@ -2576,10 +2556,13 @@ void Node3DEditor::_notification(int p_what) {
 
 				gizmo_view_rotation_scale = GIZMO_CIRCLE_SIZE * (float)EDITOR_GET("editors/3d/view_plane_rotation_gizmo_scale");
 
-				// Update grid color by rebuilding grid.
-				main_view->_finish_grid();
-				main_view->_init_grid();
-				main_view->_reconcile_decorations();
+				for (Node3DEditorView *editor_view : editor_views) {
+					for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
+						if (Node3DEditorViewport *viewport = editor_view->get_editor_viewport(i)) {
+							viewport->invalidate_grid_renderer();
+						}
+					}
+				}
 
 				for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
 					get_editor_viewport(i)->update_transform_gizmo_view();
@@ -2879,10 +2862,7 @@ void Node3DEditorView::_notification(int p_what) {
 			// The view owns its resource lifecycle. Build the grid/origin once, when THIS view is
 			// actually in the tree (theme/world ready) -- not when the services enter -- and guard
 			// against re-running when the workspace reparents the view between panes.
-			if (!decorations_initialized) {
-				init_decorations();
-				decorations_initialized = true;
-			}
+			// Grid/origin resources are owned by each Node3DEditorViewport.
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
@@ -3249,16 +3229,9 @@ void Node3DEditor::clear() {
 		get_editor_viewport(i)->reset();
 	}
 
-	if (main_view->origin_instance.is_valid()) {
-		RenderingServer::get_singleton()->instance_set_visible(main_view->origin_instance, true);
-	}
+	main_view->set_origin_enabled(true);
 
 	view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_ORIGIN), true);
-	for (int i = 0; i < 3; ++i) {
-		if (main_view->grid_enable[i]) {
-			main_view->grid_visible[i] = true;
-		}
-	}
 
 	for (uint32_t i = 0; i < VIEWPORTS_COUNT; i++) {
 		Node3DEditorViewport *vp = get_editor_viewport(i);
@@ -3267,8 +3240,6 @@ void Node3DEditor::clear() {
 	}
 
 	view_layout_menu->get_popup()->set_item_checked(view_layout_menu->get_popup()->get_item_index(MENU_VIEW_GRID), true);
-	main_view->grid_enabled = true;
-	main_view->grid_init_draw = false;
 }
 
 void Node3DEditor::_sun_direction_draw() {
