@@ -304,6 +304,23 @@ public:
 		END_ROUND
 	};
 
+	// Unions a whole SET of polygons in one Clipper pass, rather than folding them together with
+	// repeated pairwise merge_polygons() calls. The pairwise form is quadratic in practice: each
+	// merge re-processes an accumulating contour, so N overlapping polygons cost far more than the
+	// single sweep Clipper is capable of. Inputs are treated with NonZero fill, so consistently
+	// wound (CCW) polygons union rather than cancel where they overlap.
+	//
+	// Returns one positively-wound ring per connected component and one negatively-wound ring per
+	// enclosed void, which is the same convention the pairwise operations already produce.
+	static Vector<Vector<Point2>> merge_polygon_set(const Vector<Vector<Point2>> &p_polygons);
+
+	// Subtracts a whole SET of clip polygons from a whole SET of subjects in one Clipper pass. Same
+	// argument as merge_polygon_set: folding N clips in with repeated clip_polygons() calls re-walks
+	// an accumulating result set every time, where Clipper can sweep all of them at once.
+	static Vector<Vector<Point2>> clip_polygon_set(const Vector<Vector<Point2>> &p_subjects, const Vector<Vector<Point2>> &p_clips);
+
+	static Vector<Vector<Point2>> _polypath_set_do_operation(PolyBooleanOperation p_op, const Vector<Vector<Point2>> &p_subjects, const Vector<Vector<Point2>> &p_clips);
+
 	static Vector<Vector<Point2>> merge_polygons(const Vector<Point2> &p_polygon_a, const Vector<Point2> &p_polygon_b) {
 		return _polypaths_do_operation(OPERATION_UNION, p_polygon_a, p_polygon_b);
 	}

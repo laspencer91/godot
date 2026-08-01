@@ -247,6 +247,85 @@ void Geometry2D::make_atlas(const Vector<Size2i> &p_rects, Vector<Point2i> &r_re
 	r_size = Size2(results[best].max_w, results[best].max_h);
 }
 
+static void _fill_clipper_paths(const Vector<Vector<Point2>> &p_polygons, Clipper2Lib::PathsD &r_paths) {
+	using namespace Clipper2Lib;
+	r_paths.reserve(p_polygons.size());
+	for (int i = 0; i < p_polygons.size(); ++i) {
+		const Vector<Point2> &poly = p_polygons[i];
+		if (poly.size() < 3) {
+			continue; // Degenerate; contributes no area to any boolean.
+		}
+		PathD path(poly.size());
+		for (int j = 0; j < poly.size(); ++j) {
+			path[j] = PointD(poly[j].x, poly[j].y);
+		}
+		r_paths.push_back(path);
+	}
+}
+
+Vector<Vector<Point2>> Geometry2D::_polypath_set_do_operation(PolyBooleanOperation p_op, const Vector<Vector<Point2>> &p_subjects, const Vector<Vector<Point2>> &p_clips) {
+	using namespace Clipper2Lib;
+
+	ClipType op = ClipType::Union;
+	switch (p_op) {
+		case OPERATION_UNION:
+			op = ClipType::Union;
+			break;
+		case OPERATION_DIFFERENCE:
+			op = ClipType::Difference;
+			break;
+		case OPERATION_INTERSECTION:
+			op = ClipType::Intersection;
+			break;
+		case OPERATION_XOR:
+			op = ClipType::Xor;
+			break;
+	}
+
+	Vector<Vector<Point2>> polypaths;
+
+	PathsD subject;
+	_fill_clipper_paths(p_subjects, subject);
+	if (subject.empty()) {
+		return polypaths;
+	}
+	PathsD clip;
+	_fill_clipper_paths(p_clips, clip);
+
+	ClipperD clp(clipper_precision); // Scale points up internally to attain the desired precision.
+	clp.PreserveCollinear(false); // Remove redundant vertices.
+	clp.AddSubject(subject);
+	if (!clip.empty()) {
+		clp.AddClip(clip);
+	}
+
+	PathsD paths;
+	// NonZero rather than EvenOdd: under EvenOdd two overlapping same-wound polygons would cancel in
+	// their shared region, which is the opposite of what a set-wise union or difference means.
+	clp.Execute(op, FillRule::NonZero, paths);
+
+	polypaths.resize(paths.size());
+	for (PathsD::size_type i = 0; i < paths.size(); i++) {
+		const PathD &path = paths[i];
+
+		Vector<Vector2> polypath;
+		polypath.resize(path.size());
+		for (PathsD::size_type j = 0; j < path.size(); ++j) {
+			polypath.set(j, Point2(static_cast<real_t>(path[j].x), static_cast<real_t>(path[j].y)));
+		}
+		polypaths.set(i, polypath);
+	}
+	return polypaths;
+}
+
+Vector<Vector<Point2>> Geometry2D::merge_polygon_set(const Vector<Vector<Point2>> &p_polygons) {
+	return _polypath_set_do_operation(OPERATION_UNION, p_polygons, Vector<Vector<Point2>>());
+}
+
+Vector<Vector<Point2>> Geometry2D::clip_polygon_set(const Vector<Vector<Point2>> &p_subjects, const Vector<Vector<Point2>> &p_clips) {
+	return _polypath_set_do_operation(OPERATION_DIFFERENCE, p_subjects, p_clips);
+}
+
 Vector<Vector<Point2>> Geometry2D::_polypaths_do_operation(PolyBooleanOperation p_op, const Vector<Point2> &p_polypath_a, const Vector<Point2> &p_polypath_b, bool is_a_open) {
 	using namespace Clipper2Lib;
 

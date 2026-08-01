@@ -357,6 +357,9 @@ public:
 		OPERATION_XOR
 	};
 	// 2D polygon boolean operations.
+	TypedArray<PackedVector2Array> decompose_many_polygons_in_convex(const TypedArray<PackedVector2Array> &p_polygons, const TypedArray<PackedVector2Array> &p_holes);
+	TypedArray<PackedVector2Array> merge_polygon_set(const TypedArray<PackedVector2Array> &p_polygons); // Union of a whole set, one pass.
+	TypedArray<PackedVector2Array> clip_polygon_set(const TypedArray<PackedVector2Array> &p_subjects, const TypedArray<PackedVector2Array> &p_clips); // Difference, one pass.
 	TypedArray<PackedVector2Array> merge_polygons(const Vector<Vector2> &p_polygon_a, const Vector<Vector2> &p_polygon_b); // Union (add).
 	TypedArray<PackedVector2Array> clip_polygons(const Vector<Vector2> &p_polygon_a, const Vector<Vector2> &p_polygon_b); // Difference (subtract).
 	TypedArray<PackedVector2Array> intersect_polygons(const Vector<Vector2> &p_polygon_a, const Vector<Vector2> &p_polygon_b); // Common area (multiply).

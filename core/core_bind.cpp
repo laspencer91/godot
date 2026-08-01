@@ -996,6 +996,57 @@ TypedArray<PackedVector2Array> Geometry2D::decompose_polygon_in_convex(const Vec
 	return ret;
 }
 
+// Exposes the hole-aware convex partition that ::Geometry2D has always had internally but never
+// bound. decompose_polygon_in_convex() takes a single hole-free ring, which forces callers that
+// have a polygon WITH holes to invent a workaround (slab slicing, or unconstrained Delaunay plus
+// per-triangle rejection). This is the primitive those workarounds were substituting for.
+TypedArray<PackedVector2Array> Geometry2D::decompose_many_polygons_in_convex(const TypedArray<PackedVector2Array> &p_polygons, const TypedArray<PackedVector2Array> &p_holes) {
+	Vector<Vector<Point2>> polygons;
+	polygons.resize(p_polygons.size());
+	for (int i = 0; i < p_polygons.size(); ++i) {
+		polygons.set(i, p_polygons[i]);
+	}
+	Vector<Vector<Point2>> holes;
+	holes.resize(p_holes.size());
+	for (int i = 0; i < p_holes.size(); ++i) {
+		holes.set(i, p_holes[i]);
+	}
+
+	Vector<Vector<Point2>> decomp = ::Geometry2D::decompose_many_polygons_in_convex(polygons, holes);
+
+	TypedArray<PackedVector2Array> ret;
+	for (int i = 0; i < decomp.size(); ++i) {
+		ret.push_back(decomp[i]);
+	}
+	return ret;
+}
+
+static Vector<Vector<Point2>> _typed_array_to_polygons(const TypedArray<PackedVector2Array> &p_array) {
+	Vector<Vector<Point2>> polygons;
+	polygons.resize(p_array.size());
+	for (int i = 0; i < p_array.size(); ++i) {
+		polygons.set(i, p_array[i]);
+	}
+	return polygons;
+}
+
+static TypedArray<PackedVector2Array> _polygons_to_typed_array(const Vector<Vector<Point2>> &p_polygons) {
+	TypedArray<PackedVector2Array> ret;
+	for (int i = 0; i < p_polygons.size(); ++i) {
+		ret.push_back(p_polygons[i]);
+	}
+	return ret;
+}
+
+TypedArray<PackedVector2Array> Geometry2D::merge_polygon_set(const TypedArray<PackedVector2Array> &p_polygons) {
+	return _polygons_to_typed_array(::Geometry2D::merge_polygon_set(_typed_array_to_polygons(p_polygons)));
+}
+
+TypedArray<PackedVector2Array> Geometry2D::clip_polygon_set(const TypedArray<PackedVector2Array> &p_subjects, const TypedArray<PackedVector2Array> &p_clips) {
+	return _polygons_to_typed_array(::Geometry2D::clip_polygon_set(
+			_typed_array_to_polygons(p_subjects), _typed_array_to_polygons(p_clips)));
+}
+
 TypedArray<PackedVector2Array> Geometry2D::merge_polygons(const Vector<Vector2> &p_polygon_a, const Vector<Vector2> &p_polygon_b) {
 	Vector<Vector<Point2>> polys = ::Geometry2D::merge_polygons(p_polygon_a, p_polygon_b);
 
@@ -1142,6 +1193,9 @@ void Geometry2D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("convex_hull", "points"), &Geometry2D::convex_hull);
 	ClassDB::bind_method(D_METHOD("decompose_polygon_in_convex", "polygon"), &Geometry2D::decompose_polygon_in_convex);
 
+	ClassDB::bind_method(D_METHOD("decompose_many_polygons_in_convex", "polygons", "holes"), &Geometry2D::decompose_many_polygons_in_convex);
+	ClassDB::bind_method(D_METHOD("merge_polygon_set", "polygons"), &Geometry2D::merge_polygon_set);
+	ClassDB::bind_method(D_METHOD("clip_polygon_set", "subjects", "clips"), &Geometry2D::clip_polygon_set);
 	ClassDB::bind_method(D_METHOD("merge_polygons", "polygon_a", "polygon_b"), &Geometry2D::merge_polygons);
 	ClassDB::bind_method(D_METHOD("clip_polygons", "polygon_a", "polygon_b"), &Geometry2D::clip_polygons);
 	ClassDB::bind_method(D_METHOD("intersect_polygons", "polygon_a", "polygon_b"), &Geometry2D::intersect_polygons);
