@@ -605,8 +605,10 @@ void GameView::_stop_pressed() {
 
 	screen_index_before_start = -1;
 
-	// G4: the game has stopped — there's nothing to tab to, so pull the Game screen back off the strip.
-	EditorNode::get_singleton()->get_editor_main_screen()->set_button_enabled(EditorMainScreen::EDITOR_GAME, false);
+	// G4: the game has stopped — there's nothing to tab to. Pull Game off the strip and, when Game is
+	// still the selected singleton screen, dismiss its transient screen-host tab as well. If stop restored
+	// another singleton screen above (for example Asset Store), that screen keeps the shared host alive.
+	EditorNode::get_singleton()->get_editor_main_screen()->dismiss_main_plugin(EditorMainScreen::EDITOR_GAME);
 }
 
 void GameView::_embedding_completed() {

@@ -280,6 +280,23 @@ else
 	fail=1
 fi
 
+# A screen-host-only leaf is transient: Game may have opened it during the previous editor session,
+# but screens://Editor is intentionally not restored. Its split must collapse instead of leaving an
+# empty, uncloseable pane, and the surviving leaf must retain its stable pane id. Keep this after the
+# shared-project cases so its restore fixture cannot influence them.
+cp "$SMOKE_DIR/project.godot" "$WORK/project.godot"
+cp "$SMOKE_DIR/restore_stale_screen_host.cfg" "$WORK/.godot/editor/editor_layout.cfg"
+run_case "restore_stale_screen_host" -e
+if grep -q '"t": "split"' "$WORK/.godot/editor/editor_layout.cfg"; then
+	echo "  FAIL  restore_stale_screen_host_layout (transient screen-host left an empty split)"
+	fail=1
+elif grep -q '"id": 2' "$WORK/.godot/editor/editor_layout.cfg"; then
+	echo "  PASS  restore_stale_screen_host_layout (empty split collapsed; survivor id retained)"
+else
+	echo "  FAIL  restore_stale_screen_host_layout (surviving pane lost its stable id)"
+	fail=1
+fi
+
 # Save-capture round-trip (M6.2): the restore_workspace fixture hand-authors the tab paths, so it
 # never exercises the SAVE side. This case does: restore open scenes (the active one is revealed into
 # a pane by M7.1), quit (which must WRITE that scene into the workspace tabs), then restore again. It

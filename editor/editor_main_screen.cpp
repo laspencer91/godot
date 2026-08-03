@@ -128,10 +128,12 @@ void EditorMainScreen::load_layout_from_config(Ref<ConfigFile> p_config_file, co
 	// rebuilt in phase 1 (begin_workspace_restore, before any scene loaded — see below); this only fills
 	// the panes with their remaining tabs and drives focus. When there's no saved session, the legacy
 	// strip select() path runs instead.
-	if (!_pending_tabs.is_empty()) {
+	if (_workspace_restore_pending) {
+		_collapse_transient_only_panes(_pending_tabs);
 		_populate_pane_tabs(_pending_tabs);
 		_set_workspace_focus_after_restore();
-		_pending_tabs = Dictionary(); // Clears is_workspace_restore_pending() — resume the scene auto-reveal.
+		_pending_tabs = Dictionary();
+		_workspace_restore_pending = false; // Resume the deferred active-scene reveal.
 		return;
 	}
 
@@ -163,9 +165,10 @@ bool EditorMainScreen::begin_workspace_restore(Ref<ConfigFile> p_config_file, co
 	// session is harmless — _restore_workspace_tabs already skips it, and _collect_pane_tabs no longer
 	// records it, so it drops out on the next save.
 
-	// Hand the tab set to phase 2. A non-empty _pending_tabs IS the "restore in flight" state that
-	// is_workspace_restore_pending() reports, so the M7.1 scene auto-reveal stands down until phase 2.
+	// Hand the tab set to phase 2 and stand the M7.1 scene auto-reveal down until then. Keep an explicit
+	// pending bit because a screen-host-only session correctly produces an empty persistent tab set.
 	_pending_tabs = tabs;
+	_workspace_restore_pending = true;
 	return true;
 }
 
@@ -209,6 +212,39 @@ EditorDocument *EditorMainScreen::_resolve_session_document(const String &p_path
 		return screen_host_document;
 	}
 	return EditorNode::get_editor_data().get_or_create_document_for_path(p_path);
+}
+
+void EditorMainScreen::_collapse_transient_only_panes(const Dictionary &p_tabs) {
+	// Decide the final topology before creating any DocumentViews. Collapsing a populated leaf reparents
+	// its host through an out-of-tree interval, which is unsafe for scene cameras. A leaf whose only saved
+	// document is the deliberately non-restored screen host can be identified without loading anything.
+	const String screen_host_path = screen_host_document ? screen_host_document->get_path() : String();
+	while (workspace && !workspace->get_root_pane()->is_leaf()) {
+		WorkspacePane *transient_only_pane = nullptr;
+		for (WorkspacePane *pane : workspace->get_tabbed_leaves()) {
+			bool has_persistent_document = false;
+			const String key = itos(pane->get_pane_id());
+			if (p_tabs.has(key)) {
+				Dictionary entry = p_tabs[key];
+				Array docs = entry.get("docs", Array());
+				for (int i = 0; i < docs.size(); i++) {
+					const String path = docs[i];
+					if (!path.is_empty() && path != screen_host_path) {
+						has_persistent_document = true;
+						break;
+					}
+				}
+			}
+			if (!has_persistent_document) {
+				transient_only_pane = pane;
+				break;
+			}
+		}
+		if (!transient_only_pane) {
+			break;
+		}
+		workspace->close_pane(transient_only_pane);
+	}
 }
 
 void EditorMainScreen::_populate_pane_tabs(const Dictionary &p_tabs) {
@@ -283,6 +319,26 @@ bool EditorMainScreen::is_button_enabled(int p_index) const {
 		return true;
 	}
 	return buttons[p_index]->is_visible();
+}
+
+void EditorMainScreen::dismiss_main_plugin(int p_index) {
+	ERR_FAIL_INDEX(p_index, editor_table.size());
+	buttons[p_index]->hide();
+
+	// A different singleton screen (for example Asset Store, if it was open before Play) still needs
+	// the shared screen-host document. Only tear the host down when the dismissed plugin owns it.
+	if (selected_plugin != editor_table[p_index]) {
+		return;
+	}
+
+	buttons[p_index]->set_pressed_no_signal(false);
+	selected_plugin->make_visible(false);
+	selected_plugin = nullptr;
+	set_accessibility_name(String());
+	if (screen_host_document) {
+		close_document(screen_host_document);
+	}
+	EditorNode::get_singleton()->update_distraction_free_mode();
 }
 
 int EditorMainScreen::_get_current_main_editor() const {

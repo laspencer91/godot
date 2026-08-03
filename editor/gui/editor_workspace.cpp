@@ -122,9 +122,11 @@ void WorkspacePane::collapse_split(WorkspacePane *p_removed) {
 
 	if (survivor->is_leaf()) {
 		Control *surviving_content = survivor->get_content();
+		const uint32_t surviving_pane_id = survivor->get_pane_id();
 		survivor->set_content(nullptr); // Detach before the shell is freed.
 		remove_child(old_split);
 		memdelete(old_split); // Frees p_removed's subtree and the survivor shell.
+		set_pane_id(surviving_pane_id);
 		set_content(surviving_content);
 	} else {
 		// The survivor is itself a split: its divider subtree moves up into this pane.

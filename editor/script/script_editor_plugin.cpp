@@ -761,14 +761,14 @@ void ScriptEditor::_show_error_dialog(const String &p_path) {
 
 void ScriptEditor::_register_view(ScriptEditorBase *p_view) {
 	// G2 S1: record an open script view. Registration order follows open (edit()) order, which is the
-	// tab order at creation time. The view self-removes from the registry when it leaves the tree
-	// (tree_exiting fires on the _close_tab memdelete and on every other teardown path, incl. editor
-	// shutdown), so the registry never holds a freed pointer.
+	// tab order at creation time. Registration follows the view's lifetime, not its scene-tree
+	// membership: moving a live workspace tab between panes temporarily takes its DocumentView (and
+	// this child surface) out of the tree. The owning surface instance calls release_editor_view()
+	// from DocumentView PREDELETE, which is the actual lifetime boundary.
 	if (!p_view || registered_views.has(p_view)) {
 		return;
 	}
 	registered_views.push_back(p_view);
-	p_view->connect(SceneStringName(tree_exiting), callable_mp(this, &ScriptEditor::_unregister_view).bind(p_view));
 }
 
 void ScriptEditor::_unregister_view(ScriptEditorBase *p_view) {
@@ -2146,12 +2146,11 @@ ScriptEditorBase *ScriptEditor::create_editor_view(const Ref<Resource> &p_resour
 
 EditorHelp *ScriptEditor::create_help_view(const String &p_class) {
 	// G2 S6b: help twin of create_editor_view — create + wire WITHOUT parenting (a workspace
-	// DocumentView hosts it). Registered in the open-help registry, self-healing via tree_exiting.
+	// DocumentView hosts it). Registration survives live tab moves and ends at DocumentView PREDELETE.
 	EditorHelp *eh = memnew(EditorHelp);
 	eh->set_name(p_class);
 	eh->connect("go_to_help", callable_mp(this, &ScriptEditor::_help_class_goto));
 	eh->connect("_request_save_new_history", callable_mp(this, &ScriptEditor::_save_new_history).bind(eh));
-	eh->connect(SceneStringName(tree_exiting), callable_mp(this, &ScriptEditor::_unregister_help_view).bind(eh));
 	registered_help_views.push_back(eh);
 	return eh;
 }

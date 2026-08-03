@@ -77,14 +77,17 @@ private:
 	void _select_index(int p_index);
 
 	// G2 M6.2: workspace-session persistence, restored in two phases (see begin_workspace_restore). Phase 1
-	// stashes the saved tab set here for phase 2; a non-empty value IS the "restore in flight" state that
-	// is_workspace_restore_pending() reports (so the M7.1 scene auto-reveal stands down meanwhile).
+	// stashes the saved tab set here for phase 2. The explicit pending bit is intentionally independent
+	// of the Dictionary: a valid session containing only a transient screen-host has no persistent tabs,
+	// but its geometry still needs phase-2 empty-pane cleanup before scene auto-reveal resumes.
 	Dictionary _pending_tabs;
+	bool _workspace_restore_pending = false;
 	// _collect_pane_tabs walks the live tree and records each leaf's tab doc-paths + current (keyed by
 	// pane_id) into r_tabs; _populate_pane_tabs (phase 2) fills each rebuilt leaf; _resolve_session_document
 	// maps a saved path back to a live document (the screen-host doc locally, else via EditorData);
 	// _set_workspace_focus_after_restore drives focus once the panes are filled.
 	void _collect_pane_tabs(Dictionary &r_tabs) const;
+	void _collapse_transient_only_panes(const Dictionary &p_tabs);
 	void _populate_pane_tabs(const Dictionary &p_tabs);
 	EditorDocument *_resolve_session_document(const String &p_path);
 	void _set_workspace_focus_after_restore();
@@ -109,10 +112,13 @@ public:
 
 	// G2 M6.2: true between phase 1 and phase 2 of a workspace-session restore. The M7.1 scene auto-reveal
 	// checks this and stands down so the session (not the default reveal) decides each scene's pane.
-	bool is_workspace_restore_pending() const { return !_pending_tabs.is_empty(); }
+	bool is_workspace_restore_pending() const { return _workspace_restore_pending; }
 
 	void set_button_enabled(int p_index, bool p_enabled);
 	bool is_button_enabled(int p_index) const;
+	// Hide an on-demand singleton screen. If it is still the selected screen, also deactivate it and
+	// dismiss the transient screen-host tab; another selected singleton screen keeps the host alive.
+	void dismiss_main_plugin(int p_index);
 
 	void select_next();
 	void select_prev();

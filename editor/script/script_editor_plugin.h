@@ -195,11 +195,9 @@ class ScriptEditor : public PanelContainer {
 	// script_split, and the internal TabContainer are GONE — the workspace tab bar IS the script
 	// list; views live in workspace-tab DocumentViews.
 
-	// G2 S1: the authoritative set of open script VIEWS. Appended in open (edit()) order and
-	// self-heals via each view's tree_exiting (fires on workspace-tab close and on editor-shutdown
-	// teardown). EditorHelp views are tracked separately in registered_help_views. NOTE: if script
-	// views ever gain live tree reparenting (later workspace milestones), re-registration on
-	// tree_entered will be needed.
+	// G2 S1: the authoritative set of open script VIEWS. Appended in open (edit()) order and released
+	// by the owning DocumentView's PREDELETE hook. It deliberately survives scene-tree exit/entry:
+	// workspace tab moves and pane splits reparent the live view without closing it.
 	Vector<ScriptEditorBase *> registered_views;
 	// G2 S6a: the current script view, following the workspace (the focused pane's active script
 	// tab, pushed by TabbedDocumentHost/EditorWorkspace via set_current_surface). ObjectID so a
@@ -209,7 +207,7 @@ class ScriptEditor : public PanelContainer {
 	// a ScriptEditorBase). Drives navigation history and the help/search menu state.
 	ObjectID current_surface_id;
 	// G2 S6b: the authoritative set of open help VIEWS (mirror of registered_views for EditorHelp,
-	// which the S1 registry can't hold). Minted by create_help_view; self-heals via tree_exiting.
+	// which the S1 registry can't hold). It has the same PREDELETE lifetime as script views.
 	Vector<EditorHelp *> registered_help_views;
 	EditorFileDialog *file_dialog = nullptr;
 	AcceptDialog *error_dialog = nullptr;
@@ -482,13 +480,13 @@ public:
 	ScriptEditorBase *create_editor_view(const Ref<Resource> &p_resource);
 
 	// G2 S4: a host (e.g. a workspace DocumentView being torn down) releasing a view it hosted.
-	// Drops it from the open-scripts registry; the caller frees the Control. Idempotent with the
-	// tree_exiting auto-unregister, and lets a dtor avoid touching ScriptEditor privates.
+	// Drops it from the open-scripts registry; the caller frees the Control.
 	void release_editor_view(ScriptEditorBase *p_view) { _unregister_view(p_view); }
 
 	// G2 S6b: help twin of create_editor_view — create + wire an EditorHelp view for p_class,
 	// registered in the open-help registry but NOT parented (a workspace DocumentView hosts it).
 	EditorHelp *create_help_view(const String &p_class);
+	void release_help_view(EditorHelp *p_view) { _unregister_help_view(p_view); }
 
 	// Upstream: the active script/help surface (used by DocumentOutline) — the workspace's current
 	// surface here.

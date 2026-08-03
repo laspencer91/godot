@@ -132,7 +132,8 @@ public:
 	virtual void pre_delete_cleanup() override {
 		_park_script_chrome();
 		// G2 S4: if this view hosted a script surface, drop it from the ScriptEditor open-scripts
-		// registry before it is freed (idempotent belt-and-suspenders with tree_exiting).
+		// registry before it is freed. Live tab reparenting does not run PREDELETE, so moved views
+		// remain registered with save-all and debugger navigation.
 		if (script_surface) {
 			if (ScriptEditor *se = ScriptEditor::get_singleton()) {
 				se->release_editor_view(script_surface);
@@ -188,12 +189,19 @@ public:
 class EditorHelpDocumentSurfaceInstance : public EditorBuiltinDocumentSurfaceInstance {
 	GDCLASS(EditorHelpDocumentSurfaceInstance, EditorBuiltinDocumentSurfaceInstance);
 
+	EditorHelp *help_surface = nullptr;
+
 protected:
 	static void _bind_methods() {}
 
 public:
 	virtual void pre_delete_cleanup() override {
 		_park_script_chrome();
+		if (help_surface) {
+			if (ScriptEditor *se = ScriptEditor::get_singleton()) {
+				se->release_help_view(help_surface);
+			}
+		}
 	}
 
 	EditorHelpDocumentSurfaceInstance(const EditorDocumentSurfaceContext &p_context) :
@@ -203,9 +211,9 @@ public:
 		// in the tree (theme + doc data), so defer it until after this DocumentView is parented.
 		HelpDocument *hd = static_cast<HelpDocument *>(p_context.document);
 		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
-			EditorHelp *help = se->create_help_view(hd->get_class_name());
-			callable_mp(help, &EditorHelp::go_to_class).call_deferred(hd->get_class_name());
-			set_root_control(help);
+			help_surface = se->create_help_view(hd->get_class_name());
+			callable_mp(help_surface, &EditorHelp::go_to_class).call_deferred(hd->get_class_name());
+			set_root_control(help_surface);
 		}
 	}
 };
