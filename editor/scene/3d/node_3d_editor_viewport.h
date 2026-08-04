@@ -504,6 +504,7 @@ private:
 		Vector3 initial_click_vector;
 		Vector3 previous_rotation_vector;
 		bool gizmo_initiated = false;
+		bool uniform_scale_handle = false;
 
 		HashMap<Node3D *, Transform3D> children_original_globals;
 	} _edit;
@@ -521,6 +522,7 @@ private:
 	int zoom_failed_attempts_count = 0;
 
 	RID move_gizmo_instance[3], move_plane_gizmo_instance[3], rotate_gizmo_instance[4], scale_gizmo_instance[3], scale_plane_gizmo_instance[3], axis_gizmo_instance[3];
+	RID scale_uniform_gizmo_instance;
 	RID trackball_sphere_instance;
 
 	// Reparent-tolerance (G2): a viewport is the per-pane 3D view unit and gets moved between

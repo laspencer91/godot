@@ -118,12 +118,14 @@ using namespace Node3DEditorConstants;
 Node3DEditor *Node3DEditor::singleton = nullptr;
 
 void Node3DEditor::select_gizmo_highlight_axis(int p_axis) {
+	const bool highlight_uniform_scale = p_axis == GIZMO_HIGHLIGHT_SCALE_UNIFORM;
 	for (int i = 0; i < 3; i++) {
 		move_gizmo[i]->surface_set_material(0, i == p_axis ? gizmo_color_hl[i] : gizmo_color[i]);
 		move_plane_gizmo[i]->surface_set_material(0, (i + 6) == p_axis ? plane_gizmo_color_hl[i] : plane_gizmo_color[i]);
-		scale_gizmo[i]->surface_set_material(0, (i + 9) == p_axis ? gizmo_color_hl[i] : gizmo_color[i]);
+		scale_gizmo[i]->surface_set_material(0, (i + 9) == p_axis || highlight_uniform_scale ? gizmo_color_hl[i] : gizmo_color[i]);
 		scale_plane_gizmo[i]->surface_set_material(0, (i + 12) == p_axis ? plane_gizmo_color_hl[i] : plane_gizmo_color[i]);
 	}
+	scale_uniform_gizmo->surface_set_material(0, highlight_uniform_scale ? scale_uniform_gizmo_color_hl : scale_uniform_gizmo_color);
 
 	for (int i = 0; i < 4; i++) {
 		bool highlight;
@@ -1653,7 +1655,7 @@ void Node3DEditor::_init_indicators() {
 
 			rotate_gizmo[i].instantiate();
 
-			const Color albedo = col.from_hsv(col.get_h(), col.get_s() * 0.25, 1.0, 1);
+			const Color albedo = get_theme_color(SNAME("warning_color"), EditorStringName(Editor));
 
 			Ref<StandardMaterial3D> mat;
 			Ref<StandardMaterial3D> mat_hl;
@@ -1701,7 +1703,7 @@ void Node3DEditor::_init_indicators() {
 				{
 					Ref<SurfaceTool> surftool;
 					surftool.instantiate();
-					surftool->begin(Mesh::PRIMITIVE_TRIANGLES);
+					surftool->begin(Mesh::PRIMITIVE_LINE_STRIP);
 
 					Vector3 vec = ivec2 - ivec3;
 					Vector3 plane[4] = {
@@ -1722,10 +1724,8 @@ void Node3DEditor::_init_indicators() {
 					surftool->add_vertex(points[0]);
 					surftool->add_vertex(points[1]);
 					surftool->add_vertex(points[2]);
-
-					surftool->add_vertex(points[0]);
-					surftool->add_vertex(points[2]);
 					surftool->add_vertex(points[3]);
+					surftool->add_vertex(points[0]);
 
 					Ref<StandardMaterial3D> plane_mat;
 					plane_mat.instantiate();
@@ -1940,7 +1940,7 @@ void fragment() {
 					surftool->commit(scale_plane_gizmo[i]);
 
 					Ref<StandardMaterial3D> plane_mat_hl = plane_mat->duplicate();
-					plane_mat_hl->set_albedo(col.from_hsv(col.get_h(), col.get_s() * 0.25, 1.0, 1));
+					plane_mat_hl->set_albedo(albedo);
 					plane_gizmo_color_hl[i] = plane_mat_hl; // needed, so we can draw planes from both sides.
 				}
 
@@ -1962,6 +1962,54 @@ void fragment() {
 				}
 			}
 		}
+	}
+
+	// Uniform scale handle at the gizmo origin. The drag path already supports
+	// TRANSFORM_VIEW scaling; this cube makes that behavior discoverable.
+	{
+		scale_uniform_gizmo.instantiate();
+		Ref<SurfaceTool> surftool;
+		surftool.instantiate();
+		surftool->begin(Mesh::PRIMITIVE_TRIANGLES);
+
+		const real_t half_size = GIZMO_SCALE_UNIFORM_SIZE * 0.5;
+		const Vector3 vertices[8] = {
+			Vector3(-half_size, -half_size, -half_size),
+			Vector3(half_size, -half_size, -half_size),
+			Vector3(half_size, half_size, -half_size),
+			Vector3(-half_size, half_size, -half_size),
+			Vector3(-half_size, -half_size, half_size),
+			Vector3(half_size, -half_size, half_size),
+			Vector3(half_size, half_size, half_size),
+			Vector3(-half_size, half_size, half_size),
+		};
+		const int indices[36] = {
+			0, 2, 1, 0, 3, 2,
+			4, 5, 6, 4, 6, 7,
+			0, 1, 5, 0, 5, 4,
+			3, 7, 6, 3, 6, 2,
+			0, 4, 7, 0, 7, 3,
+			1, 2, 6, 1, 6, 5,
+		};
+		for (int index : indices) {
+			surftool->add_vertex(vertices[index]);
+		}
+
+		Color uniform_color = get_theme_color(SNAME("axis_w_color"), EditorStringName(Editor));
+		uniform_color.a *= (float)EDITOR_GET("editors/3d/manipulator_gizmo_opacity");
+		scale_uniform_gizmo_color.instantiate();
+		scale_uniform_gizmo_color->set_shading_mode(StandardMaterial3D::SHADING_MODE_UNSHADED);
+		scale_uniform_gizmo_color->set_flag(StandardMaterial3D::FLAG_DISABLE_FOG, true);
+		scale_uniform_gizmo_color->set_on_top_of_alpha();
+		scale_uniform_gizmo_color->set_transparency(StandardMaterial3D::TRANSPARENCY_ALPHA);
+		scale_uniform_gizmo_color->set_cull_mode(StandardMaterial3D::CULL_DISABLED);
+		scale_uniform_gizmo_color->set_albedo(uniform_color);
+
+		scale_uniform_gizmo_color_hl = scale_uniform_gizmo_color->duplicate();
+		scale_uniform_gizmo_color_hl->set_albedo(get_theme_color(SNAME("warning_color"), EditorStringName(Editor)));
+
+		surftool->set_material(scale_uniform_gizmo_color);
+		surftool->commit(scale_uniform_gizmo);
 	}
 
 	// Create trackball sphere

@@ -1755,6 +1755,7 @@ void Node3DEditorViewport::_compute_edit(const Point2 &p_point) {
 	_edit.click_ray = get_ray(p_point);
 	_edit.click_ray_pos = get_ray_pos(p_point);
 	_edit.plane = TRANSFORM_VIEW;
+	_edit.uniform_scale_handle = false;
 	spatial_editor->update_transform_gizmo();
 	_edit.center = spatial_editor->get_gizmo_transform().origin;
 	// Default view axis for TRANSFORM_VIEW rotations started without the gizmo's
@@ -2032,6 +2033,24 @@ bool Node3DEditorViewport::_transform_gizmo_select(const Vector2 &p_screenpos, b
 	}
 
 	if (spatial_editor->get_tool_mode() == Node3DEditor::TOOL_MODE_SCALE) {
+		Vector3 uniform_hit;
+		if (Geometry3D::segment_intersects_sphere(
+				ray_pos,
+				ray_pos + ray * MAX_Z,
+				gt.origin,
+				gizmo_scale * GIZMO_SCALE_UNIFORM_SIZE,
+				&uniform_hit)) {
+			if (p_highlight_only) {
+				spatial_editor->select_gizmo_highlight_axis(GIZMO_HIGHLIGHT_SCALE_UNIFORM);
+			} else {
+				_edit.mode = TRANSFORM_SCALE;
+				_compute_edit(p_screenpos);
+				_edit.plane = TRANSFORM_VIEW;
+				_edit.uniform_scale_handle = true;
+			}
+			return true;
+		}
+
 		int col_axis = -1;
 		float col_d = 1e20;
 
@@ -5544,6 +5563,7 @@ void Node3DEditorViewport::_apply_private_editor_layer() {
 		for (int i = 0; i < 4; i++) {
 			RS::get_singleton()->instance_set_layer_mask(rotate_gizmo_instance[i], private_mask);
 		}
+		RS::get_singleton()->instance_set_layer_mask(scale_uniform_gizmo_instance, private_mask);
 		RS::get_singleton()->instance_set_layer_mask(trackball_sphere_instance, private_mask);
 	}
 
@@ -5665,6 +5685,15 @@ void Node3DEditorViewport::_init_gizmo_instance() {
 		RS::get_singleton()->instance_geometry_set_flag(rotate_gizmo_instance[i], RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
 	}
 
+	scale_uniform_gizmo_instance = RS::get_singleton()->instance_create();
+	RS::get_singleton()->instance_set_base(scale_uniform_gizmo_instance, spatial_editor->get_scale_uniform_gizmo()->get_rid());
+	RS::get_singleton()->instance_set_scenario(scale_uniform_gizmo_instance, Node3DEditor::get_singleton()->get_editor_scenario());
+	RS::get_singleton()->instance_set_visible(scale_uniform_gizmo_instance, false);
+	RS::get_singleton()->instance_geometry_set_cast_shadows_setting(scale_uniform_gizmo_instance, RSE::SHADOW_CASTING_SETTING_OFF);
+	RS::get_singleton()->instance_set_layer_mask(scale_uniform_gizmo_instance, layer);
+	RS::get_singleton()->instance_geometry_set_flag(scale_uniform_gizmo_instance, RSE::INSTANCE_FLAG_IGNORE_OCCLUSION_CULLING, true);
+	RS::get_singleton()->instance_geometry_set_flag(scale_uniform_gizmo_instance, RSE::INSTANCE_FLAG_USE_BAKED_LIGHT, false);
+
 	// Create trackball sphere instance
 	trackball_sphere_instance = RS::get_singleton()->instance_create();
 	RS::get_singleton()->instance_set_base(trackball_sphere_instance, spatial_editor->get_trackball_sphere_gizmo()->get_rid());
@@ -5721,6 +5750,8 @@ void Node3DEditorViewport::set_editor_world(const Ref<World3D> &p_world) {
 		RS::get_singleton()->instance_set_scenario(rotate_gizmo_instance[i], scenario);
 		RS::get_singleton()->instance_set_layer_mask(rotate_gizmo_instance[i], layer);
 	}
+	RS::get_singleton()->instance_set_scenario(scale_uniform_gizmo_instance, scenario);
+	RS::get_singleton()->instance_set_layer_mask(scale_uniform_gizmo_instance, layer);
 	RS::get_singleton()->instance_set_scenario(trackball_sphere_instance, scenario);
 	RS::get_singleton()->instance_set_layer_mask(trackball_sphere_instance, layer);
 }
@@ -5738,6 +5769,7 @@ void Node3DEditorViewport::_finish_gizmo_instances() {
 	// Rotation white outline
 	RS::get_singleton()->free_rid(rotate_gizmo_instance[3]);
 
+	RS::get_singleton()->free_rid(scale_uniform_gizmo_instance);
 	RS::get_singleton()->free_rid(trackball_sphere_instance);
 }
 
@@ -5929,6 +5961,7 @@ void Node3DEditorViewport::update_transform_gizmo_view() {
 			RenderingServer::get_singleton()->instance_set_visible(scale_plane_gizmo_instance[i], false);
 			RenderingServer::get_singleton()->instance_set_visible(axis_gizmo_instance[i], false);
 		}
+		RenderingServer::get_singleton()->instance_set_visible(scale_uniform_gizmo_instance, false);
 		RenderingServer::get_singleton()->instance_set_visible(rotate_gizmo_instance[3], false);
 		return;
 	}
@@ -5961,6 +5994,7 @@ void Node3DEditorViewport::update_transform_gizmo_view() {
 			RenderingServer::get_singleton()->instance_set_visible(scale_plane_gizmo_instance[i], false);
 			RenderingServer::get_singleton()->instance_set_visible(axis_gizmo_instance[i], false);
 		}
+		RenderingServer::get_singleton()->instance_set_visible(scale_uniform_gizmo_instance, false);
 		RenderingServer::get_singleton()->instance_set_visible(rotate_gizmo_instance[3], false);
 		return;
 	}
@@ -6015,6 +6049,11 @@ void Node3DEditorViewport::update_transform_gizmo_view() {
 		RenderingServer::get_singleton()->instance_set_visible(scale_plane_gizmo_instance[i], show_gizmo && (spatial_editor->get_tool_mode() == Node3DEditor::TOOL_MODE_SCALE));
 		RenderingServer::get_singleton()->instance_set_transform(axis_gizmo_instance[i], xform);
 	}
+	Transform3D uniform_scale_xform = xform;
+	uniform_scale_xform.basis.orthonormalize();
+	uniform_scale_xform.basis.scale(scale);
+	RenderingServer::get_singleton()->instance_set_transform(scale_uniform_gizmo_instance, uniform_scale_xform);
+	RenderingServer::get_singleton()->instance_set_visible(scale_uniform_gizmo_instance, show_gizmo && spatial_editor->get_tool_mode() == Node3DEditor::TOOL_MODE_SCALE);
 
 	Transform3D view_rotation_xform = xform;
 	view_rotation_xform.orthonormalize();
@@ -7186,6 +7225,20 @@ void Node3DEditorViewport::update_transform(bool p_shift) {
 
 	switch (_edit.mode) {
 		case TRANSFORM_SCALE: {
+			if (_edit.plane == TRANSFORM_VIEW && _edit.uniform_scale_handle) {
+				const Vector2 screen_motion = _edit.mouse_pos - _edit.original_mouse_pos;
+				const real_t scale_delta = (screen_motion.x - screen_motion.y) / (200.0 * EDSCALE);
+				Vector3 motion(scale_delta, scale_delta, scale_delta);
+				if (spatial_editor->is_snap_enabled(EditorSnapModifierEffect::NATIVE)) {
+					snap = spatial_editor->get_scale_snap(EditorSnapModifierEffect::NATIVE) / 100;
+				}
+				Vector3 motion_snapped = motion;
+				motion_snapped.snapf(snap);
+				set_message(vformat(TTR("Scaling: %s"), vformat("%.*v", snap_step_decimals, motion_snapped)));
+				apply_transform(motion, snap);
+				break;
+			}
+
 			Vector3 motion_mask;
 			Plane plane;
 			bool plane_mv = false;
@@ -7549,6 +7602,7 @@ void Node3DEditorViewport::finish_transform() {
 	_edit.accumulated_rotation_angle = 0.0;
 	_edit.rotation_angle = 0.0;
 	_edit.gizmo_initiated = false;
+	_edit.uniform_scale_handle = false;
 	_edit.children_original_globals.clear();
 	spatial_editor->set_local_coords_enabled(_edit.original_local);
 	spatial_editor->update_transform_gizmo();
