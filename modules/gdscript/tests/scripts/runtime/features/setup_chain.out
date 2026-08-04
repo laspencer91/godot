@@ -1,0 +1,4 @@
+GDTEST_OK
+["base", "middle", "leaf", "ready"]
+onready-was-assigned
+["base-only"]

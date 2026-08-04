@@ -1,0 +1,2 @@
+GDTEST_ANALYZER_ERROR
+>> ERROR at line 4: A "@setup" function cannot take arguments, because it is called by the engine.

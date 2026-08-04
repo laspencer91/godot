@@ -810,6 +810,31 @@
 				[b]Note:[/b] Methods annotated with [annotation @rpc] cannot receive objects which define required parameters in [method Object._init]. See [method Object._init] for more details.
 			</description>
 		</annotation>
+		<annotation name="@setup">
+			<return type="void" />
+			<description>
+				Marks the following method as a setup hook, called automatically when the [Node] becomes ready.
+				Unlike [method Node._ready], which is a virtual method where only the most derived implementation runs, [b]every[/b] method annotated with [annotation @setup] in the inheritance chain is called, starting with the one declared furthest up the hierarchy. A derived class therefore cannot accidentally prevent a base class from setting itself up, and the method names do not need to match.
+				[codeblock]
+				# base_weapon.gd
+				extends Node
+
+				@setup
+				func _init_pools() -> void:
+					print("base")
+
+				# rk7_carbine.gd
+				extends "base_weapon.gd"
+
+				@setup
+				func _load_attachments() -> void:
+					print("derived") # Prints after "base", without calling super().
+				[/codeblock]
+				Setup hooks run after [annotation @onready] properties have been assigned, and before [method Node._ready]. Like [method Node._ready], they run again if the node re-enters the tree after [method Node.request_ready].
+				[b]Note:[/b] Do not call the base implementation with [code]super[/code] from a setup hook. It has already been called, so doing so would run it twice. This is an error.
+				[b]Note:[/b] A setup hook must take no arguments and must not be [code]static[/code], [annotation @abstract], or a coroutine (it cannot use [code]await[/code]), because each hook in the chain has to finish before the next one starts. It can only be used in classes that inherit [Node].
+			</description>
+		</annotation>
 		<annotation name="@static_unload">
 			<return type="void" />
 			<description>

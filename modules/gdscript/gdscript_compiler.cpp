@@ -2537,6 +2537,10 @@ GDScriptFunction *GDScriptCompiler::_parse_function(Error &r_error, GDScript *p_
 
 	if (!is_implicit_initializer && !is_implicit_ready && !p_for_lambda) {
 		p_script->member_functions[func_name] = gd_function;
+		if (p_func && p_func->is_setup) {
+			// Owned by `member_functions` above; this is just a direct pointer for ready dispatch.
+			p_script->setup_function = gd_function;
+		}
 	}
 
 	memdelete(codegen.generator);
@@ -2753,6 +2757,7 @@ Error GDScriptCompiler::_prepare_compilation(GDScript *p_script, const GDScriptP
 	p_script->static_variables.clear();
 	p_script->_signals.clear();
 	p_script->initializer = nullptr;
+	p_script->setup_function = nullptr;
 	p_script->implicit_initializer = nullptr;
 	p_script->implicit_ready = nullptr;
 	p_script->static_initializer = nullptr;

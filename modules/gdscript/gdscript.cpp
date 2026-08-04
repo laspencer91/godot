@@ -1446,6 +1446,9 @@ void GDScript::clear() {
 	}
 	member_functions.clear();
 
+	// Owned by `member_functions` above, so only drop the reference here.
+	setup_function = nullptr;
+
 	for (KeyValue<StringName, MemberInfo> &E : member_indices) {
 		E.value.data_type.script_type_ref = Ref<Script>();
 	}
@@ -1951,11 +1954,25 @@ void GDScriptInstance::_call_implicit_ready_recursively(GDScript *p_script) {
 	}
 }
 
+void GDScriptInstance::_call_setup_recursively(GDScript *p_script) {
+	// Call base class first, so a derived setup observes a fully set up base.
+	if (p_script->base.ptr()) {
+		_call_setup_recursively(p_script->base.ptr());
+	}
+	if (likely(p_script->valid) && p_script->setup_function) {
+		Callable::CallError err;
+		p_script->setup_function->call(this, nullptr, 0, err);
+	}
+}
+
 Variant GDScriptInstance::callp(const StringName &p_method, const Variant **p_args, int p_argcount, Callable::CallError &r_error) {
 	GDScript *sptr = script.ptr();
 	if (unlikely(p_method == SceneStringName(_ready))) {
 		// Call implicit ready first, including for the super classes recursively.
 		_call_implicit_ready_recursively(sptr);
+		// Then the `@setup` chain, so it observes assigned `@onready` values but
+		// still runs before the most-derived explicit `_ready` found below.
+		_call_setup_recursively(sptr);
 	}
 	while (sptr) {
 		if (likely(sptr->valid)) {

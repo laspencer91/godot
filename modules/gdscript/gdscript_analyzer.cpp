@@ -2078,6 +2078,26 @@ void GDScriptAnalyzer::resolve_function_signature(GDScriptParser::FunctionNode *
 	}
 #endif // DEBUG_ENABLED
 
+	if (p_function->is_setup) {
+		// Setup is driven by `Node`'s ready dispatch, so it is meaningless elsewhere.
+		if (!ClassDB::is_parent_class(parser->current_class->base_type.native_type, SNAME("Node"))) {
+			push_error(R"("@setup" can only be used in classes that inherit "Node".)", p_function);
+		}
+		// The ready dispatch calls every `@setup` in the hierarchy with no arguments and
+		// discards the result, so anything it cannot honor has to be rejected up front.
+		if (!p_function->parameters.is_empty() || p_function->is_vararg()) {
+			push_error(R"(A "@setup" function cannot take arguments, because it is called by the engine.)", p_function);
+		}
+		if (p_function->is_abstract) {
+			push_error(R"(A "@setup" function cannot be abstract, because there is no body to call.)", p_function);
+		}
+		if (p_function->is_coroutine) {
+			// A suspended base setup would return control immediately and the derived
+			// setup would start before the base finished, breaking the ordering guarantee.
+			push_error(R"(A "@setup" function cannot use "await", because each setup in the hierarchy must complete before the next one starts.)", p_function);
+		}
+	}
+
 	method_info.default_arguments.append_array(p_function->default_arg_values);
 	method_info.return_val = p_function->return_type_constraint.to_property_info("");
 	p_function->info = method_info;
@@ -3685,6 +3705,14 @@ void GDScriptAnalyzer::reduce_call(GDScriptParser::CallNode *p_call, bool p_is_a
 
 		if (p_call->callee == nullptr && current_lambda != nullptr) {
 			push_error("Cannot use `super()` inside a lambda.", p_call);
+		}
+
+		// The setup chain already runs every base implementation, so calling the same
+		// one through `super` would execute it twice. Lambdas are excluded implicitly,
+		// since `current_function` is then the lambda's own node.
+		const GDScriptParser::FunctionNode *enclosing = parser->current_function;
+		if (enclosing != nullptr && enclosing->is_setup && enclosing->identifier != nullptr && p_call->function_name == enclosing->identifier->name) {
+			push_error(vformat(R"*(Cannot call "super.%s()" from a "@setup" function, because the base implementation is already called automatically before this one.)*", p_call->function_name), p_call);
 		}
 	} else if (callee_type == GDScriptParser::Node::IDENTIFIER) {
 		base_type = parser->current_class->self_type;

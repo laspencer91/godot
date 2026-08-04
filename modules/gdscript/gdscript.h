@@ -155,6 +155,7 @@ private:
 #endif
 
 	GDScriptFunction *initializer = nullptr; // Direct pointer to `new()`/`_init()` member function, faster to locate.
+	GDScriptFunction *setup_function = nullptr; // Direct pointer to this script's own `@setup` member function, if any. Owned by `member_functions`.
 
 	GDScriptFunction *implicit_initializer = nullptr; // `@implicit_new()` special function.
 	GDScriptFunction *implicit_ready = nullptr; // `@implicit_ready()` special function.
@@ -253,6 +254,7 @@ public:
 
 	_FORCE_INLINE_ const GDScriptFunction *get_implicit_initializer() const { return implicit_initializer; }
 	_FORCE_INLINE_ const GDScriptFunction *get_implicit_ready() const { return implicit_ready; }
+	_FORCE_INLINE_ const GDScriptFunction *get_setup_function() const { return setup_function; }
 	_FORCE_INLINE_ const GDScriptFunction *get_static_initializer() const { return static_initializer; }
 
 	virtual bool has_script_signal(const StringName &p_signal) const override;
@@ -358,6 +360,7 @@ class GDScriptInstance : public ScriptInstance {
 	SelfList<GDScriptInstance> script_instance_list; // Linked list of instances with the same script.
 
 	void _call_implicit_ready_recursively(GDScript *p_script);
+	void _call_setup_recursively(GDScript *p_script);
 
 public:
 	virtual Object *get_owner() { return owner; }

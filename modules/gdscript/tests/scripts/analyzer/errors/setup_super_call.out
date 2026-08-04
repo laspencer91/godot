@@ -1,0 +1,2 @@
+GDTEST_ANALYZER_ERROR
+>> ERROR at line 12: Cannot call "super._shared_setup()" from a "@setup" function, because the base implementation is already called automatically before this one.

@@ -1,0 +1,2 @@
+GDTEST_ANALYZER_ERROR
+>> ERROR at line 6: A "@setup" function cannot use "await", because each setup in the hierarchy must complete before the next one starts.
