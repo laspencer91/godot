@@ -560,6 +560,15 @@ DocumentView *EditorMainScreen::get_document_view(EditorDocument *p_document) co
 	return host ? host->get_document_view(p_document) : nullptr;
 }
 
+DocumentView *EditorMainScreen::get_focused_document_view() const {
+	if (!workspace) {
+		return nullptr;
+	}
+	WorkspacePane *pane = workspace->get_focused_pane();
+	TabbedDocumentHost *host = pane ? Object::cast_to<TabbedDocumentHost>(pane->get_content()) : nullptr;
+	return host ? host->get_current_view() : nullptr;
+}
+
 int EditorMainScreen::get_selected_index() const {
 	for (int i = 0; i < editor_table.size(); i++) {
 		if (selected_plugin == editor_table[i]) {

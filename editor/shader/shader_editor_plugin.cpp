@@ -364,60 +364,11 @@ void ShaderEditorPlugin::_menu_item_pressed(int p_index) {
 		} break;
 		case FILE_MENU_SAVE: {
 			int index = _current_edited_shader();
-			if (index < 0) {
-				return;
-			}
-			TextShaderEditor *editor = Object::cast_to<TextShaderEditor>(edited_shaders[index].shader_editor);
-			if (editor) {
-				if (editor->get_trim_trailing_whitespace_on_save()) {
-					editor->trim_trailing_whitespace();
-				}
-
-				if (editor->get_trim_final_newlines_on_save()) {
-					editor->trim_final_newlines();
-				}
-			}
-			if (edited_shaders[index].shader.is_valid()) {
-				EditorNode::get_singleton()->save_resource(edited_shaders[index].shader);
-			} else {
-				EditorNode::get_singleton()->save_resource(edited_shaders[index].shader_inc);
-			}
-			if (editor) {
-				editor->tag_saved_version();
-			}
+			_save_view(index >= 0 ? edited_shaders[index].shader_editor : nullptr, false);
 		} break;
 		case FILE_MENU_SAVE_AS: {
 			int index = _current_edited_shader();
-			if (index < 0) {
-				return;
-			}
-			TextShaderEditor *editor = Object::cast_to<TextShaderEditor>(edited_shaders[index].shader_editor);
-			if (editor) {
-				if (editor->get_trim_trailing_whitespace_on_save()) {
-					editor->trim_trailing_whitespace();
-				}
-
-				if (editor->get_trim_final_newlines_on_save()) {
-					editor->trim_final_newlines();
-				}
-			}
-			String path;
-			if (edited_shaders[index].shader.is_valid()) {
-				path = edited_shaders[index].shader->get_path();
-				if (!path.is_resource_file()) {
-					path = "";
-				}
-				EditorNode::get_singleton()->save_resource_as(edited_shaders[index].shader, path);
-			} else {
-				path = edited_shaders[index].shader_inc->get_path();
-				if (!path.is_resource_file()) {
-					path = "";
-				}
-				EditorNode::get_singleton()->save_resource_as(edited_shaders[index].shader_inc, path);
-			}
-			if (editor) {
-				editor->tag_saved_version();
-			}
+			_save_view(index >= 0 ? edited_shaders[index].shader_editor : nullptr, true);
 		} break;
 		case FILE_MENU_INSPECT: {
 			int index = _current_edited_shader();
@@ -456,6 +407,41 @@ void ShaderEditorPlugin::_menu_item_pressed(int p_index) {
 			}
 		} break;
 	}
+}
+
+bool ShaderEditorPlugin::_save_view(ShaderEditor *p_editor, bool p_save_as) {
+	const int index = _find_edited_shader(p_editor);
+	if (index < 0) {
+		return false;
+	}
+
+	TextShaderEditor *text_editor = Object::cast_to<TextShaderEditor>(edited_shaders[index].shader_editor);
+	if (text_editor) {
+		if (text_editor->get_trim_trailing_whitespace_on_save()) {
+			text_editor->trim_trailing_whitespace();
+		}
+		if (text_editor->get_trim_final_newlines_on_save()) {
+			text_editor->trim_final_newlines();
+		}
+	}
+
+	Ref<Resource> resource = edited_shaders[index].resource();
+	if (resource.is_null()) {
+		return false;
+	}
+	if (p_save_as) {
+		String path = resource->get_path();
+		if (!path.is_resource_file()) {
+			path = "";
+		}
+		EditorNode::get_singleton()->save_resource_as(resource, path);
+	} else {
+		EditorNode::get_singleton()->save_resource(resource);
+		if (text_editor) {
+			text_editor->tag_saved_version();
+		}
+	}
+	return true;
 }
 
 void ShaderEditorPlugin::_shader_created(Ref<Shader> p_shader) {
@@ -503,11 +489,11 @@ void ShaderEditorPlugin::_res_saved_callback(const Ref<Resource> &p_res) {
 		ERR_FAIL_COND(shader_res.is_null());
 
 		TextShaderEditor *text_shader_editor = Object::cast_to<TextShaderEditor>(edited.shader_editor);
-		if (!text_shader_editor || !shader_res->is_built_in()) {
+		if (!text_shader_editor) {
 			continue;
 		}
 
-		if (shader_res->get_path().get_slice("::", 0) == path) {
+		if (shader_res == p_res || (shader_res->is_built_in() && shader_res->get_path().get_slice("::", 0) == path)) {
 			text_shader_editor->tag_saved_version();
 		}
 	}

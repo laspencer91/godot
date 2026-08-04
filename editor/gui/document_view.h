@@ -75,8 +75,11 @@ protected:
 
 public:
 	EditorDocumentView *get_document_view() const { return doc_view; }
+	EditorDocument *get_document() const;
 	Control *get_editor_surface() const;
 	SubViewport *get_scene_viewport() const;
+	bool save_document();
+	bool save_document_as();
 
 	// G2 S7 (seam #8): where the focused tab's shared chrome (ScriptEditor menu strip + find
 	// bar) mounts. Null cast target for non-hosting views is fine - callers null-check.

@@ -68,6 +68,11 @@ public:
 	virtual void set_context_active(bool p_active) {}
 	virtual void notify_surface_closing() {}
 	virtual void pre_delete_cleanup() {}
+	// Document commands are surface capabilities because the live surface owns editor-buffer
+	// behavior (format/apply/tag-saved), while EditorDocument only owns model identity/state.
+	// A false return means this surface has no save operation (for example Help or screen-host).
+	virtual bool save() { return false; }
+	virtual bool save_as() { return false; }
 
 	// State that needs a live tree remains split from factory-time restoration.
 	virtual void document_view_entered_tree() {}

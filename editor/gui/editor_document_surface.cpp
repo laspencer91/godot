@@ -99,6 +99,24 @@ protected:
 	static void _bind_methods() {}
 
 public:
+	virtual bool save() override {
+		ResourceDocument *document = host_view && host_view->get_document() ? static_cast<ResourceDocument *>(host_view->get_document()) : nullptr;
+		if (!document || document->get_resource().is_null()) {
+			return false;
+		}
+		EditorNode::get_singleton()->save_resource(document->get_resource());
+		return true;
+	}
+
+	virtual bool save_as() override {
+		ResourceDocument *document = host_view && host_view->get_document() ? static_cast<ResourceDocument *>(host_view->get_document()) : nullptr;
+		if (!document || document->get_resource().is_null()) {
+			return false;
+		}
+		EditorNode::get_singleton()->save_resource_as(document->get_resource());
+		return true;
+	}
+
 	virtual void set_context_active(bool p_active) override {
 		if (inspector_dock) {
 			inspector_dock->set_context_active(p_active);
@@ -129,6 +147,16 @@ protected:
 	static void _bind_methods() {}
 
 public:
+	virtual bool save() override {
+		ScriptEditor *script_editor = ScriptEditor::get_singleton();
+		return script_editor && script_editor->save_view(script_surface);
+	}
+
+	virtual bool save_as() override {
+		ScriptEditor *script_editor = ScriptEditor::get_singleton();
+		return script_editor && script_editor->save_view_as(script_surface);
+	}
+
 	virtual void pre_delete_cleanup() override {
 		_park_script_chrome();
 		// G2 S4: if this view hosted a script surface, drop it from the ScriptEditor open-scripts
@@ -162,6 +190,16 @@ protected:
 	static void _bind_methods() {}
 
 public:
+	virtual bool save() override {
+		ShaderEditorPlugin *shader_editor = ShaderEditorPlugin::get_singleton();
+		return shader_editor && shader_editor->save_view(shader_surface);
+	}
+
+	virtual bool save_as() override {
+		ShaderEditorPlugin *shader_editor = ShaderEditorPlugin::get_singleton();
+		return shader_editor && shader_editor->save_view_as(shader_surface);
+	}
+
 	virtual void pre_delete_cleanup() override {
 		_park_script_chrome();
 		// G-Shader: same for a shader surface - park the traveling File menu (if hosted here) and drop
@@ -569,6 +607,16 @@ protected:
 	static void _bind_methods() {}
 
 public:
+	virtual bool save() override {
+		EditorNode *editor_node = EditorNode::get_singleton();
+		return editor_node && editor_node->save_scene_document(bound_scene_document);
+	}
+
+	virtual bool save_as() override {
+		EditorNode *editor_node = EditorNode::get_singleton();
+		return editor_node && editor_node->save_scene_document(bound_scene_document, true);
+	}
+
 	virtual void capture_view_state(Dictionary &r_state) const override {
 		r_state[SNAME("scene_view_2d")] = scene_view_2d;
 		if (const Node3DEditorView *spatial_view = Object::cast_to<Node3DEditorView>(scene_surface_3d)) {

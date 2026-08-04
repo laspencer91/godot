@@ -139,6 +139,8 @@ public:
 	// destroyed (EditorData::remove_scene), so views never outlive the document they bind.
 	void drop_document_tabs(EditorDocument *p_document);
 	DocumentView *get_document_view(EditorDocument *p_document) const;
+	// The command target: current tab in the focused workspace pane, never the legacy active scene.
+	DocumentView *get_focused_document_view() const;
 	void focus_editor(const StringName &p_name);
 	int get_selected_index() const;
 	int get_plugin_index(EditorPlugin *p_editor) const;

@@ -84,6 +84,7 @@ class ShaderEditorPlugin : public EditorPlugin {
 
 	int _find_edited_shader(const ShaderEditor *p_editor) const;
 	int _current_edited_shader() const; // Index of current_shader_editor_id in edited_shaders, or -1.
+	bool _save_view(ShaderEditor *p_editor, bool p_save_as);
 	Ref<Resource> _get_current_shader();
 	void _park_file_menu(); // Return the File menu to menu_home (no shader tab focused / one is dying).
 	void _setup_file_menu(PopupMenu *p_menu);
@@ -120,6 +121,8 @@ public:
 	// G-Shader: focus hook (driven by TabbedDocumentHost / EditorWorkspace, like ScriptEditor). When a
 	// shader tab becomes current its editor hosts the File menu; any other kind of tab parks it.
 	void set_current_surface(DocumentView *p_view);
+	bool save_view(ShaderEditor *p_editor) { return _save_view(p_editor, false); }
+	bool save_view_as(ShaderEditor *p_editor) { return _save_view(p_editor, true); }
 
 	ShaderEditor *get_shader_editor(const Ref<Shader> &p_for_shader);
 

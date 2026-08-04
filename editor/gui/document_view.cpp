@@ -80,6 +80,18 @@ Control *DocumentView::get_editor_surface() const {
 	return surface_instance ? surface_instance->get_root_control() : nullptr;
 }
 
+EditorDocument *DocumentView::get_document() const {
+	return doc_view ? doc_view->get_document() : nullptr;
+}
+
+bool DocumentView::save_document() {
+	return surface_instance && surface_instance->save();
+}
+
+bool DocumentView::save_document_as() {
+	return surface_instance && surface_instance->save_as();
+}
+
 Control *DocumentView::get_chrome_host() const {
 	return content_vbox;
 }

@@ -730,7 +730,7 @@ void EditorNode::_propagate_translation_notification() {
 void EditorNode::_update_system_menu_icons(bool p_dark_mode) {
 	file_menu->set_item_icon(file_menu->get_item_index(SCENE_NEW_SCENE), get_editor_theme_native_menu_icon(SNAME("CreateNewSceneFrom"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
 	file_menu->set_item_icon(file_menu->get_item_index(SCENE_OPEN_SCENE), get_editor_theme_native_menu_icon(SNAME("PackedScene"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
-	file_menu->set_item_icon(file_menu->get_item_index(SCENE_SAVE_SCENE), get_editor_theme_native_menu_icon(SNAME("Save"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
+	file_menu->set_item_icon(file_menu->get_item_index(DOCUMENT_SAVE), get_editor_theme_native_menu_icon(SNAME("Save"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
 	file_menu->set_item_icon(file_menu->get_item_index(SCENE_QUICK_OPEN), get_editor_theme_native_menu_icon(SNAME("Load"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
 	file_menu->set_item_icon(file_menu->get_item_index(SCENE_UNDO), get_editor_theme_native_menu_icon(SNAME("RotateLeft"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
 	file_menu->set_item_icon(file_menu->get_item_index(SCENE_CLOSE), get_editor_theme_native_menu_icon(SNAME("CloseScene"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode));
@@ -2678,6 +2678,61 @@ void EditorNode::_save_scene(String p_file, int idx) {
 	_update_unsaved_cache();
 }
 
+void EditorNode::_popup_scene_save_dialog(Node *p_scene) {
+	ERR_FAIL_NULL(p_scene);
+	file->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
+
+	List<String> extensions;
+	Ref<PackedScene> sd = memnew(PackedScene);
+	ResourceSaver::get_recognized_extensions(sd, &extensions);
+	file->clear_filters();
+	for (const String &extension : extensions) {
+		file->add_filter("*." + extension, extension.to_upper());
+	}
+
+	if (!p_scene->get_scene_file_path().is_empty()) {
+		String path = p_scene->get_scene_file_path();
+		String root_name = EditorNode::adjust_scene_name_casing(p_scene->get_name());
+		String ext = path.get_extension().to_lower();
+		path = path.get_base_dir().path_join(root_name + "." + ext);
+		file->set_current_path(path);
+		if (extensions.size() && extensions.find(ext) == nullptr) {
+			file->set_current_path(path.replacen("." + ext, "." + extensions.front()->get()));
+		}
+	} else if (extensions.size()) {
+		String root_name = EditorNode::adjust_scene_name_casing(p_scene->get_name());
+		file->set_current_path(root_name + "." + extensions.front()->get().to_lower());
+	}
+	file->set_title(TTR("Save Scene As..."));
+	file->popup_file_dialog();
+}
+
+bool EditorNode::save_scene_document(EditorDocument *p_document, bool p_save_as) {
+	const int scene_idx = editor_data.find_document_index(p_document);
+	if (scene_idx < 0) {
+		return false;
+	}
+	Node *scene = editor_data.get_edited_scene_root(scene_idx);
+	if (!scene) {
+		return false;
+	}
+
+	if (!p_save_as && !scene->get_scene_file_path().is_empty()) {
+		if (!DirAccess::exists(scene->get_scene_file_path().get_base_dir())) {
+			show_save_accept(vformat(TTR("%s no longer exists! Please specify a new save location."), scene->get_scene_file_path().get_base_dir()));
+			return true;
+		}
+		_save_scene_with_preview(scene->get_scene_file_path(), scene_idx);
+		save_editor_layout_delayed();
+		return true;
+	}
+
+	document_save_as_scene_root_id = scene->get_instance_id();
+	current_menu_option = DOCUMENT_SAVE_AS;
+	_popup_scene_save_dialog(scene);
+	return true;
+}
+
 void EditorNode::save_all_scenes() {
 	project_run_bar->stop_playing();
 	_save_all_scenes();
@@ -2814,6 +2869,7 @@ void EditorNode::_dialog_action(String p_file) {
 		} break;
 		case SCENE_CLOSE:
 		case SCENE_TAB_CLOSE:
+		case DOCUMENT_SAVE_AS:
 		case SCENE_SAVE_SCENE:
 		case SCENE_MULTI_SAVE_AS_SCENE:
 		case SCENE_SAVE_AS_SCENE:
@@ -2823,6 +2879,21 @@ void EditorNode::_dialog_action(String p_file) {
 			int scene_idx = -1;
 			if (current_menu_option == SCENE_CLOSE || current_menu_option == SCENE_TAB_CLOSE) {
 				scene_idx = tab_closing_idx;
+			} else if (current_menu_option == DOCUMENT_SAVE_AS) {
+				Node *target_root = Object::cast_to<Node>(ObjectDB::get_instance(document_save_as_scene_root_id));
+				if (target_root) {
+					for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
+						if (editor_data.get_edited_scene_root(i) == target_root) {
+							scene_idx = i;
+							break;
+						}
+					}
+				}
+				if (scene_idx < 0) {
+					document_save_as_scene_root_id = ObjectID();
+					show_warning(TTR("The document selected for Save As is no longer open."));
+					return;
+				}
 			} else if (current_menu_option == SCENE_TAB_SAVE_SCENE || current_menu_option == SCENE_TAB_SAVE_AS_MAIN_SCENE || current_menu_option == SCENE_TAB_SAVE_AS_AND_RUN) {
 				scene_idx = scene_tabs->get_option_tab();
 			}
@@ -2845,12 +2916,15 @@ void EditorNode::_dialog_action(String p_file) {
 				_add_to_recent_scenes(p_file);
 				save_editor_layout_delayed();
 
-				if (scene_idx != -1) {
+				if (scene_idx != -1 && current_menu_option != DOCUMENT_SAVE_AS) {
 					_discard_changes();
 				} else {
-					// Update the path of the edited scene to ensure later do/undo action history matches.
-					editor_data.set_scene_path(editor_data.get_edited_scene(), p_file);
+					if (scene_idx == -1) {
+						// Update the path of the edited scene to ensure later do/undo action history matches.
+						editor_data.set_scene_path(editor_data.get_edited_scene(), p_file);
+					}
 				}
+				document_save_as_scene_root_id = ObjectID();
 			}
 
 			if (current_menu_option == SCENE_MULTI_SAVE_AS_SCENE) {
@@ -3514,6 +3588,14 @@ void EditorNode::_menu_option_confirm(int p_option, bool p_confirmed) {
 	}
 
 	switch (p_option) {
+		case DOCUMENT_SAVE:
+		case DOCUMENT_SAVE_AS: {
+			DocumentView *view = editor_main_screen ? editor_main_screen->get_focused_document_view() : nullptr;
+			const bool handled = view && (p_option == DOCUMENT_SAVE ? view->save_document() : view->save_document_as());
+			if (!handled) {
+				EditorToaster::get_singleton()->popup_str(TTR("The focused document cannot be saved."), EditorToaster::SEVERITY_INFO);
+			}
+		} break;
 		case SCENE_NEW_SCENE: {
 			new_scene();
 
@@ -3640,35 +3722,7 @@ void EditorNode::_menu_option_confirm(int p_option, bool p_confirmed) {
 				break;
 			}
 
-			file->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
-
-			List<String> extensions;
-			Ref<PackedScene> sd = memnew(PackedScene);
-			ResourceSaver::get_recognized_extensions(sd, &extensions);
-			file->clear_filters();
-			for (const String &extension : extensions) {
-				file->add_filter("*." + extension, extension.to_upper());
-			}
-
-			if (!scene->get_scene_file_path().is_empty()) {
-				String path = scene->get_scene_file_path();
-				String root_name = EditorNode::adjust_scene_name_casing(scene->get_name());
-				String ext = path.get_extension().to_lower();
-				path = path.get_base_dir().path_join(root_name + "." + ext);
-
-				file->set_current_path(path);
-				if (extensions.size()) {
-					if (extensions.find(ext) == nullptr) {
-						file->set_current_path(path.replacen("." + ext, "." + extensions.front()->get()));
-					}
-				}
-			} else if (extensions.size()) {
-				String root_name = scene->get_name();
-				root_name = EditorNode::adjust_scene_name_casing(root_name);
-				file->set_current_path(root_name + "." + extensions.front()->get().to_lower());
-			}
-			file->set_title(TTR("Save Scene As..."));
-			file->popup_file_dialog();
+			_popup_scene_save_dialog(scene);
 
 		} break;
 
@@ -8588,8 +8642,8 @@ void EditorNode::_build_file_menu(bool p_dark_mode) {
 	file_menu->add_submenu_node_item(TTRC("Open Recent"), recent_scenes, SCENE_OPEN_RECENT);
 	file_menu->add_separator();
 
-	file_menu->add_icon_shortcut(get_editor_theme_native_menu_icon(SNAME("Save"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode), ED_GET_SHORTCUT("editor/save_scene"), SCENE_SAVE_SCENE);
-	file_menu->add_shortcut(ED_GET_SHORTCUT("editor/save_scene_as"), SCENE_SAVE_AS_SCENE);
+	file_menu->add_icon_shortcut(get_editor_theme_native_menu_icon(SNAME("Save"), menu_type == MENU_TYPE_GLOBAL, p_dark_mode), ED_GET_SHORTCUT("editor/save_scene"), DOCUMENT_SAVE);
+	file_menu->add_shortcut(ED_GET_SHORTCUT("editor/save_scene_as"), DOCUMENT_SAVE_AS);
 	file_menu->add_shortcut(ED_GET_SHORTCUT("editor/save_all_scenes"), SCENE_SAVE_ALL_SCENES);
 	file_menu->add_separator();
 
@@ -9571,8 +9625,10 @@ EditorNode::EditorNode() {
 	ED_SHORTCUT_AND_COMMAND("editor/open_scene", TTRC("Open Scene..."), KeyModifierMask::CMD_OR_CTRL + Key::O);
 	ED_SHORTCUT_AND_COMMAND("editor/reopen_closed_scene", TTRC("Reopen Closed Scene"), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::SHIFT + Key::T);
 
-	ED_SHORTCUT_AND_COMMAND("editor/save_scene", TTRC("Save Scene"), KeyModifierMask::CMD_OR_CTRL + Key::S);
-	ED_SHORTCUT_AND_COMMAND("editor/save_scene_as", TTRC("Save Scene As..."), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::SHIFT + Key::S);
+	// Keep the established shortcut IDs so existing user overrides continue to work; only the
+	// command target changes from the active scene to the focused workspace document.
+	ED_SHORTCUT_AND_COMMAND("editor/save_scene", TTRC("Save"), KeyModifierMask::CMD_OR_CTRL + Key::S);
+	ED_SHORTCUT_AND_COMMAND("editor/save_scene_as", TTRC("Save As..."), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::SHIFT + Key::S);
 	ED_SHORTCUT_AND_COMMAND("editor/save_all_scenes", TTRC("Save All Scenes"), KeyModifierMask::CMD_OR_CTRL + KeyModifierMask::SHIFT + KeyModifierMask::ALT + Key::S);
 
 	ED_SHORTCUT_ARRAY_AND_COMMAND("editor/quick_open", TTRC("Quick Open..."), { int32_t(KeyModifierMask::SHIFT + KeyModifierMask::ALT + Key::O), int32_t(KeyModifierMask::CMD_OR_CTRL + Key::P) });

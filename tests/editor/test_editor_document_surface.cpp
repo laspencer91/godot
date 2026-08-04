@@ -45,8 +45,20 @@ static bool cleanup_called[2] = {};
 class TestSurfaceInstance : public EditorDocumentSurfaceInstance {
 	int index = 0;
 	int state_value = 0;
+	int save_calls = 0;
+	int save_as_calls = 0;
 
 public:
+	virtual bool save() override {
+		save_calls++;
+		return true;
+	}
+
+	virtual bool save_as() override {
+		save_as_calls++;
+		return true;
+	}
+
 	virtual void capture_view_state(Dictionary &r_state) const override {
 		r_state[SNAME("test_value")] = state_value;
 	}
@@ -63,6 +75,8 @@ public:
 
 	void set_state_value(int p_value) { state_value = p_value; }
 	int get_state_value() const { return state_value; }
+	int get_save_calls() const { return save_calls; }
+	int get_save_as_calls() const { return save_as_calls; }
 
 	TestSurfaceInstance(int p_index) {
 		index = p_index;
@@ -98,6 +112,25 @@ TEST_CASE("[Editor][EditorDocumentSurface] Generic view-state hooks keep pane di
 	memdelete(second);
 	memdelete(first_root);
 	memdelete(second_root);
+}
+
+TEST_CASE("[Editor][EditorDocumentSurface] Save capabilities stay on the exact surface instance") {
+	TestSurfaceInstance *focused = memnew(TestSurfaceInstance(0));
+	TestSurfaceInstance *background = memnew(TestSurfaceInstance(1));
+
+	CHECK(focused->save());
+	CHECK(focused->save_as());
+	CHECK(focused->get_save_calls() == 1);
+	CHECK(focused->get_save_as_calls() == 1);
+	CHECK(background->get_save_calls() == 0);
+	CHECK(background->get_save_as_calls() == 0);
+
+	Control *focused_root = focused->get_root_control();
+	Control *background_root = background->get_root_control();
+	memdelete(focused);
+	memdelete(background);
+	memdelete(focused_root);
+	memdelete(background_root);
 }
 
 class TestSurfaceProvider : public EditorDocumentSurfaceProvider {

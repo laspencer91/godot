@@ -144,6 +144,10 @@ public:
 	};
 
 	enum MenuOptions {
+		// Focused workspace document commands. Scene-specific callers keep using SCENE_SAVE_* below.
+		DOCUMENT_SAVE,
+		DOCUMENT_SAVE_AS,
+
 		// Scene menu.
 		SCENE_NEW_SCENE,
 		SCENE_NEW_INHERITED_SCENE,
@@ -482,6 +486,9 @@ private:
 	bool pending_translation_notification = false;
 
 	int current_menu_option = 0;
+	// Stable identity for an asynchronous focused-scene Save As. Scene indices can change while the
+	// dialog is open, so the callback resolves this root back to its live EditorData index.
+	ObjectID document_save_as_scene_root_id;
 
 	SubViewport *scene_root = nullptr; // Root of the scene being edited.
 	Node *documents_holder = nullptr; // Persistent in-tree parent for every open document's scene_root, so all stay live.
@@ -634,6 +641,7 @@ private:
 	void _nav_to_selected_scene();
 	bool _validate_scene_recursive(const String &p_filename, Node *p_node);
 	void _save_scene(String p_file, int idx = -1);
+	void _popup_scene_save_dialog(Node *p_scene);
 	void _save_all_scenes();
 	int _next_unsaved_scene(bool p_valid_filename, int p_start = 0);
 	void _discard_changes(const String &p_str = String());
@@ -894,6 +902,7 @@ public:
 	void save_resource_in_path(const Ref<Resource> &p_resource, const String &p_path);
 	void save_resource(const Ref<Resource> &p_resource);
 	void save_resource_as(const Ref<Resource> &p_resource, const String &p_at_path = String());
+	bool save_scene_document(EditorDocument *p_document, bool p_save_as = false);
 	bool is_resource_internal_to_scene(Ref<Resource> p_resource);
 	void gather_resources(const Variant &p_variant, List<Ref<Resource>> &r_list, HashSet<Object *> &r_scanned_objects, bool p_subresources = false, bool p_allow_external = false);
 	void update_resource_count(Node *p_node, bool p_remove = false);

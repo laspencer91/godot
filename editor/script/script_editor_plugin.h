@@ -429,6 +429,8 @@ class ScriptEditor : public PanelContainer {
 
 	void _script_changed();
 	int file_dialog_option;
+	// Save As dialogs outlive pane focus. Re-resolve the exact originating surface on confirmation.
+	ObjectID save_as_view_id;
 	void _file_dialog_action(const String &p_file);
 
 	Ref<Script> _get_current_script();
@@ -498,6 +500,8 @@ public:
 	void reload_open_files();
 	PackedStringArray get_unsaved_files() const;
 	PackedStringArray get_unsaved_scripts() const;
+	bool save_view(ScriptEditorBase *p_view);
+	bool save_view_as(ScriptEditorBase *p_view);
 	void save_current_script();
 	void save_all_scripts();
 	void update_script_times();

@@ -1262,8 +1262,11 @@ void ScriptEditor::_file_dialog_action(const String &p_file) {
 			open_file(p_file);
 		} break;
 		case FILE_MENU_SAVE_AS: {
-			if (ScriptEditorBase *current = _get_current_editor()) {
-				Ref<Resource> resource = current->get_edited_resource();
+			Object *instance = ObjectDB::get_instance(save_as_view_id);
+			save_as_view_id = ObjectID();
+			ScriptEditorBase *target = Object::cast_to<ScriptEditorBase>(instance);
+			if (target && registered_views.find(target) >= 0) {
+				Ref<Resource> resource = target->get_edited_resource();
 				String path = ProjectSettings::get_singleton()->localize_path(p_file);
 				Error err = _save_text_file(resource, path);
 
@@ -1454,40 +1457,10 @@ void ScriptEditor::_menu_option(int p_option) {
 	if (current) {
 		switch (p_option) {
 			case FILE_MENU_SAVE: {
-				save_current_script();
+				save_view(current);
 			} break;
 			case FILE_MENU_SAVE_AS: {
-				_auto_format_text(current);
-
-				Ref<Resource> resource = current->get_edited_resource();
-				Ref<TextFile> text_file = resource;
-				Ref<Script> scr = resource;
-
-				if (text_file.is_valid()) {
-					file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
-					file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
-					file_dialog_option = FILE_MENU_SAVE_AS;
-
-					List<String> extensions;
-					ResourceLoader::get_recognized_extensions_for_type("Script", &extensions);
-					file_dialog->clear_filters();
-					file_dialog->set_current_dir(text_file->get_path().get_base_dir());
-					file_dialog->set_current_file(text_file->get_path().get_file());
-					file_dialog->set_title(TTRC("Save File As..."));
-					file_dialog->popup_file_dialog();
-					break;
-				}
-
-				if (scr.is_valid()) {
-					clear_docs_from_script(scr);
-				}
-
-				EditorNode::get_singleton()->push_item(resource.ptr());
-				EditorNode::get_singleton()->save_resource_as(resource);
-
-				if (scr.is_valid()) {
-					update_docs_from_script(scr);
-				}
+				save_view_as(current);
 			} break;
 
 			case FILE_MENU_SOFT_RELOAD_TOOL: {
@@ -2364,11 +2337,62 @@ PackedStringArray ScriptEditor::get_unsaved_files() const {
 
 void ScriptEditor::save_current_script() {
 	ScriptEditorBase *current = _get_current_editor();
-	if (!current || _test_script_times_on_disk()) {
-		return;
+	save_view(current);
+}
+
+bool ScriptEditor::save_view(ScriptEditorBase *p_view) {
+	if (!p_view || registered_views.find(p_view) < 0) {
+		return false;
+	}
+	Ref<Resource> resource = p_view->get_edited_resource();
+	if (resource.is_null()) {
+		return false;
+	}
+	if (_test_script_times_on_disk(resource)) {
+		return true; // The conflict dialog owns the command now.
+	}
+	_save_view(p_view);
+	return true;
+}
+
+bool ScriptEditor::save_view_as(ScriptEditorBase *p_view) {
+	if (!p_view || registered_views.find(p_view) < 0) {
+		return false;
 	}
 
-	_save_view(current); // G2 simplify: shared save body with the close path.
+	_auto_format_text(p_view);
+	Ref<Resource> resource = p_view->get_edited_resource();
+	Ref<TextFile> text_file = resource;
+	Ref<Script> scr = resource;
+	if (resource.is_null()) {
+		return false;
+	}
+
+	if (text_file.is_valid()) {
+		save_as_view_id = p_view->get_instance_id();
+		file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
+		file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
+		file_dialog_option = FILE_MENU_SAVE_AS;
+
+		List<String> extensions;
+		ResourceLoader::get_recognized_extensions_for_type("Script", &extensions);
+		file_dialog->clear_filters();
+		file_dialog->set_current_dir(text_file->get_path().get_base_dir());
+		file_dialog->set_current_file(text_file->get_path().get_file());
+		file_dialog->set_title(TTRC("Save File As..."));
+		file_dialog->popup_file_dialog();
+		return true;
+	}
+
+	if (scr.is_valid()) {
+		clear_docs_from_script(scr);
+	}
+	EditorNode::get_singleton()->push_item(resource.ptr());
+	EditorNode::get_singleton()->save_resource_as(resource);
+	if (scr.is_valid()) {
+		update_docs_from_script(scr);
+	}
+	return true;
 }
 
 void ScriptEditor::save_all_scripts() {
