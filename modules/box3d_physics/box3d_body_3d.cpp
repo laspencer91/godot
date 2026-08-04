@@ -45,6 +45,20 @@ b3BodyType Box3DBody3D::_box3d_type() const {
 	}
 }
 
+uint64_t Box3DBody3D::_effective_mask_bits() const {
+	// Godot decides a contact with a non-dynamic body solely by the DYNAMIC side's mask against
+	// this body's layer — a static/kinematic body's own mask never vetoes the pair (it has no
+	// contact response for the mask to gate; upstream's pair test is an OR of both directions).
+	// Box3D's filter is a symmetric AND, so "my mask never vetoes" is expressed as all bits.
+	// Static map geometry ships with collision_mask = 0, which under a literal translation made
+	// every rigid body fall straight through it. The dynamic side's own mask still filters, so
+	// this cannot create a contact that upstream Godot would not.
+	if (_box3d_type() != b3_dynamicBody) {
+		return UINT64_MAX;
+	}
+	return (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
+}
+
 b3MotionLocks Box3DBody3D::_motion_locks() const {
 	b3MotionLocks locks = {};
 	if (mode == PS3DE::BODY_MODE_RIGID_LINEAR) {
@@ -105,6 +119,7 @@ void Box3DBody3D::set_mode(PS3DE::BodyMode p_mode) {
 	if (mode == p_mode) {
 		return;
 	}
+	const uint64_t prev_mask_bits = _effective_mask_bits();
 	mode = p_mode;
 	if (mode != PS3DE::BODY_MODE_KINEMATIC) {
 		has_kinematic_target = false;
@@ -113,6 +128,24 @@ void Box3DBody3D::set_mode(PS3DE::BodyMode p_mode) {
 		b3Body_SetType(body_id, _box3d_type());
 		b3Body_SetMotionLocks(body_id, _motion_locks());
 		_update_mass();
+		// The effective mask depends on dynamic-ness, and mode changes at runtime without a shape
+		// rebuild — RigidBody3D.freeze IS a mode change (STATIC/KINEMATIC), so a frozen-then-thawed
+		// body would otherwise keep the all-bits mask and start hitting things its mask excludes.
+		if (_effective_mask_bits() != prev_mask_bits) {
+			_update_shape_filters();
+		}
+	}
+}
+
+void Box3DBody3D::_update_shape_filters() {
+	b3Filter filter = b3DefaultFilter();
+	filter.categoryBits = (uint64_t)collision_layer;
+	filter.maskBits = _effective_mask_bits();
+	filter.groupIndex = collision_group_index;
+	for (const b3ShapeId &id : shape_ids) {
+		if (B3_IS_NON_NULL(id)) {
+			b3Shape_SetFilter(id, filter, true);
+		}
 	}
 }
 
@@ -199,7 +232,7 @@ void Box3DBody3D::_build_all_shapes() {
 		def.baseMaterial.friction = (float)friction;
 		def.baseMaterial.restitution = (float)bounce;
 		def.filter.categoryBits = (uint64_t)collision_layer;
-		def.filter.maskBits = (uint64_t)collision_mask | BOX3D_QUERY_FILTER_BIT;
+		def.filter.maskBits = _effective_mask_bits();
 		def.filter.groupIndex = collision_group_index;
 		def.enableCustomFiltering = !collision_exceptions.is_empty();
 		def.enableSensorEvents = true;

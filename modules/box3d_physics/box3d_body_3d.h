@@ -112,6 +112,8 @@ private:
 	void _build_all_shapes();
 	void _destroy_all_shapes();
 	void _update_mass();
+	void _update_shape_filters();
+	uint64_t _effective_mask_bits() const;
 	b3BodyType _box3d_type() const;
 	b3MotionLocks _motion_locks() const;
 	bool _slot_has_named_surface_material(uint32_t p_slot) const;
