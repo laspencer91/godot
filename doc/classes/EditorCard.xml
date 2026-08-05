@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorCard" inherits="PanelContainer" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A bordered editor surface with standard header, body, and footer regions.
+	</brief_description>
+	<description>
+		[b]Experimental:[/b] This class may be changed or removed in future versions.
+		Provides consistent grouping, spacing, collapse behavior, and action placement for editor interfaces.
+	</description>
+	<methods>
+		<method name="add_body_control">
+			<return type="void" />
+			<param index="0" name="control" type="Control" />
+			<description>Adds [param control] to the padded body region.</description>
+		</method>
+		<method name="add_footer_action">
+			<return type="EditorActionButton" />
+			<param index="0" name="action" type="EditorAction" />
+			<param index="1" name="emphasized" type="bool" default="false" />
+			<description>Adds an action button to the trailing side of the footer.</description>
+		</method>
+		<method name="add_footer_control">
+			<return type="void" />
+			<param index="0" name="control" type="Control" />
+			<description>Adds [param control] to the trailing-aligned footer.</description>
+		</method>
+		<method name="add_header_action">
+			<return type="EditorActionButton" />
+			<param index="0" name="action" type="EditorAction" />
+			<description>Adds an action button to the card header.</description>
+		</method>
+		<method name="clear_body">
+			<return type="void" />
+			<description>Removes and deletes all controls in the body.</description>
+		</method>
+		<method name="clear_footer">
+			<return type="void" />
+			<description>Removes and deletes all controls in the footer.</description>
+		</method>
+		<method name="get_body" qualifiers="const">
+			<return type="VBoxContainer" />
+			<description>Returns the body container.</description>
+		</method>
+		<method name="get_footer" qualifiers="const">
+			<return type="HBoxContainer" />
+			<description>Returns the footer container.</description>
+		</method>
+		<method name="get_header" qualifiers="const">
+			<return type="EditorSectionHeader" />
+			<description>Returns the section header used by this card.</description>
+		</method>
+	</methods>
+	<members>
+		<member name="badge" type="String" setter="set_badge" getter="get_badge" default="&quot;&quot;">Short state or count shown in the header.</member>
+		<member name="collapsed" type="bool" setter="set_collapsed" getter="is_collapsed" default="false">Whether the body and footer are hidden.</member>
+		<member name="collapsible" type="bool" setter="set_collapsible" getter="is_collapsible" default="false">Whether the card can be collapsed.</member>
+		<member name="description" type="String" setter="set_description" getter="get_description" default="&quot;&quot;">Supporting header text.</member>
+		<member name="title" type="String" setter="set_title" getter="get_title" default="&quot;&quot;">The card title.</member>
+	</members>
+	<signals>
+		<signal name="toggled">
+			<param index="0" name="collapsed" type="bool" />
+			<description>Emitted when collapse state changes through the header.</description>
+		</signal>
+	</signals>
+</class>

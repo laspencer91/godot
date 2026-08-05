@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorToolbar" inherits="EditorResponsiveRow" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A responsive, grouped toolbar for editor actions.
+	</brief_description>
+	<description>
+		Presents [EditorAction] instances in semantic groups. Each group remains intact while the toolbar wraps in narrow docks or windows.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="add_action">
+			<return type="EditorActionButton" />
+			<param index="0" name="action" type="EditorAction" />
+			<param index="1" name="group" type="StringName" default="&amp;&quot;primary&quot;" />
+			<description>
+				Adds [param action] to [param group] and returns its button presentation.
+			</description>
+		</method>
+		<method name="add_custom_control">
+			<return type="void" />
+			<param index="0" name="control" type="Control" />
+			<param index="1" name="group" type="StringName" default="&amp;&quot;primary&quot;" />
+			<description>
+				Adds an arbitrary [param control] to [param group]. The toolbar takes ownership of the control.
+			</description>
+		</method>
+		<method name="add_separator">
+			<return type="void" />
+			<param index="0" name="group" type="StringName" default="&amp;&quot;primary&quot;" />
+			<description>
+				Adds a visual separator inside [param group].
+			</description>
+		</method>
+		<method name="clear">
+			<return type="void" />
+			<description>
+				Removes all groups, actions, separators, and custom controls.
+			</description>
+		</method>
+	</methods>
+</class>

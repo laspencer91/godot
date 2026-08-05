@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorActionButton" inherits="Button" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A button presentation synchronized with an [EditorAction].
+	</brief_description>
+	<description>
+		Displays an [EditorAction] using the editor theme and automatically follows changes to the action's label, icon, shortcut, visibility, enabled state, and checked state.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="action" type="EditorAction" setter="set_action" getter="get_action">
+			The action represented by this button.
+		</member>
+		<member name="disabled" type="bool" setter="set_disabled" getter="is_disabled" overrides="BaseButton" default="true" />
+		<member name="emphasized" type="bool" setter="set_emphasized" getter="is_emphasized" default="false">
+			When [code]true[/code], uses the primary-action button presentation instead of the flat toolbar presentation.
+		</member>
+		<member name="theme_type_variation" type="StringName" setter="set_theme_type_variation" getter="get_theme_type_variation" overrides="Control" default="&amp;&quot;EditorActionButtonFlat&quot;" />
+		<member name="visible" type="bool" setter="set_visible" getter="is_visible" overrides="CanvasItem" default="false" />
+	</members>
+</class>

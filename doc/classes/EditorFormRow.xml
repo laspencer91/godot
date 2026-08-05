@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorFormRow" inherits="VBoxContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A responsive label, editor, description, and status row for editor forms.
+	</brief_description>
+	<description>
+		Provides consistent alignment and accessibility for ordinary dialog and tool fields. At narrow widths, the label and editing control wrap without separating the editor from its contents. This component only owns presentation; the containing screen owns validation and data mutation.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="clear_status">
+			<return type="void" />
+			<description>
+				Removes the current inline status message.
+			</description>
+		</method>
+		<method name="get_editor" qualifiers="const">
+			<return type="Control" />
+			<description>
+				Returns the editing control assigned to this row.
+			</description>
+		</method>
+		<method name="get_status" qualifiers="const">
+			<return type="int" enum="EditorFormRow.Status" />
+			<description>
+				Returns the current inline status severity.
+			</description>
+		</method>
+		<method name="get_status_text" qualifiers="const">
+			<return type="String" />
+			<description>
+				Returns the current inline status text.
+			</description>
+		</method>
+		<method name="set_editor">
+			<return type="void" />
+			<param index="0" name="editor" type="Control" />
+			<description>
+				Assigns the row's editing control. The row takes ownership of it and accepts one editor control.
+			</description>
+		</method>
+		<method name="set_status">
+			<return type="void" />
+			<param index="0" name="status" type="int" enum="EditorFormRow.Status" />
+			<param index="1" name="text" type="String" />
+			<description>
+				Displays an inline status message with the requested semantic severity.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="description" type="String" setter="set_description" getter="get_description" default="&quot;&quot;">
+			Optional help text shown below the main row.
+		</member>
+		<member name="label" type="String" setter="set_label" getter="get_label" default="&quot;&quot;">
+			Field label associated with the editing control.
+		</member>
+		<member name="required" type="bool" setter="set_required" getter="is_required" default="false">
+			Whether the field displays a semantic, warning-colored required-field indicator.
+		</member>
+	</members>
+	<constants>
+		<constant name="STATUS_NONE" value="0" enum="Status">
+			No inline status.
+		</constant>
+		<constant name="STATUS_INFO" value="1" enum="Status">
+			Informational status.
+		</constant>
+		<constant name="STATUS_SUCCESS" value="2" enum="Status">
+			Successful or valid status.
+		</constant>
+		<constant name="STATUS_WARNING" value="3" enum="Status">
+			Warning status.
+		</constant>
+		<constant name="STATUS_ERROR" value="4" enum="Status">
+			Error status.
+		</constant>
+	</constants>
+</class>

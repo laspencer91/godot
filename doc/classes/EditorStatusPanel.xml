@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorStatusPanel" inherits="PanelContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A persistent semantic information, success, warning, or error panel.
+	</brief_description>
+	<description>
+		Unlike transient editor toasts, this component remains in the owning screen while the represented state is relevant. It can include a contextual action and optional dismissal affordance.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="set_action">
+			<return type="void" />
+			<param index="0" name="action" type="EditorAction" />
+			<description>
+				Sets the contextual action shown beside the message, or hides it when [param action] is [code]null[/code].
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="dismissible" type="bool" setter="set_dismissible" getter="is_dismissible" default="false">
+			Whether a dismiss button is displayed.
+		</member>
+		<member name="message" type="String" setter="set_message" getter="get_message" default="&quot;&quot;">
+			Detailed status message.
+		</member>
+		<member name="severity" type="int" setter="set_severity" getter="get_severity" enum="EditorStatusPanel.Severity" default="0">
+			Semantic severity controlling icon, color, and panel style.
+		</member>
+		<member name="title" type="String" setter="set_title" getter="get_title" default="&quot;&quot;">
+			Short status title.
+		</member>
+	</members>
+	<signals>
+		<signal name="dismissed">
+			<description>
+				Emitted after the user dismisses the panel.
+			</description>
+		</signal>
+	</signals>
+	<constants>
+		<constant name="SEVERITY_INFO" value="0" enum="Severity">
+			Informational state.
+		</constant>
+		<constant name="SEVERITY_SUCCESS" value="1" enum="Severity">
+			Successful state.
+		</constant>
+		<constant name="SEVERITY_WARNING" value="2" enum="Severity">
+			Warning state.
+		</constant>
+		<constant name="SEVERITY_ERROR" value="3" enum="Severity">
+			Error state.
+		</constant>
+	</constants>
+</class>

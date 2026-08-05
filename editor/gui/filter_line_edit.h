@@ -36,6 +36,7 @@ class FilterLineEdit : public LineEdit {
 	GDCLASS(FilterLineEdit, LineEdit);
 
 	Control *forward_control = nullptr;
+	bool search_icon_enabled = true;
 
 protected:
 	void _notification(int p_what);
@@ -44,6 +45,7 @@ protected:
 
 public:
 	void set_forward_control(Control *p_control);
+	void set_search_icon_enabled(bool p_enabled);
 
 	FilterLineEdit();
 };

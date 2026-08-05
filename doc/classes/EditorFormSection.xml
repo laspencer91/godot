@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorFormSection" inherits="VBoxContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A titled, optionally collapsible group of editor form rows.
+	</brief_description>
+	<description>
+		Combines an [EditorSectionHeader] with a consistently spaced body of [EditorFormRow] controls or custom content.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="add_custom_control">
+			<return type="void" />
+			<param index="0" name="control" type="Control" />
+			<description>
+				Adds an arbitrary control to the section body. The section takes ownership of it.
+			</description>
+		</method>
+		<method name="add_row">
+			<return type="EditorFormRow" />
+			<param index="0" name="label" type="String" />
+			<param index="1" name="editor" type="Control" default="null" />
+			<description>
+				Creates a row with [param label] and optionally assigns [param editor] as its editing control.
+			</description>
+		</method>
+		<method name="clear">
+			<return type="void" />
+			<description>
+				Removes all rows and custom controls from the section body.
+			</description>
+		</method>
+		<method name="get_header" qualifiers="const">
+			<return type="EditorSectionHeader" />
+			<description>
+				Returns the section header for badges and trailing actions.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="collapsed" type="bool" setter="set_collapsed" getter="is_collapsed" default="false">
+			Whether the section body is hidden.
+		</member>
+		<member name="collapsible" type="bool" setter="set_collapsible" getter="is_collapsible" default="false">
+			Whether the header offers a collapse affordance.
+		</member>
+		<member name="description" type="String" setter="set_description" getter="get_description" default="&quot;&quot;">
+			Optional section description.
+		</member>
+		<member name="title" type="String" setter="set_title" getter="get_title" default="&quot;&quot;">
+			Section title.
+		</member>
+	</members>
+	<signals>
+		<signal name="toggled">
+			<param index="0" name="collapsed" type="bool" />
+			<description>
+				Emitted when the user changes the section collapse state.
+			</description>
+		</signal>
+	</signals>
+</class>

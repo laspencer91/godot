@@ -830,6 +830,9 @@ void EditorNode::_update_theme(bool p_skip_creation) {
 		}
 		editor_main_screen->add_theme_style_override(SceneStringName(panel), content_sb);
 		bottom_panel->_theme_changed();
+		if (filesystem_drawer_button) {
+			filesystem_drawer_button->set_button_icon(theme->get_icon(SNAME("Folder"), EditorStringName(EditorIcons)));
+		}
 		distraction_free->set_button_icon(theme->get_icon(SNAME("DistractionFree"), EditorStringName(EditorIcons)));
 		update_distraction_free_button_theme();
 
@@ -9974,7 +9977,7 @@ EditorNode::EditorNode() {
 	// G4: unified bottom-bar toggle for the FileSystem drawer. Seated at the far left of the bar
 	// (ahead of the Output/Debugger/Audio dock tabs) so it reads as its own leading entry. The button
 	// drives the overlay; the drawer reports back so the two stay in sync.
-	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("Explore"), gui_base->get_editor_theme_icon(SNAME("Folder")), Ref<Shortcut>(), true);
+	filesystem_drawer_button = bottom_panel->add_bottom_bar_toggle(TTR("Explore"), theme->get_icon(SNAME("Folder"), EditorStringName(EditorIcons)), Ref<Shortcut>(), true);
 	_update_filesystem_drawer_button_tooltip();
 	ED_GET_SHORTCUT("docks/open_filesystem")->connect_changed(callable_mp(this, &EditorNode::_update_filesystem_drawer_button_tooltip));
 	filesystem_drawer_button->connect(SceneStringName(toggled), callable_mp(workspace_file_drawer, &WorkspaceFileDrawer::set_open).bind(true));

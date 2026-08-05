@@ -30,6 +30,8 @@
 
 #include "editor_theme_manager.h"
 
+#include "editor/themes/editor_component_theme.h"
+
 #include "core/error/error_macros.h"
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
@@ -229,6 +231,7 @@ Ref<EditorTheme> EditorThemeManager::_create_base_theme(const Ref<EditorTheme> &
 		ThemeClassic::populate_standard_styles(theme, config);
 		ThemeClassic::populate_editor_styles(theme, config);
 	}
+	EditorComponentTheme::populate(theme, config);
 
 	_populate_text_editor_styles(theme, config);
 	_populate_visual_shader_styles(theme, config);

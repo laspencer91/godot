@@ -42,7 +42,6 @@
 
 class EditorDocument;
 class EditorFileDialog;
-class EditorObjectSelector;
 class EditorSelectionHistory;
 
 class InspectorDock : public EditorDock {
@@ -93,7 +92,6 @@ class InspectorDock : public EditorDock {
 
 	Button *open_docs_button = nullptr;
 	MenuButton *object_menu = nullptr;
-	EditorObjectSelector *object_selector = nullptr;
 
 	// G2 D6: when bound to a document (the D7b per-pane composite), selection history resolves to
 	// that document's own store instead of the global. Null on the global dock => today's behavior.

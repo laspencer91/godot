@@ -55,6 +55,18 @@
 #include "editor/file_system/editor_external_file_drop_request.h"
 #include "editor/file_system/editor_file_system.h"
 #include "editor/file_system/editor_paths.h"
+#include "editor/gui/components/editor_action.h"
+#include "editor/gui/components/editor_action_button.h"
+#include "editor/gui/components/editor_card.h"
+#include "editor/gui/components/editor_empty_state.h"
+#include "editor/gui/components/editor_form.h"
+#include "editor/gui/components/editor_form_row.h"
+#include "editor/gui/components/editor_form_section.h"
+#include "editor/gui/components/editor_pane_header.h"
+#include "editor/gui/components/editor_search_bar.h"
+#include "editor/gui/components/editor_section_header.h"
+#include "editor/gui/components/editor_status_panel.h"
+#include "editor/gui/components/editor_toolbar.h"
 #include "editor/gui/editor_document_surface.h"
 #include "editor/gui/editor_edit_domain.h"
 #include "editor/gui/editor_file_dialog.h"
@@ -84,6 +96,7 @@
 #include "editor/inspector/input_event_editor_plugin.h"
 #include "editor/inspector/sub_viewport_preview_editor_plugin.h"
 #include "editor/inspector/tool_button_editor_plugin.h"
+#include "editor/plugins/editor_component_gallery_plugin.h"
 #include "editor/scene/2d/camera_2d_editor_plugin.h"
 #include "editor/scene/2d/light_occluder_2d_editor_plugin.h"
 #include "editor/scene/2d/line_2d_editor_plugin.h"
@@ -177,6 +190,18 @@ void register_editor_types() {
 	GDREGISTER_CLASS(EditorSelection);
 	GDREGISTER_CLASS(EditorFileDialog);
 	GDREGISTER_CLASS(EditorResponsiveRow);
+	GDREGISTER_CLASS(EditorAction);
+	GDREGISTER_CLASS(EditorActionButton);
+	GDREGISTER_CLASS(EditorCard);
+	GDREGISTER_CLASS(EditorToolbar);
+	GDREGISTER_CLASS(EditorSearchBar);
+	GDREGISTER_CLASS(EditorSectionHeader);
+	GDREGISTER_CLASS(EditorPaneHeader);
+	GDREGISTER_CLASS(EditorForm);
+	GDREGISTER_CLASS(EditorFormSection);
+	GDREGISTER_CLASS(EditorFormRow);
+	GDREGISTER_CLASS(EditorEmptyState);
+	GDREGISTER_CLASS(EditorStatusPanel);
 	GDREGISTER_VIRTUAL_CLASS(EditorSettings);
 	GDREGISTER_ABSTRACT_CLASS(EditorToaster);
 	GDREGISTER_ABSTRACT_CLASS(EditorResourcePreview);
@@ -249,6 +274,7 @@ void register_editor_types() {
 	if (!Engine::get_singleton()->is_recovery_mode_hint()) {
 		EditorPlugins::add_by_type<DebugAdapterServer>();
 	}
+	EditorPlugins::add_by_type<EditorComponentGalleryPlugin>();
 	EditorPlugins::add_by_type<EditorScriptPlugin>();
 	EditorPlugins::add_by_type<FontEditorPlugin>();
 	EditorPlugins::add_by_type<GradientEditorPlugin>();

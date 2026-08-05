@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorAction" inherits="RefCounted" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A shared description and state model for an editor command.
+	</brief_description>
+	<description>
+		[EditorAction] separates command state from its visual presentation. The same action can be presented by an [EditorActionButton], an [EditorToolbar], or another editor surface while sharing its text, icon, shortcut, enabled state, checked state, and callback.
+		Actions describe user intent only. The callback's owner remains responsible for changing document state and using undo/redo where appropriate.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="trigger">
+			<return type="void" />
+			<description>
+				Invokes the action when it is enabled and visible. Checkable actions toggle [member checked] before emitting [signal triggered] and invoking [member callback].
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="action_id" type="StringName" setter="set_action_id" getter="get_action_id" default="&amp;&quot;&quot;">
+			Stable semantic identifier for the action.
+		</member>
+		<member name="callback" type="Callable" setter="set_callback" getter="get_callback" default="Callable()">
+			Callable invoked by [method trigger].
+		</member>
+		<member name="checkable" type="bool" setter="set_checkable" getter="is_checkable" default="false">
+			Whether triggering the action toggles [member checked].
+		</member>
+		<member name="checked" type="bool" setter="set_checked" getter="is_checked" default="false">
+			Current checked state for a checkable action.
+		</member>
+		<member name="enabled" type="bool" setter="set_enabled" getter="is_enabled" default="true">
+			Whether the action can be triggered.
+		</member>
+		<member name="icon_name" type="StringName" setter="set_icon_name" getter="get_icon_name" default="&amp;&quot;&quot;">
+			Name of an icon in the editor theme. Presentations resolve the texture when their theme changes.
+		</member>
+		<member name="shortcut" type="Shortcut" setter="set_shortcut" getter="get_shortcut">
+			Optional keyboard shortcut associated with the action.
+		</member>
+		<member name="text" type="String" setter="set_text" getter="get_text" default="&quot;&quot;">
+			Visible action label.
+		</member>
+		<member name="tooltip" type="String" setter="set_tooltip" getter="get_tooltip" default="&quot;&quot;">
+			Detailed description shown by visual presentations.
+		</member>
+		<member name="visible" type="bool" setter="set_visible" getter="is_visible" default="true">
+			Whether visual presentations of the action are visible.
+		</member>
+	</members>
+	<signals>
+		<signal name="changed">
+			<description>
+				Emitted when presentation-relevant state changes.
+			</description>
+		</signal>
+		<signal name="triggered">
+			<description>
+				Emitted when the action successfully triggers.
+			</description>
+		</signal>
+	</signals>
+</class>

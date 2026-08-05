@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorSectionHeader" inherits="VBoxContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A consistent title, description, badge, action, and collapse header for editor sections.
+	</brief_description>
+	<description>
+		Use this component above a related group of controls instead of manually composing labels, separators, and icon buttons.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="add_action">
+			<return type="EditorActionButton" />
+			<param index="0" name="action" type="EditorAction" />
+			<description>
+				Adds an action to the trailing action area.
+			</description>
+		</method>
+		<method name="clear_actions">
+			<return type="void" />
+			<description>
+				Removes every trailing action.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="badge" type="String" setter="set_badge" getter="get_badge" default="&quot;&quot;">
+			Optional short status or count displayed beside the title.
+		</member>
+		<member name="collapsed" type="bool" setter="set_collapsed" getter="is_collapsed" default="false">
+			Current collapse state. This component does not hide external content automatically.
+		</member>
+		<member name="collapsible" type="bool" setter="set_collapsible" getter="is_collapsible" default="false">
+			Whether the header displays a collapse affordance and makes the full header bar toggleable.
+		</member>
+		<member name="description" type="String" setter="set_description" getter="get_description" default="&quot;&quot;">
+			Optional muted explanatory text shown inline after the title.
+		</member>
+		<member name="title" type="String" setter="set_title" getter="get_title" default="&quot;&quot;">
+			Section title.
+		</member>
+	</members>
+	<signals>
+		<signal name="toggled">
+			<param index="0" name="collapsed" type="bool" />
+			<description>
+				Emitted when the user changes the collapsed state.
+			</description>
+		</signal>
+	</signals>
+</class>

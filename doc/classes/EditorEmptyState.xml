@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorEmptyState" inherits="CenterContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A centered empty-state message with semantic icon and actions.
+	</brief_description>
+	<description>
+		Use this component when a browser, pane, or editor has no content or requires an initial user choice. It provides a consistent icon, title, description, and primary/secondary action hierarchy.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="set_primary_action">
+			<return type="void" />
+			<param index="0" name="action" type="EditorAction" />
+			<description>
+				Sets the emphasized primary action, or clears it when [param action] is [code]null[/code].
+			</description>
+		</method>
+		<method name="set_secondary_action">
+			<return type="void" />
+			<param index="0" name="action" type="EditorAction" />
+			<description>
+				Sets the secondary action, or clears it when [param action] is [code]null[/code].
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="description" type="String" setter="set_description" getter="get_description" default="&quot;&quot;">
+			Explanatory text shown below the title.
+		</member>
+		<member name="icon_name" type="StringName" setter="set_icon_name" getter="get_icon_name" default="&amp;&quot;&quot;">
+			Name of the icon in the editor theme.
+		</member>
+		<member name="size_flags_horizontal" type="int" setter="set_h_size_flags" getter="get_h_size_flags" overrides="Control" enum="Control.SizeFlags" is_bitfield="true" default="3" />
+		<member name="size_flags_vertical" type="int" setter="set_v_size_flags" getter="get_v_size_flags" overrides="Control" enum="Control.SizeFlags" is_bitfield="true" default="3" />
+		<member name="title" type="String" setter="set_title" getter="get_title" default="&quot;&quot;">
+			Short statement describing the empty state.
+		</member>
+	</members>
+</class>

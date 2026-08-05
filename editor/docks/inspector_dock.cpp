@@ -42,7 +42,6 @@
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/gui/editor_file_dialog.h"
-#include "editor/gui/editor_object_selector.h"
 #include "editor/gui/editor_toaster.h"
 #include "editor/script/script_editor_plugin.h"
 #include "editor/settings/editor_command_palette.h"
@@ -411,7 +410,6 @@ void InspectorDock::_files_moved(const String &p_old_file, const String &p_new_f
 	// We only care about updating the path if the current object is the one being renamed.
 	if (res.is_valid() && p_old_file == res->get_path()) {
 		res->set_path(p_new_file);
-		object_selector->update_path();
 	}
 }
 
@@ -565,8 +563,6 @@ void InspectorDock::update(Object *p_object) {
 	if (editor_history->get_history_len() > 0) {
 		history_menu->set_disabled(false);
 	}
-	object_selector->update_path();
-
 	current = p_object;
 
 	const bool is_object = p_object != nullptr;
@@ -594,11 +590,8 @@ void InspectorDock::update(Object *p_object) {
 
 	if (!is_object || is_text_file) {
 		info->hide();
-		object_selector->clear_path();
 		return;
 	}
-
-	object_selector->enable_path();
 
 	PopupMenu *p = object_menu->get_popup();
 
@@ -717,7 +710,6 @@ void InspectorDock::shortcut_input(const Ref<InputEvent> &p_event) {
 	ERR_FAIL_COND(p_event.is_null());
 
 	Ref<InputEventKey> key = p_event;
-
 	if (key.is_null() || !key->is_pressed() || key->is_echo()) {
 		return;
 	}
@@ -772,9 +764,6 @@ EditorSelectionHistory *InspectorDock::_doc_history() const {
 
 void InspectorDock::set_bound_document(EditorDocument *p_document) {
 	bound_document = p_document;
-	if (object_selector) {
-		object_selector->set_history(_doc_history());
-	}
 }
 
 void InspectorDock::set_selection_locked(bool p_locked) {
@@ -849,18 +838,29 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 
 	HBoxContainer *general_options_hb = memnew(HBoxContainer);
 	main_vb->add_child(general_options_hb);
+	search = memnew(LineEdit);
+	search->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	search->set_placeholder(TTRC("Filter Properties"));
+	search->set_clear_button_enabled(true);
+	general_options_hb->add_child(search);
+
+	// Keep the removed resource/history toolbar controls alive for existing state and command
+	// plumbing, without giving the hidden toolbar any layout height in the Inspector.
+	HBoxContainer *hidden_options_hb = memnew(HBoxContainer);
+	main_vb->add_child(hidden_options_hb);
+	hidden_options_hb->hide();
 
 	resource_new_button = memnew(Button);
 	resource_new_button->set_theme_type_variation("FlatMenuButton");
 	resource_new_button->set_tooltip_text(TTRC("Create a new resource in memory and edit it."));
-	general_options_hb->add_child(resource_new_button);
+	hidden_options_hb->add_child(resource_new_button);
 	resource_new_button->connect(SceneStringName(pressed), callable_mp(this, &InspectorDock::_new_resource));
 	resource_new_button->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
 
 	resource_load_button = memnew(Button);
 	resource_load_button->set_theme_type_variation("FlatMenuButton");
 	resource_load_button->set_tooltip_text(TTRC("Load an existing resource from disk and edit it."));
-	general_options_hb->add_child(resource_load_button);
+	hidden_options_hb->add_child(resource_load_button);
 	resource_load_button->connect(SceneStringName(pressed), callable_mp(this, &InspectorDock::_open_resource_selector));
 	resource_load_button->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
 
@@ -868,7 +868,7 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	resource_save_button->set_flat(false);
 	resource_save_button->set_theme_type_variation("FlatMenuButton");
 	resource_save_button->set_tooltip_text(TTRC("Save the currently edited resource."));
-	general_options_hb->add_child(resource_save_button);
+	hidden_options_hb->add_child(resource_save_button);
 	resource_save_button->get_popup()->add_item(TTRC("Save"), RESOURCE_SAVE);
 	resource_save_button->get_popup()->add_item(TTRC("Save As..."), RESOURCE_SAVE_AS);
 	resource_save_button->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &InspectorDock::_menu_option));
@@ -879,7 +879,7 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	resource_extra_button->set_flat(false);
 	resource_extra_button->set_theme_type_variation("FlatMenuButton");
 	resource_extra_button->set_tooltip_text(TTRC("Extra resource options."));
-	general_options_hb->add_child(resource_extra_button);
+	hidden_options_hb->add_child(resource_extra_button);
 	resource_extra_button->connect("about_to_popup", callable_mp(this, &InspectorDock::_prepare_resource_extra_popup));
 	resource_extra_button->get_popup()->add_shortcut(ED_SHORTCUT("property_editor/paste_resource", TTRC("Edit Resource from Clipboard")), RESOURCE_EDIT_CLIPBOARD);
 	resource_extra_button->get_popup()->add_shortcut(ED_SHORTCUT("property_editor/copy_resource", TTRC("Copy Resource")), RESOURCE_COPY);
@@ -890,18 +890,16 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	resource_extra_button->get_popup()->set_item_disabled(3, true);
 	resource_extra_button->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &InspectorDock::_menu_option));
 
-	general_options_hb->add_spacer();
-
 	backward_button = memnew(Button);
 	backward_button->set_theme_type_variation(SceneStringName(FlatButton));
-	general_options_hb->add_child(backward_button);
+	hidden_options_hb->add_child(backward_button);
 	backward_button->set_tooltip_text(TTRC("Go to previous edited object in history."));
 	backward_button->set_disabled(true);
 	backward_button->connect(SceneStringName(pressed), callable_mp(this, &InspectorDock::_edit_back));
 
 	forward_button = memnew(Button);
 	forward_button->set_theme_type_variation(SceneStringName(FlatButton));
-	general_options_hb->add_child(forward_button);
+	hidden_options_hb->add_child(forward_button);
 	forward_button->set_tooltip_text(TTRC("Go to next edited object in history."));
 	forward_button->set_disabled(true);
 	forward_button->connect(SceneStringName(pressed), callable_mp(this, &InspectorDock::_edit_forward));
@@ -911,23 +909,25 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	history_menu->set_flat(false);
 	history_menu->set_theme_type_variation("FlatMenuButton");
 	history_menu->set_tooltip_text(TTRC("History of recently edited objects."));
-	general_options_hb->add_child(history_menu);
+	hidden_options_hb->add_child(history_menu);
 	history_menu->connect("about_to_popup", callable_mp(this, &InspectorDock::_prepare_history));
 	history_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &InspectorDock::_select_history));
-
-	HBoxContainer *subresource_hb = memnew(HBoxContainer);
-	main_vb->add_child(subresource_hb);
-	object_selector = memnew(EditorObjectSelector(_doc_history()));
-	object_selector->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-	subresource_hb->add_child(object_selector);
 
 	open_docs_button = memnew(Button);
 	open_docs_button->set_theme_type_variation("FlatMenuButton");
 	open_docs_button->set_disabled(true);
 	open_docs_button->set_tooltip_text(TTRC("Open documentation for this object."));
 	open_docs_button->set_shortcut(ED_SHORTCUT("property_editor/open_help", TTRC("Open Documentation")));
-	subresource_hb->add_child(open_docs_button);
+	hidden_options_hb->add_child(open_docs_button);
 	open_docs_button->connect(SceneStringName(pressed), callable_mp(this, &InspectorDock::_menu_option).bind(OBJECT_REQUEST_HELP));
+
+	object_menu = memnew(MenuButton);
+	object_menu->set_flat(false);
+	object_menu->set_theme_type_variation("FlatMenuButton");
+	general_options_hb->add_child(object_menu);
+	object_menu->set_tooltip_text(TTRC("Manage object properties."));
+	object_menu->get_popup()->connect("about_to_popup", callable_mp(this, &InspectorDock::_prepare_menu));
+	object_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &InspectorDock::_menu_option));
 
 	new_resource_dialog = memnew(CreateDialog);
 	Node *dialog_parent = this;
@@ -937,23 +937,6 @@ InspectorDock::InspectorDock(EditorData &p_editor_data, bool p_is_global) {
 	dialog_parent->add_child(new_resource_dialog);
 	new_resource_dialog->set_base_type("Resource");
 	new_resource_dialog->connect("create", callable_mp(this, &InspectorDock::_resource_created));
-
-	HBoxContainer *property_tools_hb = memnew(HBoxContainer);
-	main_vb->add_child(property_tools_hb);
-
-	search = memnew(LineEdit);
-	search->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-	search->set_placeholder(TTRC("Filter Properties"));
-	search->set_clear_button_enabled(true);
-	property_tools_hb->add_child(search);
-
-	object_menu = memnew(MenuButton);
-	object_menu->set_flat(false);
-	object_menu->set_theme_type_variation("FlatMenuButton");
-	property_tools_hb->add_child(object_menu);
-	object_menu->set_tooltip_text(TTRC("Manage object properties."));
-	object_menu->get_popup()->connect("about_to_popup", callable_mp(this, &InspectorDock::_prepare_menu));
-	object_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &InspectorDock::_menu_option));
 
 	info = memnew(Button);
 	main_vb->add_child(info);

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorSearchBar" inherits="HBoxContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A standardized editor search field with debounce, result count, and filter actions.
+	</brief_description>
+	<description>
+		Combines a clearable search field, optional result count, and action area. Directional key events can be forwarded to a result control so keyboard navigation works while the search field retains focus.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="add_filter_action">
+			<return type="EditorActionButton" />
+			<param index="0" name="action" type="EditorAction" />
+			<description>
+				Adds a filter or search-option action to the trailing toolbar.
+			</description>
+		</method>
+		<method name="clear_query">
+			<return type="void" />
+			<description>
+				Clears [member query] and immediately emits [signal query_changed].
+			</description>
+		</method>
+		<method name="get_line_edit" qualifiers="const">
+			<return type="LineEdit" />
+			<description>
+				Returns the underlying search [LineEdit] for focus and selection operations.
+			</description>
+		</method>
+		<method name="set_forward_control">
+			<return type="void" />
+			<param index="0" name="control" type="Control" />
+			<description>
+				Forwards directional and page-navigation key events to [param control].
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="debounce_msec" type="int" setter="set_debounce_msec" getter="get_debounce_msec" default="150">
+			Delay before [signal query_changed] is emitted while typing. Set to [code]0[/code] for immediate updates.
+		</member>
+		<member name="placeholder" type="String" setter="set_placeholder" getter="get_placeholder" default="&quot;&quot;">
+			Placeholder shown while the query is empty.
+		</member>
+		<member name="query" type="String" setter="set_query" getter="get_query" default="&quot;&quot;">
+			Current search text.
+		</member>
+		<member name="result_count" type="int" setter="set_result_count" getter="get_result_count" default="-1">
+			Displayed result count. A negative value hides the count.
+		</member>
+	</members>
+	<signals>
+		<signal name="query_changed">
+			<param index="0" name="query" type="String" />
+			<description>
+				Emitted after the debounce period when the query changes.
+			</description>
+		</signal>
+		<signal name="query_submitted">
+			<param index="0" name="query" type="String" />
+			<description>
+				Emitted when the user submits the search field.
+			</description>
+		</signal>
+	</signals>
+</class>

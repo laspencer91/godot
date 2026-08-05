@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorPaneHeader" inherits="PanelContainer" api_type="editor" experimental="This editor UI component may change as more editor screens adopt it." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A standard identity and action header for editor panes and asset editors.
+	</brief_description>
+	<description>
+		Displays a semantic editor icon, title, optional subtitle, unsaved-state indicator, and responsive grouped actions.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="add_action">
+			<return type="EditorActionButton" />
+			<param index="0" name="action" type="EditorAction" />
+			<param index="1" name="group" type="StringName" default="&amp;&quot;primary&quot;" />
+			<description>
+				Adds [param action] to the requested toolbar group.
+			</description>
+		</method>
+		<method name="clear_actions">
+			<return type="void" />
+			<description>
+				Removes every header action.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="dirty" type="bool" setter="set_dirty" getter="is_dirty" default="false">
+			Whether the header displays its unsaved-state indicator.
+		</member>
+		<member name="icon_name" type="StringName" setter="set_icon_name" getter="get_icon_name" default="&amp;&quot;&quot;">
+			Name of the identity icon in the editor theme.
+		</member>
+		<member name="subtitle" type="String" setter="set_subtitle" getter="get_subtitle" default="&quot;&quot;">
+			Optional path, type, or secondary identity text.
+		</member>
+		<member name="title" type="String" setter="set_title" getter="get_title" default="&quot;&quot;">
+			Primary pane or document title.
+		</member>
+	</members>
+</class>
