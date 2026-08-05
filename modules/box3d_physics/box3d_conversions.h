@@ -38,6 +38,14 @@ _FORCE_INLINE_ b3Transform to_box3d(const Transform3D &p_t) {
 	return t;
 }
 
+// Box3D body transforms are rigid, while Godot's Transform3D also carries scale.
+// Basis::get_scale() and get_rotation_quaternion() are a paired R * S
+// decomposition, including mirrored transforms.
+_FORCE_INLINE_ Transform3D box3d_decompose_transform(const Transform3D &p_transform, Vector3 &r_scale) {
+	r_scale = p_transform.basis.get_scale();
+	return Transform3D(Basis(p_transform.basis.get_rotation_quaternion()), p_transform.origin);
+}
+
 _FORCE_INLINE_ Transform3D to_godot(const b3Transform &p_t) {
 	return Transform3D(Basis(to_godot(p_t.q)), to_godot(p_t.p));
 }
