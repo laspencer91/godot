@@ -7,6 +7,7 @@
 #include "box3d_area_3d.h"
 #include "box3d_conversions.h"
 #include "box3d_direct_space_state_3d.h"
+#include "box3d_shape_scaling.h"
 #include "joints/box3d_joint_3d.h"
 #include "box3d_shape_3d.h"
 #include "box3d_space_3d.h"
@@ -93,10 +94,13 @@ void Box3DBody3D::set_space(Box3DSpace3D *p_space) {
 
 	if (space) {
 		space->body_added(this);
+		Vector3 body_scale;
+		const Transform3D body_transform = box3d_decompose_transform(transform, body_scale);
+		scale = body_scale;
 		b3BodyDef def = b3DefaultBodyDef();
 		def.type = _box3d_type();
-		def.position = to_box3d(transform.origin);
-		def.rotation = to_box3d(transform.basis.get_rotation_quaternion());
+		def.position = to_box3d(body_transform.origin);
+		def.rotation = to_box3d(body_transform.basis.get_rotation_quaternion());
 		def.linearVelocity = to_box3d(linear_velocity_cache);
 		def.angularVelocity = to_box3d(angular_velocity_cache);
 		def.gravityScale = (float)gravity_scale;
@@ -261,34 +265,35 @@ void Box3DBody3D::_build_all_shapes() {
 
 		b3ShapeId shape_id = b3_nullShapeId;
 		const b3Vec3 unit_scale = b3Vec3{ 1.0f, 1.0f, 1.0f };
+		const Transform3D scaled_shape_transform = box3d_get_scaled_shape_transform(slot.xform, scale);
 
 		switch (s->type) {
 			case PS3DE::SHAPE_SPHERE: {
 				b3Sphere sphere;
-				sphere.center = to_box3d(slot.xform.origin);
-				sphere.radius = s->sphere_radius;
+				sphere.center = to_box3d(scaled_shape_transform.origin);
+				sphere.radius = s->sphere_radius * box3d_get_uniform_primitive_scale(scaled_shape_transform);
 				shape_id = b3CreateSphereShape(body_id, &def, &sphere);
 			} break;
 
 			case PS3DE::SHAPE_CAPSULE: {
 				const float half_cylinder = MAX(0.0f, 0.5f * s->capsule_height - s->capsule_radius);
 				b3Capsule capsule;
-				capsule.center1 = to_box3d(slot.xform.xform(Vector3(0, half_cylinder, 0)));
-				capsule.center2 = to_box3d(slot.xform.xform(Vector3(0, -half_cylinder, 0)));
-				capsule.radius = s->capsule_radius;
+				capsule.center1 = to_box3d(scaled_shape_transform.xform(Vector3(0, half_cylinder, 0)));
+				capsule.center2 = to_box3d(scaled_shape_transform.xform(Vector3(0, -half_cylinder, 0)));
+				capsule.radius = s->capsule_radius * box3d_get_uniform_primitive_scale(scaled_shape_transform);
 				shape_id = b3CreateCapsuleShape(body_id, &def, &capsule);
 			} break;
 
 			case PS3DE::SHAPE_BOX: {
 				if (s->box_built) {
-					shape_id = b3CreateTransformedHullShape(body_id, &def, &s->box_hull.base, to_box3d(slot.xform), unit_scale);
+					shape_id = box3d_create_scaled_hull_shape(body_id, &def, &s->box_hull.base, slot.xform, scale);
 				}
 			} break;
 
 			case PS3DE::SHAPE_CYLINDER:
 			case PS3DE::SHAPE_CONVEX_POLYGON: {
 				if (s->hull) {
-					shape_id = b3CreateTransformedHullShape(body_id, &def, s->hull, to_box3d(slot.xform), unit_scale);
+					shape_id = box3d_create_scaled_hull_shape(body_id, &def, s->hull, slot.xform, scale);
 				}
 			} break;
 
@@ -300,15 +305,17 @@ void Box3DBody3D::_build_all_shapes() {
 					}
 					def.enableSensorEvents = false;
 					b3MeshData *mesh = s->mesh;
+					b3Vec3 mesh_scale = to_box3d(scale);
 					if (!slot.xform.is_equal_approx(Transform3D())) {
-						mesh = _clone_mesh_with_transform(s->mesh, slot.xform);
+						mesh = _clone_mesh_with_transform(s->mesh, scaled_shape_transform);
 						if (mesh == nullptr) {
 							WARN_PRINT("Box3D: failed to bake trimesh instance transform.");
 							continue;
 						}
 						instance_meshes[i] = mesh;
+						mesh_scale = unit_scale;
 					}
-					shape_id = b3CreateMeshShape(body_id, &def, mesh, unit_scale);
+					shape_id = b3CreateMeshShape(body_id, &def, mesh, mesh_scale);
 				}
 			} break;
 
@@ -320,15 +327,17 @@ void Box3DBody3D::_build_all_shapes() {
 					}
 					def.enableSensorEvents = false;
 					b3MeshData *mesh = s->mesh;
+					b3Vec3 mesh_scale = to_box3d(scale);
 					if (!slot.xform.is_equal_approx(Transform3D())) {
-						mesh = _clone_mesh_with_transform(s->mesh, slot.xform);
+						mesh = _clone_mesh_with_transform(s->mesh, scaled_shape_transform);
 						if (mesh == nullptr) {
 							WARN_PRINT("Box3D: failed to bake heightmap instance transform.");
 							continue;
 						}
 						instance_meshes[i] = mesh;
+						mesh_scale = unit_scale;
 					}
-					shape_id = b3CreateMeshShape(body_id, &def, mesh, unit_scale);
+					shape_id = b3CreateMeshShape(body_id, &def, mesh, mesh_scale);
 				}
 			} break;
 
@@ -461,16 +470,23 @@ void Box3DBody3D::shapes_changed() {
 
 void Box3DBody3D::set_transform(const Transform3D &p_transform) {
 	transform = p_transform;
+	Vector3 new_scale;
+	const Transform3D rigid_transform = box3d_decompose_transform(p_transform, new_scale);
+	const bool scale_changed = !scale.is_equal_approx(new_scale);
+	if (scale_changed) {
+		scale = new_scale;
+		shapes_changed();
+	}
 	if (!in_space()) {
 		return;
 	}
 	if (mode == PS3DE::BODY_MODE_KINEMATIC) {
 		// Deferred: applied as a velocity-consistent target next step (moving platforms).
-		kinematic_target = p_transform;
+		kinematic_target = rigid_transform;
 		has_kinematic_target = true;
 		space->kinematic_target_queued(this);
 	} else {
-		b3Body_SetTransform(body_id, to_box3d(p_transform.origin), to_box3d(p_transform.basis.get_rotation_quaternion()));
+		b3Body_SetTransform(body_id, to_box3d(rigid_transform.origin), to_box3d(rigid_transform.basis.get_rotation_quaternion()));
 	}
 }
 
@@ -905,7 +921,7 @@ void Box3DBody3D::remove_area(Box3DArea3D *p_area) {
 }
 
 void Box3DBody3D::sync_from_move_event(const b3WorldTransform &p_transform, bool p_fell_asleep) {
-	transform = to_godot(p_transform);
+	transform = to_godot(p_transform).scaled_local(scale);
 	if (p_fell_asleep) {
 		sleeping = true;
 	} else if (sleeping) {

@@ -48,6 +48,7 @@ private:
 
 	PS3DE::BodyMode mode = PS3DE::BODY_MODE_RIGID;
 	Transform3D transform;
+	Vector3 scale = Vector3(1.0, 1.0, 1.0);
 	Vector3 linear_velocity_cache;
 	Vector3 angular_velocity_cache;
 	bool sleeping = false;

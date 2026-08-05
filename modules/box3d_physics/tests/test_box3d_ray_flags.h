@@ -71,13 +71,13 @@ public:
 		return shape;
 	}
 
-	RID create_trimesh(bool p_backface_collision) {
+	RID create_trimesh(bool p_backface_collision, real_t p_height = 0.0) {
 		PackedVector3Array faces;
 		// Godot triangle soups use clockwise winding for the front face. This
 		// triangle therefore faces +Y after the module converts it for Box3D.
-		faces.push_back(Vector3(-2.0, 0.0, -2.0));
-		faces.push_back(Vector3(2.0, 0.0, -2.0));
-		faces.push_back(Vector3(0.0, 0.0, 2.0));
+		faces.push_back(Vector3(-2.0, p_height, -2.0));
+		faces.push_back(Vector3(2.0, p_height, -2.0));
+		faces.push_back(Vector3(0.0, p_height, 2.0));
 
 		Dictionary data;
 		data["faces"] = faces;
@@ -202,6 +202,29 @@ TEST_CASE("[Box3D][RayFlags] Two-sided trimeshes accept requested back-face rays
 	result = PS3DT::RayResult();
 	const bool expected_divergent_hit = test_space.cast_ray(Vector3(0.0, -2.0, 0.0), Vector3(0.0, 2.0, 0.0), result, false, false);
 	(void)expected_divergent_hit;
+}
+
+TEST_CASE("[Box3D][Transforms] Static trimeshes inherit body scale") {
+	RayTestSpace test_space;
+	Transform3D scaled_transform;
+	scaled_transform.basis.scale_local(Vector3(2.0, 2.0, 2.0));
+	const RID mesh_body = test_space.add_static_body(test_space.create_trimesh(false, 1.0), scaled_transform);
+	test_space.update();
+
+	PS3DT::RayResult result;
+	REQUIRE(test_space.cast_ray(Vector3(0.0, 4.0, 0.0), Vector3(0.0, 0.0, 0.0), result, false, false));
+	CHECK(result.rid == mesh_body);
+	CHECK(result.position.is_equal_approx(Vector3(0.0, 2.0, 0.0)));
+
+	// Scale changes after entering the space must rebuild attached geometry too.
+	scaled_transform.basis = Basis();
+	scaled_transform.basis.scale_local(Vector3(3.0, 3.0, 3.0));
+	test_space.get_server().body_set_state(mesh_body, PS3DE::BODY_STATE_TRANSFORM, scaled_transform);
+	test_space.update();
+	result = PS3DT::RayResult();
+	REQUIRE(test_space.cast_ray(Vector3(0.0, 4.0, 0.0), Vector3(0.0, 0.0, 0.0), result, false, false));
+	CHECK(result.rid == mesh_body);
+	CHECK(result.position.is_equal_approx(Vector3(0.0, 3.0, 0.0)));
 }
 
 TEST_CASE("[Box3D][RayFlags] Heightmaps honor hit_back_faces") {

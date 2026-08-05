@@ -50,6 +50,7 @@ private:
 	LocalVector<ShapeSlot> slots;
 
 	Transform3D transform;
+	Vector3 scale = Vector3(1.0, 1.0, 1.0);
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
 	bool monitorable = false;
