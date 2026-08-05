@@ -42,6 +42,7 @@ constexpr real_t GIZMO_CIRCLE_SIZE = 1.1;
 
 constexpr real_t GIZMO_SCALE_OFFSET = GIZMO_CIRCLE_SIZE + 0.3;
 constexpr real_t GIZMO_ARROW_OFFSET = GIZMO_CIRCLE_SIZE + 0.3;
+constexpr real_t GIZMO_MOVE_CENTER_SIZE = 0.12;
 constexpr real_t GIZMO_SCALE_UNIFORM_SIZE = 0.18;
 
 constexpr real_t TRACKBALL_SENSITIVITY = 0.005;
@@ -53,6 +54,7 @@ constexpr int GIZMO_HIGHLIGHT_AXIS_VIEW_ROTATION = 15;
 constexpr float VERTEX_SNAP_THRESHOLD = 30.0f;
 constexpr int GIZMO_HIGHLIGHT_AXIS_TRACKBALL = 16;
 constexpr int GIZMO_HIGHLIGHT_SCALE_UNIFORM = 17;
+constexpr int GIZMO_HIGHLIGHT_MOVE_CENTER = 18;
 
 constexpr real_t ZOOM_FREELOOK_INDICATOR_DELAY_S = 1.5;
 

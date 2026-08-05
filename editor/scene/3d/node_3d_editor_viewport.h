@@ -522,6 +522,7 @@ private:
 	int zoom_failed_attempts_count = 0;
 
 	RID move_gizmo_instance[3], move_plane_gizmo_instance[3], rotate_gizmo_instance[4], scale_gizmo_instance[3], scale_plane_gizmo_instance[3], axis_gizmo_instance[3];
+	RID move_center_gizmo_instance;
 	RID scale_uniform_gizmo_instance;
 	RID trackball_sphere_instance;
 

@@ -118,6 +118,7 @@ using namespace Node3DEditorConstants;
 Node3DEditor *Node3DEditor::singleton = nullptr;
 
 void Node3DEditor::select_gizmo_highlight_axis(int p_axis) {
+	const bool highlight_move_center = p_axis == GIZMO_HIGHLIGHT_MOVE_CENTER;
 	const bool highlight_uniform_scale = p_axis == GIZMO_HIGHLIGHT_SCALE_UNIFORM;
 	for (int i = 0; i < 3; i++) {
 		move_gizmo[i]->surface_set_material(0, i == p_axis ? gizmo_color_hl[i] : gizmo_color[i]);
@@ -125,6 +126,7 @@ void Node3DEditor::select_gizmo_highlight_axis(int p_axis) {
 		scale_gizmo[i]->surface_set_material(0, (i + 9) == p_axis || highlight_uniform_scale ? gizmo_color_hl[i] : gizmo_color[i]);
 		scale_plane_gizmo[i]->surface_set_material(0, (i + 12) == p_axis ? plane_gizmo_color_hl[i] : plane_gizmo_color[i]);
 	}
+	move_center_gizmo->surface_set_material(0, highlight_move_center ? move_center_gizmo_color_hl : move_center_gizmo_color);
 	scale_uniform_gizmo->surface_set_material(0, highlight_uniform_scale ? scale_uniform_gizmo_color_hl : scale_uniform_gizmo_color);
 
 	for (int i = 0; i < 4; i++) {
@@ -1964,6 +1966,59 @@ void fragment() {
 		}
 	}
 
+	// View-plane translation handle at the gizmo origin.
+	{
+		move_center_gizmo.instantiate();
+		Ref<SurfaceTool> surftool;
+		surftool.instantiate();
+		surftool->begin(Mesh::PRIMITIVE_TRIANGLES);
+
+		const int sphere_rings = TRACKBALL_SPHERE_RINGS;
+		const int sphere_sectors = TRACKBALL_SPHERE_SECTORS;
+		for (int r = 0; r <= sphere_rings; ++r) {
+			for (int s = 0; s <= sphere_sectors; ++s) {
+				const real_t ring_angle = Math::PI * r / sphere_rings;
+				const real_t sector_angle = Math::TAU * s / sphere_sectors;
+				const Vector3 vertex(
+						GIZMO_MOVE_CENTER_SIZE * Math::sin(ring_angle) * Math::cos(sector_angle),
+						GIZMO_MOVE_CENTER_SIZE * Math::cos(ring_angle),
+						GIZMO_MOVE_CENTER_SIZE * Math::sin(ring_angle) * Math::sin(sector_angle));
+
+				surftool->set_normal(vertex.normalized());
+				surftool->add_vertex(vertex);
+			}
+		}
+
+		for (int r = 0; r < sphere_rings; ++r) {
+			for (int s = 0; s < sphere_sectors; ++s) {
+				const int current = r * (sphere_sectors + 1) + s;
+				const int next = current + sphere_sectors + 1;
+				surftool->add_index(current);
+				surftool->add_index(next);
+				surftool->add_index(current + 1);
+				surftool->add_index(current + 1);
+				surftool->add_index(next);
+				surftool->add_index(next + 1);
+			}
+		}
+
+		Color center_color = get_theme_color(SNAME("axis_w_color"), EditorStringName(Editor));
+		center_color.a *= (float)EDITOR_GET("editors/3d/manipulator_gizmo_opacity");
+		move_center_gizmo_color.instantiate();
+		move_center_gizmo_color->set_shading_mode(StandardMaterial3D::SHADING_MODE_UNSHADED);
+		move_center_gizmo_color->set_flag(StandardMaterial3D::FLAG_DISABLE_FOG, true);
+		move_center_gizmo_color->set_on_top_of_alpha();
+		move_center_gizmo_color->set_transparency(StandardMaterial3D::TRANSPARENCY_ALPHA);
+		move_center_gizmo_color->set_cull_mode(StandardMaterial3D::CULL_DISABLED);
+		move_center_gizmo_color->set_albedo(center_color);
+
+		move_center_gizmo_color_hl = move_center_gizmo_color->duplicate();
+		move_center_gizmo_color_hl->set_albedo(get_theme_color(SNAME("warning_color"), EditorStringName(Editor)));
+
+		surftool->set_material(move_center_gizmo_color);
+		surftool->commit(move_center_gizmo);
+	}
+
 	// Uniform scale handle at the gizmo origin. The drag path already supports
 	// TRANSFORM_VIEW scaling; this cube makes that behavior discoverable.
 	{
@@ -2357,6 +2412,14 @@ void Node3DEditor::update_gizmo_opacity() {
 		col.a = 1.0;
 		plane_gizmo_color_hl[i]->set_albedo(col);
 	}
+
+	Color col = move_center_gizmo_color->get_albedo();
+	col.a = opacity;
+	move_center_gizmo_color->set_albedo(col);
+
+	col = move_center_gizmo_color_hl->get_albedo();
+	col.a = 1.0;
+	move_center_gizmo_color_hl->set_albedo(col);
 }
 
 void Node3DEditor::update_grid() {

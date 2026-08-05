@@ -154,6 +154,7 @@ private:
 	HashSet<uint64_t> private_editor_layer_warned_scenarios;
 
 	Ref<ArrayMesh> move_gizmo[3], move_plane_gizmo[3], rotate_gizmo[4], scale_gizmo[3], scale_plane_gizmo[3], axis_gizmo[3];
+	Ref<ArrayMesh> move_center_gizmo;
 	Ref<ArrayMesh> scale_uniform_gizmo;
 	Ref<ArrayMesh> trackball_sphere_gizmo;
 	Ref<StandardMaterial3D> gizmo_color[3];
@@ -161,6 +162,8 @@ private:
 	Ref<ShaderMaterial> rotate_gizmo_color[4];
 	Ref<StandardMaterial3D> gizmo_color_hl[3];
 	Ref<StandardMaterial3D> plane_gizmo_color_hl[3];
+	Ref<StandardMaterial3D> move_center_gizmo_color;
+	Ref<StandardMaterial3D> move_center_gizmo_color_hl;
 	Ref<StandardMaterial3D> scale_uniform_gizmo_color;
 	Ref<StandardMaterial3D> scale_uniform_gizmo_color_hl;
 	Ref<ShaderMaterial> rotate_gizmo_color_hl[4];
@@ -544,6 +547,7 @@ public:
 	Ref<ArrayMesh> get_rotate_gizmo(int idx) const { return rotate_gizmo[idx]; }
 	Ref<ArrayMesh> get_scale_gizmo(int idx) const { return scale_gizmo[idx]; }
 	Ref<ArrayMesh> get_scale_plane_gizmo(int idx) const { return scale_plane_gizmo[idx]; }
+	Ref<ArrayMesh> get_move_center_gizmo() const { return move_center_gizmo; }
 	Ref<ArrayMesh> get_scale_uniform_gizmo() const { return scale_uniform_gizmo; }
 	Ref<ArrayMesh> get_trackball_sphere_gizmo() const { return trackball_sphere_gizmo; }
 
