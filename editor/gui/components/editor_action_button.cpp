@@ -51,7 +51,7 @@ void EditorActionButton::_update_action() {
 
 void EditorActionButton::_notification(int p_what) {
 	if (p_what == NOTIFICATION_THEME_CHANGED) {
-		set_custom_minimum_size(Size2(0, get_theme_constant(SNAME("minimum_height"))));
+		set_custom_minimum_size(Size2(get_theme_constant(SNAME("minimum_width")), get_theme_constant(SNAME("minimum_height"))));
 	}
 	if (p_what == NOTIFICATION_THEME_CHANGED || p_what == NOTIFICATION_TRANSLATION_CHANGED) {
 		_update_action();

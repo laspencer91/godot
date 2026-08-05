@@ -18,9 +18,10 @@
 
 void EditorPaneHeader::_update_icon() {
 	editor_component_update_icon(this, icon_rect, icon_name);
-	// The subtitle sits on its own line, indented to stay under the title.
-	subtitle_indent->set_visible(icon_rect->is_visible());
-	subtitle_indent->set_custom_minimum_size(Size2(icon_rect->get_custom_minimum_size().x, 0));
+	// Secondary context aligns with the pane's leading edge rather than the
+	// title text. This gives both rows a stable anchor as icons change.
+	subtitle_indent->hide();
+	subtitle_indent->set_custom_minimum_size(Size2());
 }
 
 void EditorPaneHeader::_notification(int p_what) {
@@ -107,12 +108,17 @@ void EditorPaneHeader::_bind_methods() {
 }
 
 EditorPaneHeader::EditorPaneHeader() {
+	set_h_size_flags(SIZE_EXPAND_FILL);
+
 	VBoxContainer *column = memnew(VBoxContainer);
+	column->set_theme_type_variation(SNAME("EditorPaneHeaderLayout"));
+	column->set_h_size_flags(SIZE_EXPAND_FILL);
 	add_child(column);
 
 	// Icon, title, dirty chip and actions all live on the title row and center
 	// on it, so they stay mutually aligned whether or not a subtitle is shown.
 	HBoxContainer *title_row = memnew(HBoxContainer);
+	title_row->set_h_size_flags(SIZE_EXPAND_FILL);
 	column->add_child(title_row);
 
 	icon_rect = memnew(TextureRect);
@@ -151,6 +157,7 @@ EditorPaneHeader::EditorPaneHeader() {
 	dirty_row->add_child(dirty_label);
 
 	toolbar = memnew(EditorToolbar);
+	toolbar->set_h_size_flags(SIZE_SHRINK_END);
 	toolbar->set_v_size_flags(SIZE_SHRINK_CENTER);
 	title_row->add_child(toolbar);
 

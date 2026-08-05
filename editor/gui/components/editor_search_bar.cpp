@@ -120,6 +120,7 @@ LineEdit *EditorSearchBar::get_line_edit() const {
 }
 
 EditorActionButton *EditorSearchBar::add_filter_action(const Ref<EditorAction> &p_action) {
+	filter_toolbar->show();
 	return filter_toolbar->add_action(p_action);
 }
 
@@ -147,9 +148,12 @@ void EditorSearchBar::_bind_methods() {
 }
 
 EditorSearchBar::EditorSearchBar() {
+	set_h_size_flags(SIZE_EXPAND_FILL);
+
 	search_panel = memnew(PanelContainer);
 	search_panel->set_theme_type_variation(SNAME("EditorSearchField"));
 	search_panel->set_h_size_flags(SIZE_EXPAND_FILL);
+	search_panel->set_stretch_ratio(1.0);
 	add_child(search_panel);
 
 	HBoxContainer *search_row = memnew(HBoxContainer);
@@ -174,9 +178,11 @@ EditorSearchBar::EditorSearchBar() {
 	result_count_label->set_theme_type_variation(SNAME("EditorSearchCount"));
 	result_count_label->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
 	result_count_label->hide();
-	add_child(result_count_label);
+	search_row->add_child(result_count_label);
 
 	filter_toolbar = memnew(EditorToolbar);
+	filter_toolbar->set_h_size_flags(SIZE_SHRINK_END);
+	filter_toolbar->hide();
 	add_child(filter_toolbar);
 
 	debounce_timer = memnew(Timer);

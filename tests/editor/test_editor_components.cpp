@@ -22,6 +22,7 @@ TEST_FORCE_LINK(test_editor_components)
 #include "editor/gui/components/editor_section_header.h"
 #include "editor/gui/components/editor_status_panel.h"
 #include "editor/gui/components/editor_toolbar.h"
+#include "editor/gui/editor_spin_slider.h"
 #include "scene/gui/line_edit.h"
 
 namespace TestEditorComponents {
@@ -126,6 +127,17 @@ TEST_CASE("[Editor][Components] Search and status controls retain view state") {
 	CHECK(status->get_severity() == EditorStatusPanel::SEVERITY_ERROR);
 	CHECK(status->is_dismissible());
 	memdelete(status);
+}
+
+TEST_CASE("[Editor][Components] Spin slider supports compact value presentation") {
+	EditorSpinSlider *slider = memnew(EditorSpinSlider);
+	slider->set_custom_value_text_margin(2);
+	slider->set_custom_value_font_size(11);
+	slider->set_value_text_alignment(HORIZONTAL_ALIGNMENT_RIGHT);
+	CHECK(slider->get_custom_value_text_margin() == 2);
+	CHECK(slider->get_custom_value_font_size() == 11);
+	CHECK(slider->get_value_text_alignment() == HORIZONTAL_ALIGNMENT_RIGHT);
+	memdelete(slider);
 }
 
 } // namespace TestEditorComponents

@@ -22,6 +22,7 @@ class EditorComponentGalleryPlugin : public EditorPlugin {
 	void _build_gallery();
 	void _open_gallery();
 	Ref<EditorAction> _make_action(const String &p_text, const StringName &p_icon = StringName(), bool p_enabled = true);
+	Control *_build_inspector_chrome_panel(bool p_narrow);
 
 protected:
 	static void _bind_methods() {}

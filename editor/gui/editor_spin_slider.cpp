@@ -65,7 +65,7 @@ String EditorSpinSlider::get_tooltip(const Point2 &p_pos) const {
 Size2 EditorSpinSlider::get_minimum_size() const {
 	Ref<StyleBox> sb = get_theme_stylebox(CoreStringName(normal), SNAME("LineEdit"));
 	Ref<Font> font = get_theme_font(SceneStringName(font), SNAME("LineEdit"));
-	int font_size = get_theme_font_size(SceneStringName(font_size), SNAME("LineEdit"));
+	int font_size = custom_value_font_size >= 0 ? custom_value_font_size : get_theme_font_size(SceneStringName(font_size), SNAME("LineEdit"));
 
 	Size2 ms = sb->get_minimum_size();
 	Ref<Texture2D> updown = read_only ? theme_cache.updown_disabled_icon : theme_cache.updown_icon;
@@ -336,10 +336,21 @@ void EditorSpinSlider::_update_value_input_stylebox() {
 	// default margins.
 	Ref<StyleBox> stylebox = get_theme_stylebox(CoreStringName(normal), SNAME("LineEdit"))->duplicate();
 	// TODO: Handle this internally instead of relying on the theme.
-	int margin = get_theme_constant(get_label().is_empty() ? SNAME("line_edit_margin_empty") : SNAME("line_edit_margin"), SNAME("EditorSpinSlider"));
-	stylebox->set_content_margin(is_layout_rtl() ? SIDE_RIGHT : SIDE_LEFT, margin);
+	if (custom_value_text_margin >= 0) {
+		stylebox->set_content_margin(SIDE_LEFT, custom_value_text_margin);
+		stylebox->set_content_margin(SIDE_RIGHT, custom_value_text_margin);
+	} else {
+		int margin = get_theme_constant(get_label().is_empty() ? SNAME("line_edit_margin_empty") : SNAME("line_edit_margin"), SNAME("EditorSpinSlider"));
+		stylebox->set_content_margin(is_layout_rtl() ? SIDE_RIGHT : SIDE_LEFT, margin);
+	}
 
 	value_input->add_theme_style_override(CoreStringName(normal), stylebox);
+	value_input->set_horizontal_alignment(value_text_alignment);
+	if (custom_value_font_size >= 0) {
+		value_input->add_theme_font_size_override(SceneStringName(font_size), custom_value_font_size);
+	} else {
+		value_input->remove_theme_font_size_override(SceneStringName(font_size));
+	}
 }
 
 void EditorSpinSlider::_draw_spin_slider() {
@@ -354,12 +365,20 @@ void EditorSpinSlider::_draw_spin_slider() {
 		draw_style_box(sb, Rect2(Vector2(), size));
 	}
 	Ref<Font> font = get_theme_font(SceneStringName(font), SNAME("LineEdit"));
-	int font_size = get_theme_font_size(SceneStringName(font_size), SNAME("LineEdit"));
+	int font_size = custom_value_font_size >= 0 ? custom_value_font_size : get_theme_font_size(SceneStringName(font_size), SNAME("LineEdit"));
 	int sep_base = 4 * EDSCALE;
 	int sep = sep_base + sb->get_offset().x; //make it have the same margin on both sides, looks better
 
 	int label_width = font->get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).width;
-	int number_width = size.width - sb->get_minimum_size().width - label_width - sep;
+	int number_width;
+	float text_start;
+	if (custom_value_text_margin >= 0) {
+		text_start = custom_value_text_margin;
+		number_width = MAX(0, int(size.width) - custom_value_text_margin * 2);
+	} else {
+		number_width = size.width - sb->get_minimum_size().width - label_width - sep;
+		text_start = rtl ? Math::round(sb->get_offset().x) : Math::round(sb->get_offset().x + label_width + sep);
+	}
 
 	String numstr = get_text_value();
 
@@ -392,8 +411,24 @@ void EditorSpinSlider::_draw_spin_slider() {
 	RID num_rid = TS->create_shaped_text();
 	TS->shaped_text_add_string(num_rid, numstr + U"\u2009" + suffix, font->get_rids(), font_size, font->get_opentype_features());
 
-	float text_start = rtl ? Math::round(sb->get_offset().x) : Math::round(sb->get_offset().x + label_width + sep);
-	Vector2 text_ofs = rtl ? Vector2(text_start + (number_width - TS->shaped_text_get_width(num_rid)), vofs) : Vector2(text_start, vofs);
+	float draw_start;
+	if (custom_value_text_margin >= 0) {
+		const float available_slack = number_width - TS->shaped_text_get_width(num_rid);
+		switch (value_text_alignment) {
+			case HORIZONTAL_ALIGNMENT_CENTER:
+				draw_start = text_start + available_slack * 0.5f;
+				break;
+			case HORIZONTAL_ALIGNMENT_RIGHT:
+				draw_start = text_start + available_slack;
+				break;
+			default:
+				draw_start = text_start;
+				break;
+		}
+	} else {
+		draw_start = rtl ? text_start + (number_width - TS->shaped_text_get_width(num_rid)) : text_start;
+	}
+	Vector2 text_ofs = Vector2(draw_start, vofs);
 	int v_size = TS->shaped_text_get_glyph_count(num_rid);
 	const Glyph *glyphs = TS->shaped_text_get_glyphs(num_rid);
 	for (int i = 0; i < v_size; i++) {
@@ -713,6 +748,51 @@ bool EditorSpinSlider::is_flat() const {
 
 bool EditorSpinSlider::is_grabbing() const {
 	return grabbing_grabber || grabbing_spinner;
+}
+
+void EditorSpinSlider::set_custom_value_text_margin(int p_margin) {
+	ERR_FAIL_COND(p_margin < -1);
+	if (custom_value_text_margin == p_margin) {
+		return;
+	}
+	custom_value_text_margin = p_margin;
+	_update_value_input_stylebox();
+	update_minimum_size();
+	queue_redraw();
+}
+
+int EditorSpinSlider::get_custom_value_text_margin() const {
+	return custom_value_text_margin;
+}
+
+void EditorSpinSlider::set_custom_value_font_size(int p_font_size) {
+	ERR_FAIL_COND(p_font_size < -1);
+	if (custom_value_font_size == p_font_size) {
+		return;
+	}
+	custom_value_font_size = p_font_size;
+	_update_value_input_stylebox();
+	update_minimum_size();
+	queue_redraw();
+}
+
+int EditorSpinSlider::get_custom_value_font_size() const {
+	return custom_value_font_size;
+}
+
+void EditorSpinSlider::set_value_text_alignment(HorizontalAlignment p_alignment) {
+	if (value_text_alignment == p_alignment) {
+		return;
+	}
+	value_text_alignment = p_alignment;
+	if (value_input) {
+		value_input->set_horizontal_alignment(value_text_alignment);
+	}
+	queue_redraw();
+}
+
+HorizontalAlignment EditorSpinSlider::get_value_text_alignment() const {
+	return value_text_alignment;
 }
 
 void EditorSpinSlider::set_deferred_drag_mode_enabled(bool p_enabled) {

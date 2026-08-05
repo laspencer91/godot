@@ -142,18 +142,144 @@ void EditorComponentTheme::populate(const Ref<EditorTheme> &p_theme, const Edito
 	p_theme->set_type_variation("EditorSectionBadge", "Label");
 	p_theme->set_color("font_color", "EditorSectionBadge", p_config.accent_color);
 
-	Ref<StyleBoxFlat> pane_header = _component_style(p_config.base_style, p_config.surface_low_color, resting_border, stroke, 14 * EDSCALE, 12 * EDSCALE, radius);
+	Ref<StyleBoxFlat> pane_header = _component_style(p_config.base_style, p_config.surface_low_color, resting_border, stroke, 14 * EDSCALE, 8 * EDSCALE, radius);
 	p_theme->set_stylebox("panel", "EditorPaneHeader", pane_header);
 	p_theme->set_constant("icon_size", "EditorPaneHeader", 20 * EDSCALE);
+	p_theme->set_type_variation("EditorPaneHeaderLayout", "VBoxContainer");
+	p_theme->set_constant("separation", "EditorPaneHeaderLayout", 0);
 	p_theme->set_type_variation("EditorPaneTitle", "HeaderSmall");
 	p_theme->set_type_variation("EditorPaneSubtitle", "Label");
 	p_theme->set_color("font_color", "EditorPaneSubtitle", p_config.font_secondary_color);
+	p_theme->set_font_size(SceneStringName(font_size), "EditorPaneSubtitle", MAX(8, p_theme->get_default_font_size() - 2 * Math::round(EDSCALE)));
 	p_theme->set_type_variation("EditorPaneDirtyIndicator", "Label");
-	p_theme->set_color("font_color", "EditorPaneDirtyIndicator", p_config.font_secondary_color.lerp(p_config.warning_color, 0.55));
-	p_theme->set_font_size(SceneStringName(font_size), "EditorPaneDirtyIndicator", MAX(8, p_theme->get_default_font_size() - Math::round(EDSCALE)));
-	Ref<StyleBoxFlat> dirty_chip = _component_style(p_config.base_style, p_config.surface_lower_color.lerp(p_config.warning_color, 0.03), resting_border.lerp(p_config.warning_color, 0.28), stroke, 5 * EDSCALE, 1 * EDSCALE, MAX(2, radius - Math::round(EDSCALE)));
+	p_theme->set_color("font_color", "EditorPaneDirtyIndicator", p_config.font_secondary_color.lerp(p_config.warning_color, 0.48));
+	p_theme->set_font_size(SceneStringName(font_size), "EditorPaneDirtyIndicator", MAX(8, p_theme->get_default_font_size() - 2 * Math::round(EDSCALE)));
+	Ref<StyleBoxEmpty> dirty_chip = p_config.base_empty_style->duplicate();
+	dirty_chip->set_content_margin_individual(3 * EDSCALE, 0, 3 * EDSCALE, 0);
 	p_theme->set_type_variation("EditorPaneDirtyChip", "PanelContainer");
 	p_theme->set_stylebox("panel", "EditorPaneDirtyChip", dirty_chip);
+
+	// Inspector chrome direction study. These tokens are intentionally consumed
+	// only by the component gallery for now. Keeping the prototype theme-driven
+	// lets it exercise light/dark themes and editor scaling before any of the
+	// live Inspector controls adopt the visual language.
+	// Reserve the outer stroke as content margin so full-bleed descendants
+	// cannot paint over the single outline that owns the whole Inspector pane.
+	Ref<StyleBoxFlat> inspector_preview_frame = _component_style(p_config.base_style, p_config.surface_base_color, card_border, stroke, stroke, stroke, radius);
+	p_theme->set_type_variation("InspectorChromePreviewFrame", "PanelContainer");
+	p_theme->set_stylebox("panel", "InspectorChromePreviewFrame", inspector_preview_frame);
+	Ref<StyleBoxFlat> inspector_pane_header = _component_style(p_config.base_style, p_config.surface_low_color, card_border, 0, 14 * EDSCALE, 8 * EDSCALE, MAX(0, radius - stroke));
+	inspector_pane_header->set_border_width(SIDE_BOTTOM, stroke);
+	inspector_pane_header->set_border_color(card_border);
+	inspector_pane_header->set_corner_radius(CORNER_BOTTOM_LEFT, 0);
+	inspector_pane_header->set_corner_radius(CORNER_BOTTOM_RIGHT, 0);
+	p_theme->set_type_variation("InspectorChromePaneHeader", "EditorPaneHeader");
+	p_theme->set_stylebox("panel", "InspectorChromePaneHeader", inspector_pane_header);
+	p_theme->set_type_variation("InspectorChromePreviewCaption", "Label");
+	p_theme->set_color("font_color", "InspectorChromePreviewCaption", p_config.font_secondary_color);
+	p_theme->set_type_variation("InspectorChromeOverflowButton", "Button");
+	p_theme->set_stylebox(CoreStringName(normal), "InspectorChromeOverflowButton", p_config.base_empty_style);
+	p_theme->set_stylebox(SceneStringName(hover), "InspectorChromeOverflowButton", p_config.flat_button_hover);
+	p_theme->set_stylebox(SceneStringName(pressed), "InspectorChromeOverflowButton", p_config.flat_button_pressed);
+	p_theme->set_stylebox("hover_pressed", "InspectorChromeOverflowButton", p_config.flat_button_hover_pressed);
+	p_theme->set_stylebox("focus", "InspectorChromeOverflowButton", focus_overlay);
+	p_theme->set_constant("minimum_width", "InspectorChromeOverflowButton", 24 * EDSCALE);
+	p_theme->set_constant("minimum_height", "InspectorChromeOverflowButton", 24 * EDSCALE);
+
+	// A saturated amber reads as an intentional modified-state accent without
+	// inheriting the editor warning color's muddy/tan cast on dark surfaces.
+	const Color inspector_modified_color = p_config.dark_theme ? Color(0.96, 0.58, 0.14) : Color(0.72, 0.34, 0.025);
+	const Color class_warm = p_config.surface_high_color.lerp(inspector_modified_color, p_config.dark_theme ? 0.20 : 0.12);
+	const Color class_accent = p_config.surface_high_color.lerp(p_config.accent_color, p_config.dark_theme ? 0.22 : 0.13);
+	Color shifted_accent = p_config.accent_color;
+	shifted_accent.set_hsv(Math::fmod(shifted_accent.get_h() + 0.14f, 1.0f), shifted_accent.get_s() * 0.72f, shifted_accent.get_v());
+	const Color class_shifted = p_config.surface_high_color.lerp(shifted_accent, p_config.dark_theme ? 0.20 : 0.12);
+	const Color gradient_fade = p_config.surface_base_color;
+	p_theme->set_color("class_0_start", "InspectorChromeHeaderPreview", class_warm);
+	p_theme->set_color("class_0_end", "InspectorChromeHeaderPreview", gradient_fade.lerp(class_warm, 0.30));
+	p_theme->set_color("class_1_start", "InspectorChromeHeaderPreview", class_accent);
+	p_theme->set_color("class_1_end", "InspectorChromeHeaderPreview", gradient_fade.lerp(class_accent, 0.30));
+	p_theme->set_color("class_2_start", "InspectorChromeHeaderPreview", class_shifted);
+	p_theme->set_color("class_2_end", "InspectorChromeHeaderPreview", gradient_fade.lerp(class_shifted, 0.30));
+	const Color section_fill = p_config.surface_base_color.lerp(p_config.surface_high_color, p_config.dark_theme ? 0.14 : 0.10);
+	p_theme->set_color("section_start", "InspectorChromeHeaderPreview", section_fill);
+	p_theme->set_color("section_end", "InspectorChromeHeaderPreview", section_fill);
+	p_theme->set_color("hover_overlay_color", "InspectorChromeHeaderPreview", Color(p_config.mono_color, p_config.dark_theme ? 0.055 : 0.035));
+	p_theme->set_color("font_color", "InspectorChromeHeaderPreview", p_config.font_color);
+	p_theme->set_color("secondary_font_color", "InspectorChromeHeaderPreview", p_config.font_secondary_color);
+	Color section_badge_fill = p_config.font_secondary_color.lerp(p_config.accent_color, p_config.dark_theme ? 0.16 : 0.10);
+	section_badge_fill.a = p_config.dark_theme ? 0.18 : 0.12;
+	p_theme->set_color("badge_fill_color", "InspectorChromeHeaderPreview", section_badge_fill);
+	p_theme->set_color("badge_text_color", "InspectorChromeHeaderPreview", p_config.font_secondary_color.lerp(p_config.font_color, 0.20));
+	p_theme->set_constant("category_height", "InspectorChromeHeaderPreview", 24 * EDSCALE);
+	p_theme->set_constant("section_height", "InspectorChromeHeaderPreview", 29 * EDSCALE);
+	p_theme->set_constant("category_horizontal_padding", "InspectorChromeHeaderPreview", 14 * EDSCALE);
+	p_theme->set_constant("horizontal_padding", "InspectorChromeHeaderPreview", 9 * EDSCALE);
+	p_theme->set_color("guide_color", "InspectorChromeBodyPreview", p_config.separator_color.lerp(p_config.font_secondary_color, 0.24));
+	p_theme->set_type_variation("InspectorChromePropertyLabel", "Label");
+	p_theme->set_color("font_color", "InspectorChromePropertyLabel", p_config.font_color.lerp(p_config.accent_color, p_config.dark_theme ? 0.10 : 0.06));
+	p_theme->set_font_size(SceneStringName(font_size), "InspectorChromePropertyLabel", MAX(8, p_theme->get_default_font_size() - 2 * Math::round(EDSCALE)));
+	p_theme->set_type_variation("InspectorChromeResetButton", "Button");
+	p_theme->set_stylebox(CoreStringName(normal), "InspectorChromeResetButton", p_config.base_empty_style);
+	p_theme->set_stylebox(SceneStringName(hover), "InspectorChromeResetButton", p_config.flat_button_hover);
+	p_theme->set_stylebox(SceneStringName(pressed), "InspectorChromeResetButton", p_config.flat_button_pressed);
+	p_theme->set_stylebox("focus", "InspectorChromeResetButton", focus_overlay);
+	p_theme->set_color("icon_normal_color", "InspectorChromeResetButton", inspector_modified_color);
+	p_theme->set_color("icon_hover_color", "InspectorChromeResetButton", inspector_modified_color.lerp(p_config.mono_color, 0.18));
+
+	p_theme->set_type_variation("InspectorChromeField", "EditorFieldLineEdit");
+	p_theme->set_font_size(SceneStringName(font_size), "InspectorChromeField", MAX(8, p_theme->get_default_font_size() - 2 * Math::round(EDSCALE)));
+	Ref<StyleBoxFlat> inspector_modified_field = field_normal->duplicate();
+	inspector_modified_field->set_bg_color(p_config.surface_lower_color.lerp(inspector_modified_color, 0.025));
+	inspector_modified_field->set_border_color(resting_border.lerp(inspector_modified_color, 0.68));
+	p_theme->set_type_variation("InspectorChromeModifiedField", "InspectorChromeField");
+	p_theme->set_stylebox(CoreStringName(normal), "InspectorChromeModifiedField", inspector_modified_field);
+	p_theme->set_stylebox("focus", "InspectorChromeModifiedField", focus_overlay);
+	p_theme->set_stylebox("read_only", "InspectorChromeModifiedField", field_read_only);
+
+	Ref<StyleBoxFlat> axis_field = _component_style(p_config.base_style, p_config.surface_lower_color, resting_border, stroke, 0, 0, MAX(2, radius - stroke));
+	p_theme->set_type_variation("InspectorChromeAxisField", "PanelContainer");
+	p_theme->set_stylebox("panel", "InspectorChromeAxisField", axis_field);
+	Ref<StyleBoxFlat> axis_field_modified = axis_field->duplicate();
+	axis_field_modified->set_border_color(resting_border.lerp(inspector_modified_color, 0.68));
+	p_theme->set_type_variation("InspectorChromeAxisFieldModified", "InspectorChromeAxisField");
+	p_theme->set_stylebox("panel", "InspectorChromeAxisFieldModified", axis_field_modified);
+	Ref<StyleBoxEmpty> axis_value = p_config.base_empty_style->duplicate();
+	axis_value->set_content_margin_individual(5 * EDSCALE, 3 * EDSCALE, 5 * EDSCALE, 3 * EDSCALE);
+	p_theme->set_type_variation("InspectorChromeAxisValue", "LineEdit");
+	p_theme->set_stylebox(CoreStringName(normal), "InspectorChromeAxisValue", axis_value);
+	p_theme->set_stylebox("focus", "InspectorChromeAxisValue", p_config.base_empty_style);
+	p_theme->set_stylebox("read_only", "InspectorChromeAxisValue", axis_value);
+	p_theme->set_type_variation("InspectorChromeAxisChip", "PanelContainer");
+	const Color axis_colors[] = { Color(0.72, 0.12, 0.16), Color(0.08, 0.55, 0.22), Color(0.06, 0.34, 0.72) };
+	const StringName axis_types[] = { SNAME("InspectorChromeAxisX"), SNAME("InspectorChromeAxisY"), SNAME("InspectorChromeAxisZ") };
+	for (int i = 0; i < 3; i++) {
+		p_theme->set_type_variation(axis_types[i], "InspectorChromeAxisChip");
+		Ref<StyleBoxFlat> axis_chip = _component_style(p_config.base_style, axis_colors[i], Color(0, 0, 0, 0), 0, 0, 0, 0);
+		axis_chip->set_border_width(SIDE_LEFT, stroke);
+		axis_chip->set_border_width(SIDE_TOP, stroke);
+		axis_chip->set_border_width(SIDE_BOTTOM, stroke);
+		axis_chip->set_border_color(resting_border);
+		axis_chip->set_corner_radius(CORNER_TOP_LEFT, MAX(2, radius - stroke));
+		axis_chip->set_corner_radius(CORNER_BOTTOM_LEFT, MAX(2, radius - stroke));
+		p_theme->set_stylebox("panel", axis_types[i], axis_chip);
+	}
+	p_theme->set_type_variation("InspectorChromeAxisLabel", "Label");
+	p_theme->set_color("font_color", "InspectorChromeAxisLabel", Color(1, 1, 1));
+	p_theme->set_font_size(SceneStringName(font_size), "InspectorChromeAxisLabel", MAX(8, p_theme->get_default_font_size() - 2 * Math::round(EDSCALE)));
+
+	Ref<StyleBoxFlat> inspector_resource_field = _component_style(p_config.base_style, p_config.surface_lower_color, resting_border, stroke, 5 * EDSCALE, 2 * EDSCALE, MAX(2, radius - stroke));
+	p_theme->set_type_variation("InspectorChromeResourceField", "PanelContainer");
+	p_theme->set_stylebox("panel", "InspectorChromeResourceField", inspector_resource_field);
+	Ref<StyleBoxFlat> inspector_resource_field_modified = inspector_resource_field->duplicate();
+	inspector_resource_field_modified->set_border_color(resting_border.lerp(inspector_modified_color, 0.68));
+	p_theme->set_type_variation("InspectorChromeResourceFieldModified", "InspectorChromeResourceField");
+	p_theme->set_stylebox("panel", "InspectorChromeResourceFieldModified", inspector_resource_field_modified);
+	p_theme->set_type_variation("InspectorChromeResourceBadge", "Label");
+	p_theme->set_color("font_color", "InspectorChromeResourceBadge", p_config.highlight_color);
+	p_theme->set_font_size(SceneStringName(font_size), "InspectorChromeResourceBadge", MAX(8, p_theme->get_default_font_size() - Math::round(EDSCALE)));
+	p_theme->set_type_variation("InspectorChromeResourceName", "Label");
+	p_theme->set_font_size(SceneStringName(font_size), "InspectorChromeResourceName", MAX(8, p_theme->get_default_font_size() - Math::round(EDSCALE)));
 
 	// Forms.
 	p_theme->set_constant("separation", "EditorForm", 12 * EDSCALE);

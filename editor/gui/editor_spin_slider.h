@@ -79,6 +79,9 @@ private:
 	ControlState control_state = CONTROL_STATE_DEFAULT;
 	bool flat = false;
 	bool editing_integer = false;
+	int custom_value_text_margin = -1;
+	int custom_value_font_size = -1;
+	HorizontalAlignment value_text_alignment = HORIZONTAL_ALIGNMENT_LEFT;
 
 	void _grab_start();
 	void _grab_end();
@@ -138,6 +141,12 @@ public:
 	bool is_flat() const;
 
 	bool is_grabbing() const;
+	void set_custom_value_text_margin(int p_margin);
+	int get_custom_value_text_margin() const;
+	void set_custom_value_font_size(int p_font_size);
+	int get_custom_value_font_size() const;
+	void set_value_text_alignment(HorizontalAlignment p_alignment);
+	HorizontalAlignment get_value_text_alignment() const;
 	void set_deferred_drag_mode_enabled(bool p_enabled = true);
 	bool is_deferred_drag_mode_enabled() const;
 
