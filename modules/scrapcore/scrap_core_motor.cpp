@@ -27,6 +27,8 @@ public:
 	bool is_on_floor() const override { return true; }
 	bool is_on_wall() const override { return false; }
 	scrap::Vec3 get_wall_normal() const override { return scrap::Vec3::zero(); }
+	// Flat floor, matching is_grounded() above (contract_smoke.cpp's stub).
+	scrap::Vec3 get_floor_normal() const override { return scrap::Vec3::up(); }
 	bool can_stand_up(scrap::Scalar, const scrap::MovementParams &) const override { return true; }
 	void set_capsule_for_pose(scrap::Scalar, int32_t, const scrap::MovementParams &) override {}
 	bool raycast_blocked(const scrap::Vec3 &, const scrap::Vec3 &, uint32_t) const override { return false; }
@@ -90,6 +92,11 @@ const ScalarParamEntry SCALAR_PARAMS[] = {
 	{ "slide_min_speed", &MP::slide_min_speed },
 	{ "slide_arm_window", &MP::slide_arm_window },
 	{ "slide_hop_grace_window", &MP::slide_hop_grace_window },
+	{ "slide_slope_friction_gain", &MP::slide_slope_friction_gain },
+	{ "slide_slope_uphill_gain", &MP::slide_slope_uphill_gain },
+	{ "slide_slope_friction_min", &MP::slide_slope_friction_min },
+	{ "slide_slope_time_gain", &MP::slide_slope_time_gain },
+	{ "slide_slope_time_scale_min", &MP::slide_slope_time_scale_min },
 	{ "wall_jump_entry_speed", &MP::wall_jump_entry_speed },
 	{ "wall_jump_speed_floor_mult", &MP::wall_jump_speed_floor_mult },
 	{ "wall_jump_speed_max_mult", &MP::wall_jump_speed_max_mult },
@@ -113,7 +120,11 @@ const ScalarParamEntry SCALAR_PARAMS[] = {
 	{ "crouch_eye_offset", &MP::crouch_eye_offset },
 	{ "prone_eye_offset", &MP::prone_eye_offset },
 	{ "pose_transition_rate", &MP::pose_transition_rate },
-	{ "step_smooth_rate", &MP::step_smooth_rate },
+	{ "prone_dwell_band", &MP::prone_dwell_band },
+	{ "prone_dwell_scale", &MP::prone_dwell_scale },
+	{ "prone_drop_finish_scale", &MP::prone_drop_finish_scale },
+	// (step_smooth_rate left MovementConfig 2026-08-05 -> PlayerFeelConfig:
+	// presentation-only, and MovementParams no longer carries the field.)
 	{ "lean_distance", &MP::lean_distance },
 	{ "lean_roll", &MP::lean_roll },
 	{ "lean_transition_rate", &MP::lean_transition_rate },
@@ -254,11 +265,20 @@ void ScrapCoreMotor::update_params(const Dictionary &p_params) {
 
 void ScrapCoreMotor::register_ladder(int p_id, const Vector3 &p_position, const Vector3 &p_outward_normal, const Vector3 &p_side_dir, double p_height, double p_half_width, double p_attach_depth) {
 	ScrapLadderVolume ladder;
-	// PlayerPawn._ladder_runtime_id: an authored id > 0 is kept verbatim; any
-	// other authored id maps to index + 1. Registration order IS the contract
-	// (node-path-sorted, like _sorted_ladders) -- no re-sorting here, because
-	// authored non-sequential ids must not reorder the probe walk.
-	ladder.id = p_id > 0 ? p_id : int(ladders.size()) + 1;
+	// PlayerPawn._ladder_runtime_id (player_pawn.gd:464-475): the authored id is
+	// kept VERBATIM, and there is NO index fallback any more. An unbaked ladder
+	// arrives as id 0, stays 0, and is simply not mountable (get_ladder_by_id
+	// rejects <= 0) -- the caller has already pushed the "run the map bake"
+	// error. The old `id <= 0 -> index + 1` fallback was a per-machine guess at
+	// a value that rides the wire, i.e. a desync; do not reintroduce it.
+	// Registration order IS the contract (node-path-sorted, like
+	// _sorted_ladders) -- no re-sorting here, because authored non-sequential
+	// ids must not reorder the probe walk.
+	// p_position is LadderVolume.bottom_center(): the gameplay origin every
+	// ScrapLadderVolume read measures from, and the point ScrapCore's
+	// ILadderVolume::global_position() means (top of ladder = position.y +
+	// height). It is NOT the node's global_position for a box-authored ladder.
+	ladder.id = p_id;
 	ladder.position = p_position;
 	ladder.outward = p_outward_normal;
 	ladder.side = p_side_dir;

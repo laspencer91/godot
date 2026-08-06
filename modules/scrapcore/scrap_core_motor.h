@@ -62,8 +62,12 @@ public:
 	// (outward_normal()/side_dir()); extents stay double end to end. CALL ORDER
 	// IS CONTRACT: register in node-path-sorted order (the GDScript's
 	// _sorted_ladders walk) -- probe iteration preserves registration order.
-	// id follows PlayerPawn._ladder_runtime_id: an authored id > 0 is kept
-	// verbatim; id <= 0 maps to registration index + 1.
+	// id follows PlayerPawn._ladder_runtime_id: the authored id is kept
+	// VERBATIM, with no index fallback -- an unbaked ladder registers as id 0
+	// and is unmountable, because ladder_id rides the wire and a per-machine
+	// guess is a desync.
+	// position is LadderVolume.bottom_center() (the gameplay origin), NOT the
+	// node's global_position: for a box-authored ladder those differ.
 	void register_ladder(int p_id, const Vector3 &p_position, const Vector3 &p_outward_normal, const Vector3 &p_side_dir, double p_height, double p_half_width, double p_attach_depth);
 	void clear_ladders();
 

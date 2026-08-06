@@ -481,6 +481,19 @@ scrap::Vec3 Box3DPawnBody::get_wall_normal() const {
 	return to_scrap(last_result.wall_normal);
 }
 
+scrap::Vec3 Box3DPawnBody::get_floor_normal() const {
+	// PlayerCollisionBackend.get_floor_normal (player_collision_backend.gd:61):
+	// the cached normal from the last solve, ZERO when airborne. Routed through
+	// the cached result rather than CharacterBody3D::get_floor_normal() for the
+	// same reason is_grounded() is -- the query-only mover never runs
+	// move_and_slide, so the native value is a flat ZERO and every slope would
+	// read as level ground. Same freshness contract as is_on_floor(): it
+	// describes the END of the previous move, which is what the motor reads at
+	// the top of the tick, one read per tick immediately after is_grounded()
+	// (movement_motor.cpp:1215-1223).
+	return to_scrap(last_result.floor_normal);
+}
+
 bool Box3DPawnBody::can_stand_up(scrap::Scalar p_current_height, const scrap::MovementParams &p_params) const {
 	// Backend.can_stand: collide a STAND capsule at the feet and reject on any
 	// ceiling-ish plane. (current_height deliberately unused, like the GDScript.)

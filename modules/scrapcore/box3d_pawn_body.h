@@ -23,14 +23,17 @@
 #include <scrapcore/pawn_body.h>
 
 // Mirror of src/world/ladder_volume.gd's geometry math over registered data
-// (id, base position, outward + side axes, extents). Pure functions of the
+// (id, bottom-center position, outward + side axes, extents). `position` is the
+// node's bottom_center() -- the gameplay origin every read here measures from,
+// and what ILadderVolume::global_position() means to the core (top of ladder =
+// position.y + height). Pure functions of the
 // stored geometry, exactly like the node's -- the motor's ladder path stays
 // deterministic. Axes arrive pre-resolved from the game side (the node's
 // outward_normal()/side_dir()), so cardinal and free-form facings both work.
 class ScrapLadderVolume final : public scrap::ILadderVolume {
 public:
-	int32_t id = 0;
-	Vector3 position;
+	int32_t id = 0; // authored ladder_id, verbatim; 0 = unbaked, unmountable
+	Vector3 position; // LadderVolume.bottom_center()
 	Vector3 outward; // unit, XZ
 	Vector3 side; // unit, XZ
 	double ladder_height = 3.0;
@@ -61,7 +64,8 @@ public:
 class Box3DPawnBody final : public scrap::IPawnBody {
 public:
 	// Mirror of PlayerCollisionResult: the cached contact state every
-	// is_on_floor / is_on_wall / get_wall_normal read serves from.
+	// is_on_floor / is_on_wall / get_wall_normal / get_floor_normal read serves
+	// from.
 	// step_delta_y is double like the GDScript's bare float fields
 	// (player_collision_result.gd / the pawn's mailbox accumulator).
 	struct CollisionResult {
@@ -144,6 +148,7 @@ public:
 	bool is_on_floor() const override;
 	bool is_on_wall() const override;
 	scrap::Vec3 get_wall_normal() const override;
+	scrap::Vec3 get_floor_normal() const override;
 	bool can_stand_up(scrap::Scalar p_current_height, const scrap::MovementParams &p_params) const override;
 	void set_capsule_for_pose(scrap::Scalar p_height, int32_t p_pose, const scrap::MovementParams &p_params) override;
 	bool raycast_blocked(const scrap::Vec3 &p_from, const scrap::Vec3 &p_to, uint32_t p_mask) const override;
