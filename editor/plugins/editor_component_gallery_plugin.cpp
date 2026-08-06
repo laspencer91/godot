@@ -47,7 +47,9 @@ class InspectorChromeHeaderPreview : public Control {
 public:
 	enum Kind {
 		KIND_CATEGORY,
+		KIND_DIVIDER,
 		KIND_SECTION,
+		KIND_SUBSECTION,
 	};
 
 private:
@@ -55,6 +57,7 @@ private:
 	String title;
 	String badge;
 	int palette_index = 0;
+	int indentation_depth = 0;
 	bool expanded = true;
 	bool hovered = false;
 	Control *collapse_target = nullptr;
@@ -73,6 +76,12 @@ private:
 		if (kind == KIND_CATEGORY) {
 			start_name = StringName("class_" + itos(CLAMP(palette_index, 0, 2)) + "_start");
 			end_name = StringName("class_" + itos(CLAMP(palette_index, 0, 2)) + "_end");
+		} else if (kind == KIND_DIVIDER) {
+			start_name = SNAME("divider_start");
+			end_name = SNAME("divider_end");
+		} else if (kind == KIND_SUBSECTION) {
+			start_name = SNAME("subsection_start");
+			end_name = SNAME("subsection_end");
 		}
 		Color gradient_start = get_theme_color(start_name, theme_type);
 		Color gradient_end = get_theme_color(end_name, theme_type);
@@ -104,18 +113,23 @@ private:
 			draw_line(Point2(0, size.y - border_width * 0.5f), Point2(size.x, size.y - border_width * 0.5f), bottom_border, border_width);
 		}
 
-		const int padding = get_theme_constant(kind == KIND_CATEGORY ? SNAME("category_horizontal_padding") : SNAME("horizontal_padding"), theme_type);
+		const StringName padding_name = kind == KIND_CATEGORY ? SNAME("category_horizontal_padding") : SNAME("horizontal_padding");
+		const int padding = get_theme_constant(padding_name, theme_type) + indentation_depth * 12 * EDSCALE;
 		const Ref<Font> font = get_theme_font(SNAME("bold"), EditorStringName(EditorFonts));
-		const int font_size = get_theme_font_size(SNAME("bold_size"), EditorStringName(EditorFonts));
+		int font_size = get_theme_font_size(SNAME("bold_size"), EditorStringName(EditorFonts));
+		if (kind == KIND_DIVIDER || kind == KIND_SUBSECTION) {
+			font_size = MAX(8, font_size - Math::round(EDSCALE));
+		}
 		const Ref<Font> secondary_font = get_theme_font(SNAME("main"), EditorStringName(EditorFonts));
 		const int secondary_size = MAX(8, get_theme_font_size(SNAME("main_size"), EditorStringName(EditorFonts)) - 1);
-		const Color font_color = get_theme_color(SceneStringName(font_color), theme_type);
+		const StringName font_color_name = kind == KIND_DIVIDER ? SNAME("divider_font_color") : (kind == KIND_SUBSECTION ? SNAME("subsection_font_color") : SceneStringName(font_color));
+		const Color font_color = get_theme_color(font_color_name, theme_type);
 		const Color secondary_color = get_theme_color(SNAME("secondary_font_color"), theme_type);
 		const float baseline = (size.y - font->get_height(font_size)) * 0.5f + font->get_ascent(font_size);
 
 		float leading = padding;
 		float trailing = padding;
-		if (kind == KIND_SECTION) {
+		if (kind != KIND_CATEGORY) {
 			StringName arrow_name = expanded ? SNAME("arrow") : (rtl ? SNAME("arrow_collapsed_mirrored") : SNAME("arrow_collapsed"));
 			const Ref<Texture2D> arrow = get_theme_icon(arrow_name, SNAME("Tree"));
 			if (arrow.is_valid()) {
@@ -179,7 +193,14 @@ private:
 public:
 	Size2 get_minimum_size() const override {
 		const StringName theme_type = SNAME("InspectorChromeHeaderPreview");
-		const StringName height_name = kind == KIND_CATEGORY ? SNAME("category_height") : SNAME("section_height");
+		StringName height_name = SNAME("section_height");
+		if (kind == KIND_CATEGORY) {
+			height_name = SNAME("category_height");
+		} else if (kind == KIND_DIVIDER) {
+			height_name = SNAME("divider_height");
+		} else if (kind == KIND_SUBSECTION) {
+			height_name = SNAME("subsection_height");
+		}
 		return Size2(0, get_theme_constant(height_name, theme_type));
 	}
 
@@ -190,11 +211,12 @@ public:
 		}
 	}
 
-	InspectorChromeHeaderPreview(Kind p_kind, const String &p_title, const String &p_badge = String(), int p_palette_index = 0, bool p_expanded = true) {
+	InspectorChromeHeaderPreview(Kind p_kind, const String &p_title, const String &p_badge = String(), int p_palette_index = 0, bool p_expanded = true, int p_indentation_depth = 0) {
 		kind = p_kind;
 		title = p_title;
 		badge = p_badge;
 		palette_index = p_palette_index;
+		indentation_depth = p_indentation_depth;
 		expanded = p_expanded;
 		set_mouse_filter(MOUSE_FILTER_STOP);
 		set_focus_mode(FOCUS_ALL);
@@ -225,17 +247,20 @@ public:
 };
 
 class InspectorChromeBodyPreview : public VBoxContainer {
+	int depth = 0;
+
 	void _theme_updated() {
 		queue_redraw();
 	}
 
 	void _draw_guide() {
-		const float guide_x = 13 * EDSCALE;
+		const float guide_x = (13 + depth * 12) * EDSCALE;
 		draw_line(Point2(guide_x, 0), Point2(guide_x, get_size().y), get_theme_color(SNAME("guide_color"), SNAME("InspectorChromeBodyPreview")), MAX(1.0f, EDSCALE));
 	}
 
 public:
-	InspectorChromeBodyPreview() {
+	InspectorChromeBodyPreview(int p_depth = 0) {
+		depth = p_depth;
 		connect(SceneStringName(draw), callable_mp(this, &InspectorChromeBodyPreview::_draw_guide));
 		connect(SceneStringName(theme_changed), callable_mp(this, &InspectorChromeBodyPreview::_theme_updated));
 	}
@@ -419,7 +444,7 @@ static PanelContainer *_chrome_resource_field(const String &p_name, const String
 	return field;
 }
 
-static MarginContainer *_chrome_property_row(const String &p_label, Control *p_editor, bool p_stacked = false, bool p_modified = false) {
+static MarginContainer *_chrome_property_row(const String &p_label, Control *p_editor, bool p_stacked = false, bool p_modified = false, int p_depth = 0) {
 	if (p_stacked) {
 		VBoxContainer *column = memnew(VBoxContainer);
 		column->add_theme_constant_override(SNAME("separation"), 4 * EDSCALE);
@@ -433,7 +458,7 @@ static MarginContainer *_chrome_property_row(const String &p_label, Control *p_e
 		p_editor->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 		editor_inset->add_child(p_editor);
 		column->add_child(editor_inset);
-		return _chrome_inset(column, 22, 4, 11);
+		return _chrome_inset(column, 22 + p_depth * 12, 4, 11);
 	}
 
 	HBoxContainer *row = memnew(HBoxContainer);
@@ -454,20 +479,20 @@ static MarginContainer *_chrome_property_row(const String &p_label, Control *p_e
 	p_editor->set_h_size_flags(Control::SIZE_SHRINK_END);
 	editor_cluster->add_child(p_editor);
 	row->add_child(editor_cluster);
-	return _chrome_inset(row, 38, 3, 11);
+	return _chrome_inset(row, 38 + p_depth * 12, 3, 11);
 }
 
-static VBoxContainer *_chrome_body(bool p_draw_guide = false) {
-	VBoxContainer *body = p_draw_guide ? memnew(InspectorChromeBodyPreview) : memnew(VBoxContainer);
+static VBoxContainer *_chrome_body(bool p_draw_guide = false, int p_depth = 0) {
+	VBoxContainer *body = p_draw_guide ? memnew(InspectorChromeBodyPreview(p_depth)) : memnew(VBoxContainer);
 	body->add_theme_constant_override(SNAME("separation"), 1 * EDSCALE);
 	return body;
 }
 
-static VBoxContainer *_chrome_collapsible(InspectorChromeHeaderPreview::Kind p_kind, const String &p_title, const String &p_badge, Control *p_body, int p_palette_index = 0, bool p_expanded = true) {
+static VBoxContainer *_chrome_collapsible(InspectorChromeHeaderPreview::Kind p_kind, const String &p_title, const String &p_badge, Control *p_body, int p_palette_index = 0, bool p_expanded = true, int p_indentation_depth = 0) {
 	VBoxContainer *group = memnew(VBoxContainer);
 	group->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	group->add_theme_constant_override(SNAME("separation"), 0);
-	InspectorChromeHeaderPreview *header = memnew(InspectorChromeHeaderPreview(p_kind, p_title, p_badge, p_palette_index, p_expanded));
+	InspectorChromeHeaderPreview *header = memnew(InspectorChromeHeaderPreview(p_kind, p_title, p_badge, p_palette_index, p_expanded, p_indentation_depth));
 	group->add_child(header);
 	p_body->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	group->add_child(p_body);
@@ -523,13 +548,23 @@ Control *EditorComponentGalleryPlugin::_build_inspector_chrome_panel(bool p_narr
 	if (!p_narrow) {
 		VBoxContainer *wall = _chrome_body();
 		wall->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Identity"), "1", _chrome_body(), 0, false));
-		VBoxContainer *dimensions = _chrome_body(true);
-		dimensions->add_child(_chrome_property_row(TTR("Length"), _chrome_field("4.00 m")));
-		dimensions->add_child(_chrome_property_row(TTR("Height"), _chrome_field("3.00 m")));
-		dimensions->add_child(_chrome_property_row(TTR("Thickness"), _chrome_field("0.125 m", 165, true), false, true));
-		dimensions->add_child(_chrome_property_row(TTR("Studs"), _chrome_field("7")));
-		wall->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Dimensions"), "4", dimensions));
-		wall->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Structural Health"), "2", _chrome_body(), 0, false));
+
+		VBoxContainer *structure = _chrome_body();
+		VBoxContainer *dimensions = _chrome_body(true, 1);
+		dimensions->add_child(_chrome_property_row(TTR("Length"), _chrome_field("4.00 m"), false, false, 1));
+		dimensions->add_child(_chrome_property_row(TTR("Height"), _chrome_field("3.00 m"), false, false, 1));
+		dimensions->add_child(_chrome_property_row(TTR("Thickness"), _chrome_field("0.125 m", 165, true), false, true, 1));
+		dimensions->add_child(_chrome_property_row(TTR("Studs"), _chrome_field("7"), false, false, 1));
+		structure->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Dimensions"), "4", dimensions, 0, true, 1));
+
+		VBoxContainer *structural_health = _chrome_body();
+		VBoxContainer *health = _chrome_body(true, 2);
+		health->add_child(_chrome_property_row(TTR("Panel Face"), _chrome_field("84.0", 165, true), false, true, 2));
+		structural_health->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SUBSECTION, TTR("Health"), String(), health, 0, true, 2));
+		structural_health->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SUBSECTION, TTR("Armor"), "1", _chrome_body(), 0, false, 2));
+		structure->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Structural Health"), "2", structural_health, 0, true, 1));
+		wall->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_DIVIDER, TTR("STRUCTURE"), TTR("2 changed"), structure));
+
 		VBoxContainer *materials = _chrome_body(true);
 		materials->add_child(_chrome_property_row(TTR("Panel Face"), _chrome_resource_field(TTR("panel_face_painted"), TTR("unique"), Color(0.78, 0.22, 0.75), true), false, true));
 		materials->add_child(_chrome_property_row(TTR("Stud"), _chrome_resource_field(TTR("timber_stud_oak"), TTR("shared"), Color(0.68, 0.48, 0.33), true), false, true));
@@ -557,7 +592,9 @@ Control *EditorComponentGalleryPlugin::_build_inspector_chrome_panel(bool p_narr
 		transform->add_child(_chrome_property_row(TTR("Scale"), _chrome_vector("1.0", "1.0", "1.0"), true));
 		node_3d->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Transform"), "3", transform));
 		VBoxContainer *materials = _chrome_body(true);
-		materials->add_child(_chrome_property_row(TTR("Panel Face"), _chrome_resource_field(TTR("panel_face_painted"), TTR("unique"), Color(0.78, 0.22, 0.75), true, 250), true, true));
+		VBoxContainer *surface = _chrome_body(true, 1);
+		surface->add_child(_chrome_property_row(TTR("Panel Face"), _chrome_resource_field(TTR("panel_face_painted"), TTR("unique"), Color(0.78, 0.22, 0.75), true, 250), true, true, 1));
+		materials->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SUBSECTION, TTR("Surface"), "1", surface, 0, true, 1));
 		node_3d->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_SECTION, TTR("Visual Materials"), "1", materials));
 		root->add_child(_chrome_collapsible(InspectorChromeHeaderPreview::KIND_CATEGORY, TTR("Node3D"), TTR("3 changed"), node_3d, 1));
 
@@ -592,7 +629,7 @@ void EditorComponentGalleryPlugin::_build_gallery() {
 
 	EditorCard *inspector_chrome = memnew(EditorCard);
 	inspector_chrome->set_title(TTR("Inspector Chrome Direction"));
-	inspector_chrome->set_description(TTR("Gallery-only prototype: full-bleed hierarchy, standardized fields, compact vectors, and resource rows. The live Inspector is unchanged."));
+	inspector_chrome->set_description(TTR("Gallery-only prototype: full-bleed type, group, and subgroup hierarchy with depth-aware guide rails, standardized fields, compact vectors, and resource rows. The live Inspector is unchanged."));
 	inspector_chrome->set_badge(TTR("Prototype"));
 	content->add_child(inspector_chrome);
 
