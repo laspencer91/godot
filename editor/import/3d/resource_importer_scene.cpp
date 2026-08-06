@@ -1758,7 +1758,7 @@ Node *ResourceImporterScene::_post_fix_node(Node *p_node, Node *p_root, HashMap<
 								StaticBody3D *col = memnew(StaticBody3D);
 								p_node->add_child(col, true);
 								col->set_owner(p_node->get_owner());
-								col->set_transform(get_collision_shapes_transform(node_settings));
+								col->set_transform(get_collision_shapes_transform(m, node_settings));
 								col->set_position(p_applied_root_scale * col->get_position());
 								const Ref<PhysicsMaterial> &pmo = node_settings["physics/physics_material_override"];
 								if (pmo.is_valid()) {
@@ -1776,7 +1776,7 @@ Node *ResourceImporterScene::_post_fix_node(Node *p_node, Node *p_root, HashMap<
 								rigid_body->set_name(p_node->get_name());
 								_copy_meta(p_node, rigid_body);
 								p_node->replace_by(rigid_body);
-								rigid_body->set_transform(mi->get_transform() * get_collision_shapes_transform(node_settings));
+								rigid_body->set_transform(mi->get_transform() * get_collision_shapes_transform(m, node_settings));
 								rigid_body->set_position(p_applied_root_scale * rigid_body->get_position());
 								p_node = rigid_body;
 								mi->set_transform(Transform3D());
@@ -1794,7 +1794,7 @@ Node *ResourceImporterScene::_post_fix_node(Node *p_node, Node *p_root, HashMap<
 							} break;
 							case MESH_PHYSICS_STATIC_COLLIDER_ONLY: {
 								StaticBody3D *col = memnew(StaticBody3D);
-								col->set_transform(mi->get_transform() * get_collision_shapes_transform(node_settings));
+								col->set_transform(mi->get_transform() * get_collision_shapes_transform(m, node_settings));
 								col->set_position(p_applied_root_scale * col->get_position());
 								col->set_name(p_node->get_name());
 								_copy_meta(p_node, col);
@@ -1810,7 +1810,7 @@ Node *ResourceImporterScene::_post_fix_node(Node *p_node, Node *p_root, HashMap<
 							} break;
 							case MESH_PHYSICS_AREA_ONLY: {
 								Area3D *area = memnew(Area3D);
-								area->set_transform(mi->get_transform() * get_collision_shapes_transform(node_settings));
+								area->set_transform(mi->get_transform() * get_collision_shapes_transform(m, node_settings));
 								area->set_position(p_applied_root_scale * area->get_position());
 								area->set_name(p_node->get_name());
 								_copy_meta(p_node, area);
@@ -1826,10 +1826,12 @@ Node *ResourceImporterScene::_post_fix_node(Node *p_node, Node *p_root, HashMap<
 						base->set_collision_layer(node_settings["physics/layer"]);
 						base->set_collision_mask(node_settings["physics/mask"]);
 
+						const Vector3 shape_offset = get_collision_shapes_offset(m, node_settings);
 						for (const Ref<Shape3D> &E : shapes) {
 							CollisionShape3D *cshape = memnew(CollisionShape3D);
 							cshape->set_shape(E);
 							base->add_child(cshape, true);
+							cshape->set_position(shape_offset);
 
 							cshape->set_owner(base->get_owner());
 						}
@@ -2279,6 +2281,9 @@ void ResourceImporterScene::get_internal_import_options(InternalImportCategory p
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "generate/navmesh", PROPERTY_HINT_ENUM, "Disabled,Mesh + NavMesh,NavMesh Only"), 0));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "physics/body_type", PROPERTY_HINT_ENUM, "StaticBody3D,RigidBody3D,Area3D"), 0));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "physics/shape_type", PROPERTY_HINT_ENUM, "Decompose Convex (Slow),Single Convex (Average),Trimesh (Slow),Box (Fast),Sphere (Fast),Cylinder (Average),Capsule (Fast),Automatic", PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_UPDATE_ALL_IF_MODIFIED), 7));
+			// Sizes the primitive shapes from the mesh bounds. Lives beside the shape type it
+			// qualifies, since enabling it retires the whole Primitive section below.
+			r_options->push_back(ImportOption(PropertyInfo(Variant::BOOL, "physics/fit_to_mesh", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_UPDATE_ALL_IF_MODIFIED), true));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::OBJECT, "physics/physics_material_override", PROPERTY_HINT_RESOURCE_TYPE, PhysicsMaterial::get_class_static()), Variant()));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "physics/layer", PROPERTY_HINT_LAYERS_3D_PHYSICS), 1));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "physics/mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), 1));
@@ -2310,7 +2315,7 @@ void ResourceImporterScene::get_internal_import_options(InternalImportCategory p
 			r_options->push_back(ImportOption(PropertyInfo(Variant::INT, "decomposition/max_convex_hulls", PROPERTY_HINT_RANGE, "1,100,1", PROPERTY_USAGE_DEFAULT), decomposition_default->get_max_convex_hulls()));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::BOOL, "decomposition/project_hull_vertices", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT), decomposition_default->get_project_hull_vertices()));
 
-			// Primitives: Box, Sphere, Cylinder, Capsule.
+			// Primitives: Box, Sphere, Cylinder, Capsule. Unused while physics/fit_to_mesh is on.
 			r_options->push_back(ImportOption(PropertyInfo(Variant::VECTOR3, "primitive/size", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT), Vector3(2.0, 2.0, 2.0)));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::FLOAT, "primitive/height", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT), 1.0));
 			r_options->push_back(ImportOption(PropertyInfo(Variant::FLOAT, "primitive/radius", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT), 1.0));
@@ -2455,21 +2460,37 @@ bool ResourceImporterScene::get_internal_option_visibility(InternalImportCategor
 				return false;
 			}
 
+			// The primitive shapes are the only ones not already derived from the mesh, so
+			// they are the only ones with anything to fit. While fitting, the authored size
+			// and placement are unused and stay hidden.
+			const bool fits_to_mesh = p_options.has("physics/fit_to_mesh") &&
+					p_options["physics/fit_to_mesh"].operator bool();
+
+			if (p_option == "physics/fit_to_mesh") {
+				const ShapeType physics_shape = (ShapeType)p_options["physics/shape_type"].operator int();
+				return generate_physics &&
+						physics_shape >= SHAPE_TYPE_BOX &&
+						physics_shape <= SHAPE_TYPE_CAPSULE;
+			}
+
 			if (p_option == "primitive/position" || p_option == "primitive/rotation") {
 				const ShapeType physics_shape = (ShapeType)p_options["physics/shape_type"].operator int();
 				return generate_physics &&
+						!fits_to_mesh &&
 						physics_shape >= SHAPE_TYPE_BOX;
 			}
 
 			if (p_option == "primitive/size") {
 				const ShapeType physics_shape = (ShapeType)p_options["physics/shape_type"].operator int();
 				return generate_physics &&
+						!fits_to_mesh &&
 						physics_shape == SHAPE_TYPE_BOX;
 			}
 
 			if (p_option == "primitive/radius") {
 				const ShapeType physics_shape = (ShapeType)p_options["physics/shape_type"].operator int();
 				return generate_physics &&
+						!fits_to_mesh &&
 						(physics_shape == SHAPE_TYPE_SPHERE ||
 								physics_shape == SHAPE_TYPE_CYLINDER ||
 								physics_shape == SHAPE_TYPE_CAPSULE);
@@ -2478,6 +2499,7 @@ bool ResourceImporterScene::get_internal_option_visibility(InternalImportCategor
 			if (p_option == "primitive/height") {
 				const ShapeType physics_shape = (ShapeType)p_options["physics/shape_type"].operator int();
 				return generate_physics &&
+						!fits_to_mesh &&
 						(physics_shape == SHAPE_TYPE_CYLINDER ||
 								physics_shape == SHAPE_TYPE_CAPSULE);
 			}
@@ -2630,6 +2652,7 @@ bool ResourceImporterScene::get_internal_option_update_view_required(InternalImp
 			if (
 					p_option == "generate/physics" ||
 					p_option == "physics/shape_type" ||
+					p_option == "physics/fit_to_mesh" ||
 					p_option.contains("decomposition/") ||
 					p_option.contains("primitive/")) {
 				return true;

@@ -302,11 +302,21 @@ public:
 
 	ResourceImporterScene(const String &p_scene_import_type = "PackedScene");
 
+	// True when the selected primitive shape should be sized from the mesh instead of
+	// the authored primitive/* values, in which case r_aabb receives the mesh bounds.
+	template <typename M>
+	static bool get_primitive_fit_aabb(const Ref<ImporterMesh> &p_mesh, const M &p_options, AABB &r_aabb);
+
 	template <typename M>
 	static Vector<Ref<Shape3D>> get_collision_shapes(const Ref<ImporterMesh> &p_mesh, const M &p_options, float p_applied_root_scale);
 
 	template <typename M>
-	static Transform3D get_collision_shapes_transform(const M &p_options);
+	static Transform3D get_collision_shapes_transform(const Ref<ImporterMesh> &p_mesh, const M &p_options);
+
+	// Local offset of the generated CollisionShape3D within its body. Non-zero only when
+	// fitting to the mesh, to re-center a primitive on bounds the mesh origin is not centered on.
+	template <typename M>
+	static Vector3 get_collision_shapes_offset(const Ref<ImporterMesh> &p_mesh, const M &p_options);
 };
 
 class EditorSceneFormatImporterESCN : public EditorSceneFormatImporter {
@@ -318,8 +328,44 @@ public:
 };
 
 template <typename M>
+bool ResourceImporterScene::get_primitive_fit_aabb(const Ref<ImporterMesh> &p_mesh, const M &p_options, AABB &r_aabb) {
+	ShapeType generate_shape_type = SHAPE_TYPE_AUTOMATIC;
+	if (p_options.has(SNAME("physics/shape_type"))) {
+		generate_shape_type = (ShapeType)p_options[SNAME("physics/shape_type")].operator int();
+	}
+
+	// Only the primitive shapes have anything to fit; the mesh-derived ones already follow it.
+	if (generate_shape_type < SHAPE_TYPE_BOX || generate_shape_type > SHAPE_TYPE_CAPSULE) {
+		return false;
+	}
+
+	if (p_options.has(SNAME("physics/fit_to_mesh")) && !p_options[SNAME("physics/fit_to_mesh")].operator bool()) {
+		return false;
+	}
+
+	if (p_mesh.is_null() || p_mesh->get_surface_count() == 0) {
+		return false;
+	}
+
+	const AABB aabb = p_mesh->get_aabb();
+	if (aabb.size.is_zero_approx()) {
+		// Degenerate or empty geometry; fall back to the authored primitive values.
+		return false;
+	}
+
+	r_aabb = aabb;
+	return true;
+}
+
+template <typename M>
 Vector<Ref<Shape3D>> ResourceImporterScene::get_collision_shapes(const Ref<ImporterMesh> &p_mesh, const M &p_options, float p_applied_root_scale) {
 	ERR_FAIL_COND_V(p_mesh.is_null(), Vector<Ref<Shape3D>>());
+
+	// Root scale is baked into the mesh data before collision generation runs, so a fitted
+	// size already carries it and must not be multiplied by p_applied_root_scale again. The
+	// authored primitive/* values are in pre-scale units and still need it.
+	AABB fit_aabb;
+	const bool fit_to_mesh = get_primitive_fit_aabb(p_mesh, p_options, fit_aabb);
 
 	ShapeType generate_shape_type = SHAPE_TYPE_AUTOMATIC;
 	if (p_options.has(SNAME("physics/shape_type"))) {
@@ -424,7 +470,9 @@ Vector<Ref<Shape3D>> ResourceImporterScene::get_collision_shapes(const Ref<Impor
 	} else if (generate_shape_type == SHAPE_TYPE_BOX) {
 		Ref<BoxShape3D> box;
 		box.instantiate();
-		if (p_options.has(SNAME("primitive/size"))) {
+		if (fit_to_mesh) {
+			box->set_size(fit_aabb.size);
+		} else if (p_options.has(SNAME("primitive/size"))) {
 			box->set_size(p_options[SNAME("primitive/size")].operator Vector3() * p_applied_root_scale);
 		} else {
 			box->set_size(Vector3(2, 2, 2) * p_applied_root_scale);
@@ -437,7 +485,11 @@ Vector<Ref<Shape3D>> ResourceImporterScene::get_collision_shapes(const Ref<Impor
 	} else if (generate_shape_type == SHAPE_TYPE_SPHERE) {
 		Ref<SphereShape3D> sphere;
 		sphere.instantiate();
-		if (p_options.has(SNAME("primitive/radius"))) {
+		if (fit_to_mesh) {
+			// Spans the longest axis, matching how the cylinder and capsule fits span their
+			// cross-section. This is not a fully enclosing sphere: corners can still poke out.
+			sphere->set_radius(0.5f * fit_aabb.get_longest_axis_size());
+		} else if (p_options.has(SNAME("primitive/radius"))) {
 			sphere->set_radius(p_options[SNAME("primitive/radius")].operator float() * p_applied_root_scale);
 		} else {
 			sphere->set_radius(1.0f * p_applied_root_scale);
@@ -449,15 +501,21 @@ Vector<Ref<Shape3D>> ResourceImporterScene::get_collision_shapes(const Ref<Impor
 	} else if (generate_shape_type == SHAPE_TYPE_CYLINDER) {
 		Ref<CylinderShape3D> cylinder;
 		cylinder.instantiate();
-		if (p_options.has(SNAME("primitive/height"))) {
-			cylinder->set_height(p_options[SNAME("primitive/height")].operator float() * p_applied_root_scale);
+		if (fit_to_mesh) {
+			// Godot cylinders are Y-up, so height follows Y and the radius spans X/Z.
+			cylinder->set_height(fit_aabb.size.y);
+			cylinder->set_radius(0.5f * MAX(fit_aabb.size.x, fit_aabb.size.z));
 		} else {
-			cylinder->set_height(1.0f * p_applied_root_scale);
-		}
-		if (p_options.has(SNAME("primitive/radius"))) {
-			cylinder->set_radius(p_options[SNAME("primitive/radius")].operator float() * p_applied_root_scale);
-		} else {
-			cylinder->set_radius(1.0f * p_applied_root_scale);
+			if (p_options.has(SNAME("primitive/height"))) {
+				cylinder->set_height(p_options[SNAME("primitive/height")].operator float() * p_applied_root_scale);
+			} else {
+				cylinder->set_height(1.0f * p_applied_root_scale);
+			}
+			if (p_options.has(SNAME("primitive/radius"))) {
+				cylinder->set_radius(p_options[SNAME("primitive/radius")].operator float() * p_applied_root_scale);
+			} else {
+				cylinder->set_radius(1.0f * p_applied_root_scale);
+			}
 		}
 
 		Vector<Ref<Shape3D>> shapes;
@@ -466,15 +524,24 @@ Vector<Ref<Shape3D>> ResourceImporterScene::get_collision_shapes(const Ref<Impor
 	} else if (generate_shape_type == SHAPE_TYPE_CAPSULE) {
 		Ref<CapsuleShape3D> capsule;
 		capsule.instantiate();
-		if (p_options.has(SNAME("primitive/height"))) {
-			capsule->set_height(p_options[SNAME("primitive/height")].operator float() * p_applied_root_scale);
+		if (fit_to_mesh) {
+			// Godot capsules are Y-up and their height spans the caps. Setting the radius
+			// first, then a height already at or above the diameter, avoids either setter
+			// clamping the other when the bounds are wider than they are tall.
+			const float radius = 0.5f * MAX(fit_aabb.size.x, fit_aabb.size.z);
+			capsule->set_radius(radius);
+			capsule->set_height(MAX(fit_aabb.size.y, radius * 2.0f));
 		} else {
-			capsule->set_height(1.0f * p_applied_root_scale);
-		}
-		if (p_options.has(SNAME("primitive/radius"))) {
-			capsule->set_radius(p_options[SNAME("primitive/radius")].operator float() * p_applied_root_scale);
-		} else {
-			capsule->set_radius(1.0f * p_applied_root_scale);
+			if (p_options.has(SNAME("primitive/height"))) {
+				capsule->set_height(p_options[SNAME("primitive/height")].operator float() * p_applied_root_scale);
+			} else {
+				capsule->set_height(1.0f * p_applied_root_scale);
+			}
+			if (p_options.has(SNAME("primitive/radius"))) {
+				capsule->set_radius(p_options[SNAME("primitive/radius")].operator float() * p_applied_root_scale);
+			} else {
+				capsule->set_radius(1.0f * p_applied_root_scale);
+			}
 		}
 
 		Vector<Ref<Shape3D>> shapes;
@@ -485,8 +552,26 @@ Vector<Ref<Shape3D>> ResourceImporterScene::get_collision_shapes(const Ref<Impor
 }
 
 template <typename M>
-Transform3D ResourceImporterScene::get_collision_shapes_transform(const M &p_options) {
+Vector3 ResourceImporterScene::get_collision_shapes_offset(const Ref<ImporterMesh> &p_mesh, const M &p_options) {
+	AABB fit_aabb;
+	if (!get_primitive_fit_aabb(p_mesh, p_options, fit_aabb)) {
+		return Vector3();
+	}
+	// Centers the primitive on the bounds rather than the mesh origin, which for imported
+	// props usually sits on the floor. This rides on the shape node instead of the body so
+	// that the RigidBody3D path, which reparents the mesh at identity, does not move visuals.
+	return fit_aabb.get_center();
+}
+
+template <typename M>
+Transform3D ResourceImporterScene::get_collision_shapes_transform(const Ref<ImporterMesh> &p_mesh, const M &p_options) {
 	Transform3D transform;
+
+	AABB fit_aabb;
+	if (get_primitive_fit_aabb(p_mesh, p_options, fit_aabb)) {
+		// The mesh dictates placement; see get_collision_shapes_offset().
+		return transform;
+	}
 
 	ShapeType generate_shape_type = SHAPE_TYPE_AUTOMATIC;
 	if (p_options.has(SNAME("physics/shape_type"))) {

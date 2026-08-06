@@ -122,6 +122,7 @@ public:
 	void create_shadow_mesh();
 	Ref<ImporterMesh> get_shadow_mesh() const;
 
+	AABB get_aabb() const;
 	Vector<Face3> get_faces() const;
 #ifndef PHYSICS_3D_DISABLED
 	Vector<Ref<Shape3D>> convex_decompose(const Ref<MeshConvexDecompositionSettings> &p_settings) const;

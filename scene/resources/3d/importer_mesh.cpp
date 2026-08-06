@@ -1128,6 +1128,23 @@ Dictionary ImporterMesh::_get_data() const {
 	return data;
 }
 
+AABB ImporterMesh::get_aabb() const {
+	AABB aabb;
+	bool first = true;
+	for (int i = 0; i < surfaces.size(); i++) {
+		const Vector<Vector3> vertices = surfaces[i].arrays[Mesh::ARRAY_VERTEX];
+		for (const Vector3 &vertex : vertices) {
+			if (first) {
+				aabb.position = vertex;
+				first = false;
+			} else {
+				aabb.expand_to(vertex);
+			}
+		}
+	}
+	return aabb;
+}
+
 Vector<Face3> ImporterMesh::get_faces() const {
 	Vector<Face3> faces;
 	for (int i = 0; i < surfaces.size(); i++) {

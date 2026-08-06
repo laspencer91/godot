@@ -638,7 +638,9 @@ void SceneImportSettingsDialog::_update_view_gizmos() {
 
 			// Generate the mesh collider.
 			Vector<Ref<Shape3D>> shapes = ResourceImporterScene::get_collision_shapes(mesh, e.value.settings, 1.0);
-			const Transform3D transform = ResourceImporterScene::get_collision_shapes_transform(e.value.settings);
+			Transform3D transform = ResourceImporterScene::get_collision_shapes_transform(mesh, e.value.settings);
+			// The generated shapes share one offset, so the preview can carry it on the view itself.
+			transform.origin += ResourceImporterScene::get_collision_shapes_offset(mesh, e.value.settings);
 
 			Ref<ArrayMesh> collider_view_mesh;
 			collider_view_mesh.instantiate();
