@@ -73,7 +73,7 @@ function Wait-ForBuildSlot {
 }
 
 function Restore-Hardlinks {
-    foreach ($linkName in @("godot.exe", "godot-editor.exe")) {
+    foreach ($linkName in @("godot.exe", "godot-editor.exe", "godot.windows.editor.x86_64.focus_save.exe")) {
         $linkPath = Join-Path $binDir $linkName
         try {
             if (Test-Path $linkPath) { Remove-Item $linkPath -Force -ErrorAction Stop }
