@@ -9,8 +9,10 @@ passive indicator for `.scn`; point sites (context menu) still answer via the fu
 And harvesting now routes through a single choke point
 (`EditorFileSystem::_harvest_asset_facts`) so steps H/J add one line there, not five sites.
 Not yet cherry-picked to godot-box3d: these are editor-only paths that gate/agent builds
-never execute — flag to Logan whether the two-tree rule should still apply. Steps E+ wait
-on the step-F measurement as planned. This is the umbrella contract that
+never execute — flag to Logan whether the two-tree rule should still apply. **Step F verdict
+(2026-08-10, Logan, rebuilt editor): faster — measurement gate passed. Steps E and G stay
+unbuilt by design; the plan closes at A–D.** Steps H–J land with the features that consume
+them (derived data store). This is the umbrella contract that
 [EXPLORE-PERFORMANCE-PLAN.md](./EXPLORE-PERFORMANCE-PLAN.md),
 [GLTF-MATERIAL-OVERRIDES-DESIGN.md](./GLTF-MATERIAL-OVERRIDES-DESIGN.md), and the derived data
 store proposals (`scrapline/docs/proposals/DERIVED_DATA_STORE-2026-08-09.md`,
