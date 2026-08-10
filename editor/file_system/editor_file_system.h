@@ -53,6 +53,14 @@ class EditorFileSystemDirectory : public Object {
 	EditorFileSystemDirectory *parent = nullptr;
 	Vector<EditorFileSystemDirectory *> subdirs;
 
+	// Asset Fact Index storage classes: how an asset's bytes are meant to be treated by
+	// derived-data tooling. See workspace-editor-planning/ASSET-FACT-INDEX.md.
+	enum AssetStorageClass : uint8_t {
+		ASSET_STORAGE_AUTHORED, // Hand-authored source content; never regenerated.
+		ASSET_STORAGE_RETAINED_DERIVED, // Derived from other assets, but kept/committed.
+		ASSET_STORAGE_REGENERATED, // Derived and safely regenerable from source.
+	};
+
 	struct FileInfo {
 		String file;
 		StringName type;
@@ -75,6 +83,13 @@ class EditorFileSystemDirectory : public Object {
 			bool is_tool = false;
 		};
 		ScriptClassInfo class_info;
+
+		// --- Asset Fact Index fields ---
+		// Derived, regenerable facts harvested on the scan thread — never authored state.
+		// See workspace-editor-planning/ASSET-FACT-INDEX.md.
+		bool has_description = false; // Whether the asset has an editor description (harvested later).
+		AssetStorageClass storage_class = ASSET_STORAGE_AUTHORED;
+		uint32_t badge_flags = 0; // Small fact bitset; bits defined by later features.
 	};
 
 	Vector<FileInfo *> files;
@@ -239,6 +254,12 @@ class EditorFileSystem : public Node {
 		bool import_valid = false;
 		String import_group_file;
 		ScriptClassInfo class_info;
+
+		// --- Asset Fact Index fields ---
+		// Mirrors EditorFileSystemDirectory::FileInfo; see workspace-editor-planning/ASSET-FACT-INDEX.md.
+		bool has_description = false;
+		EditorFileSystemDirectory::AssetStorageClass storage_class = EditorFileSystemDirectory::ASSET_STORAGE_AUTHORED;
+		uint32_t badge_flags = 0;
 	};
 
 	HashMap<String, FileCache> file_cache;

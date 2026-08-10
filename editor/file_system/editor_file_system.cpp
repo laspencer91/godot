@@ -58,7 +58,9 @@ int EditorFileSystem::nb_files_total = 0;
 EditorFileSystem::ScannedDirectory *EditorFileSystem::first_scan_root_dir = nullptr;
 
 //the name is the version, to keep compatibility with different versions of Godot
-#define CACHE_FILE_NAME "filesystem_cache10"
+// Fork cache format adds the asset-fact fields (has_description, storage_class,
+// badge_flags); bump the suffix on any further format change.
+#define CACHE_FILE_NAME "filesystem_cache10_fork1"
 
 // Bump this when script global class extraction semantics change. The marker is
 // stored at the end of the filesystem cache, so older editors safely ignore it
@@ -554,7 +556,7 @@ void EditorFileSystem::_load_filesystem_cache() {
 					fc.import_group_file = split[6].strip_edges();
 					{
 						const Vector<String> &slices = split[7].split("<>");
-						ERR_CONTINUE(slices.size() < 7);
+						ERR_CONTINUE(slices.size() < 10);
 						fc.class_info.name = slices[0];
 						fc.class_info.extends = slices[1];
 						fc.class_info.icon_path = slices[2];
@@ -562,6 +564,10 @@ void EditorFileSystem::_load_filesystem_cache() {
 						fc.class_info.is_tool = slices[4].to_int();
 						fc.import_md5 = slices[5];
 						fc.import_dest_paths = slices[6].split("<*>");
+						// Asset Fact Index fields; see workspace-editor-planning/ASSET-FACT-INDEX.md.
+						fc.has_description = slices[7].to_int() != 0;
+						fc.storage_class = (EditorFileSystemDirectory::AssetStorageClass)slices[8].to_int();
+						fc.badge_flags = (uint32_t)slices[9].to_int();
 					}
 					fc.deps = split[8].strip_edges().split("<>", false);
 
@@ -1405,6 +1411,9 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				fi->import_valid = fc->import_valid;
 				fi->import_group_file = fc->import_group_file;
 				fi->class_info = fc->class_info;
+				fi->has_description = fc->has_description;
+				fi->storage_class = fc->storage_class;
+				fi->badge_flags = fc->badge_flags;
 
 				// Ensures backward compatibility when the project is loaded for the first time with the added import_md5
 				// and import_dest_paths properties in the file cache.
@@ -1468,6 +1477,9 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				fi->import_dest_paths = Vector<String>();
 				fi->import_valid = true;
 				fi->class_info = fc->class_info;
+				fi->has_description = fc->has_description;
+				fi->storage_class = fc->storage_class;
+				fi->badge_flags = fc->badge_flags;
 
 				if (first_scan && ClassDB::is_parent_class(fi->type, SNAME("Script"))) {
 					bool update_script = false;
@@ -2047,7 +2059,7 @@ void EditorFileSystem::_save_filesystem_cache(EditorFileSystemDirectory *p_dir, 
 		cache_string.append(itos(file_info->import_modified_time));
 		cache_string.append(itos(file_info->import_valid));
 		cache_string.append(file_info->import_group_file);
-		cache_string.append(String("<>").join({ file_info->class_info.name, file_info->class_info.extends, file_info->class_info.icon_path, itos(file_info->class_info.is_abstract), itos(file_info->class_info.is_tool), file_info->import_md5, String("<*>").join(file_info->import_dest_paths) }));
+		cache_string.append(String("<>").join({ file_info->class_info.name, file_info->class_info.extends, file_info->class_info.icon_path, itos(file_info->class_info.is_abstract), itos(file_info->class_info.is_tool), file_info->import_md5, String("<*>").join(file_info->import_dest_paths), itos(file_info->has_description), itos((int)file_info->storage_class), itos(file_info->badge_flags) }));
 		cache_string.append(String("<>").join(file_info->deps));
 
 		p_file->store_line(String("::").join(cache_string));
