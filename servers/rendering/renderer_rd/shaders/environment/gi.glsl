@@ -483,12 +483,24 @@ void sdfgi_process(vec3 vertex, vec3 normal, vec3 reflection, float roughness, o
 	}
 }
 
+// Hard ceiling on cone iterations. Step size is max(0.5 cells, tan_half_angle * dist), so as roughness
+// approaches 0 the specular cone stops widening and degenerates into a LINEAR half-cell march at mip 0.
+// On a 256^3 probe (max_distance = 384 cells) that is up to ~765 trilinear fetches into an 8 MB volume
+// for a single pixel, against ~32 fetches for all four diffuse cones combined. Beyond bounding the worst
+// case, the cap removes the wavefront divergence tail where a few smooth-material lanes stall a whole
+// wave. Truncated distant specular falls back to the environment via blend_ambient below.
+#define MAX_CONE_STEPS 32
+
 //standard voxel cone trace
 vec4 voxel_cone_trace(texture3D probe, vec3 cell_size, vec3 pos, vec3 direction, float tan_half_angle, float max_distance, float p_bias) {
 	float dist = p_bias;
 	vec4 color = vec4(0.0);
 
-	while (dist < max_distance && color.a < 1.0) {
+	// Alpha accumulates as a += (1 - a) * s.a with mip-filtered s.a < 1, so it converges on 1.0 only
+	// asymptotically: a `color.a < 1.0` test almost never fires and every cone runs to the box edge.
+	// 0.98 restores a real early-out. (The forward tracer in scene_forward_gi_inc.glsl uses 0.95; these
+	// two implementations of the same feature have drifted apart upstream.)
+	for (int step_count = 0; step_count < MAX_CONE_STEPS && dist < max_distance && color.a < 0.98; step_count++) {
 		float diameter = max(1.0, 2.0 * tan_half_angle * dist);
 		vec3 uvw_pos = (pos + dist * direction) * cell_size;
 		float half_diameter = diameter * 0.5;
@@ -511,7 +523,9 @@ vec4 voxel_cone_trace_45_degrees(texture3D probe, vec3 cell_size, vec3 pos, vec3
 	float radius = max(0.5, dist);
 	float lod_level = log2(radius * 2.0);
 
-	while (dist < max_distance && color.a < 1.0) {
+	// dist doubles every step here, so this cone is logarithmic (~8 steps on a 256^3 probe) and needs no
+	// iteration cap -- only the same alpha early-out fix as voxel_cone_trace above.
+	while (dist < max_distance && color.a < 0.98) {
 		vec3 uvw_pos = (pos + dist * direction) * cell_size;
 
 		//check if outside, then break
@@ -595,7 +609,13 @@ void voxel_gi_compute(uint index, vec3 position, vec3 normal, vec3 ref_vec, mat3
 	out_diff += light * blend;
 
 	//radiance
-	vec4 irr_light = voxel_cone_trace(voxel_gi_textures[index], cell_size, position, ref_vec, tan(roughness * 0.5 * M_PI * 0.99), max_distance, voxel_gi_instances.data[index].bias);
+	// Floor the specular aperture. Unclamped, roughness -> 0 gives tan_half_angle -> 0, `diameter` clamps
+	// to one cell, and the cone raymarches half a cell at a time across the whole probe diagonal at mip 0
+	// -- by far the dominant per-pixel cost in this shader. 0.10 is a ~5.7 degree half-angle: tight enough
+	// to still read as a reflection, wide enough to restore geometric stepping. Voxel specular is a blurry
+	// few-cell approximation either way; sharp reflections are ReflectionProbe/SSR's job, not this one's.
+	float spec_cone_tan = max(tan(roughness * 0.5 * M_PI * 0.99), 0.10);
+	vec4 irr_light = voxel_cone_trace(voxel_gi_textures[index], cell_size, position, ref_vec, spec_cone_tan, max_distance, voxel_gi_instances.data[index].bias);
 	irr_light.rgb *= voxel_gi_instances.data[index].dynamic_range * voxel_gi_instances.data[index].exposure_normalization;
 	if (!voxel_gi_instances.data[index].blend_ambient) {
 		irr_light.a = 1.0;
