@@ -667,10 +667,14 @@ void FileSystemDock::set_display_mode(DisplayMode p_display_mode) {
 	_update_display_mode(false);
 }
 
-void FileSystemDock::_update_display_mode(bool p_force) {
+void FileSystemDock::_update_display_mode(bool p_force, bool p_skip_view_rebuild) {
 	if (!p_force && old_display_mode == display_mode) {
 		return;
 	}
+
+	// A mode change has to run its own rebuilds: they are what re-allocates the selection between the
+	// two views. Only a refresh of an unchanged mode is safe to leave to the caller.
+	const bool skip_view_rebuild = p_skip_view_rebuild && old_display_mode == display_mode;
 
 	// Preserve the selection when switching modes.
 	Vector<String> selected_paths;
@@ -697,7 +701,9 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 			}
 			button_file_list_display_mode->hide();
 
-			_update_tree(get_uncollapsed_paths(), false, true, selected_paths);
+			if (!skip_view_rebuild) {
+				_update_tree(get_uncollapsed_paths(), false, true, selected_paths);
+			}
 			file_list_vb->hide();
 		} break;
 
@@ -744,7 +750,9 @@ void FileSystemDock::_update_display_mode(bool p_force) {
 
 				// Always update to avoid broken icons, as previous updates
 				// could have happened before the dock was inside the tree.
-				update_all();
+				if (!skip_view_rebuild) {
+					update_all();
+				}
 			}
 		} break;
 	}
@@ -1143,7 +1151,8 @@ void FileSystemDock::navigate_to_path(const String &p_path) {
 		active_color_filter.clear();
 		_end_category_filter();
 		_rebuild_category_rail();
-		_update_color_filter_view();
+		// `_navigate_to_path()` below owns the file list rebuild for the target path.
+		_update_color_filter_view(true);
 	}
 	file_list_search_box->clear();
 	// G4: FileSystem is hosted by the workspace drawer and intentionally isn't registered with
@@ -1221,14 +1230,29 @@ void FileSystemDock::_update_visible_scene_previews() {
 			vertical_scroll->is_visible() ? vertical_scroll->get_page() : files->get_size().y);
 	const Rect2 visible_rect(scroll_position, visible_size);
 	HashSet<String> visible_scenes;
+	EditorResourcePreview *preview = EditorResourcePreview::get_singleton();
 
 	for (int i = 0; i < files->get_item_count(); i++) {
+		// Cheap visibility test first: it short-circuits before any per-row classification lookup below.
+		if (!files->get_item_rect(i).intersects(visible_rect)) {
+			continue;
+		}
 		const String path = files->get_item_metadata(i);
+		if (path.ends_with("/")) {
+			continue;
+		}
+
+		// Generic resource preview: request it once per path, only while the row is visible.
+		if (previewable_row_indices.has(i) && !queued_generic_preview_paths.has(path)) {
+			queued_generic_preview_paths.insert(path);
+			preview->queue_resource_preview(path, callable_mp(this, &FileSystemDock::_file_list_thumbnail_done).bind(i, files->get_item_text(i)));
+		}
+
 		// Open scenes already have a live, fully realized document in memory. Deep-loading another isolated
 		// copy just for a thumbnail can briefly double the resource and renderer footprint of a large level.
 		// Its save-time preview still arrives through the generic resource-preview request above; when that
 		// cache is absent, keep the generic scene icon instead of risking an out-of-memory editor exit.
-		if (path.ends_with("/") || EditorFileSystem::get_singleton()->get_file_type(path) != SNAME("PackedScene") || EditorNode::get_singleton()->is_scene_open(path) || !files->get_item_rect(i).intersects(visible_rect)) {
+		if (!scene_row_indices.has(i) || EditorNode::get_singleton()->is_scene_open(path)) {
 			continue;
 		}
 		visible_scenes.insert(path);
@@ -1238,7 +1262,7 @@ void FileSystemDock::_update_visible_scene_previews() {
 
 		const Callable callback = callable_mp(this, &FileSystemDock::_file_list_thumbnail_done).bind(i, files->get_item_text(i));
 		visible_scene_preview_requests.insert(path, callback);
-		EditorResourcePreview::get_singleton()->queue_scene_preview(path, callback, EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
+		preview->queue_scene_preview(path, callback, EditorResourcePreview::PREVIEW_PRIORITY_HIGH);
 	}
 
 	Vector<String> requests_to_cancel;
@@ -1248,7 +1272,7 @@ void FileSystemDock::_update_visible_scene_previews() {
 		}
 	}
 	for (const String &path : requests_to_cancel) {
-		EditorResourcePreview::get_singleton()->cancel_scene_preview(path, visible_scene_preview_requests[path]);
+		preview->cancel_scene_preview(path, visible_scene_preview_requests[path]);
 		visible_scene_preview_requests.erase(path);
 	}
 }
@@ -1357,6 +1381,9 @@ void FileSystemDock::_search(EditorFileSystemDirectory *p_path, List<FileInfo> *
 
 void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<String> &p_override_selection) {
 	_cancel_visible_scene_previews();
+	scene_row_indices.clear();
+	previewable_row_indices.clear();
+	queued_generic_preview_paths.clear();
 
 	// Register the previously selected items.
 	Vector<String> previous_selection;
@@ -1615,9 +1642,13 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 			files->set_item_custom_fg_color(item_index, get_theme_color(SNAME("accent_color"), EditorStringName(Editor)));
 		}
 
-		// Generate the preview.
+		// Record preview eligibility; the actual preview requests are queued for visible rows only,
+		// deduplicated, by _update_visible_scene_previews().
+		if (finfo->type == SNAME("PackedScene")) {
+			scene_row_indices.insert(item_index);
+		}
 		if (!finfo->import_broken) {
-			EditorResourcePreview::get_singleton()->queue_resource_preview(fpath, callable_mp(this, &FileSystemDock::_file_list_thumbnail_done).bind(item_index, fname));
+			previewable_row_indices.insert(item_index);
 		}
 
 		// Select the items.
@@ -4344,11 +4375,15 @@ void FileSystemDock::_set_category_filter(const String &p_color_key) {
 	emit_signal(SNAME("display_mode_changed"));
 }
 
-void FileSystemDock::_update_color_filter_view() {
-	_update_display_mode(true);
-	if (!_is_color_collection_active() && category_restore_pending) {
+void FileSystemDock::_update_color_filter_view(bool p_navigation_rebuilds_file_list) {
+	// Leaving the collection restores the saved view below, which rebuilds both views from the saved
+	// state. Letting `_update_display_mode()` refresh them first only builds rows that are thrown away.
+	const bool restoring = !_is_color_collection_active() && category_restore_pending;
+	_update_display_mode(true, restoring);
+	if (restoring) {
 		_update_tree(category_restore_uncollapsed_paths, false, true, category_restore_selection);
-		if (display_mode != DISPLAY_MODE_TREE_ONLY) {
+		// A navigation rebuilds the file list for its own target right after, dropping this selection.
+		if (display_mode != DISPLAY_MODE_TREE_ONLY && !p_navigation_rebuilds_file_list) {
 			_update_file_list(true, category_restore_selection);
 		}
 		category_restore_selection.clear();

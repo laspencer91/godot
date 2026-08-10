@@ -381,6 +381,14 @@ private:
 	HashMap<String, DescriptionCacheEntry> description_cache;
 	HashMap<String, Callable> visible_scene_preview_requests;
 	bool scene_preview_visibility_update_queued = false;
+	// Rows of the current file list classified as scene files (type == "PackedScene"), recorded when the
+	// list is built so _update_visible_scene_previews() never has to re-scan EditorFileSystem for the type.
+	HashSet<int> scene_row_indices;
+	// Rows of the current file list eligible for a generic resource preview (i.e. not import-broken).
+	HashSet<int> previewable_row_indices;
+	// Paths already queued for a generic resource preview since the last full rebuild, so scrolling or
+	// re-running the visibility pass doesn't re-queue the same path over and over.
+	HashSet<String> queued_generic_preview_paths;
 
 	Vector<String> prev_selection;
 
@@ -490,7 +498,9 @@ private:
 	void _end_category_filter();
 	void _build_category_visible_paths();
 	bool _gather_category_tree_paths(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color);
-	void _update_color_filter_view();
+	// `p_navigation_rebuilds_file_list` is for callers that follow this up with a navigation, which
+	// rebuilds the file list itself; the restore below then only has to rebuild the tree.
+	void _update_color_filter_view(bool p_navigation_rebuilds_file_list = false);
 	bool _is_color_collection_active() const { return !active_color_filter.is_empty(); }
 	void _gather_color_collection(EditorFileSystemDirectory *p_dir, const String &p_dir_path, const String &p_inherited_color, List<FileInfo> *r_matches, CategoryCollectionStats *r_stats);
 	void _update_category_empty_state(bool p_type_filter_emptied = false);
@@ -546,7 +556,9 @@ private:
 	void _cancel_visible_scene_previews();
 	Ref<Texture2D> _apply_thumbnail_filter(const Ref<Texture2D> &p_thumbnail, const String &p_file_path) const;
 
-	void _update_display_mode(bool p_force = false);
+	// `p_skip_view_rebuild` keeps the layout work but drops the tree/file list refresh, for callers that
+	// rebuild both views themselves right after. Only honored when the mode itself isn't changing.
+	void _update_display_mode(bool p_force = false, bool p_skip_view_rebuild = false);
 
 	Vector<String> _tree_get_selected(bool remove_self_inclusion = true, bool p_include_unselected_cursor = false) const;
 	Vector<String> _file_list_get_selected() const;
