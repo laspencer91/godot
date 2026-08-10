@@ -1,6 +1,16 @@
 # Asset Fact Index — the shared foundation
 
-**Status (2026-08-10):** Proposed. Nothing implemented. This is the umbrella contract that
+**Status (2026-08-10, evening):** Steps A–D **implemented and committed** on `fork-master`
+(`adf1b67eb9` step A, `7c778ab0ec` step B, `12616f4f38` steps C+D + review-pass cleanups),
+each verified by a green canonical build. Two deltas discovered during implementation:
+binary `.scn` scenes cannot be probed on the scan thread (the old probe did a full
+`ResourceLoader::load`), so their harvested fact is uniformly **false** — row lists show no
+passive indicator for `.scn`; point sites (context menu) still answer via the full probe.
+And harvesting now routes through a single choke point
+(`EditorFileSystem::_harvest_asset_facts`) so steps H/J add one line there, not five sites.
+Not yet cherry-picked to godot-box3d: these are editor-only paths that gate/agent builds
+never execute — flag to Logan whether the two-tree rule should still apply. Steps E+ wait
+on the step-F measurement as planned. This is the umbrella contract that
 [EXPLORE-PERFORMANCE-PLAN.md](./EXPLORE-PERFORMANCE-PLAN.md),
 [GLTF-MATERIAL-OVERRIDES-DESIGN.md](./GLTF-MATERIAL-OVERRIDES-DESIGN.md), and the derived data
 store proposals (`scrapline/docs/proposals/DERIVED_DATA_STORE-2026-08-09.md`,
