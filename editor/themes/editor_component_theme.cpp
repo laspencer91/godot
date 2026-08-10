@@ -134,11 +134,26 @@ void EditorComponentTheme::populate(const Ref<EditorTheme> &p_theme, const Edito
 
 	// Section and pane headers.
 	p_theme->set_constant("separation", "EditorSectionHeader", 6 * EDSCALE);
+	p_theme->set_constant("row_separation", "EditorSectionHeader", 8 * EDSCALE);
+	p_theme->set_constant("compact_row_separation", "EditorSectionHeader", 5 * EDSCALE);
+	p_theme->set_constant("hierarchy_step", "EditorSectionHeader", 12 * EDSCALE);
+	p_theme->set_constant("icon_size", "EditorSectionHeader", 16 * EDSCALE);
 	p_theme->set_type_variation("EditorSectionHeaderRow", "HBoxContainer");
 	p_theme->set_constant("separation", "EditorSectionHeaderRow", 8 * EDSCALE);
 	p_theme->set_type_variation("EditorSectionTitle", "HeaderSmall");
+	for (const StringName &variation : { SNAME("EditorSectionHeaderCategory"), SNAME("EditorSectionHeaderDivider"), SNAME("EditorSectionHeaderSection"), SNAME("EditorSectionHeaderSubsection") }) {
+		p_theme->set_type_variation(variation, "EditorSectionHeader");
+	}
+	for (const StringName &variation : { SNAME("EditorSectionTitleCategory"), SNAME("EditorSectionTitleDivider"), SNAME("EditorSectionTitleSection"), SNAME("EditorSectionTitleSubsection") }) {
+		p_theme->set_type_variation(variation, "EditorSectionTitle");
+	}
+	p_theme->set_font_size(SceneStringName(font_size), "EditorSectionTitleDivider", MAX(8, p_theme->get_default_font_size() - Math::round(EDSCALE)));
+	p_theme->set_font_size(SceneStringName(font_size), "EditorSectionTitleSubsection", MAX(8, p_theme->get_default_font_size() - Math::round(EDSCALE)));
 	p_theme->set_type_variation("EditorSectionDescription", "Label");
 	p_theme->set_color("font_color", "EditorSectionDescription", p_config.font_secondary_color);
+	p_theme->set_type_variation("EditorSectionStatus", "Label");
+	p_theme->set_color("font_color", "EditorSectionStatus", p_config.font_secondary_color);
+	p_theme->set_font_size(SceneStringName(font_size), "EditorSectionStatus", MAX(8, p_theme->get_default_font_size() - Math::round(EDSCALE)));
 	p_theme->set_type_variation("EditorSectionBadge", "Label");
 	p_theme->set_color("font_color", "EditorSectionBadge", p_config.accent_color);
 

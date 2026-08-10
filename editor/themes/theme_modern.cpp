@@ -2439,6 +2439,16 @@ void ThemeModern::populate_editor_styles(const Ref<EditorTheme> &p_theme, Editor
 
 		Color inspector_section_color = p_config.font_color.lerp(Color(0.5, 0.5, 0.5), 0.35);
 		p_theme->set_color(SceneStringName(font_color), "EditorInspectorSection", inspector_section_color);
+		const Color inspector_group_background = p_config.surface_base_color.lerp(p_config.surface_high_color, p_config.dark_theme ? 0.14 : 0.10);
+		const Color inspector_subgroup_background = p_config.surface_base_color.lerp(p_config.surface_high_color, p_config.dark_theme ? 0.07 : 0.045);
+		p_theme->set_color("group_background", "EditorInspectorSection", inspector_group_background);
+		p_theme->set_color("subgroup_background", "EditorInspectorSection", inspector_subgroup_background);
+		p_theme->set_color("path_background", "EditorInspectorSection", inspector_subgroup_background.lerp(p_config.surface_base_color, 0.35));
+		p_theme->set_color("favorites_background", "EditorInspectorSection", inspector_group_background);
+		p_theme->set_color("hover_overlay", "EditorInspectorSection", Color(p_config.mono_color, p_config.dark_theme ? 0.055 : 0.035));
+		p_theme->set_color("subgroup_font_color", "EditorInspectorSection", p_config.font_secondary_color.lerp(p_config.font_color, 0.52));
+		p_theme->set_constant("group_header_height", "EditorInspectorSection", 25 * EDSCALE);
+		p_theme->set_constant("subgroup_header_height", "EditorInspectorSection", 23 * EDSCALE);
 
 		Color inspector_indent_color = p_config.accent_color;
 		inspector_indent_color.a = 0.2;
@@ -2483,6 +2493,13 @@ void ThemeModern::populate_editor_styles(const Ref<EditorTheme> &p_theme, Editor
 			category_bg->set_border_color(p_config.extra_border_color_2);
 		}
 		p_theme->set_stylebox("bg", "EditorInspectorCategory", category_bg);
+		const Color inspector_class_start = p_config.surface_high_color.lerp(p_config.accent_color, p_config.dark_theme ? 0.22 : 0.13);
+		p_theme->set_color("class_gradient_start", "EditorInspectorCategory", inspector_class_start);
+		p_theme->set_color("class_gradient_end", "EditorInspectorCategory", p_config.surface_base_color.lerp(inspector_class_start, 0.30));
+		p_theme->set_color("custom_background", "EditorInspectorCategory", p_config.surface_base_color.lerp(p_config.accent_color, p_config.dark_theme ? 0.08 : 0.05));
+		p_theme->set_color("favorites_background", "EditorInspectorCategory", p_config.surface_base_color.lerp(p_config.surface_high_color, 0.18));
+		p_theme->set_constant("horizontal_padding", "EditorInspectorCategory", 9 * EDSCALE);
+		p_theme->set_constant("header_height", "EditorInspectorCategory", 24 * EDSCALE);
 
 		// EditorInspectorArray.
 		p_theme->set_color("bg", "EditorInspectorArray", p_config.surface_base_color);

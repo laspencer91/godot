@@ -2218,6 +2218,16 @@ void ThemeClassic::populate_editor_styles(const Ref<EditorTheme> &p_theme, Edito
 
 		Color inspector_section_color = p_config.font_color.lerp(Color(0.5, 0.5, 0.5), 0.35);
 		p_theme->set_color(SceneStringName(font_color), "EditorInspectorSection", inspector_section_color);
+		const Color inspector_group_background = p_config.dark_color_1.lerp(p_config.mono_color, 0.06);
+		const Color inspector_subgroup_background = p_config.dark_color_1.lerp(p_config.mono_color, 0.03);
+		p_theme->set_color("group_background", "EditorInspectorSection", inspector_group_background);
+		p_theme->set_color("subgroup_background", "EditorInspectorSection", inspector_subgroup_background);
+		p_theme->set_color("path_background", "EditorInspectorSection", inspector_subgroup_background.lerp(p_config.dark_color_1, 0.35));
+		p_theme->set_color("favorites_background", "EditorInspectorSection", inspector_group_background);
+		p_theme->set_color("hover_overlay", "EditorInspectorSection", Color(p_config.mono_color, p_config.dark_theme ? 0.055 : 0.035));
+		p_theme->set_color("subgroup_font_color", "EditorInspectorSection", p_config.font_color.lerp(p_config.mono_color, 0.18));
+		p_theme->set_constant("group_header_height", "EditorInspectorSection", 25 * EDSCALE);
+		p_theme->set_constant("subgroup_header_height", "EditorInspectorSection", 23 * EDSCALE);
 
 		Color inspector_indent_color = p_config.accent_color;
 		inspector_indent_color.a = 0.2;
@@ -2249,6 +2259,13 @@ void ThemeClassic::populate_editor_styles(const Ref<EditorTheme> &p_theme, Edito
 		category_bg->set_border_color(prop_category_color);
 		category_bg->set_content_margin_all(0);
 		p_theme->set_stylebox("bg", "EditorInspectorCategory", category_bg);
+		const Color inspector_class_start = prop_category_color.lerp(p_config.accent_color, p_config.dark_theme ? 0.18 : 0.10);
+		p_theme->set_color("class_gradient_start", "EditorInspectorCategory", inspector_class_start);
+		p_theme->set_color("class_gradient_end", "EditorInspectorCategory", p_config.dark_color_1.lerp(inspector_class_start, 0.30));
+		p_theme->set_color("custom_background", "EditorInspectorCategory", p_config.dark_color_1.lerp(p_config.accent_color, p_config.dark_theme ? 0.07 : 0.04));
+		p_theme->set_color("favorites_background", "EditorInspectorCategory", prop_category_color);
+		p_theme->set_constant("horizontal_padding", "EditorInspectorCategory", 9 * EDSCALE);
+		p_theme->set_constant("header_height", "EditorInspectorCategory", 24 * EDSCALE);
 
 		// EditorInspectorArray.
 		p_theme->set_color("bg", "EditorInspectorArray", p_config.dark_color_1);

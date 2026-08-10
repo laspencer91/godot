@@ -1939,7 +1939,7 @@ SceneImportSettingsDialog::SceneImportSettingsDialog() {
 	}
 
 	inspector = memnew(EditorInspector);
-	inspector->set_custom_minimum_size(Size2(300 * EDSCALE, 0));
+	inspector->set_custom_minimum_size(Size2(345 * EDSCALE, 0));
 	inspector->connect(SNAME("property_edited"), callable_mp(this, &SceneImportSettingsDialog::_inspector_property_edited));
 	// Display the same tooltips as in the Import dock.
 	inspector->set_object_class(ResourceImporterScene::get_class_static());

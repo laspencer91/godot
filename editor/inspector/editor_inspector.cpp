@@ -1874,6 +1874,7 @@ void EditorInspectorCategory::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_DRAW: {
+			script_icon_rect = Rect2();
 			Ref<StyleBox> sb;
 			if (color_level == -1) {
 				sb = theme_cache.background;
@@ -1884,6 +1885,28 @@ void EditorInspectorCategory::_notification(int p_what) {
 			}
 
 			draw_style_box(sb, Rect2(Vector2(), get_size()));
+			if (color_level == -1) {
+				if (kind == KIND_CLASS) {
+					const Vector<Point2> points = {
+						Point2(0, 0),
+						Point2(get_size().x, 0),
+						Point2(get_size().x, get_size().y),
+						Point2(0, get_size().y),
+					};
+					const Vector<Color> colors = {
+						theme_cache.class_gradient_start,
+						theme_cache.class_gradient_start,
+						theme_cache.class_gradient_end,
+						theme_cache.class_gradient_end,
+					};
+					draw_polygon(points, colors);
+					const float border_width = MAX(1.0f, EDSCALE);
+					draw_line(Point2(0, border_width * 0.5f), Point2(get_size().x, border_width * 0.5f), theme_cache.class_gradient_start.lightened(0.18f), border_width);
+					draw_line(Point2(0, get_size().y - border_width * 0.5f), Point2(get_size().x, get_size().y - border_width * 0.5f), theme_cache.class_gradient_end.darkened(0.22f), border_width);
+				} else {
+					draw_rect(Rect2(Vector2(), get_size()), kind == KIND_CUSTOM ? theme_cache.custom_background : theme_cache.favorites_background);
+				}
+			}
 
 			const Ref<Font> &font = theme_cache.bold_font;
 			int font_size = theme_cache.bold_font_size;
@@ -1895,9 +1918,10 @@ void EditorInspectorCategory::_notification(int p_what) {
 			if (icon.is_valid()) {
 				w += hs + icon_size;
 			}
-			w = MIN(w, get_size().width - sb->get_minimum_size().width);
+			const int horizontal_padding = theme_cache.horizontal_padding;
+			w = MIN(w, int(get_size().width) - horizontal_padding * 2);
 
-			int ofs = (get_size().width - w) / 2;
+			int ofs = horizontal_padding;
 
 			float v_margin_offset = sb->get_content_margin(SIDE_TOP) - sb->get_content_margin(SIDE_BOTTOM);
 
@@ -1908,6 +1932,9 @@ void EditorInspectorCategory::_notification(int p_what) {
 					rect_pos.x = get_size().width - rect_pos.x - icon_size;
 				}
 				draw_texture_rect(icon, Rect2(rect_pos, rect_size));
+				if (category_script.is_valid()) {
+					script_icon_rect = Rect2(rect_pos, rect_size).grow(2 * EDSCALE);
+				}
 
 				ofs += hs + icon_size;
 				w -= hs + icon_size;
@@ -1947,7 +1974,18 @@ Control *EditorInspectorCategory::make_custom_tooltip(const String &p_text) cons
 
 void EditorInspectorCategory::set_as_favorite() {
 	is_favorite = true;
+	kind = KIND_FAVORITES;
 	_update_icon();
+	queue_redraw();
+}
+
+void EditorInspectorCategory::set_kind(Kind p_kind) {
+	if (kind == p_kind) {
+		return;
+	}
+	kind = p_kind;
+	update_minimum_size();
+	queue_redraw();
 }
 
 void EditorInspectorCategory::set_property_info(const PropertyInfo &p_info) {
@@ -1999,8 +2037,16 @@ Size2 EditorInspectorCategory::get_minimum_size() const {
 	if (bg.is_valid()) {
 		ms.height += bg->get_content_margin(SIDE_TOP) + bg->get_content_margin(SIDE_BOTTOM);
 	}
+	ms.height = MAX(ms.height, float(theme_cache.header_height));
 
 	return ms;
+}
+
+Control::CursorShape EditorInspectorCategory::get_cursor_shape(const Point2 &p_pos) const {
+	if (category_script.is_valid() && script_icon_rect.has_point(p_pos)) {
+		return CURSOR_POINTING_HAND;
+	}
+	return Control::get_cursor_shape(p_pos);
 }
 
 void EditorInspectorCategory::_handle_menu_option(int p_option) {
@@ -2034,6 +2080,10 @@ void EditorInspectorCategory::_handle_menu_option(int p_option) {
 			ur->commit_action();
 		} break;
 
+		case MENU_OPEN_SCRIPT: {
+			_open_script();
+		} break;
+
 		case MENU_OPEN_DOCS: {
 			ScriptEditor::get_singleton()->goto_help("class:" + doc_class_name);
 			EditorNode::get_singleton()->get_editor_main_screen()->focus_editor(SNAME("Script"));
@@ -2042,6 +2092,12 @@ void EditorInspectorCategory::_handle_menu_option(int p_option) {
 		case MENU_UNFAVORITE_ALL: {
 			emit_signal(SNAME("unfavorite_all"));
 		} break;
+	}
+}
+
+void EditorInspectorCategory::_open_script() {
+	if (category_script.is_valid()) {
+		EditorNode::get_singleton()->edit_resource(category_script);
 	}
 }
 
@@ -2054,6 +2110,9 @@ void EditorInspectorCategory::_popup_context_menu(const Point2i &p_position) {
 		} else {
 			menu->add_icon_item(theme_cache.icon_copy, TTRC("Copy Category Values"), MENU_COPY_VALUE);
 			menu->add_icon_item(theme_cache.icon_paste, TTRC("Paste Category Values"), MENU_PASTE_VALUE);
+			if (category_script.is_valid()) {
+				menu->add_icon_item(theme_cache.icon_script, TTRC("Open Script"), MENU_OPEN_SCRIPT);
+			}
 
 			if (!doc_class_name.is_empty()) {
 				menu->add_item(TTRC("Open Documentation"), MENU_OPEN_DOCS);
@@ -2085,17 +2144,18 @@ void EditorInspectorCategory::_popup_context_menu(const Point2i &p_position) {
 
 void EditorInspectorCategory::_update_icon() {
 	if (is_favorite) {
+		category_script.unref();
 		icon = theme_cache.icon_favorites;
 		return;
 	}
 
 	icon = Ref<Texture2D>();
 
-	Ref<Script> scr = _get_category_script(info);
-	if (scr.is_valid()) {
-		StringName script_name = EditorNode::get_editor_data().script_class_get_name(scr->get_path());
+	category_script = _get_category_script(info);
+	if (category_script.is_valid()) {
+		StringName script_name = EditorNode::get_editor_data().script_class_get_name(category_script->get_path());
 		if (script_name == StringName()) {
-			icon = EditorNode::get_singleton()->get_object_icon(scr.ptr());
+			icon = EditorNode::get_singleton()->get_object_icon(category_script.ptr());
 		} else {
 			icon = EditorNode::get_singleton()->get_class_icon(script_name);
 		}
@@ -2114,8 +2174,13 @@ void EditorInspectorCategory::_theme_changed() {
 
 void EditorInspectorCategory::gui_input(const Ref<InputEvent> &p_event) {
 	const Ref<InputEventMouseButton> &mb = p_event;
-	if (mb.is_valid() && mb->is_pressed() && mb->get_button_index() == MouseButton::RIGHT) {
-		_popup_context_menu(get_screen_position() + mb->get_position());
+	if (mb.is_valid() && mb->is_pressed()) {
+		if (mb->get_button_index() == MouseButton::LEFT && (mb->is_double_click() || script_icon_rect.has_point(mb->get_position())) && category_script.is_valid()) {
+			_open_script();
+			accept_event();
+		} else if (mb->get_button_index() == MouseButton::RIGHT) {
+			_popup_context_menu(get_screen_position() + mb->get_position());
+		}
 	}
 }
 
@@ -2165,6 +2230,12 @@ Ref<Texture2D> EditorInspectorSection::_get_checkbox() {
 }
 
 int EditorInspectorSection::_get_header_height() {
+	if (kind == KIND_GROUP && theme_cache.group_header_height > 0) {
+		return theme_cache.group_header_height;
+	}
+	if ((kind == KIND_SUBGROUP || kind == KIND_PATH) && theme_cache.subgroup_header_height > 0) {
+		return theme_cache.subgroup_header_height;
+	}
 	int header_height = theme_cache.bold_font->get_height(theme_cache.bold_font_size);
 	Ref<Texture2D> arrow = _get_arrow();
 	if (arrow.is_valid()) {
@@ -2266,11 +2337,31 @@ void EditorInspectorSection::_notification(int p_what) {
 			int header_height = _get_header_height();
 			Rect2 header_rect = Rect2(Vector2(header_offset_x, 0.0), Vector2(header_width, header_height));
 			Color c = bg_color;
-			c.a *= 0.4;
-			if (header_hover) {
-				c = c.lightened(Input::get_singleton()->is_mouse_button_pressed(MouseButton::LEFT) ? -0.05 : 0.2);
+			switch (kind) {
+				case KIND_GROUP:
+					c = theme_cache.group_background;
+					break;
+				case KIND_SUBGROUP:
+					c = theme_cache.subgroup_background;
+					break;
+				case KIND_PATH:
+					c = theme_cache.path_background;
+					break;
+				case KIND_FAVORITES:
+					c = theme_cache.favorites_background;
+					break;
+				case KIND_ARRAY:
+					c.a *= 0.4;
+					break;
 			}
 			draw_rect(header_rect, c);
+			if (header_hover) {
+				Color hover = theme_cache.hover_overlay;
+				if (Input::get_singleton()->is_mouse_button_pressed(MouseButton::LEFT)) {
+					hover = hover.darkened(0.12f);
+				}
+				draw_rect(header_rect, hover);
+			}
 
 			// Draw header title, folding arrow and count of revertable properties.
 			{
@@ -2298,6 +2389,10 @@ void EditorInspectorSection::_notification(int p_what) {
 				Ref<Font> font = theme_cache.bold_font;
 				int font_size = theme_cache.bold_font_size;
 				Color font_color = theme_cache.font_color;
+				if (kind == KIND_SUBGROUP || kind == KIND_PATH) {
+					font_size = MAX(8, font_size - Math::round(EDSCALE));
+					font_color = theme_cache.subgroup_font_color;
+				}
 
 				Ref<Font> light_font = theme_cache.light_font;
 				int light_font_size = theme_cache.light_font_size;
@@ -2570,6 +2665,17 @@ void EditorInspectorSection::setup(const String &p_section, const String &p_labe
 			vbox->hide();
 		}
 	}
+}
+
+void EditorInspectorSection::set_kind(Kind p_kind, int p_hierarchy_depth) {
+	p_hierarchy_depth = MAX(0, p_hierarchy_depth);
+	if (kind == p_kind && hierarchy_depth == p_hierarchy_depth) {
+		return;
+	}
+	kind = p_kind;
+	hierarchy_depth = p_hierarchy_depth;
+	update_minimum_size();
+	queue_redraw();
 }
 
 void EditorInspectorSection::gui_input(const Ref<InputEvent> &p_event) {
@@ -3667,6 +3773,7 @@ void EditorInspectorArray::setup_with_move_element_function(Object *p_object, co
 	numbered = p_numbered;
 
 	EditorInspectorSection::setup(String(p_array_element_prefix) + "_array", p_label, p_object, p_bg_color, p_foldable, 0);
+	set_kind(KIND_ARRAY);
 
 	_setup();
 }
@@ -3684,6 +3791,7 @@ void EditorInspectorArray::setup_with_count_property(Object *p_object, const Str
 
 	add_button->set_text(p_add_item_text);
 	EditorInspectorSection::setup(String(count_property) + "_array", p_label, p_object, p_bg_color, p_foldable, 0);
+	set_kind(KIND_ARRAY);
 
 	_setup();
 }
@@ -3883,6 +3991,41 @@ EditorProperty *EditorInspector::instantiate_property_editor(Object *p_object, c
 	return nullptr;
 }
 
+void EditorInspector::reorder_transform_category_to_top(List<PropertyInfo> &r_properties, const StringName &p_edited_class) {
+	StringName category_name;
+	if (p_edited_class == SNAME("Node3D") || ClassDB::is_parent_class(p_edited_class, SNAME("Node3D"))) {
+		category_name = SNAME("Node3D");
+	} else if (p_edited_class == SNAME("Node2D") || ClassDB::is_parent_class(p_edited_class, SNAME("Node2D"))) {
+		category_name = SNAME("Node2D");
+	} else {
+		return;
+	}
+
+	List<PropertyInfo>::Element *category_begin = nullptr;
+	for (List<PropertyInfo>::Element *E = r_properties.front(); E; E = E->next()) {
+		const PropertyInfo &property = E->get();
+		if ((property.usage & PROPERTY_USAGE_CATEGORY) && property.name == category_name && property.hint_string == category_name) {
+			category_begin = E;
+			break;
+		}
+	}
+	if (!category_begin || category_begin == r_properties.front()) {
+		return;
+	}
+
+	List<PropertyInfo>::Element *category_end = category_begin->next();
+	while (category_end && !(category_end->get().usage & PROPERTY_USAGE_CATEGORY)) {
+		category_end = category_end->next();
+	}
+
+	List<PropertyInfo>::Element *insertion_point = r_properties.front();
+	for (List<PropertyInfo>::Element *E = category_begin; E != category_end;) {
+		List<PropertyInfo>::Element *next = E->next();
+		r_properties.move_before(E, insertion_point);
+		E = next;
+	}
+}
+
 void EditorInspector::initialize_section_theme(EditorInspectorSection::ThemeCache &p_cache, Control *p_control) {
 	EditorInspector *parent_inspector = _get_control_parent_inspector(p_control);
 	if (parent_inspector && parent_inspector != p_control) {
@@ -3898,7 +4041,13 @@ void EditorInspector::initialize_section_theme(EditorInspectorSection::ThemeCach
 
 	p_cache.warning_color = p_control->get_theme_color(SNAME("warning_color"), EditorStringName(Editor));
 	p_cache.prop_subsection = p_control->get_theme_color(SNAME("prop_subsection"), EditorStringName(Editor));
+	p_cache.group_background = p_control->get_theme_color(SNAME("group_background"), SNAME("EditorInspectorSection"));
+	p_cache.subgroup_background = p_control->get_theme_color(SNAME("subgroup_background"), SNAME("EditorInspectorSection"));
+	p_cache.path_background = p_control->get_theme_color(SNAME("path_background"), SNAME("EditorInspectorSection"));
+	p_cache.favorites_background = p_control->get_theme_color(SNAME("favorites_background"), SNAME("EditorInspectorSection"));
+	p_cache.hover_overlay = p_control->get_theme_color(SNAME("hover_overlay"), SNAME("EditorInspectorSection"));
 	p_cache.font_color = p_control->get_theme_color(SceneStringName(font_color), EditorStringName(Editor));
+	p_cache.subgroup_font_color = p_control->get_theme_color(SNAME("subgroup_font_color"), SNAME("EditorInspectorSection"));
 	p_cache.font_disabled_color = p_control->get_theme_color(SNAME("font_disabled_color"), EditorStringName(Editor));
 	p_cache.font_hover_color = p_control->get_theme_color(SNAME("font_hover_color"), EditorStringName(Editor));
 	p_cache.font_pressed_color = p_control->get_theme_color(SNAME("font_pressed_color"), EditorStringName(Editor));
@@ -3911,6 +4060,8 @@ void EditorInspector::initialize_section_theme(EditorInspectorSection::ThemeCach
 	p_cache.bold_font_size = p_control->get_theme_font_size(SNAME("bold_size"), EditorStringName(EditorFonts));
 	p_cache.light_font = p_control->get_theme_font(SNAME("main"), EditorStringName(EditorFonts));
 	p_cache.light_font_size = p_control->get_theme_font_size(SNAME("main_size"), EditorStringName(EditorFonts));
+	p_cache.group_header_height = p_control->get_theme_constant(SNAME("group_header_height"), SNAME("EditorInspectorSection"));
+	p_cache.subgroup_header_height = p_control->get_theme_constant(SNAME("subgroup_header_height"), SNAME("EditorInspectorSection"));
 
 	p_cache.arrow = p_control->get_theme_icon(SNAME("arrow"), SNAME("Tree"));
 	p_cache.arrow_collapsed = p_control->get_theme_icon(SNAME("arrow_collapsed"), SNAME("Tree"));
@@ -3936,8 +4087,14 @@ void EditorInspector::initialize_category_theme(EditorInspectorCategory::ThemeCa
 	p_cache.horizontal_separation = p_control->get_theme_constant(SNAME("h_separation"), SNAME("Tree"));
 	p_cache.vertical_separation = p_control->get_theme_constant(SNAME("separation"), SNAME("EditorPropertyContainer"));
 	p_cache.class_icon_size = p_control->get_theme_constant(SNAME("class_icon_size"), EditorStringName(Editor));
+	p_cache.horizontal_padding = p_control->get_theme_constant(SNAME("horizontal_padding"), SNAME("EditorInspectorCategory"));
+	p_cache.header_height = p_control->get_theme_constant(SNAME("header_height"), SNAME("EditorInspectorCategory"));
 
 	p_cache.font_color = p_control->get_theme_color(SceneStringName(font_color), SNAME("Tree"));
+	p_cache.class_gradient_start = p_control->get_theme_color(SNAME("class_gradient_start"), SNAME("EditorInspectorCategory"));
+	p_cache.class_gradient_end = p_control->get_theme_color(SNAME("class_gradient_end"), SNAME("EditorInspectorCategory"));
+	p_cache.custom_background = p_control->get_theme_color(SNAME("custom_background"), SNAME("EditorInspectorCategory"));
+	p_cache.favorites_background = p_control->get_theme_color(SNAME("favorites_background"), SNAME("EditorInspectorCategory"));
 
 	p_cache.bold_font = p_control->get_theme_font(SNAME("bold"), EditorStringName(EditorFonts));
 	p_cache.bold_font_size = p_control->get_theme_font_size(SNAME("bold_size"), EditorStringName(EditorFonts));
@@ -3948,6 +4105,7 @@ void EditorInspector::initialize_category_theme(EditorInspectorCategory::ThemeCa
 	p_cache.icon_favorites = p_control->get_editor_theme_icon(SNAME("Favorites"));
 	p_cache.icon_unfavorite = p_control->get_editor_theme_icon(SNAME("Unfavorite"));
 	p_cache.icon_help = p_control->get_editor_theme_icon(SNAME("Help"));
+	p_cache.icon_script = p_control->get_editor_theme_icon(SNAME("Script"));
 
 	p_cache.background = p_control->get_theme_stylebox(SNAME("bg"), SNAME("EditorInspectorCategory"));
 
@@ -4289,6 +4447,9 @@ void EditorInspector::update_tree() {
 
 	List<PropertyInfo> plist;
 	object->get_property_list(&plist, true);
+	MultiNodeEdit *multi_node_edit = Object::cast_to<MultiNodeEdit>(object);
+	const StringName edited_class = multi_node_edit ? multi_node_edit->get_edited_class_name() : object->get_class_name();
+	reorder_transform_category_to_top(plist, edited_class);
 
 	HashMap<VBoxContainer *, HashMap<String, VBoxContainer *>> vbox_per_path;
 	HashMap<String, EditorInspectorArray *> editor_inspector_array_per_prefix;
@@ -4424,6 +4585,7 @@ void EditorInspector::update_tree() {
 
 			// Create an EditorInspectorCategory and add it to the inspector.
 			EditorInspectorCategory *category = memnew(EditorInspectorCategory);
+			category->set_kind(is_custom_category ? EditorInspectorCategory::KIND_CUSTOM : EditorInspectorCategory::KIND_CLASS);
 			category->set_property_info(p);
 			category->set_color_level(category_color_level);
 			main_vbox->add_child(category);
@@ -4659,6 +4821,16 @@ void EditorInspector::update_tree() {
 				Color c = sscolor;
 				c.a /= level;
 				section->setup(acc_path, label, object, c, use_folding, section_depth, level);
+				EditorInspectorSection::Kind section_kind = EditorInspectorSection::KIND_PATH;
+				int hierarchy_depth = i;
+				if (i == 0 && component == group) {
+					section_kind = EditorInspectorSection::KIND_GROUP;
+					hierarchy_depth = 0;
+				} else if (component == subgroup && ((!group.is_empty() && i == 1) || (group.is_empty() && i == 0))) {
+					section_kind = EditorInspectorSection::KIND_SUBGROUP;
+					hierarchy_depth = group.is_empty() ? 0 : 1;
+				}
+				section->set_kind(section_kind, hierarchy_depth);
 				section->set_tooltip_text(tooltip);
 
 				section->connect("section_toggled_by_user", callable_mp(this, &EditorInspector::_section_toggled_by_user));
@@ -5088,6 +5260,7 @@ void EditorInspector::update_tree() {
 				parent_vbox = section->get_vbox();
 
 				section->setup("", section_name, object, sscolor, false);
+				section->set_kind(EditorInspectorSection::KIND_FAVORITES);
 				section->set_tooltip_text(tooltip);
 
 				if (togglable_editor_inspector_sections.has(section_name)) {
@@ -5127,6 +5300,7 @@ void EditorInspector::update_tree() {
 					vbox->add_child(section);
 					vbox = section->get_vbox();
 					section->setup("", section_name, object, sscolor, false);
+					section->set_kind(EditorInspectorSection::KIND_FAVORITES, 1);
 					section->set_tooltip_text(tooltip);
 
 					if (togglable_editor_inspector_sections.has(KV.key + "/" + section_name)) {

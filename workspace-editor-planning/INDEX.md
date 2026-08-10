@@ -9,9 +9,10 @@ on `master`; do not use the old feature branch or path as the implementation bas
 multiple scenes, scripts, and resources are open at once, each pane carrying document-bound views
 and contextual docks; editing commands remain scoped to the focused pane.
 
-**Status (2026-07-16):** the G1/G2 workspace foundation, G4 Explore drawer, G6 drag-to-split,
+**Status (2026-08-05):** the G1/G2 workspace foundation, G4 Explore drawer, G6 drag-to-split,
 and the core G3 per-pane document surfaces are implemented. G7 is partially implemented. G5
-remains a measure-first investigation. The canonical smoke suite (`smoke/run_smoke.sh`) is the
+remains a measure-first investigation, and G9 now specifies investigation-gated native floating
+document windows. The canonical smoke suite (`smoke/run_smoke.sh`) is the
 automated baseline. A human multi-pane audit, generalized dirty/save behavior, and per-view
 restart persistence remain; automated evidence is not being used as a substitute for those
 human/lifecycle gaps. NOTE: the G-Level level editor was removed 2026-07-16 (Blender workflow
@@ -32,6 +33,8 @@ status table below take precedence over future-tense implementation steps in tho
 | **G5** | **Planned / Measurement Outstanding** | Faster open/startup investigation and measured optimization | [G5-faster-load.md](./G5-faster-load.md) |
 | **G6** | **Implemented; Automated Verified** | Drag-a-tab-to-split compass and directional drop zones | [G6-drag-to-split.md](./G6-drag-to-split.md) |
 | **G7** | **Partially Implemented; targeted automation complete** | Animation is document-owned; remaining contextual editors are evaluated case by case | [G7-contextual-bottom-docks.md](./G7-contextual-bottom-docks.md) |
+| **G8** | **Design (2026-08-05)** | Audio workspace: AudioEvent document surface, parameter/curve authoring, document-owned Deck; first real adoption of the `editor/gui/components/` design system | [G8-audio-workspace.md](./G8-audio-workspace.md) |
+| **G9** | **Planned / Investigation Gated** | Native floating document-pane windows with global focused-command routing, redock semantics, and persistence | [G9-floating-document-windows.md](./G9-floating-document-windows.md) |
 
 ## Cross-cutting references
 
@@ -39,6 +42,9 @@ status table below take precedence over future-tense implementation steps in tho
 |---|---|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | The service / view-state / document-state taxonomy + seam rules — the tiebreaker for where any editor member belongs. |
 | [DIVERGENCE-LEDGER.md](./DIVERGENCE-LEDGER.md) | Per-file record of stock-file edits (ours-by-design vs upstreamable) + the rebase-cadence policy. |
+| [GLTF-MATERIAL-OVERRIDES-DESIGN.md](./GLTF-MATERIAL-OVERRIDES-DESIGN.md) | Inline, per-field glTF material overrides; stable material identity; texture handling; and the authored-versus-derived resource contract. |
+| [EXPLORE-PERFORMANCE-PLAN.md](./EXPLORE-PERFORMANCE-PLAN.md) | Code-verified Explore/FileSystem dock lag analysis (O(N²) preview scan, sync description probes, full-rebuild churn) + ordered fix plan; the no-file-I/O-at-row-build rule that derived-data hiding and model-import UI badges must follow. |
+| [ASSET-FACT-INDEX.md](./ASSET-FACT-INDEX.md) | The shared foundation the Explore plan, material overrides, and derived data store all wait on: facts harvested once on the scan thread onto `FileInfo`, published as an immutable generation-stamped snapshot, queried everywhere. A→Z implementation steps + full per-concern traceability against all three docs. |
 | [STEP5-CANVASVIEW2D-SCOPE.md](./STEP5-CANVASVIEW2D-SCOPE.md) | Historical scope and rationale for the now-landed per-pane `CanvasView2D`; retain for architectural context. |
 | [STEP5b3-SELECTION-SCOPE.md](./STEP5b3-SELECTION-SCOPE.md) | Historical per-pane 2D selection/manipulation scope and the rationale for the chosen per-document selection model. |
 | [smoke/](./smoke/run_smoke.sh) | Multi-flow regression harness. Future source changes must refresh its evidence rather than relying on fixture presence. |
@@ -95,6 +101,9 @@ order:
    already have Inspector-backed tabs.
 4. **Start G5 only with its measurement gate.** Define a representative workload, capture repeatable
    cold/warm baselines on an optimized editor, then rank or discard the proposed optimizations.
+5. **Start G9 only with its native-window gates.** Prove live surface reparenting, global focus and
+   command routing, dialog ownership, and cross-window drag feasibility before writing a persistence
+   schema. Ship explicit undock/redock before optional drag or nested floating splits.
 
 Historical rationale: G1 was correctly treated as the hard world/document foundation; G2 and G3
 were correctly coupled because panes need document-bound views and docks; G4 was correctly kept

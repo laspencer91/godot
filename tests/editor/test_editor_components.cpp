@@ -23,6 +23,7 @@ TEST_FORCE_LINK(test_editor_components)
 #include "editor/gui/components/editor_status_panel.h"
 #include "editor/gui/components/editor_toolbar.h"
 #include "editor/gui/editor_spin_slider.h"
+#include "editor/inspector/editor_inspector.h"
 #include "scene/gui/line_edit.h"
 
 namespace TestEditorComponents {
@@ -138,6 +139,47 @@ TEST_CASE("[Editor][Components] Spin slider supports compact value presentation"
 	CHECK(slider->get_custom_value_font_size() == 11);
 	CHECK(slider->get_value_text_alignment() == HORIZONTAL_ALIGNMENT_RIGHT);
 	memdelete(slider);
+}
+
+TEST_CASE("[Editor][Components] Section headers preserve semantic presentation state") {
+	EditorSectionHeader *header = memnew(EditorSectionHeader);
+	header->set_visual_role(EditorSectionHeader::VISUAL_ROLE_SUBSECTION);
+	header->set_hierarchy_depth(2);
+	header->set_compact(true);
+	header->set_status("3 changed");
+
+	CHECK(header->get_visual_role() == EditorSectionHeader::VISUAL_ROLE_SUBSECTION);
+	CHECK(header->get_hierarchy_depth() == 2);
+	CHECK(header->is_compact());
+	CHECK(header->get_status() == "3 changed");
+
+	memdelete(header);
+}
+
+TEST_CASE("[Editor][Inspector] Transform category presentation order is stable") {
+	List<PropertyInfo> properties;
+	properties.push_back(PropertyInfo(Variant::NIL, "Player", PROPERTY_HINT_NONE, "res://player.gd", PROPERTY_USAGE_CATEGORY));
+	properties.push_back(PropertyInfo(Variant::INT, "ammo"));
+	properties.push_back(PropertyInfo(Variant::NIL, "Node3D", PROPERTY_HINT_NONE, "Node3D", PROPERTY_USAGE_CATEGORY));
+	properties.push_back(PropertyInfo(Variant::NIL, "Transform", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_GROUP));
+	properties.push_back(PropertyInfo(Variant::VECTOR3, "position"));
+	properties.push_back(PropertyInfo(Variant::NIL, "Node", PROPERTY_HINT_NONE, "Node", PROPERTY_USAGE_CATEGORY));
+	properties.push_back(PropertyInfo(Variant::STRING_NAME, "name"));
+
+	EditorInspector::reorder_transform_category_to_top(properties, SNAME("Node3D"));
+
+	const List<PropertyInfo>::Element *property = properties.front();
+	REQUIRE(property != nullptr);
+	CHECK(property->get().name == "Node3D");
+	property = property->next();
+	REQUIRE(property != nullptr);
+	CHECK(property->get().name == "Transform");
+	property = property->next();
+	REQUIRE(property != nullptr);
+	CHECK(property->get().name == "position");
+	property = property->next();
+	REQUIRE(property != nullptr);
+	CHECK(property->get().name == "Player");
 }
 
 } // namespace TestEditorComponents

@@ -44,6 +44,7 @@ class LineEdit;
 class MarginContainer;
 class OptionButton;
 class PopupMenu;
+class Script;
 class SpinBox;
 class StyleBoxFlat;
 class TextureRect;
@@ -384,10 +385,20 @@ class EditorInspectorCategory : public Control {
 
 	friend class EditorInspector;
 
+public:
+	enum Kind {
+		KIND_CLASS,
+		KIND_CUSTOM,
+		KIND_FAVORITES,
+	};
+
+private:
+
 	// Right-click context menu options.
 	enum ClassMenuOption {
 		MENU_COPY_VALUE,
 		MENU_PASTE_VALUE,
+		MENU_OPEN_SCRIPT,
 		MENU_OPEN_DOCS,
 		MENU_UNFAVORITE_ALL,
 	};
@@ -396,8 +407,14 @@ class EditorInspectorCategory : public Control {
 		int horizontal_separation = 0;
 		int vertical_separation = 0;
 		int class_icon_size = 0;
+		int horizontal_padding = 0;
+		int header_height = 0;
 
 		Color font_color;
+		Color class_gradient_start;
+		Color class_gradient_end;
+		Color custom_background;
+		Color favorites_background;
 
 		Ref<Font> bold_font;
 		int bold_font_size = 0;
@@ -407,6 +424,7 @@ class EditorInspectorCategory : public Control {
 		Ref<Texture2D> icon_favorites;
 		Ref<Texture2D> icon_unfavorite;
 		Ref<Texture2D> icon_help;
+		Ref<Texture2D> icon_script;
 
 		Ref<StyleBox> background;
 		Ref<StyleBox> sub_inspector_background;
@@ -416,17 +434,21 @@ class EditorInspectorCategory : public Control {
 	PropertyInfo info;
 
 	Ref<Texture2D> icon;
+	Ref<Script> category_script;
+	Rect2 script_icon_rect;
 	String label;
 	String doc_class_name;
 	PopupMenu *menu = nullptr;
 	bool is_favorite = false;
 	bool menu_icon_dirty = true;
 	int color_level = -1;
+	Kind kind = KIND_CLASS;
 
 	LocalVector<EditorProperty *> category_properties;
 
 	void _handle_menu_option(int p_option);
 	void _popup_context_menu(const Point2i &p_position);
+	void _open_script();
 	void _update_icon();
 	void _theme_changed();
 
@@ -440,6 +462,8 @@ protected:
 
 public:
 	void set_as_favorite();
+	void set_kind(Kind p_kind);
+	Kind get_kind() const { return kind; }
 	void set_property_info(const PropertyInfo &p_info);
 	void set_doc_class_name(const String &p_name);
 	void set_color_level(int p_color_level);
@@ -447,6 +471,7 @@ public:
 	void register_property(EditorProperty *p_property) { category_properties.push_back(p_property); }
 
 	virtual Size2 get_minimum_size() const override;
+	virtual CursorShape get_cursor_shape(const Point2 &p_pos = Point2()) const override;
 	virtual Control *make_custom_tooltip(const String &p_text) const override;
 
 	EditorInspectorCategory();
@@ -456,6 +481,17 @@ class EditorInspectorSection : public Container {
 	GDCLASS(EditorInspectorSection, Container);
 
 	friend class EditorInspector;
+
+public:
+	enum Kind {
+		KIND_GROUP,
+		KIND_SUBGROUP,
+		KIND_PATH,
+		KIND_ARRAY,
+		KIND_FAVORITES,
+	};
+
+private:
 
 	enum MenuItems {
 		MENU_COPY_VALUE,
@@ -472,6 +508,8 @@ class EditorInspectorSection : public Container {
 	bool keying = false;
 	int indent_depth = 0;
 	int level = 1;
+	int hierarchy_depth = 0;
+	Kind kind = KIND_PATH;
 	String related_enable_property;
 	// G2 M7.2a-fix: ObjectID of the EditorInspector we connected `property_edited` to while checkable.
 	// Stored so the disconnect (set_checkable false-branch + destructor) always targets the SAME
@@ -515,7 +553,13 @@ class EditorInspectorSection : public Container {
 
 		Color warning_color;
 		Color prop_subsection;
+		Color group_background;
+		Color subgroup_background;
+		Color path_background;
+		Color favorites_background;
+		Color hover_overlay;
 		Color font_color;
+		Color subgroup_font_color;
 		Color font_disabled_color;
 		Color font_hover_color;
 		Color font_pressed_color;
@@ -528,6 +572,8 @@ class EditorInspectorSection : public Container {
 		int bold_font_size = 0;
 		Ref<Font> light_font;
 		int light_font_size = 0;
+		int group_header_height = 0;
+		int subgroup_header_height = 0;
 
 		Ref<Texture2D> arrow;
 		Ref<Texture2D> arrow_collapsed;
@@ -559,6 +605,9 @@ public:
 	virtual Control *make_custom_tooltip(const String &p_text) const override;
 
 	void setup(const String &p_section, const String &p_label, Object *p_object, const Color &p_bg_color, bool p_foldable, int p_indent_depth = 0, int p_level = 1);
+	void set_kind(Kind p_kind, int p_hierarchy_depth = 0);
+	Kind get_kind() const { return kind; }
+	int get_hierarchy_depth() const { return hierarchy_depth; }
 	String get_section() const;
 	String get_label() const { return label; }
 	VBoxContainer *get_vbox();
@@ -902,6 +951,7 @@ public:
 	static void cleanup_plugins();
 
 	static EditorProperty *instantiate_property_editor(Object *p_object, const Variant::Type p_type, const String &p_path, const PropertyHint p_hint, const String &p_hint_text, const uint32_t p_usage, const bool p_wide = false);
+	static void reorder_transform_category_to_top(List<PropertyInfo> &r_properties, const StringName &p_edited_class);
 
 	static void initialize_section_theme(EditorInspectorSection::ThemeCache &p_cache, Control *p_control);
 	static void initialize_category_theme(EditorInspectorCategory::ThemeCache &p_cache, Control *p_control);
