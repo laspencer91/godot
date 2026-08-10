@@ -100,6 +100,26 @@ static bool _find_description_section(const String &p_text, EditorAssetDescripti
 	return in_target_section;
 }
 
+// The pure-extension half of EditorAssetDescription::get_asset_kind(): the single table mapping a
+// file extension to an asset kind, with no filesystem access at all. Callers that must stay
+// stat-free (the scan-thread file probe) use this directly; get_asset_kind() adds the .import
+// sidecar fallback on top.
+static EditorAssetDescription::AssetKind _kind_from_extension(const String &p_extension) {
+	if (p_extension == "tscn") {
+		return EditorAssetDescription::ASSET_KIND_SCENE_TEXT;
+	}
+	if (p_extension == "scn") {
+		return EditorAssetDescription::ASSET_KIND_SCENE_BINARY;
+	}
+	if (p_extension == "tres") {
+		return EditorAssetDescription::ASSET_KIND_RESOURCE_TEXT;
+	}
+	if (p_extension == "res") {
+		return EditorAssetDescription::ASSET_KIND_RESOURCE_BINARY;
+	}
+	return EditorAssetDescription::ASSET_KIND_UNSUPPORTED;
+}
+
 static Node *_get_open_scene_root(const String &p_path) {
 	if (!EditorNode::get_singleton()) {
 		return nullptr;
@@ -143,18 +163,9 @@ static Error _read_scene_state_description(const String &p_path, String &r_descr
 } // namespace
 
 EditorAssetDescription::AssetKind EditorAssetDescription::get_asset_kind(const String &p_path) {
-	const String extension = p_path.get_extension().to_lower();
-	if (extension == "tscn") {
-		return ASSET_KIND_SCENE_TEXT;
-	}
-	if (extension == "scn") {
-		return ASSET_KIND_SCENE_BINARY;
-	}
-	if (extension == "tres") {
-		return ASSET_KIND_RESOURCE_TEXT;
-	}
-	if (extension == "res") {
-		return ASSET_KIND_RESOURCE_BINARY;
+	const AssetKind kind = _kind_from_extension(p_path.get_extension().to_lower());
+	if (kind != ASSET_KIND_UNSUPPORTED) {
+		return kind;
 	}
 	if (FileAccess::exists(p_path + ".import")) {
 		return ASSET_KIND_IMPORTED;
@@ -183,13 +194,6 @@ String EditorAssetDescription::get_asset_kind_name(AssetKind p_kind) {
 bool EditorAssetDescription::is_supported(const String &p_path) {
 	const AssetKind kind = get_asset_kind(p_path);
 	return kind != ASSET_KIND_UNSUPPORTED && kind != ASSET_KIND_RESOURCE_BINARY;
-}
-
-uint64_t EditorAssetDescription::get_cache_modified_time(const String &p_path) {
-	if (get_asset_kind(p_path) == ASSET_KIND_IMPORTED) {
-		return FileAccess::get_modified_time(p_path + ".import");
-	}
-	return FileAccess::get_modified_time(p_path);
 }
 
 Error EditorAssetDescription::_read_utf8_file(const String &p_path, uint64_t p_max_bytes, String &r_text) {
@@ -407,6 +411,59 @@ Error EditorAssetDescription::write_description(const String &p_path, const Stri
 	return ERR_UNAVAILABLE;
 }
 
+bool EditorAssetDescription::file_has_description(const String &p_path) {
+	return file_has_description(p_path, get_asset_kind(p_path) == ASSET_KIND_IMPORTED);
+}
+
+bool EditorAssetDescription::file_has_description(const String &p_path, bool p_is_imported) {
+	if (p_is_imported) {
+		Ref<ConfigFile> config;
+		config.instantiate();
+		return config->load(p_path + ".import") == OK && config->has_section_key("remap", "description") && !String(config->get_value("remap", "description")).is_empty();
+	}
+
+	// Same gating as get_asset_kind(), minus the .import lookup the caller already answered — hence
+	// the extension-only table rather than get_asset_kind(), which would stat the sidecar.
+	// Binary .scn/.res and every unsupported type have no file-only answer here: .res is
+	// unsupported entirely, and .scn descriptions live in a packed scene state that only the
+	// main-thread probe may load.
+	TextAssetKind text_kind;
+	switch (_kind_from_extension(p_path.get_extension().to_lower())) {
+		case ASSET_KIND_SCENE_TEXT:
+			text_kind = TEXT_ASSET_SCENE;
+			break;
+		case ASSET_KIND_RESOURCE_TEXT:
+			text_kind = TEXT_ASSET_RESOURCE;
+			break;
+		default:
+			return false;
+	}
+
+	String source_text;
+	if (_read_utf8_file(p_path, MAX_TEXT_SCAN_BYTES, source_text) != OK) {
+		return false;
+	}
+	String description;
+	return read_text_description(source_text, text_kind, description) == OK && !description.is_empty();
+}
+
+bool EditorAssetDescription::get_open_scene_description_overlay(const String &p_path, bool &r_has_description) {
+	// The overlay only ever applies to a currently open text scene: an unsaved editor_description on
+	// the open scene's root can differ from what's on disk, and thus from any file-derived or
+	// harvested fact. O(1), no file I/O. A binary .scn that's open still gets a correct answer, but
+	// through has_description_bounded()'s full read (_read_scene_state_description() consults the
+	// same open root), not through this overlay.
+	if (_kind_from_extension(p_path.get_extension().to_lower()) != ASSET_KIND_SCENE_TEXT) {
+		return false;
+	}
+	const Node *root = _get_open_scene_root(p_path);
+	if (!root) {
+		return false;
+	}
+	r_has_description = !root->get_editor_description().is_empty();
+	return true;
+}
+
 bool EditorAssetDescription::has_description_bounded(const String &p_path) {
 	const AssetKind kind = get_asset_kind(p_path);
 	if (!is_supported(p_path)) {
@@ -418,23 +475,14 @@ bool EditorAssetDescription::has_description_bounded(const String &p_path) {
 		return read_description(p_path, description, error) == OK && !description.is_empty();
 	}
 	if (kind == ASSET_KIND_IMPORTED) {
-		Ref<ConfigFile> config;
-		config.instantiate();
-		return config->load(p_path + ".import") == OK && config->has_section_key("remap", "description") && !String(config->get_value("remap", "description")).is_empty();
+		return file_has_description(p_path, true);
 	}
 
 	// ASSET_KIND_SCENE_BINARY already returned above; only an open text scene is handled without a file scan.
-	if (kind == ASSET_KIND_SCENE_TEXT) {
-		if (const Node *root = _get_open_scene_root(p_path)) {
-			return !root->get_editor_description().is_empty();
-		}
+	bool open_scene_has_description = false;
+	if (get_open_scene_description_overlay(p_path, open_scene_has_description)) {
+		return open_scene_has_description;
 	}
 
-	String source_text;
-	if (_read_utf8_file(p_path, MAX_TEXT_SCAN_BYTES, source_text) != OK) {
-		return false;
-	}
-	String description;
-	const TextAssetKind text_kind = kind == ASSET_KIND_SCENE_TEXT ? TEXT_ASSET_SCENE : TEXT_ASSET_RESOURCE;
-	return read_text_description(source_text, text_kind, description) == OK && !description.is_empty();
+	return file_has_description(p_path, false);
 }

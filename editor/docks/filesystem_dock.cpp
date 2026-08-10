@@ -453,6 +453,13 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 			file_info.icon_path = p_dir->get_file_icon_path(i);
 			file_info.import_broken = !p_dir->get_file_import_is_valid(i);
 			file_info.modified_time = p_dir->get_file_modified_time(i);
+			// Resolved while p_dir/i are still at hand, so the row loop below (after the sort reorders
+			// file_list) never has to re-resolve a path to query the harvested Asset Fact Index fact.
+			// _resolve_file_has_description() never calls has_description_bounded, so binary scenes
+			// (.scn) naturally read false here (the harvested fact for them always is, since full-load
+			// probing can't run on the scan thread) and show no passive indicator in this row loop; the
+			// context menu/refresh point sites still probe .scn with the full read.
+			file_info.has_description = _resolve_file_has_description(p_dir, i, lpath.path_join(file_info.name));
 
 			file_list.push_back(file_info);
 		}
@@ -482,7 +489,7 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 				file_item->set_custom_bg_color(0, parent_bg_color);
 			}
 			file_item->set_metadata(0, file_metadata);
-			if (_asset_has_description(file_metadata)) {
+			if (file_info.has_description) {
 				_set_tree_description_indicator(file_item, true);
 			}
 			file_item->set_accept_children(false);
@@ -586,6 +593,10 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 		String text;
 		Ref<Texture2D> icon;
 		Color color;
+		// Resolved once in the file branch below and reused for the description indicator, so the
+		// row never pays a second find_file() to answer a fact the directory already holds.
+		EditorFileSystemDirectory *dir = nullptr;
+		int index = -1;
 		if (favorite == "res://") {
 			text = "/";
 			icon = folder_icon;
@@ -596,8 +607,7 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 			color = FileSystemDock::get_dir_icon_color(favorite, default_folder_color);
 		} else {
 			text = favorite.get_file();
-			int index;
-			EditorFileSystemDirectory *dir = EditorFileSystem::get_singleton()->find_file(favorite, &index);
+			dir = EditorFileSystem::get_singleton()->find_file(favorite, &index);
 			// Favorite file rows are type-filtered as they are built, exactly like the rows `_create_tree`
 			// makes, so the visibility pass in `_update_filtered_items` never has to re-derive a type.
 			if (!_matches_type_filter(text, dir ? dir->get_file_type(index) : StringName())) {
@@ -620,7 +630,7 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 		ti->set_selectable(0, true);
 		ti->set_metadata(0, favorite);
 		ti->set_accept_children(false);
-		if (!favorite.ends_with("/") && _asset_has_description(favorite)) {
+		if (!favorite.ends_with("/") && dir && _resolve_file_has_description(dir, index, favorite)) {
 			_set_tree_description_indicator(ti, true);
 		}
 		if (favorite.ends_with("/")) {
@@ -1233,18 +1243,32 @@ void FileSystemDock::_update_visible_scene_previews() {
 	EditorResourcePreview *preview = EditorResourcePreview::get_singleton();
 
 	for (int i = 0; i < files->get_item_count(); i++) {
-		// Cheap visibility test first: it short-circuits before any per-row classification lookup below.
-		if (!files->get_item_rect(i).intersects(visible_rect)) {
-			continue;
+		if (i >= (int)file_list_row_flags.size()) {
+			// Defensive: the flags vector is built in lockstep with the rows, so this cannot happen.
+			break;
 		}
-		const String path = files->get_item_metadata(i);
-		if (path.ends_with("/")) {
+		// Cheap visibility test first: it short-circuits before any per-row classification lookup below.
+		const Rect2 item_rect = files->get_item_rect(i);
+		if (!item_rect.intersects(visible_rect)) {
+			// ItemList lays rows out with a non-decreasing y as the index grows, in both list and icon
+			// modes, so once a row starts below the viewport every later row does too.
+			if (item_rect.position.y > visible_rect.position.y + visible_rect.size.y) {
+				break;
+			}
 			continue;
 		}
 
-		// Generic resource preview: request it once per path, only while the row is visible.
-		if (previewable_row_indices.has(i) && !queued_generic_preview_paths.has(path)) {
-			queued_generic_preview_paths.insert(path);
+		// Classification before metadata: the flags answer both questions below without touching the row.
+		uint8_t &row_flags = file_list_row_flags[i];
+		if ((row_flags & FILE_LIST_ROW_DIRECTORY) || !(row_flags & (FILE_LIST_ROW_SCENE | FILE_LIST_ROW_PREVIEW_PENDING))) {
+			continue;
+		}
+		const String path = files->get_item_metadata(i);
+
+		// Generic resource preview: request it once per row, only while the row is visible. Clearing the
+		// bit is the deduplication.
+		if (row_flags & FILE_LIST_ROW_PREVIEW_PENDING) {
+			row_flags = uint8_t(row_flags & ~uint32_t(FILE_LIST_ROW_PREVIEW_PENDING));
 			preview->queue_resource_preview(path, callable_mp(this, &FileSystemDock::_file_list_thumbnail_done).bind(i, files->get_item_text(i)));
 		}
 
@@ -1252,7 +1276,7 @@ void FileSystemDock::_update_visible_scene_previews() {
 		// copy just for a thumbnail can briefly double the resource and renderer footprint of a large level.
 		// Its save-time preview still arrives through the generic resource-preview request above; when that
 		// cache is absent, keep the generic scene icon instead of risking an out-of-memory editor exit.
-		if (!scene_row_indices.has(i) || EditorNode::get_singleton()->is_scene_open(path)) {
+		if (!(row_flags & FILE_LIST_ROW_SCENE) || EditorNode::get_singleton()->is_scene_open(path)) {
 			continue;
 		}
 		visible_scenes.insert(path);
@@ -1371,6 +1395,9 @@ void FileSystemDock::_search(EditorFileSystemDirectory *p_path, List<FileInfo> *
 				continue;
 			}
 
+			// Resolved while p_path/i are at hand, so the row loop never re-resolves the path.
+			file_info.has_description = _resolve_file_has_description(p_path, i, file_info.path);
+
 			matches->push_back(file_info);
 			if (matches->size() > p_max_items) {
 				return;
@@ -1381,9 +1408,7 @@ void FileSystemDock::_search(EditorFileSystemDirectory *p_path, List<FileInfo> *
 
 void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<String> &p_override_selection) {
 	_cancel_visible_scene_previews();
-	scene_row_indices.clear();
-	previewable_row_indices.clear();
-	queued_generic_preview_paths.clear();
+	file_list_row_flags.clear();
 
 	// Register the previously selected items.
 	Vector<String> previous_selection;
@@ -1442,6 +1467,9 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 
 	// Build the FileInfo list.
 	List<FileInfo> file_list;
+	// Every branch below fills FileInfo::has_description while an EditorFileSystemDirectory + index
+	// for the row is still at hand, so the row loop further down never has to re-resolve a path to
+	// query the harvested Asset Fact Index fact (see _resolve_file_has_description()).
 	if (_is_color_collection_active()) {
 		// Categories initially gather a project-wide union. A directory selected in the pruned tree adds
 		// a real res:// scope without replacing the underlying All Assets navigation state.
@@ -1461,6 +1489,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 				icon = folder_icon;
 				if (searched_tokens.is_empty() || _matches_all_search_tokens(text)) {
 					files->add_item(text, icon, true);
+					file_list_row_flags.push_back(uint8_t(FILE_LIST_ROW_DIRECTORY));
 					files->set_item_metadata(-1, favorite);
 				}
 			} else if (favorite.ends_with("/")) {
@@ -1468,6 +1497,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 				icon = folder_icon;
 				if (searched_tokens.is_empty() || _matches_all_search_tokens(text)) {
 					files->add_item(text, icon, true);
+					file_list_row_flags.push_back(uint8_t(FILE_LIST_ROW_DIRECTORY));
 					files->set_item_metadata(-1, favorite);
 
 					const Color folder_color = FileSystemDock::get_dir_icon_color(favorite, default_folder_color);
@@ -1489,6 +1519,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 					file_info.icon_path = efd->get_file_icon_path(index);
 					file_info.import_broken = !efd->get_file_import_is_valid(index);
 					file_info.modified_time = efd->get_file_modified_time(index);
+					file_info.has_description = _resolve_file_has_description(efd, index, favorite);
 				} else {
 					file_info.type = "";
 					file_info.import_broken = true;
@@ -1530,6 +1561,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 				// Display folders in the list.
 				if (directory != "res://") {
 					files->add_item("..", folder_icon, true);
+					file_list_row_flags.push_back(uint8_t(FILE_LIST_ROW_DIRECTORY));
 
 					String bd = directory.get_base_dir();
 					if (bd != "res://" && !bd.ends_with("/")) {
@@ -1554,6 +1586,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 					bool has_custom_color = assigned_folder_colors.has(dpath);
 
 					files->add_item(dname, folder_icon, true);
+					file_list_row_flags.push_back(uint8_t(FILE_LIST_ROW_DIRECTORY));
 					files->set_item_metadata(-1, dpath);
 					Color this_folder_color = has_custom_color ? folder_colors[assigned_folder_colors[dpath]] : inherited_folder_color;
 					if (!editor_is_dark_icon_and_font && this_folder_color != default_folder_color) {
@@ -1577,6 +1610,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 				file_info.icon_path = efd->get_file_icon_path(i);
 				file_info.import_broken = !efd->get_file_import_is_valid(i);
 				file_info.modified_time = efd->get_file_modified_time(i);
+				file_info.has_description = _resolve_file_has_description(efd, i, file_info.path);
 
 				file_list.push_back(file_info);
 			}
@@ -1621,6 +1655,16 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 			tooltip += "\n" + TTR("Status: Import of file failed. Please fix file and reimport manually.");
 		}
 
+		// Record preview eligibility; the actual preview requests are queued for visible rows only,
+		// deduplicated, by _update_visible_scene_previews().
+		uint32_t row_flags = 0;
+		if (finfo->type == SNAME("PackedScene")) {
+			row_flags |= FILE_LIST_ROW_SCENE;
+		}
+		if (!finfo->import_broken) {
+			row_flags |= FILE_LIST_ROW_PREVIEW_PENDING;
+		}
+
 		// Add the item to the ItemList.
 		int item_index;
 		if (use_thumbnails) {
@@ -1634,21 +1678,13 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 			item_index = files->get_item_count() - 1;
 			files->set_item_metadata(item_index, fpath);
 		}
-		if (_asset_has_description(fpath)) {
+		file_list_row_flags.push_back(uint8_t(row_flags));
+		if (finfo->has_description) {
 			_set_file_list_description_icon(item_index, true, fname);
 		}
 
 		if (fpath == main_scene_path) {
 			files->set_item_custom_fg_color(item_index, get_theme_color(SNAME("accent_color"), EditorStringName(Editor)));
-		}
-
-		// Record preview eligibility; the actual preview requests are queued for visible rows only,
-		// deduplicated, by _update_visible_scene_previews().
-		if (finfo->type == SNAME("PackedScene")) {
-			scene_row_indices.insert(item_index);
-		}
-		if (!finfo->import_broken) {
-			previewable_row_indices.insert(item_index);
 		}
 
 		// Select the items.
@@ -1833,21 +1869,35 @@ void FileSystemDock::_tree_description_button_clicked(TreeItem *p_item, int p_co
 	_show_description(p_item->get_metadata(0));
 }
 
+bool FileSystemDock::_resolve_file_has_description(EditorFileSystemDirectory *p_dir, int p_idx, const String &p_path) const {
+	// The open-scene overlay wins where it applies: an unsaved editor_description on an open text
+	// scene's root can differ from the harvested Asset Fact Index fact, which only reflects disk.
+	bool has_description = false;
+	if (EditorAssetDescription::get_open_scene_description_overlay(p_path, has_description)) {
+		return has_description;
+	}
+	return p_dir->get_file_has_description(p_idx);
+}
+
 bool FileSystemDock::_asset_has_description(const String &p_path) {
-	if (!EditorAssetDescription::is_supported(p_path)) {
+	const EditorAssetDescription::AssetKind kind = EditorAssetDescription::get_asset_kind(p_path);
+	if (kind == EditorAssetDescription::ASSET_KIND_UNSUPPORTED || kind == EditorAssetDescription::ASSET_KIND_RESOURCE_BINARY) {
 		return false;
 	}
-	const uint64_t modified_time = EditorAssetDescription::get_cache_modified_time(p_path);
-	HashMap<String, DescriptionCacheEntry>::Iterator cached = description_cache.find(p_path);
-	if (cached && cached->value.modified_time == modified_time) {
-		return cached->value.has_description;
+
+	// Binary scenes are always harvested as has_description == false (full-load probing can't run
+	// on the scan thread), so a point query still needs the full probe here. .scn is rare, and this
+	// is only reached from single-path call sites (context menu, refresh), never a row loop.
+	if (kind == EditorAssetDescription::ASSET_KIND_SCENE_BINARY) {
+		return EditorAssetDescription::has_description_bounded(p_path);
 	}
 
-	DescriptionCacheEntry entry;
-	entry.modified_time = modified_time;
-	entry.has_description = EditorAssetDescription::has_description_bounded(p_path);
-	description_cache.insert(p_path, entry);
-	return entry.has_description;
+	int index = -1;
+	EditorFileSystemDirectory *dir = EditorFileSystem::get_singleton()->find_file(p_path, &index);
+	if (!dir) {
+		return false;
+	}
+	return _resolve_file_has_description(dir, index, p_path);
 }
 
 void FileSystemDock::_set_tree_description_indicator(TreeItem *p_item, bool p_has_description) {
@@ -1877,7 +1927,10 @@ void FileSystemDock::_set_file_list_description_icon(int p_item_index, bool p_ha
 }
 
 void FileSystemDock::_refresh_description_indicator(const String &p_path) {
-	description_cache.erase(p_path);
+	// Re-harvest the fact from the just-saved file before querying, so the engine's cached
+	// has_description reflects what was just written (update_file() re-reads this single file
+	// on the main thread; see EditorFileSystem::update_files() re-harvesting on save).
+	EditorFileSystem::get_singleton()->update_file(p_path);
 	const bool has_description = _asset_has_description(p_path);
 	for (int item_index = 0; item_index < files->get_item_count(); item_index++) {
 		if (files->get_item_metadata(item_index) != p_path) {
@@ -4468,6 +4521,8 @@ void FileSystemDock::_gather_color_collection(EditorFileSystemDirectory *p_dir, 
 			file_info.icon_path = p_dir->get_file_icon_path(i);
 			file_info.import_broken = !p_dir->get_file_import_is_valid(i);
 			file_info.modified_time = p_dir->get_file_modified_time(i);
+			// Resolved while p_dir/i are at hand, so the row loop never re-resolves the path.
+			file_info.has_description = _resolve_file_has_description(p_dir, i, file_info.path);
 			r_matches->push_back(file_info);
 		}
 	}

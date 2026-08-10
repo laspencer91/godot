@@ -44,6 +44,7 @@
 #include "core/variant/variant_parser.h"
 #include "editor/doc/editor_help.h"
 #include "editor/editor_node.h"
+#include "editor/file_system/editor_asset_description.h"
 #include "editor/file_system/editor_paths.h"
 #include "editor/inspector/editor_resource_preview.h"
 #include "editor/script/script_editor_plugin.h"
@@ -205,6 +206,11 @@ String EditorFileSystemDirectory::get_file_icon_path(int p_idx) const {
 StringName EditorFileSystemDirectory::get_file_type(int p_idx) const {
 	ERR_FAIL_INDEX_V(p_idx, files.size(), "");
 	return files[p_idx]->type;
+}
+
+bool EditorFileSystemDirectory::get_file_has_description(int p_idx) const {
+	ERR_FAIL_INDEX_V(p_idx, files.size(), false);
+	return files[p_idx]->has_description;
 }
 
 StringName EditorFileSystemDirectory::get_file_resource_script_class(int p_idx) const {
@@ -564,7 +570,8 @@ void EditorFileSystem::_load_filesystem_cache() {
 						fc.class_info.is_tool = slices[4].to_int();
 						fc.import_md5 = slices[5];
 						fc.import_dest_paths = slices[6].split("<*>");
-						// Asset Fact Index fields; see workspace-editor-planning/ASSET-FACT-INDEX.md.
+						// Asset facts triplet — keep in sync (see _harvest_asset_facts);
+						// also workspace-editor-planning/ASSET-FACT-INDEX.md.
 						fc.has_description = slices[7].to_int() != 0;
 						fc.storage_class = (EditorFileSystemDirectory::AssetStorageClass)slices[8].to_int();
 						fc.badge_flags = (uint32_t)slices[9].to_int();
@@ -1411,6 +1418,7 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				fi->import_valid = fc->import_valid;
 				fi->import_group_file = fc->import_group_file;
 				fi->class_info = fc->class_info;
+				// Asset facts triplet — keep in sync (see _harvest_asset_facts).
 				fi->has_description = fc->has_description;
 				fi->storage_class = fc->storage_class;
 				fi->badge_flags = fc->badge_flags;
@@ -1457,6 +1465,9 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				fi->import_md5 = FileAccess::get_md5(path + ".import");
 				fi->import_dest_paths = Vector<String>();
 				fi->import_valid = (fi->type == "TextFile" || fi->type == "OtherFile") ? true : ResourceLoader::is_import_valid(path);
+				// get_resource_import_info() above does not surface the description, so read it
+				// from the sidecar. If the sidecar is missing the reimport queued below harvests it.
+				_harvest_asset_facts(fi, path, true);
 
 				ItemAction ia;
 				ia.action = ItemAction::ACTION_FILE_TEST_REIMPORT;
@@ -1477,6 +1488,7 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				fi->import_dest_paths = Vector<String>();
 				fi->import_valid = true;
 				fi->class_info = fc->class_info;
+				// Asset facts triplet — keep in sync (see _harvest_asset_facts).
 				fi->has_description = fc->has_description;
 				fi->storage_class = fc->storage_class;
 				fi->badge_flags = fc->badge_flags;
@@ -1513,6 +1525,7 @@ void EditorFileSystem::_process_file_system(const ScannedDirectory *p_scan_dir, 
 				fi->import_md5 = "";
 				fi->import_dest_paths = Vector<String>();
 				fi->import_valid = true;
+				_harvest_asset_facts(fi, path, false);
 
 				// Files in dep_update_list are forced for rescan to update dependencies. They don't need other updates.
 				if (!dep_update_list.has(path)) {
@@ -1675,6 +1688,7 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 
 				if (idx == -1) {
 					//never seen this file, add actition to add it
+					const bool can_import = _can_import_file(f);
 					EditorFileSystemDirectory::FileInfo *fi = memnew(EditorFileSystemDirectory::FileInfo);
 					fi->file = f;
 
@@ -1694,6 +1708,7 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 					fi->class_info = _get_global_script_class(fi->type, path);
 					fi->import_valid = (fi->type == "TextFile" || fi->type == "OtherFile") ? true : ResourceLoader::is_import_valid(path);
 					fi->import_group_file = ResourceLoader::get_import_group_file(path);
+					_harvest_asset_facts(fi, path, can_import);
 
 					{
 						ItemAction ia;
@@ -1704,7 +1719,7 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 						scan_actions.push_back(ia);
 					}
 
-					if (_can_import_file(f)) {
+					if (can_import) {
 						//if it can be imported, and it was added, it needs to be reimported
 						ItemAction ia;
 						ia.action = ItemAction::ACTION_FILE_TEST_REIMPORT;
@@ -1785,6 +1800,9 @@ void EditorFileSystem::_scan_fs_changes(EditorFileSystemDirectory *p_dir, ScanPr
 
 			if (mt != p_dir->files[i]->modified_time) {
 				p_dir->files[i]->modified_time = mt; //save new time, but test for reload
+				// The file changed on disk, so its harvested facts are stale. Nothing else
+				// re-reads this file when it isn't cached as a loaded resource.
+				_harvest_asset_facts(p_dir->files[i], path, false);
 
 				ItemAction ia;
 				ia.action = ItemAction::ACTION_FILE_RELOAD;
@@ -2059,6 +2077,7 @@ void EditorFileSystem::_save_filesystem_cache(EditorFileSystemDirectory *p_dir, 
 		cache_string.append(itos(file_info->import_modified_time));
 		cache_string.append(itos(file_info->import_valid));
 		cache_string.append(file_info->import_group_file);
+		// The last three joined fields are the asset facts triplet — keep in sync (see _harvest_asset_facts).
 		cache_string.append(String("<>").join({ file_info->class_info.name, file_info->class_info.extends, file_info->class_info.icon_path, itos(file_info->class_info.is_abstract), itos(file_info->class_info.is_tool), file_info->import_md5, String("<*>").join(file_info->import_dest_paths), itos(file_info->has_description), itos((int)file_info->storage_class), itos(file_info->badge_flags) }));
 		cache_string.append(String("<>").join(file_info->deps));
 
@@ -2262,6 +2281,17 @@ void EditorFileSystem::_save_late_updated_files() {
 	for (const String &E : late_update_files) {
 		f->store_line(E);
 	}
+}
+
+void EditorFileSystem::_harvest_asset_facts(EditorFileSystemDirectory::FileInfo *p_fi, const String &p_path, bool p_is_imported) {
+	// Sole fresh-read harvest site for the Asset Fact Index; storage_class and badge_flags harvesting
+	// lands here too (see workspace-editor-planning/ASSET-FACT-INDEX.md steps H and J), keeping "one
+	// field, one harvest site" true as the fact set grows.
+	p_fi->has_description = EditorAssetDescription::file_has_description(p_path, p_is_imported);
+}
+
+void EditorFileSystem::_harvest_asset_facts(EditorFileSystemDirectory::FileInfo *p_fi, const String &p_path) {
+	_harvest_asset_facts(p_fi, p_path, EditorAssetDescription::get_asset_kind(p_path) == EditorAssetDescription::ASSET_KIND_IMPORTED);
 }
 
 Vector<String> EditorFileSystem::_get_dependencies(const String &p_path) {
@@ -2690,6 +2720,10 @@ void EditorFileSystem::update_files(const Vector<String> &p_script_paths) {
 			fi->modified_time = FileAccess::get_modified_time(file);
 			fi->deps = _get_dependencies(file);
 			fi->import_valid = (type == "TextFile" || type == "OtherFile") ? true : ResourceLoader::is_import_valid(file);
+			// The file was just written, so re-harvest the asset facts from it. This runs on the
+			// main thread, but it is one bounded read of a single file, same as the dependency
+			// and type reads above.
+			_harvest_asset_facts(fi, file);
 
 			if (uid != ResourceUID::INVALID_ID) {
 				if (ResourceUID::get_singleton()->has_id(uid)) {
@@ -2992,6 +3026,10 @@ Error EditorFileSystem::_reimport_group(const String &p_group_file, const Vector
 			fs->files[cpos]->type = "OtherFile";
 		}
 		fs->files[cpos]->import_valid = err == OK;
+		// The description was carried over from the old sidecar into the one just rewritten above.
+		// Fact store; see _harvest_asset_facts().
+		const String *description = descriptions.getptr(file);
+		fs->files[cpos]->has_description = description && !description->is_empty();
 
 		if (ResourceUID::get_singleton()->has_id(uid)) {
 			ResourceUID::get_singleton()->set_id(uid, file);
@@ -3096,6 +3134,8 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 			fs->files[cpos]->deps.clear();
 			fs->files[cpos]->type = "";
 			fs->files[cpos]->import_valid = false;
+			// Fact store; see _harvest_asset_facts().
+			fs->files[cpos]->has_description = !description.is_empty();
 			EditorResourcePreview::get_singleton()->check_for_invalidation(p_file);
 		}
 		return OK;
@@ -3299,6 +3339,9 @@ Error EditorFileSystem::_reimport_file(const String &p_file, const HashMap<Strin
 		fs->files[cpos]->resource_script_class = ResourceLoader::get_resource_script_class(p_file);
 		fs->files[cpos]->uid = uid;
 		fs->files[cpos]->import_valid = fs->files[cpos]->type == "TextFile" ? true : ResourceLoader::is_import_valid(p_file);
+		// The description read from the old sidecar was carried into the one just written above.
+		// Fact store; see _harvest_asset_facts().
+		fs->files[cpos]->has_description = !description.is_empty();
 	}
 
 	for (const String &path : gen_files) {

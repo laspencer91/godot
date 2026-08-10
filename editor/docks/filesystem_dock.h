@@ -374,21 +374,17 @@ private:
 
 	HashSet<String> cached_valid_conversion_targets;
 
-	struct DescriptionCacheEntry {
-		uint64_t modified_time = 0;
-		bool has_description = false;
-	};
-	HashMap<String, DescriptionCacheEntry> description_cache;
 	HashMap<String, Callable> visible_scene_preview_requests;
 	bool scene_preview_visibility_update_queued = false;
-	// Rows of the current file list classified as scene files (type == "PackedScene"), recorded when the
-	// list is built so _update_visible_scene_previews() never has to re-scan EditorFileSystem for the type.
-	HashSet<int> scene_row_indices;
-	// Rows of the current file list eligible for a generic resource preview (i.e. not import-broken).
-	HashSet<int> previewable_row_indices;
-	// Paths already queued for a generic resource preview since the last full rebuild, so scrolling or
-	// re-running the visibility pass doesn't re-queue the same path over and over.
-	HashSet<String> queued_generic_preview_paths;
+	enum FileListRowFlags {
+		FILE_LIST_ROW_SCENE = 1, // Row is a scene file (type == "PackedScene").
+		FILE_LIST_ROW_PREVIEW_PENDING = 2, // Row is preview-eligible (not import-broken) and not yet queued.
+		FILE_LIST_ROW_DIRECTORY = 4, // Row is a folder ("..", subdirectory, or favorited folder).
+	};
+	// One entry per row of `files`, in index order, recorded while the list is built so
+	// _update_visible_scene_previews() never has to re-scan EditorFileSystem or re-read metadata for a
+	// classification. PREVIEW_PENDING is cleared as previews are queued, which is also the dedup.
+	LocalVector<uint8_t> file_list_row_flags;
 
 	Vector<String> prev_selection;
 
@@ -519,6 +515,10 @@ private:
 	void _update_color_icon_button(const String &p_color_key);
 	void _color_labels_dialog_confirmed();
 	bool _asset_has_description(const String &p_path);
+	// Combines the harvested Asset Fact Index fact for files[p_idx] of p_dir with
+	// EditorAssetDescription's open-scene overlay; used at FileInfo population sites that already
+	// hold a resolved EditorFileSystemDirectory + index, so row-build loops never re-resolve p_path.
+	bool _resolve_file_has_description(EditorFileSystemDirectory *p_dir, int p_idx, const String &p_path) const;
 	void _set_tree_description_indicator(TreeItem *p_item, bool p_has_description);
 	void _set_file_list_description_icon(int p_item_index, bool p_has_description, const String &p_file_name);
 	void _refresh_description_indicator(const String &p_path);

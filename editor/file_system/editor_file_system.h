@@ -109,6 +109,7 @@ public:
 	String get_file_path(int p_idx) const;
 	ResourceUID::ID get_file_uid(int p_idx) const;
 	StringName get_file_type(int p_idx) const;
+	bool get_file_has_description(int p_idx) const; // Harvested Asset Fact Index fact; editor-internal only, not bound to ClassDB.
 	StringName get_file_resource_script_class(int p_idx) const;
 	Vector<String> get_file_deps(int p_idx) const;
 	bool get_file_import_is_valid(int p_idx) const;
@@ -342,6 +343,14 @@ class EditorFileSystem : public Node {
 	bool reimport_on_missing_imported_files;
 
 	Vector<String> _get_dependencies(const String &p_path);
+
+	// The single site where the Asset Fact Index facts are harvested fresh off a file, so the
+	// remaining facts (storage_class, badge_flags — see workspace-editor-planning/ASSET-FACT-INDEX.md
+	// steps H and J) land here instead of in every scan branch. Pass p_is_imported when the caller
+	// already knows whether the file has an .import sidecar; the overload without it derives that
+	// itself at the cost of one existence check.
+	void _harvest_asset_facts(EditorFileSystemDirectory::FileInfo *p_fi, const String &p_path, bool p_is_imported);
+	void _harvest_asset_facts(EditorFileSystemDirectory::FileInfo *p_fi, const String &p_path);
 
 	struct ImportFile {
 		String path;
