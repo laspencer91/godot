@@ -589,6 +589,18 @@
 				[/codeblock]
 			</description>
 		</method>
+		<method name="get_unique_scene_id" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns this node's persistent unique scene ID, assigned the first time its scene is packed for saving, or [constant UNIQUE_SCENE_ID_UNASSIGNED] if the node has never been saved. Unlike the node's name or path, the ID survives renames and moves within the scene. IDs are only unique among the nodes saved by one scene file — instantiating a scene twice yields duplicate IDs, so combine with the containing scene's UID (and [method get_unique_scene_id_path]) for a globally stable identity.
+			</description>
+		</method>
+		<method name="get_unique_scene_id_path" qualifiers="const">
+			<return type="PackedInt32Array" />
+			<description>
+				Returns the chain of unique scene IDs that identifies this node relative to its scene root: ordered from the root's direct descendant down to this node, root excluded. This mirrors the identity path the scene saver stores for node references. Returns an empty array if any node on the owner chain has no settled ID yet (the scene was never saved) or the chain does not terminate at a scene root — treat empty as "no identity yet", never as a valid key.
+			</description>
+		</method>
 		<method name="get_viewport" qualifiers="const">
 			<return type="Viewport" />
 			<description>
@@ -1161,6 +1173,9 @@
 		</signal>
 	</signals>
 	<constants>
+		<constant name="UNIQUE_SCENE_ID_UNASSIGNED" value="0">
+			Value of [method get_unique_scene_id] for a node that has never been saved: no identity has been settled by the scene saver yet.
+		</constant>
 		<constant name="NOTIFICATION_ENTER_TREE" value="10">
 			Notification received when the node enters a [SceneTree]. See [method _enter_tree].
 			This notification is received [i]before[/i] the related [signal tree_entered] signal.

@@ -550,6 +550,7 @@ public:
 
 	void set_unique_scene_id(int32_t p_unique_id);
 	int32_t get_unique_scene_id() const;
+	PackedInt32Array get_unique_scene_id_path() const;
 
 	Window *get_window() const;
 	Window *get_non_popup_window() const;

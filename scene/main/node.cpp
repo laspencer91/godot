@@ -2140,6 +2140,28 @@ int32_t Node::get_unique_scene_id() const {
 	return data.unique_scene_id;
 }
 
+PackedInt32Array Node::get_unique_scene_id_path() const {
+	// Mirror of the id_paths walk in SceneState::pack(): the chain of unique scene IDs
+	// from the scene root's direct child down to this node, root excluded. Empty when any
+	// node on the chain has no settled ID (never saved through pack()) or the chain does
+	// not terminate at a scene root — callers must treat empty as "no identity yet".
+	PackedInt32Array id_path;
+	const Node *base = this;
+	while (base->get_unique_scene_id() != UNIQUE_SCENE_ID_UNASSIGNED) {
+		id_path.push_back(base->get_unique_scene_id());
+		Node *base_owner = base->get_owner();
+		if (base_owner == nullptr) {
+			break;
+		}
+		if (base_owner->get_owner() == nullptr) {
+			id_path.reverse();
+			return id_path;
+		}
+		base = base_owner;
+	}
+	return PackedInt32Array();
+}
+
 Window *Node::get_window() const {
 	ERR_THREAD_GUARD_V(nullptr);
 	Viewport *vp = get_viewport();
@@ -3821,6 +3843,8 @@ void Node::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_groups"), &Node::_get_groups);
 	ClassDB::bind_method(D_METHOD("set_owner", "owner"), &Node::set_owner);
 	ClassDB::bind_method(D_METHOD("get_owner"), &Node::get_owner);
+	ClassDB::bind_method(D_METHOD("get_unique_scene_id"), &Node::get_unique_scene_id);
+	ClassDB::bind_method(D_METHOD("get_unique_scene_id_path"), &Node::get_unique_scene_id_path);
 	ClassDB::bind_method(D_METHOD("get_index", "include_internal"), &Node::get_index, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("print_tree"), &Node::print_tree);
 	ClassDB::bind_method(D_METHOD("print_tree_pretty"), &Node::print_tree_pretty);
@@ -3966,6 +3990,8 @@ void Node::_bind_methods() {
 	}
 	ClassDB::bind_method(D_METHOD("set_thread_safe", "property", "value"), &Node::set_thread_safe);
 	ClassDB::bind_method(D_METHOD("notify_thread_safe", "what"), &Node::notify_thread_safe);
+
+	BIND_CONSTANT(UNIQUE_SCENE_ID_UNASSIGNED);
 
 	BIND_CONSTANT(NOTIFICATION_ENTER_TREE);
 	BIND_CONSTANT(NOTIFICATION_EXIT_TREE);
