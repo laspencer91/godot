@@ -91,6 +91,7 @@
 		</member>
 		<member name="light_projector" type="Texture2D" setter="set_projector" getter="get_projector" keywords="cookie, gobo">
 			[Texture2D] projected by light. [member shadow_enabled] must be on for the projector to work. Light projectors make the light appear as if it is shining through a colored but transparent object, almost like light shining through stained-glass.
+			[b]Note:[/b] [OmniLight3D] projector textures are taken into account when baking with [LightmapGI]. [SpotLight3D] projector textures are not currently taken into account by [LightmapGI].
 			[b]Note:[/b] Unlike [BaseMaterial3D] whose filter mode can be adjusted on a per-material basis, the filter mode for light projector textures is set globally with [member ProjectSettings.rendering/textures/light_projectors/filter].
 			[b]Note:[/b] Light projector textures are only supported in the Forward+ and Mobile rendering methods, not Compatibility.
 		</member>

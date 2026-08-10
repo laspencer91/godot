@@ -90,7 +90,7 @@ void LightmapperRD::add_directional_light(const String &p_name, bool p_static, c
 	light_metadata.push_back(md);
 }
 
-void LightmapperRD::add_omni_light(const String &p_name, bool p_static, const Vector3 &p_position, const Color &p_color, float p_energy, float p_indirect_energy, float p_range, float p_attenuation, float p_size, float p_shadow_blur) {
+void LightmapperRD::add_omni_light(const String &p_name, bool p_static, const Vector3 &p_position, const Color &p_color, float p_energy, float p_indirect_energy, float p_range, float p_attenuation, float p_size, float p_shadow_blur, const Basis &p_projector_basis, const Rect2 &p_projector_rect) {
 	Light l;
 	l.type = LIGHT_TYPE_OMNI;
 	l.position[0] = p_position.x;
@@ -106,6 +106,18 @@ void LightmapperRD::add_omni_light(const String &p_name, bool p_static, const Ve
 	l.static_bake = p_static;
 	l.size = p_size;
 	l.shadow_blur = p_shadow_blur;
+	// These fields are otherwise unused by omni lights. Store the world-to-light
+	// projector basis in them so the compute shader can reproduce the renderer's
+	// dual-paraboloid projector mapping without increasing the light buffer size.
+	for (int i = 0; i < 3; i++) {
+		l.direction[i] = p_projector_basis.get_column(0)[i];
+		l.area_width[i] = p_projector_basis.get_column(1)[i];
+		l.area_height[i] = p_projector_basis.get_column(2)[i];
+	}
+	l.area_texture_rect[0] = p_projector_rect.position.x;
+	l.area_texture_rect[1] = p_projector_rect.position.y;
+	l.area_texture_rect[2] = p_projector_rect.size.x;
+	l.area_texture_rect[3] = p_projector_rect.size.y;
 	lights.push_back(l);
 
 	LightMetadata md;

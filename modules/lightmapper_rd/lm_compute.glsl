@@ -443,6 +443,10 @@ vec2 get_vogel_disk(float p_i, float p_rotation, float p_sample_count_sqrt) {
 	return vec2(cos(theta), sin(theta)) * r;
 }
 
+vec3 projector_srgb_to_linear(vec3 p_color) {
+	return mix(pow((p_color + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), p_color * (1.0 / 12.92), lessThan(p_color, vec3(0.04045)));
+}
+
 void trace_direct_light(vec3 p_position, vec3 p_normal, uint p_light_index, bool p_soft_shadowing, out vec3 r_light, out vec3 r_light_dir, inout uint r_noise, float p_texel_size, out float r_shadow) {
 	const float EPSILON = 0.00001;
 
@@ -517,7 +521,30 @@ void trace_direct_light(vec3 p_position, vec3 p_normal, uint p_light_index, bool
 
 		attenuation = get_omni_attenuation(dist, 1.0 / light_data.range, light_data.attenuation);
 
-		if (light_data.type == LIGHT_TYPE_SPOT) {
+		if (light_data.type == LIGHT_TYPE_OMNI && light_data.area_texture_rect != vec4(0.0)) {
+			// Omni projectors use two vertically stacked dual-paraboloid maps. For
+			// omni lights, direction/area_width/area_height contain the columns of
+			// the world-to-light projector basis and area_texture_rect contains the
+			// full projector texture's rectangle in the offline light texture atlas.
+			vec3 local_v = normalize(mat3(light_data.direction, light_data.area_width.xyz, light_data.area_height.xyz) * (p_position - light_pos));
+			vec4 atlas_rect = light_data.area_texture_rect;
+			atlas_rect.w *= 0.5;
+
+			if (local_v.z >= 0.0) {
+				atlas_rect.y += atlas_rect.w;
+			}
+
+			local_v.xy /= 1.0 + abs(local_v.z);
+			local_v.xy = local_v.xy * 0.5 + 0.5;
+			vec2 proj_uv = local_v.xy * atlas_rect.zw;
+
+			// Clamp within this hemisphere to avoid bleeding from neighboring atlas entries.
+			vec2 texel_size = 1.0 / vec2(textureSize(area_light_atlas, 0));
+			proj_uv = clamp(proj_uv, texel_size * 0.5, atlas_rect.zw - texel_size * 0.5);
+
+			vec4 projector = textureLod(sampler2D(area_light_atlas, area_light_atlas_sampler), proj_uv + atlas_rect.xy, 0.0);
+			light_texture_color = projector_srgb_to_linear(projector.rgb) * projector.a;
+		} else if (light_data.type == LIGHT_TYPE_SPOT) {
 			vec3 rel = normalize(p_position - light_pos);
 			float cos_spot_angle = light_data.cos_spot_angle;
 			float cos_angle = dot(rel, light_data.direction);

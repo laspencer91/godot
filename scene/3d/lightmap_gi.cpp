@@ -908,8 +908,9 @@ LightmapGI::BakeError LightmapGI::_save_and_reimport_atlas_textures(const Ref<Li
 	return LightmapGI::BAKE_ERROR_OK;
 }
 
-void LightmapGI::_build_area_light_texture_atlas(const Vector<LightmapGI::LightsFound> &lights_found, HashMap<Ref<Texture2D>, AreaLightAtlasTexture> &r_textures, Size2i &r_atlas_size, int &r_mipmaps) const {
-	if (RenderingServer::get_singleton()->get_current_rendering_method() != "gl_compatibility") { // area light textures unsupported in compat
+void LightmapGI::_build_light_texture_atlas(const Vector<LightmapGI::LightsFound> &lights_found, HashMap<Ref<Texture2D>, LightAtlasTexture> &r_textures, Size2i &r_atlas_size, int &r_mipmaps) const {
+	// Area-light textures and omni projectors share the lightmapper's offline texture atlas.
+	if (RenderingServer::get_singleton()->get_current_rendering_method() != "gl_compatibility") { // Light textures are unsupported in Compatibility.
 		r_mipmaps = 8;
 		r_atlas_size = Size2i(pow(2, r_mipmaps), pow(2, r_mipmaps));
 
@@ -918,7 +919,14 @@ void LightmapGI::_build_area_light_texture_atlas(const Vector<LightmapGI::Lights
 			if (Object::cast_to<AreaLight3D>(light)) {
 				AreaLight3D *l = Object::cast_to<AreaLight3D>(light);
 				if (l->get_area_texture().is_valid() && !r_textures.has(l->get_area_texture())) {
-					r_textures[l->get_area_texture()] = AreaLightAtlasTexture();
+					r_textures[l->get_area_texture()] = LightAtlasTexture();
+				}
+			} else if (Object::cast_to<OmniLight3D>(light)) {
+				OmniLight3D *l = Object::cast_to<OmniLight3D>(light);
+				if (l->has_shadow() && l->get_projector().is_valid() && !r_textures.has(l->get_projector())) {
+					LightAtlasTexture texture;
+					texture.panorama_to_dp = true;
+					r_textures[l->get_projector()] = texture;
 				}
 			}
 		}
@@ -954,7 +962,7 @@ void LightmapGI::_build_area_light_texture_atlas(const Vector<LightmapGI::Lights
 	int idx = 0;
 	int border = 1 << (r_mipmaps - 1);
 
-	for (const KeyValue<Ref<Texture2D>, AreaLightAtlasTexture> &E : r_textures) {
+	for (const KeyValue<Ref<Texture2D>, LightAtlasTexture> &E : r_textures) {
 		Ref<Texture2D> tex = E.key;
 		Size2i tex_size = Size2i(tex->get_width(), tex->get_height());
 
@@ -1339,17 +1347,19 @@ LightmapGI::BakeError LightmapGI::bake(Node *p_from_node, String p_image_data_pa
 	{
 		Size2i area_light_atlas_size;
 		int area_light_atlas_mipmaps = 1;
-		HashMap<Ref<Texture2D>, AreaLightAtlasTexture> area_light_atlas_textures;
+		HashMap<Ref<Texture2D>, LightAtlasTexture> light_atlas_textures;
 		PackedByteArray area_light_atlas_data;
-		_build_area_light_texture_atlas(lights_found, area_light_atlas_textures, area_light_atlas_size, area_light_atlas_mipmaps);
-		if (area_light_atlas_textures.size() > 0) {
+		_build_light_texture_atlas(lights_found, light_atlas_textures, area_light_atlas_size, area_light_atlas_mipmaps);
+		if (light_atlas_textures.size() > 0) {
 			TypedArray<RID> area_light_textures;
 			TypedArray<Rect2> area_light_texture_rects;
-			for (const KeyValue<Ref<Texture2D>, AreaLightAtlasTexture> &E : area_light_atlas_textures) {
+			PackedByteArray panorama_to_dp;
+			for (const KeyValue<Ref<Texture2D>, LightAtlasTexture> &E : light_atlas_textures) {
 				area_light_textures.push_back(E.key->get_rid());
 				area_light_texture_rects.push_back(E.value.texture_rect);
+				panorama_to_dp.push_back(E.value.panorama_to_dp ? 1 : 0);
 			}
-			area_light_atlas_data = RS::get_singleton()->bake_render_area_light_atlas(area_light_textures, area_light_texture_rects, area_light_atlas_size, area_light_atlas_mipmaps);
+			area_light_atlas_data = RS::get_singleton()->bake_render_area_light_atlas(area_light_textures, area_light_texture_rects, panorama_to_dp, area_light_atlas_size, area_light_atlas_mipmaps);
 		} else {
 			area_light_atlas_data.resize_initialized(4); // 1 pixel
 		}
@@ -1387,7 +1397,13 @@ LightmapGI::BakeError LightmapGI::bake(Node *p_from_node, String p_image_data_pa
 				if (use_physical_light_units) {
 					energy *= (1.0 / (Math::PI * 4.0));
 				}
-				lightmapper->add_omni_light(light->get_name(), light->get_bake_mode() == Light3D::BAKE_STATIC, xf.origin, linear_color, energy, indirect_energy, l->get_param(Light3D::PARAM_RANGE), l->get_param(Light3D::PARAM_ATTENUATION), l->get_param(Light3D::PARAM_SIZE), l->get_param(Light3D::PARAM_SHADOW_BLUR));
+				LightAtlasTexture projector;
+				Basis projector_basis;
+				if (l->has_shadow() && l->get_projector().is_valid() && light_atlas_textures.has(l->get_projector())) {
+					projector = light_atlas_textures[l->get_projector()];
+					projector_basis = xf.basis.inverse();
+				}
+				lightmapper->add_omni_light(light->get_name(), light->get_bake_mode() == Light3D::BAKE_STATIC, xf.origin, linear_color, energy, indirect_energy, l->get_param(Light3D::PARAM_RANGE), l->get_param(Light3D::PARAM_ATTENUATION), l->get_param(Light3D::PARAM_SIZE), l->get_param(Light3D::PARAM_SHADOW_BLUR), projector_basis, projector.texture_rect);
 			} else if (Object::cast_to<SpotLight3D>(light)) {
 				SpotLight3D *l = Object::cast_to<SpotLight3D>(light);
 				if (use_physical_light_units) {
@@ -1405,9 +1421,9 @@ LightmapGI::BakeError LightmapGI::bake(Node *p_from_node, String p_image_data_pa
 					float surface_area = l->get_area_size().x * l->get_area_size().y;
 					energy /= surface_area;
 				}
-				AreaLightAtlasTexture tex;
-				if (l->get_area_texture().is_valid()) {
-					tex = area_light_atlas_textures[l->get_area_texture()];
+				LightAtlasTexture tex;
+				if (l->get_area_texture().is_valid() && light_atlas_textures.has(l->get_area_texture())) {
+					tex = light_atlas_textures[l->get_area_texture()];
 				}
 				lightmapper->add_area_light(light->get_name(), light->get_bake_mode() == Light3D::BAKE_STATIC, xf.origin, -xf.basis.get_column(Vector3::AXIS_Z).normalized(), linear_color, energy, indirect_energy, l->get_param(Light3D::PARAM_RANGE), l->get_param(Light3D::PARAM_ATTENUATION), area_vec_x, area_vec_y, l->get_param(Light3D::PARAM_SIZE), l->get_param(Light3D::PARAM_SHADOW_BLUR), tex.texture_rect, tex.max_mipmap);
 			}

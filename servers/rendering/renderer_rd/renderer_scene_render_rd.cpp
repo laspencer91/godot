@@ -1675,13 +1675,14 @@ TypedArray<Image> RendererSceneRenderRD::bake_render_uv2(RID p_base, const Typed
 	return ret;
 }
 
-PackedByteArray RendererSceneRenderRD::bake_render_area_light_atlas(const TypedArray<RID> &p_area_light_textures, const TypedArray<Rect2> &p_area_light_atlas_texture_rects, const Size2i &p_size, int p_mipmaps) {
+PackedByteArray RendererSceneRenderRD::bake_render_area_light_atlas(const TypedArray<RID> &p_area_light_textures, const TypedArray<Rect2> &p_area_light_atlas_texture_rects, const PackedByteArray &p_panorama_to_dp, const Size2i &p_size, int p_mipmaps) {
 	PackedByteArray data;
 	ERR_FAIL_COND_V_MSG(p_mipmaps <= 0, data, "Mipmaps must be greater than 0");
 	ERR_FAIL_COND_V_MSG(p_size.width < pow(2, p_mipmaps), data, "Image width must be greater than mipmaps to power of 2");
 	ERR_FAIL_COND_V_MSG(p_size.height < pow(2, p_mipmaps), data, "Image height must be greater than mipmaps to power of 2");
 	ERR_FAIL_COND_V_MSG(p_size.width != Math::nearest_power_of_2_templated(p_size.width) || p_size.height != Math::nearest_power_of_2_templated(p_size.height), data, "Image size must be a power of 2");
 	ERR_FAIL_COND_V_MSG(p_area_light_textures.size() != p_area_light_atlas_texture_rects.size(), data, "Number of Texture2Ds and number of Rect2s must match");
+	ERR_FAIL_COND_V_MSG(p_area_light_textures.size() != p_panorama_to_dp.size(), data, "Number of Texture2Ds and number of panorama conversion flags must match");
 
 	RD::TextureFormat tf;
 	tf.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
@@ -1729,7 +1730,7 @@ PackedByteArray RendererSceneRenderRD::bake_render_area_light_atlas(const TypedA
 				fb_vec.push_back(shared_tex);
 				RID blur_fb = RD::get_singleton()->framebuffer_create(fb_vec);
 				RD::DrawListID rescale_draw_list = RD::get_singleton()->draw_list_begin(blur_fb, RD::DRAW_CLEAR_ALL, cc);
-				copy_effects->copy_to_atlas_fb(rd_texture, blur_fb, Rect2(Vector2(0.0, 0.0), Vector2(1.0, 1.0)), rescale_draw_list);
+				copy_effects->copy_to_atlas_fb(rd_texture, blur_fb, Rect2(Vector2(0.0, 0.0), Vector2(1.0, 1.0)), rescale_draw_list, false, p_panorama_to_dp[t_idx] != 0);
 				RD::get_singleton()->draw_list_end();
 
 				copy_effects->copy_to_fb_rect(blur_tex, mip_fb, uv_recti);
