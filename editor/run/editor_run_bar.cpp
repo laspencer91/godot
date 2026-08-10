@@ -63,6 +63,7 @@ void EditorRunBar::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_POSTINITIALIZE: {
 			_reset_play_buttons();
+			_update_game_embed_mode_button();
 		} break;
 
 		case NOTIFICATION_READY: {
@@ -95,6 +96,7 @@ void EditorRunBar::_notification(int p_what) {
 			}
 
 			_update_play_buttons();
+			_update_game_embed_mode_button();
 			profiler_autostart_indicator->set_button_icon(get_editor_theme_icon(SNAME("ProfilerAutostartWarning")));
 			pause_button->set_button_icon(get_editor_theme_icon(SNAME("Pause")));
 			stop_button->set_button_icon(get_editor_theme_icon(SNAME("Stop")));
@@ -161,6 +163,44 @@ void EditorRunBar::_update_play_buttons() {
 		active_button->set_pressed(true);
 		active_button->set_button_icon(get_editor_theme_icon(SNAME("Reload")));
 	}
+}
+
+void EditorRunBar::_game_embed_mode_pressed(int p_mode) {
+	ERR_FAIL_INDEX(p_mode, GAME_EMBED_MAX);
+	set_game_embed_mode((GameEmbedMode)p_mode);
+	emit_signal(SNAME("game_embed_mode_changed"), p_mode);
+}
+
+void EditorRunBar::_update_game_embed_mode_button() {
+	if (!game_embed_mode_button) {
+		return;
+	}
+
+	PopupMenu *popup = game_embed_mode_button->get_popup();
+	for (int i = 0; i < GAME_EMBED_MAX; i++) {
+		popup->set_item_checked(popup->get_item_index(i), i == game_embed_mode);
+	}
+
+	switch (game_embed_mode) {
+		case GAME_EMBED_DISABLED:
+			game_embed_mode_button->set_button_icon(get_editor_theme_icon(SNAME("EmbedDisabled")));
+			game_embed_mode_button->set_tooltip_text(TTRC("Run the game in its own window on the next run."));
+			break;
+		case GAME_EMBED_FLOATING:
+			game_embed_mode_button->set_button_icon(get_editor_theme_icon(SNAME("EmbedFloating")));
+			game_embed_mode_button->set_tooltip_text(TTRC("Run the game in a floating editor window on the next run."));
+			break;
+		case GAME_EMBED_EDITOR:
+			game_embed_mode_button->set_button_icon(get_editor_theme_icon(SNAME("EmbedFused")));
+			game_embed_mode_button->set_tooltip_text(TTRC("Run the game embedded in the editor on the next run."));
+			break;
+		case GAME_EMBED_MAX:
+			break;
+	}
+
+	popup->set_item_icon(popup->get_item_index(GAME_EMBED_DISABLED), get_editor_theme_icon(SNAME("EmbedDisabled")));
+	popup->set_item_icon(popup->get_item_index(GAME_EMBED_FLOATING), get_editor_theme_icon(SNAME("EmbedFloating")));
+	popup->set_item_icon(popup->get_item_index(GAME_EMBED_EDITOR), get_editor_theme_icon(SNAME("EmbedFused")));
 }
 
 void EditorRunBar::_movie_maker_item_pressed(int p_id) {
@@ -546,6 +586,12 @@ void EditorRunBar::update_profiler_autostart_indicator() {
 	}
 }
 
+void EditorRunBar::set_game_embed_mode(GameEmbedMode p_mode) {
+	ERR_FAIL_INDEX(p_mode, GAME_EMBED_MAX);
+	game_embed_mode = p_mode;
+	_update_game_embed_mode_button();
+}
+
 HBoxContainer *EditorRunBar::get_buttons_container() {
 	return main_hbox;
 }
@@ -553,6 +599,7 @@ HBoxContainer *EditorRunBar::get_buttons_container() {
 void EditorRunBar::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("play_pressed"));
 	ADD_SIGNAL(MethodInfo("stop_pressed"));
+	ADD_SIGNAL(MethodInfo("game_embed_mode_changed", PropertyInfo(Variant::INT, "mode")));
 }
 
 EditorRunBar::EditorRunBar() {
@@ -612,6 +659,17 @@ EditorRunBar::EditorRunBar() {
 
 		return;
 	}
+
+	game_embed_mode_button = memnew(MenuButton);
+	main_hbox->add_child(game_embed_mode_button);
+	game_embed_mode_button->set_theme_type_variation("RunBarButton");
+	game_embed_mode_button->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
+	game_embed_mode_button->set_accessibility_name(TTRC("Game Run Location"));
+	PopupMenu *game_embed_popup = game_embed_mode_button->get_popup();
+	game_embed_popup->add_radio_check_item(TTRC("Run in Own Window"), GAME_EMBED_DISABLED);
+	game_embed_popup->add_radio_check_item(TTRC("Run in Floating Editor Window"), GAME_EMBED_FLOATING);
+	game_embed_popup->add_radio_check_item(TTRC("Run Embedded in Editor"), GAME_EMBED_EDITOR);
+	game_embed_popup->connect(SceneStringName(id_pressed), callable_mp(this, &EditorRunBar::_game_embed_mode_pressed));
 
 	play_button = memnew(Button);
 	main_hbox->add_child(play_button);

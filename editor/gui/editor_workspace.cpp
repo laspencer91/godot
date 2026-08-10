@@ -291,26 +291,9 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 	if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(focused_pane->get_content())) {
 		last_tabbed_pane = focused_pane;
 
-		// G4: focusing a scene pane makes its scene the active edited scene, so the global bottom docks
-		// (Animation, Terrain) follow whichever pane you click into — not only when you click its tab or
-		// viewport. No-op for a non-scene current tab, and no-op when the scene is already active, so
-		// re-clicking the same pane costs nothing.
-		host->activate_current_document();
-
-		// G2 S6a: the "current script" the ScriptEditor services act on follows pane focus — the
-		// newly focused pane's active tab decides it (a script view, or null for any other kind).
-		if (ScriptEditor *se = ScriptEditor::get_singleton()) {
-			se->set_current_surface(host->get_current_view());
-		}
-		// G-Shader: the shader File menu likewise follows pane focus into the focused shader tab.
-		if (ShaderEditorPlugin *sep = ShaderEditorPlugin::get_singleton()) {
-			sep->set_current_surface(host->get_current_view());
-		}
-		// G2 M7.2a: the shared 2D/3D toolbar follows pane focus into the focused scene pane's header.
-		if (EditorNode *en = EditorNode::get_singleton()) {
-			en->update_scene_pane_toolbar(host->get_current_view());
-		}
-		host->set_context_active(true);
+		// The current tab owns all shared editor context: active scene, script/shader commands,
+		// scene toolbar, and document-local docks.
+		host->activate_current_context();
 	}
 
 	if (old_focused) {

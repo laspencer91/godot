@@ -45,6 +45,15 @@ class PanelContainer;
 class EditorRunBar : public MarginContainer {
 	GDCLASS(EditorRunBar, MarginContainer);
 
+public:
+	enum GameEmbedMode {
+		GAME_EMBED_DISABLED,
+		GAME_EMBED_FLOATING,
+		GAME_EMBED_EDITOR,
+		GAME_EMBED_MAX,
+	};
+
+private:
 	static EditorRunBar *singleton;
 
 	enum RunMode {
@@ -76,6 +85,8 @@ class EditorRunBar : public MarginContainer {
 	Button *stop_button = nullptr;
 	Button *play_scene_button = nullptr;
 	Button *play_custom_scene_button = nullptr;
+	MenuButton *game_embed_mode_button = nullptr;
+	GameEmbedMode game_embed_mode = GAME_EMBED_EDITOR;
 
 	EditorRun editor_run;
 	EditorRunNative *run_native = nullptr;
@@ -94,6 +105,8 @@ class EditorRunBar : public MarginContainer {
 
 	void _reset_play_buttons();
 	void _update_play_buttons();
+	void _game_embed_mode_pressed(int p_mode);
+	void _update_game_embed_mode_button();
 
 	void _movie_maker_item_pressed(int p_id);
 	void _write_movie_toggled(bool p_enabled);
@@ -138,6 +151,8 @@ public:
 	bool is_movie_maker_enabled() const;
 
 	void update_profiler_autostart_indicator();
+	void set_game_embed_mode(GameEmbedMode p_mode);
+	GameEmbedMode get_game_embed_mode() const { return game_embed_mode; }
 
 	Button *get_pause_button() { return pause_button; }
 

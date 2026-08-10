@@ -336,7 +336,16 @@ void EditorMainScreen::dismiss_main_plugin(int p_index) {
 	selected_plugin = nullptr;
 	set_accessibility_name(String());
 	if (screen_host_document) {
-		close_document(screen_host_document);
+		const bool closed = close_document(screen_host_document);
+		if (closed && workspace) {
+			// The generic tab-removal path suppresses activation while reselecting because it can run
+			// during EditorData mutation. A transient screen-host close is safe to reactivate immediately.
+			WorkspacePane *focused = workspace->get_focused_pane();
+			TabbedDocumentHost *host = focused ? Object::cast_to<TabbedDocumentHost>(focused->get_content()) : nullptr;
+			if (host) {
+				host->activate_current_context();
+			}
+		}
 	}
 	EditorNode::get_singleton()->update_distraction_free_mode();
 }
@@ -493,8 +502,7 @@ void EditorMainScreen::reveal(EditorDocument *p_document, DocumentViewKind p_kin
 			if (p_grab_focus) {
 				host->focus_document(p_document);
 				workspace->set_focused_pane(target);
-				host->activate_current_document();
-				host->set_context_active(true);
+				host->activate_current_context();
 			} else {
 				host->ensure_document(p_document); // G2 S6a: background open — tab + hidden view, no focus change.
 			}

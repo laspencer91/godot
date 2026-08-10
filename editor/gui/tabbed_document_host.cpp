@@ -242,6 +242,12 @@ void TabbedDocumentHost::set_context_active(bool p_active) {
 	}
 }
 
+void TabbedDocumentHost::activate_current_context() {
+	_activate_document(current);
+	_sync_current_script_view(current);
+	set_context_active(true);
+}
+
 void TabbedDocumentHost::_sync_current_script_view(int p_idx) {
 	// G2 S6a: the "current script" the ScriptEditor services act on (save, run, breakpoints)
 	// follows the workspace: a script tab becoming current makes its view the current one; any
@@ -271,7 +277,6 @@ void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 		// Hosts used outside EditorWorkspace retain their legacy activation behavior. Inside a
 		// workspace, only the focused pane may change global editor context.
 		if (!workspace || workspace->get_focused_pane() == pane) {
-			_activate_document(p_idx);
 			// G2 M7.2b-fix: the "follow the focused pane" services (ScriptEditor / Shader current-surface,
 			// shared 2D/3D toolbar) must only re-point when THIS pane is the focused one. A programmatic
 			// tab change in a *background* pane (set_current() re-emitting tab_selected, the background reveal
@@ -281,8 +286,7 @@ void TabbedDocumentHost::_on_tab_selected(int p_idx) {
 			// press before TabBar emits tab_selected, so the focused pane is already this one; and
 			// EditorWorkspace::set_focused_pane re-runs the very same sync on any focus change, so no
 			// focused-pane tab switch is ever starved.
-			_sync_current_script_view(p_idx); // G2 S6a
-			set_context_active(true);
+			activate_current_context();
 		}
 	}
 }

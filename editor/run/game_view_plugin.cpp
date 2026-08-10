@@ -780,27 +780,24 @@ void GameView::_selection_options_menu_id_pressed(int p_id) {
 	menu->set_item_checked(menu->get_item_index(SELECTION_PREFER_GROUP), selection_prefer_group);
 }
 
-void GameView::_game_embed_mode_pressed(int p_option) {
-	EmbedMode mode = (EmbedMode)p_option;
-	for (int i = 0; i < EmbedMode::EMBED_TYPE_MAX; i++) {
-		game_embed_mode_button[i]->set_pressed_no_signal(i == mode);
-	}
-
+void GameView::_game_embed_mode_pressed(int p_mode) {
+	ERR_FAIL_INDEX(p_mode, EditorRunBar::GAME_EMBED_MAX);
+	EditorRunBar::GameEmbedMode mode = (EditorRunBar::GameEmbedMode)p_mode;
 	switch (mode) {
-		case EMBED_TYPE_DISABLED: {
+		case EditorRunBar::GAME_EMBED_DISABLED: {
 			embed_on_play = false;
 			make_floating_on_play = false;
 		} break;
-		case EMBED_TYPE_FLOATING: {
+		case EditorRunBar::GAME_EMBED_FLOATING: {
 			embed_on_play = true;
 			make_floating_on_play = true;
 		} break;
-		case EMBED_TYPE_EDITOR: {
+		case EditorRunBar::GAME_EMBED_EDITOR: {
 			embed_on_play = true;
 			make_floating_on_play = false;
 		} break;
-		case EMBED_TYPE_MAX:
-			break;
+		case EditorRunBar::GAME_EMBED_MAX:
+			return;
 	}
 	EditorSettings::get_singleton()->set_project_metadata("game_view", "embed_on_play", embed_on_play);
 	EditorSettings::get_singleton()->set_project_metadata("game_view", "make_floating_on_play", make_floating_on_play);
@@ -1009,12 +1006,6 @@ void GameView::_update_embed_menu_options() {
 	menu->set_item_checked(menu->get_item_index(WINDOW_SIZE_MODE_STRETCH), embed_size_mode == SIZE_MODE_STRETCH);
 }
 
-void GameView::_update_embed_buttons() {
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]->set_pressed(embed_on_play && !make_floating_on_play);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]->set_pressed(make_floating_on_play && window_wrapper->is_window_available());
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]->set_pressed(!embed_on_play && !make_floating_on_play);
-}
-
 void GameView::_update_game_window_size_label() {
 	String window_size_string = game_window_size.x < 0 ? "" : vformat("%dx%d", game_window_size.x, game_window_size.y);
 	game_size_label->set_text(hdr_output_enabled ? vformat("%s %s (%.2f)", window_size_string, TTRC("HDR"), output_max_linear_value)
@@ -1195,9 +1186,6 @@ void GameView::_notification(int p_what) {
 			camera_override_button->set_button_icon(get_editor_theme_icon(SNAME("Camera")));
 			camera_override_menu->set_button_icon(get_editor_theme_icon(SNAME("GuiDropdown")));
 
-			game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]->set_button_icon(get_editor_theme_icon(SNAME("EmbedFused")));
-			game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]->set_button_icon(get_editor_theme_icon(SNAME("EmbedFloating")));
-			game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]->set_button_icon(get_editor_theme_icon(SNAME("EmbedDisabled")));
 			game_window_options_menu->set_button_icon(get_editor_theme_icon(SNAME("GuiDropdown")));
 
 			_update_speed_state_icon(time_scale_index);
@@ -1208,31 +1196,38 @@ void GameView::_notification(int p_what) {
 		case NOTIFICATION_READY: {
 			if (DisplayServer::get_singleton()->has_feature(DisplayServerEnums::FEATURE_WINDOW_EMBEDDING)) {
 				// Embedding available.
+				EditorRunBar::GameEmbedMode embed_mode = EditorRunBar::GAME_EMBED_EDITOR;
 				int game_mode = EDITOR_GET("run/window_placement/game_embed_mode");
 				switch (game_mode) {
 					case -1: { // Disabled.
 						embed_on_play = false;
 						make_floating_on_play = false;
+						embed_mode = EditorRunBar::GAME_EMBED_DISABLED;
 					} break;
 					case 1: { // Embed.
 						embed_on_play = true;
 						make_floating_on_play = false;
+						embed_mode = EditorRunBar::GAME_EMBED_EDITOR;
 					} break;
 					case 2: { // Floating.
 						embed_on_play = true;
 						make_floating_on_play = true;
+						embed_mode = EditorRunBar::GAME_EMBED_FLOATING;
 					} break;
 					default: {
 						embed_on_play = EditorSettings::get_singleton()->get_project_metadata("game_view", "embed_on_play", true);
 						make_floating_on_play = EditorSettings::get_singleton()->get_project_metadata("game_view", "make_floating_on_play", false);
+						embed_mode = !embed_on_play ? EditorRunBar::GAME_EMBED_DISABLED : (make_floating_on_play ? EditorRunBar::GAME_EMBED_FLOATING : EditorRunBar::GAME_EMBED_EDITOR);
 					} break;
 				}
 				embed_size_mode = (EmbedSizeMode)(int)EditorSettings::get_singleton()->get_project_metadata("game_view", "embed_size_mode", SIZE_MODE_FIXED);
-				_update_embed_buttons();
 				_update_embed_menu_options();
 
-				EditorRunBar::get_singleton()->connect("play_pressed", callable_mp(this, &GameView::_play_pressed));
-				EditorRunBar::get_singleton()->connect("stop_pressed", callable_mp(this, &GameView::_stop_pressed));
+				EditorRunBar *run_bar = EditorRunBar::get_singleton();
+				run_bar->set_game_embed_mode(embed_mode);
+				run_bar->connect("game_embed_mode_changed", callable_mp(this, &GameView::_game_embed_mode_pressed));
+				run_bar->connect("play_pressed", callable_mp(this, &GameView::_play_pressed));
+				run_bar->connect("stop_pressed", callable_mp(this, &GameView::_stop_pressed));
 				EditorRun::instance_starting_callback = _instance_starting_static;
 				EditorRun::instance_rq_screenshot_callback = _instance_rq_screenshot_static;
 
@@ -1685,27 +1680,6 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 	game_size_label->set_h_size_flags(SIZE_EXPAND_FILL);
 	game_size_label->set_horizontal_alignment(HorizontalAlignment::HORIZONTAL_ALIGNMENT_RIGHT);
 	game_size_label->set_mouse_filter(MouseFilter::MOUSE_FILTER_PASS);
-
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR] = memnew(Button);
-	game_hb->add_child(game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]->set_toggle_mode(true);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]->set_theme_type_variation("FlatMenuButtonNoIconTint");
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]->connect(SceneStringName(pressed), callable_mp(this, &GameView::_game_embed_mode_pressed).bind(EmbedMode::EMBED_TYPE_EDITOR));
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_EDITOR]->set_tooltip_text(TTRC("Run the game embedded in the Game workspace on the next run."));
-
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING] = memnew(Button);
-	game_hb->add_child(game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]->set_toggle_mode(true);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]->set_theme_type_variation("FlatMenuButtonNoIconTint");
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]->connect(SceneStringName(pressed), callable_mp(this, &GameView::_game_embed_mode_pressed).bind(EmbedMode::EMBED_TYPE_FLOATING));
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_FLOATING]->set_tooltip_text(TTRC("Run the game in a floating window with the toolbar on the next run."));
-
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED] = memnew(Button);
-	game_hb->add_child(game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]->set_toggle_mode(true);
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]->set_theme_type_variation("FlatMenuButtonNoIconTint");
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]->connect(SceneStringName(pressed), callable_mp(this, &GameView::_game_embed_mode_pressed).bind(EmbedMode::EMBED_TYPE_DISABLED));
-	game_embed_mode_button[EmbedMode::EMBED_TYPE_DISABLED]->set_tooltip_text(TTRC("Run the game in a floating window without the toolbar on the next run."));
 
 	game_window_options_menu = memnew(MenuButton);
 	game_hb->add_child(game_window_options_menu);
