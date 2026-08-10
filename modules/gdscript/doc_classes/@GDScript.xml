@@ -762,6 +762,25 @@
 				[b]Note:[/b] Avoid storing lambda callables in member variables of [RefCounted]-based classes (e.g. resources), as this can lead to memory leaks. Use only method callables and optionally [method Callable.bind] or [method Callable.unbind].
 			</description>
 		</annotation>
+		<annotation name="@field_meta">
+			<return type="void" />
+			<param index="0" name="key" type="String" />
+			<param index="1" name="value" type="Variant" default="true" />
+			<description>
+				Attaches runtime metadata to a class variable. Use [method GDScript.get_member_metadata] to retrieve all metadata attached to a variable by name. Multiple annotations with different keys can be applied to the same variable. The [param value] must be a constant expression.
+				[codeblock]
+				@field_meta("simulated")
+				@field_meta("since", "0.4")
+				@export var spread_base := 1.2
+
+				func _ready():
+					var metadata := (get_script() as GDScript).get_member_metadata(&amp;"spread_base")
+					print(metadata["simulated"]) # Prints true.
+					print(metadata["since"]) # Prints 0.4.
+				[/codeblock]
+				[b]Note:[/b] Metadata is compiled into the script and is available in exported projects. It does not change how the variable is displayed or serialized.
+			</description>
+		</annotation>
 		<annotation name="@icon">
 			<return type="void" />
 			<param index="0" name="icon_path" type="String" />

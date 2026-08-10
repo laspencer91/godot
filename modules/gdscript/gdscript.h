@@ -86,6 +86,7 @@ class GDScript : public Script {
 	// Members are just indices to the instantiated script.
 	HashMap<StringName, MemberInfo> member_indices; // Includes member info of all base GDScript classes.
 	HashSet<StringName> members; // Only members of the current class.
+	HashMap<StringName, Dictionary> member_metadata; // Runtime-visible metadata for members of the current class.
 
 	// Only static variables of the current class.
 	HashMap<StringName, MemberInfo> static_variables_indices;
@@ -243,6 +244,7 @@ public:
 	const HashMap<StringName, Ref<GDScript>> &get_subclasses() const { return subclasses; }
 	const HashMap<StringName, Variant> &get_constants() const { return constants; }
 	const HashSet<StringName> &get_members() const { return members; }
+	Dictionary get_member_metadata(const StringName &p_member) const;
 	const GDScriptDataType &get_member_type(const StringName &p_member) const {
 		CRASH_COND(!member_indices.has(p_member));
 		return member_indices[p_member].data_type;

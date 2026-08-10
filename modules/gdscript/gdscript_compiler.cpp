@@ -2721,6 +2721,7 @@ Error GDScriptCompiler::_prepare_compilation(GDScript *p_script, const GDScriptP
 	p_script->native = Ref<GDScriptNativeClass>();
 	p_script->base = Ref<GDScript>();
 	p_script->members.clear();
+	p_script->member_metadata.clear();
 
 	// This makes possible to clear script constants and member_functions without heap-use-after-free errors.
 	HashMap<StringName, Variant> constants;
@@ -2924,6 +2925,10 @@ Error GDScriptCompiler::_prepare_compilation(GDScript *p_script, const GDScriptP
 					minfo.index = p_script->member_indices.size();
 					p_script->member_indices[name] = minfo;
 					p_script->members.insert(name);
+				}
+
+				if (!variable->member_metadata.is_empty()) {
+					p_script->member_metadata[name] = variable->member_metadata.duplicate(true);
 				}
 
 #ifdef TOOLS_ENABLED

@@ -356,6 +356,21 @@ void GDScript::get_script_property_list(List<PropertyInfo> *r_list) const {
 	_get_script_property_list(r_list, true);
 }
 
+Dictionary GDScript::get_member_metadata(const StringName &p_member) const {
+	const GDScript *script = this;
+	while (script) {
+		const Dictionary *member_meta = script->member_metadata.getptr(p_member);
+		if (member_meta) {
+			return member_meta->duplicate(true);
+		}
+		if (script->members.has(p_member) || script->static_variables_indices.has(p_member)) {
+			return Dictionary();
+		}
+		script = script->base.ptr();
+	}
+	return Dictionary();
+}
+
 bool GDScript::has_method(const StringName &p_method) const {
 	return member_functions.has(p_method);
 }
@@ -1077,6 +1092,7 @@ void GDScript::_get_property_list(List<PropertyInfo> *p_properties) const {
 
 void GDScript::_bind_methods() {
 	ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "new", &GDScript::_new, MethodInfo("new"));
+	ClassDB::bind_method(D_METHOD("get_member_metadata", "member"), &GDScript::get_member_metadata);
 }
 
 void GDScript::set_path_cache(const String &p_path) {
@@ -1454,6 +1470,7 @@ void GDScript::clear() {
 	}
 
 	member_indices.clear();
+	member_metadata.clear();
 	static_variables.clear();
 	static_variables_indices.clear();
 

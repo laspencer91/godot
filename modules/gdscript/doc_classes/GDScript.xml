@@ -12,6 +12,14 @@
 		<link title="GDScript documentation index">$DOCS_URL/tutorials/scripting/gdscript/index.html</link>
 	</tutorials>
 	<methods>
+		<method name="get_member_metadata" qualifiers="const">
+			<return type="Dictionary" />
+			<param index="0" name="member" type="StringName" />
+			<description>
+				Returns the runtime metadata attached to [param member] with [annotation @GDScript.@field_meta]. Returns an empty [Dictionary] if the member has no metadata or does not exist. Metadata inherited from a base GDScript is included when the member is not overridden.
+				The returned dictionary is a deep copy. Changing it does not alter the metadata stored by the script.
+			</description>
+		</method>
 		<method name="new" qualifiers="vararg">
 			<return type="Variant" />
 			<description>

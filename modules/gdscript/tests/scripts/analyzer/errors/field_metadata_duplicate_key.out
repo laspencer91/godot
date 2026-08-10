@@ -1,0 +1,2 @@
+GDTEST_ANALYZER_ERROR
+>> ERROR at line 2: "@field_meta" key "networked" is already defined for this variable.

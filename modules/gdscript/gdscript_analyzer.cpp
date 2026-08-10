@@ -1788,7 +1788,8 @@ void GDScriptAnalyzer::resolve_annotation(GDScriptParser::AnnotationNode *p_anno
 			return;
 		}
 
-		if (value.get_type() != argument_info.type) {
+		const bool argument_accepts_variant = argument_info.type == Variant::NIL && (argument_info.usage & PROPERTY_USAGE_NIL_IS_VARIANT);
+		if (!argument_accepts_variant && value.get_type() != argument_info.type) {
 #ifdef DEBUG_ENABLED
 			if (argument_info.type == Variant::INT && value.get_type() == Variant::FLOAT) {
 				parser->push_warning(argument, GDScriptWarning::NARROWING_CONVERSION);

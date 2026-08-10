@@ -150,6 +150,8 @@ GDScriptParser::GDScriptParser() {
 		register_annotation(MethodInfo("@setup"), AnnotationInfo::FUNCTION, &GDScriptParser::setup_annotation);
 		// Onready annotation.
 		register_annotation(MethodInfo("@onready"), AnnotationInfo::VARIABLE, &GDScriptParser::onready_annotation);
+		// Runtime-visible metadata for class variables.
+		register_annotation(MethodInfo("@field_meta", PropertyInfo(Variant::STRING, "key"), PropertyInfo(Variant::NIL, "value", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NIL_IS_VARIANT)), AnnotationInfo::VARIABLE, &GDScriptParser::field_meta_annotation, varray(true));
 		// Export annotations.
 		register_annotation(MethodInfo("@export"), AnnotationInfo::VARIABLE, &GDScriptParser::export_annotations<PROPERTY_HINT_NONE, Variant::NIL>);
 		register_annotation(MethodInfo("@export_enum", PropertyInfo(Variant::STRING, "names")), AnnotationInfo::VARIABLE, &GDScriptParser::export_annotations<PROPERTY_HINT_ENUM, Variant::NIL>, varray(), true);
@@ -4750,6 +4752,27 @@ bool GDScriptParser::onready_annotation(AnnotationNode *p_annotation, Node *p_ta
 	}
 	variable->onready = true;
 	current_class->onready_used = true;
+	return true;
+}
+
+bool GDScriptParser::field_meta_annotation(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class) {
+	ERR_FAIL_COND_V_MSG(p_target->type != Node::VARIABLE, false, R"("@field_meta" annotation can only be applied to class variables.)");
+	ERR_FAIL_COND_V(p_annotation->resolved_arguments.is_empty(), false);
+
+	const StringName key = p_annotation->resolved_arguments[0].operator String();
+	if (key.is_empty()) {
+		push_error(R"("@field_meta" annotation key cannot be empty.)", p_annotation->arguments[0]);
+		return false;
+	}
+
+	VariableNode *variable = static_cast<VariableNode *>(p_target);
+	if (variable->member_metadata.has(key)) {
+		push_error(vformat(R"("@field_meta" key "%s" is already defined for this variable.)", key), p_annotation);
+		return false;
+	}
+
+	const Variant value = p_annotation->resolved_arguments.size() > 1 ? p_annotation->resolved_arguments[1] : Variant(true);
+	variable->member_metadata[key] = value;
 	return true;
 }
 
