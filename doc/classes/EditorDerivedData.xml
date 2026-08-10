@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="EditorDerivedData" inherits="Object" api_type="editor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Editor-owned allocator for machine-generated artifacts (bakes).
+	</brief_description>
+	<description>
+		[EditorDerivedData] allocates on-disk locations for machine-generated artifacts (lightmaps, GI data, procedural bakes) keyed by the owning node's persistent identity: the containing scene's resource UID plus the node's unique-scene-ID chain (see [method Node.get_unique_scene_id_path]) plus a producer slot name. Producers ask for a path instead of choosing one, so renaming or moving a scene or node keeps resolving to the same bundle, while duplicating a node or scene allocates a fresh one on its next bake.
+		The available slots and their storage roots are defined project-side by the script named in the [code]editor/derived_data/slot_registry[/code] project setting, which must expose [code]SLOTS[/code] and [code]ROOTS[/code] constants. Each allocated bundle directory carries a [code]manifest.cfg[/code] recording its identity; read it through [method describe], never directly.
+		A node must have been saved at least once before allocation so its unique IDs are settled — allocation fails with an error for unsaved (new or freshly duplicated) nodes.
+		[b]Note:[/b] This class shouldn't be instantiated directly. Instead, access the singleton directly by its name.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="bundle_for">
+			<return type="String" />
+			<param index="0" name="owner" type="Node" />
+			<param index="1" name="slot" type="StringName" />
+			<description>
+				Returns the bundle directory for [param owner]'s [param slot], allocating and creating it (manifest included) if the owner's identity has no bundle yet. Multi-file producers write their files inside this directory. Returns an empty string on failure (unknown slot, unsaved owner, or an identity mismatch against an existing manifest).
+			</description>
+		</method>
+		<method name="describe">
+			<return type="Dictionary" />
+			<param index="0" name="artifact_path" type="String" />
+			<description>
+				Returns the manifest contents (slot, schema, producer, scene UID, ID chain, human-readable labels, timestamps, plus [code]bundle_dir[/code]) for any path under a derived data root, or an empty dictionary if the path belongs to no bundle. This is the only supported way to read a bundle manifest.
+			</description>
+		</method>
+		<method name="file_for">
+			<return type="String" />
+			<param index="0" name="owner" type="Node" />
+			<param index="1" name="slot" type="StringName" />
+			<param index="2" name="ext" type="String" />
+			<description>
+				Single-file convenience over [method bundle_for]: returns [code]data.[param ext][/code] inside the owner's bundle for [param slot], allocating the bundle if needed. [param ext] is a bare extension without a dot. Returns an empty string on failure.
+			</description>
+		</method>
+		<method name="owns">
+			<return type="bool" />
+			<param index="0" name="owner" type="Node" />
+			<param index="1" name="slot" type="StringName" />
+			<param index="2" name="artifact_path" type="String" />
+			<description>
+				Returns [code]true[/code] if the bundle containing [param artifact_path] is owned by [param owner] for [param slot]: its manifest identity matches the node's current key. A [code]false[/code] result on a referenced artifact means the node is living off another node's bake (for example after a paste) and its next bake will fork into a fresh bundle that the caller must repoint to.
+			</description>
+		</method>
+	</methods>
+</class>

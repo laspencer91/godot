@@ -78,6 +78,7 @@ if env.editor_build:
     SConscript("asset_library/SCsub")
     SConscript("audio/SCsub")
     SConscript("debugger/SCsub")
+    SConscript("derived_data/SCsub")
     SConscript("doc/SCsub")
     SConscript("docks/SCsub")
     SConscript("export/SCsub")

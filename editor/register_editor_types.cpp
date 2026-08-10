@@ -41,6 +41,7 @@
 #include "editor/audio/audio_stream_randomizer_editor_plugin.h"
 #include "editor/debugger/debug_adapter/debug_adapter_server.h"
 #include "editor/debugger/editor_debugger_plugin.h"
+#include "editor/derived_data/editor_derived_data.h"
 #include "editor/docks/filesystem_dock.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
@@ -214,6 +215,7 @@ void register_editor_types() {
 	GDREGISTER_ABSTRACT_CLASS(ScriptEditorBase);
 	GDREGISTER_CLASS(EditorSyntaxHighlighter);
 	GDREGISTER_ABSTRACT_CLASS(EditorInterface);
+	GDREGISTER_ABSTRACT_CLASS(EditorDerivedData);
 	GDREGISTER_CLASS(EditorExportPlugin);
 	GDREGISTER_ABSTRACT_CLASS(EditorExportPlatform);
 	GDREGISTER_ABSTRACT_CLASS(EditorExportPlatformPC);
@@ -366,6 +368,15 @@ void register_editor_types() {
 	ei_singleton.editor_only = true;
 	Engine::get_singleton()->add_singleton(ei_singleton);
 
+	// The derived data allocator's slot table is project code — one source of truth
+	// shared with project-side tooling (audit, size report).
+	GLOBAL_DEF(PropertyInfo(Variant::STRING, "editor/derived_data/slot_registry", PROPERTY_HINT_FILE, "*.gd"), "");
+	EditorDerivedData::create();
+	// Deliberately NOT editor_only: the project's gate/audit scripts run in project
+	// mode under the editor binary and read bundles through this singleton. Editor
+	// builds only — exported games never register editor types at all.
+	Engine::get_singleton()->add_singleton(Engine::Singleton("EditorDerivedData", EditorDerivedData::get_singleton()));
+
 	if (RenderingServer::get_singleton()) {
 		// RenderingServer needs to exist for this to succeed.
 		Texture3DEditor::init_shaders();
@@ -396,6 +407,7 @@ void unregister_editor_types() {
 #endif
 	EditorEditDomainRegistry::free();
 	EditorViewportChromeRegistry::free();
+	EditorDerivedData::free();
 	EditorInterface::free();
 
 	if (EditorPaths::get_singleton()) {
