@@ -12,6 +12,7 @@
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/object/script_language.h"
 #include "scene/3d/physics/collision_object_3d.h"
 
 static PackedInt64Array _resolve_surface_map_material_ids(Box3DPhysics *p_box3d_physics, const Ref<Box3DSurfaceMap> &p_surface_map) {
@@ -61,8 +62,8 @@ void Box3DSurfaceMaterial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_tangent_velocity"), &Box3DSurfaceMaterial::get_tangent_velocity);
 	ClassDB::bind_method(D_METHOD("set_debug_color", "color"), &Box3DSurfaceMaterial::set_debug_color);
 	ClassDB::bind_method(D_METHOD("get_debug_color"), &Box3DSurfaceMaterial::get_debug_color);
-	ClassDB::bind_method(D_METHOD("set_custom", "custom"), &Box3DSurfaceMaterial::set_custom);
-	ClassDB::bind_method(D_METHOD("get_custom"), &Box3DSurfaceMaterial::get_custom);
+	ClassDB::bind_method(D_METHOD("set_gameplay", "gameplay"), &Box3DSurfaceMaterial::set_gameplay);
+	ClassDB::bind_method(D_METHOD("get_gameplay"), &Box3DSurfaceMaterial::get_gameplay);
 	ClassDB::bind_method(D_METHOD("set_texture_patterns", "patterns"), &Box3DSurfaceMaterial::set_texture_patterns);
 	ClassDB::bind_method(D_METHOD("get_texture_patterns"), &Box3DSurfaceMaterial::get_texture_patterns);
 
@@ -73,8 +74,24 @@ void Box3DSurfaceMaterial::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rolling_resistance", PROPERTY_HINT_RANGE, "0,1,0.001"), "set_rolling_resistance", "get_rolling_resistance");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "tangent_velocity"), "set_tangent_velocity", "get_tangent_velocity");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "debug_color"), "set_debug_color", "get_debug_color");
-	ADD_PROPERTY(PropertyInfo(Variant::DICTIONARY, "custom"), "set_custom", "get_custom");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "gameplay", PROPERTY_HINT_RESOURCE_TYPE, "Box3DSurfaceGameplayData"), "set_gameplay", "get_gameplay");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "texture_patterns"), "set_texture_patterns", "get_texture_patterns");
+}
+
+void Box3DSurfaceMaterial::_validate_property(PropertyInfo &p_property) const {
+	// One project setting, reflected by every material's picker: without this the slot
+	// offers every Box3DSurfaceGameplayData subclass in the project, when a project that
+	// has chosen one almost always means that one.
+	if (p_property.name != SNAME("gameplay")) {
+		return;
+	}
+	const String gameplay_class = Box3DPhysics::get_surface_gameplay_data_class();
+	// An unresolved class means the script was deleted or lost its class_name. Falling back
+	// to the base type keeps the existing value editable instead of hiding it behind a
+	// picker that refuses to show it; the Physics tab reports the dangling setting.
+	if (!gameplay_class.is_empty() && ScriptServer::is_global_class(gameplay_class)) {
+		p_property.hint_string = gameplay_class;
+	}
 }
 
 b3SurfaceMaterial Box3DSurfaceMaterial::to_box3d() const {
@@ -265,12 +282,19 @@ void Box3DPhysics::register_project_settings() {
 	// creates and owns this file, so the path is a conventional default rather than
 	// something the user is expected to pick in a file dialog.
 	GLOBAL_DEF(PropertyInfo(Variant::STRING, "physics/box3d/surface_material_library", PROPERTY_HINT_FILE, "*.tres,*.res"), "res://box3d_surface_materials.tres");
+	// The class picker in the Physics tab writes this. PROPERTY_HINT_TYPE_STRING makes the
+	// General settings list render it as a class picker too, rather than a raw text field.
+	GLOBAL_DEF(PropertyInfo(Variant::STRING, "physics/box3d/surface_gameplay_data", PROPERTY_HINT_TYPE_STRING, "Box3DSurfaceGameplayData"), "");
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_hertz", PROPERTY_HINT_RANGE, U"0,240,0.1,or_greater,suffix:Hz"), 60.0f);
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_damping_ratio", PROPERTY_HINT_RANGE, U"0,10,0.01,or_greater"), 2.0f);
 }
 
 String Box3DPhysics::get_surface_material_library_path() {
 	return GLOBAL_GET("physics/box3d/surface_material_library");
+}
+
+String Box3DPhysics::get_surface_gameplay_data_class() {
+	return GLOBAL_GET("physics/box3d/surface_gameplay_data");
 }
 
 void Box3DPhysics::_ensure_surface_material_library() const {

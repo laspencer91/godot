@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Box3DSurfaceGameplayData" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Base class for project-defined surface gameplay data.
+	</brief_description>
+	<description>
+		[Box3DSurfaceGameplayData] carries no data of its own and is never read by the physics engine. It exists so a project can declare its own per-surface gameplay fields as a real type, and so the editor can filter to that type instead of offering every [Resource] class.
+		Declare a subclass in the project, then select it in [b]Project Settings &gt; Physics &gt; Gameplay Data Class[/b]. New surface materials are created with an instance of it, and every [member Box3DSurfaceMaterial.gameplay] slot is limited to it:
+		[codeblock]
+		# res://surface_gameplay_data.gd
+		class_name SurfaceGameplayData extends Box3DSurfaceGameplayData
+
+		@export_range(0.0, 1.0) var penetration := 0.0
+		@export var footsteps: AudioStreamRandomizer
+		[/codeblock]
+		The class is stored by name in the [code]physics/box3d/surface_gameplay_data[/code] project setting, so renaming the class or removing its [code]class_name[/code] leaves the setting dangling; the Physics tab flags this rather than silently treating it as unset.
+	</description>
+	<tutorials>
+	</tutorials>
+</class>

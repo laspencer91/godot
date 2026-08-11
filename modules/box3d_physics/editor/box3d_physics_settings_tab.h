@@ -11,6 +11,7 @@
 class Box3DSurfaceMaterialProxy;
 class Button;
 class ConfirmationDialog;
+class CreateDialog;
 class EditorInspector;
 class HSplitContainer;
 class Timer;
@@ -32,6 +33,12 @@ class Box3DPhysicsSettingsTab : public VBoxContainer {
 	Button *duplicate_button = nullptr;
 	Button *delete_button = nullptr;
 	Button *empty_add_button = nullptr;
+
+	// One project-wide choice of gameplay data class, reflected by every material's
+	// `gameplay` picker through Box3DSurfaceMaterial::_validate_property.
+	Button *gameplay_class_button = nullptr;
+	Button *gameplay_class_clear_button = nullptr;
+	CreateDialog *gameplay_class_dialog = nullptr;
 
 	ConfirmationDialog *delete_dialog = nullptr;
 	// Field edits arrive one per drag step, so coalesce them instead of rewriting and
@@ -56,6 +63,7 @@ class Box3DPhysicsSettingsTab : public VBoxContainer {
 
 	void _refresh();
 	void _update_inspector();
+	void _register_gameplay_property_docs();
 	void _item_selected();
 	void _item_renamed();
 
@@ -65,8 +73,21 @@ class Box3DPhysicsSettingsTab : public VBoxContainer {
 	void _delete_pressed();
 	void _delete_confirmed();
 
+	void _update_gameplay_class_button();
+	void _gameplay_class_pressed();
+	void _gameplay_class_picked();
+	void _gameplay_class_cleared();
+	void _set_gameplay_class(const String &p_class);
+	// The setting holds either a global class name or a script path, so both forms
+	// resolve through here.
+	static Ref<Script> _load_gameplay_script();
+	Ref<Box3DSurfaceGameplayData> _instantiate_gameplay_data() const;
+	void _backfill_gameplay_data();
+
 	void _inspector_property_edited(const String &p_property);
+	void _undo_redo_inspector_callback(Object *p_undo_redo, Object *p_modified_object, const String &p_property, const Variant &p_value);
 	void _surface_materials_changed();
+	void _scripts_reloaded();
 
 protected:
 	static void _bind_methods();

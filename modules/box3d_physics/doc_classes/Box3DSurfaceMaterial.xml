@@ -9,11 +9,25 @@
 	<tutorials>
 	</tutorials>
 	<members>
-		<member name="custom" type="Dictionary" setter="set_custom" getter="get_custom">
-			Game-specific material data such as penetration, footstep, or impact settings.
-		</member>
 		<member name="debug_color" type="Color" setter="set_debug_color" getter="get_debug_color">
 			Optional Box3D debug color.
+		</member>
+		<member name="gameplay" type="Box3DSurfaceGameplayData" setter="set_gameplay" getter="get_gameplay">
+			Project-defined gameplay data for this surface, such as footstep sounds, impact decals or penetration settings.
+			Declare a script class extending [Box3DSurfaceGameplayData] and select it in [b]Project Settings &gt; Physics &gt; Gameplay Data Class[/b]. New materials are then created with an instance of it already assigned, and this slot is limited to that class:
+			[codeblock]
+			# res://surface_gameplay_data.gd
+			class_name SurfaceGameplayData extends Box3DSurfaceGameplayData
+
+			@export_range(0.0, 1.0) var penetration := 0.0
+			@export var footsteps: AudioStreamRandomizer
+			[/codeblock]
+			[codeblock]
+			var surface := Box3DPhysics.get_material(hit_material_id)
+			var data := surface.gameplay as SurfaceGameplayData
+			if data:
+			    play_footstep(data.footsteps)
+			[/codeblock]
 		</member>
 		<member name="friction" type="float" setter="set_friction" getter="get_friction" default="0.6">
 			Box3D surface friction.

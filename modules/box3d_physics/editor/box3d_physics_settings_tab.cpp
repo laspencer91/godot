@@ -4,12 +4,18 @@
 
 #include "box3d_physics_settings_tab.h"
 
+#include "core/config/project_settings.h"
+#include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/object/script_language.h"
 #include "editor/editor_node.h"
+#include "editor/doc/editor_help.h"
 #include "editor/editor_string_names.h"
+#include "editor/file_system/editor_file_system.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/create_dialog.h"
 #include "editor/inspector/editor_inspector.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/button.h"
@@ -19,6 +25,7 @@
 #include "scene/gui/separator.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/tree.h"
+#include "scene/property_utils.h"
 #include "scene/main/timer.h"
 #include "scene/scene_string_names.h"
 
@@ -38,6 +45,14 @@ protected:
 		}
 		bool valid = false;
 		material->set(p_name, p_value, &valid);
+		if (!valid) {
+			// Not one of the material's own properties, so it came from the flattened
+			// gameplay data below.
+			const Ref<Box3DSurfaceGameplayData> gameplay = material->get_gameplay();
+			if (gameplay.is_valid()) {
+				gameplay->set(p_name, p_value, &valid);
+			}
+		}
 		return valid;
 	}
 
@@ -47,6 +62,12 @@ protected:
 		}
 		bool valid = false;
 		r_ret = material->get(p_name, &valid);
+		if (!valid) {
+			const Ref<Box3DSurfaceGameplayData> gameplay = material->get_gameplay();
+			if (gameplay.is_valid()) {
+				r_ret = gameplay->get(p_name, &valid);
+			}
+		}
 		return valid;
 	}
 
@@ -54,12 +75,69 @@ protected:
 		if (material.is_null()) {
 			return;
 		}
+		// Names the doc class for everything below it, so the inspector's tooltips resolve
+		// against Box3DSurfaceMaterial rather than against this proxy.
+		p_list->push_back(PropertyInfo(Variant::NIL, Box3DSurfaceMaterial::get_class_static(), PROPERTY_HINT_NONE, Box3DSurfaceMaterial::get_class_static(), PROPERTY_USAGE_CATEGORY));
+
 		List<PropertyInfo> class_properties;
 		ClassDB::get_property_list(Box3DSurfaceMaterial::get_class_static(), &class_properties, true);
 		for (const PropertyInfo &property : class_properties) {
-			if (property.name == SNAME("material_name") || property.name == SNAME("material_id")) {
+			// `gameplay` is chosen once for the whole project, so a per-material picker would
+			// only offer ways to get it wrong. Its fields are flattened in below instead.
+			if (property.name == SNAME("material_name") || property.name == SNAME("material_id") || property.name == SNAME("gameplay")) {
 				continue;
 			}
+			p_list->push_back(property);
+		}
+
+		const Ref<Box3DSurfaceGameplayData> gameplay = material->get_gameplay();
+		const Ref<Script> gameplay_script = gameplay.is_valid() ? gameplay->get_script() : Variant();
+		if (gameplay_script.is_null()) {
+			return;
+		}
+
+		// Sourced from the instance rather than from Script::get_script_property_list(): only
+		// the instance route reflects @export_group ordering and, with validate_property()
+		// below, whatever the script's own _validate_property() decides. A script that
+		// narrows a field to an enum at edit time (say, FMOD surface labels read from the
+		// Studio project) has to work here exactly as it does in the ordinary inspector.
+		List<PropertyInfo> instance_properties;
+		gameplay->get_property_list(&instance_properties);
+
+		List<PropertyInfo> script_properties;
+		bool has_fields = false;
+		for (PropertyInfo property : instance_properties) {
+			// Its own class categories would re-divide a list that is already one section.
+			if (property.usage & PROPERTY_USAGE_CATEGORY) {
+				continue;
+			}
+			if (property.usage & (PROPERTY_USAGE_GROUP | PROPERTY_USAGE_SUBGROUP)) {
+				script_properties.push_back(property);
+				continue;
+			}
+			// Everything the base type already owns: `script`, and Resource's own path/name
+			// bookkeeping. The material published everything native above.
+			if (!(property.usage & PROPERTY_USAGE_EDITOR) || property.name == SNAME("script") || ClassDB::has_property(Box3DSurfaceGameplayData::get_class_static(), property.name)) {
+				continue;
+			}
+			gameplay->validate_property(property);
+			if (!(property.usage & PROPERTY_USAGE_EDITOR)) {
+				// The script hid it from this context.
+				continue;
+			}
+			script_properties.push_back(property);
+			has_fields = true;
+		}
+		if (!has_fields) {
+			return;
+		}
+
+		// A divider so the project's fields never read as built-in Box3D physics settings, and
+		// the doc class for them. hint_string is the script path rather than the class name:
+		// the inspector loads it to recover the doc class, which is what makes each field's
+		// `##` comment show up as its tooltip.
+		p_list->push_back(PropertyInfo(Variant::NIL, get_gameplay_doc_class(gameplay_script), PROPERTY_HINT_NONE, gameplay_script->get_path(), PROPERTY_USAGE_CATEGORY));
+		for (const PropertyInfo &property : script_properties) {
 			p_list->push_back(property);
 		}
 	}
@@ -67,6 +145,23 @@ protected:
 public:
 	void set_material(const Ref<Box3DSurfaceMaterial> &p_material) { material = p_material; }
 	Ref<Box3DSurfaceMaterial> get_material() const { return material; }
+
+	// The doc class the inspector resolves the flattened gameplay tooltips against. Kept here
+	// so the category emitted above and the descriptions the tab registers cannot drift apart.
+	static String get_gameplay_doc_class(const Ref<Script> &p_script) {
+		if (p_script.is_null()) {
+			return String();
+		}
+		const StringName doc_class = p_script->get_doc_class_name();
+		if (doc_class != StringName()) {
+			return String(doc_class);
+		}
+		const StringName global_name = p_script->get_global_name();
+		if (global_name != StringName()) {
+			return String(global_name);
+		}
+		return p_script->get_path().get_file();
+	}
 };
 
 void Box3DPhysicsSettingsTab::_bind_methods() {
@@ -157,6 +252,7 @@ void Box3DPhysicsSettingsTab::_refresh() {
 			library = current;
 		}
 	}
+	_backfill_gameplay_data();
 
 	updating = true;
 	material_tree->clear();
@@ -218,7 +314,62 @@ void Box3DPhysicsSettingsTab::_refresh() {
 	_update_inspector();
 }
 
+void Box3DPhysicsSettingsTab::_register_gameplay_property_docs() {
+	// The gameplay fields are flattened onto a proxy that is neither a Resource nor scripted,
+	// so EditorInspector cannot reach their script the way it does for a normally inspected
+	// custom resource (editor_inspector.cpp:4950-4962): all it has is the category name, which
+	// it looks up in EditorHelp's DocTools with no fallback. Hand it the `##` comments off the
+	// script we already hold, the way the TileSet proxy inspectors describe their own fields.
+	const Ref<Script> script = _load_gameplay_script();
+	if (script.is_null()) {
+		return;
+	}
+	const Vector<DocData::ClassDoc> docs = script->get_documentation();
+	if (docs.is_empty()) {
+		return;
+	}
+	// A script's own class doc is the last entry; anything before it is an inner class.
+	const DocData::ClassDoc &class_doc = docs[docs.size() - 1];
+	const DocData::ClassDoc *registered = EditorHelp::get_doc(class_doc.name);
+
+	// Which name the tooltip is keyed by depends on what the script yields, so register under
+	// every candidate rather than betting on one.
+	Vector<String> doc_classes;
+	doc_classes.push_back(Box3DSurfaceMaterialProxy::get_gameplay_doc_class(script));
+	doc_classes.push_back(class_doc.name);
+	doc_classes.push_back(Box3DSurfaceMaterialProxy::get_class_static());
+
+	for (const DocData::PropertyDoc &property : class_doc.properties) {
+		if (property.description.is_empty()) {
+			continue;
+		}
+		// Descriptions are prepended to whatever the doc system finds on its own, so skip the
+		// ones it can already resolve rather than showing them twice.
+		bool already_documented = false;
+		if (registered != nullptr) {
+			for (const DocData::PropertyDoc &known : registered->properties) {
+				if (known.name == property.name && !known.description.is_empty()) {
+					already_documented = true;
+					break;
+				}
+			}
+		}
+		if (already_documented) {
+			continue;
+		}
+		for (const String &doc_class : doc_classes) {
+			if (!doc_class.is_empty()) {
+				inspector->add_custom_property_description(doc_class, property.name, property.description);
+			}
+		}
+	}
+}
+
 void Box3DPhysicsSettingsTab::_update_inspector() {
+	// Ahead of the early-out, so a script reload refreshes the text even when the selection
+	// has not changed.
+	_register_gameplay_property_docs();
+
 	Ref<Box3DSurfaceMaterial> surface_material;
 	if (library.is_valid()) {
 		surface_material = library->find_material(selected_name);
@@ -315,6 +466,12 @@ void Box3DPhysicsSettingsTab::_append_material(const Ref<Box3DSurfaceMaterial> &
 	}
 	surface_material->set_material_name(lib->make_unique_name(p_name_base));
 	surface_material->set_material_id(lib->allocate_material_id());
+	// A duplicate already carries the source's data, so only a fresh material needs one.
+	// Without this every new material would start with an empty slot the user has to fill
+	// by hand, which is the chore this setting exists to remove.
+	if (p_source.is_null() && surface_material->get_gameplay().is_null()) {
+		surface_material->set_gameplay(_instantiate_gameplay_data());
+	}
 
 	TypedArray<Box3DSurfaceMaterial> materials = _current_materials();
 	materials.push_back(surface_material);
@@ -374,6 +531,162 @@ void Box3DPhysicsSettingsTab::_inspector_property_edited(const String &p_propert
 	save_timer->start();
 }
 
+Ref<Script> Box3DPhysicsSettingsTab::_load_gameplay_script() {
+	const String setting = Box3DPhysics::get_surface_gameplay_data_class();
+	if (setting.is_empty()) {
+		return Ref<Script>();
+	}
+	// A class name is the friendlier form and the one the picker writes, but requiring
+	// `class_name` to use the feature at all would be a trap: a plain `extends
+	// Box3DSurfaceGameplayData` script is perfectly valid and can only be named by path.
+	const String path = ScriptServer::is_global_class(setting) ? ScriptServer::get_global_class_path(setting) : setting;
+	if (path.is_empty() || !ResourceLoader::exists(path)) {
+		return Ref<Script>();
+	}
+	return ResourceLoader::load(path, "Script");
+}
+
+Ref<Box3DSurfaceGameplayData> Box3DPhysicsSettingsTab::_instantiate_gameplay_data() const {
+	// Deliberately not can_instantiate(): the editor disables scripting, so that is false for
+	// every script without @tool. The object is a native Resource carrying the script, which
+	// is how EditorData::script_class_instance() and every custom resource already work.
+	const Ref<Script> script = _load_gameplay_script();
+	if (script.is_null()) {
+		return Ref<Box3DSurfaceGameplayData>();
+	}
+	if (!ClassDB::is_parent_class(script->get_instance_base_type(), Box3DSurfaceGameplayData::get_class_static())) {
+		WARN_PRINT(vformat("Box3D: '%s' does not extend Box3DSurfaceGameplayData; new materials will have no gameplay data.", Box3DPhysics::get_surface_gameplay_data_class()));
+		return Ref<Box3DSurfaceGameplayData>();
+	}
+
+	Variant instance = ClassDB::instantiate(script->get_instance_base_type());
+	Object *object = instance;
+	if (object == nullptr) {
+		return Ref<Box3DSurfaceGameplayData>();
+	}
+	// Stamps the custom-type script that the inspector reads to label the resource, which a
+	// bare set_script would miss. Mirrors EditorData::script_class_instance(), which cannot
+	// be used directly because it only accepts global class names.
+	PropertyUtils::assign_custom_type_script(object, script);
+	object->set_script(script);
+	return Ref<Box3DSurfaceGameplayData>(instance);
+}
+
+void Box3DPhysicsSettingsTab::_backfill_gameplay_data() {
+	// The gameplay fields are flattened into the inspector, so there is no picker a user
+	// could reach for: a material with no data would simply show nothing and offer no way
+	// to fix it. Materials that predate the setting, or predate this project choosing a
+	// class, converge here instead. Not an undo action — it establishes the invariant the
+	// setting already implies rather than making a decision of its own.
+	if (library.is_null()) {
+		return;
+	}
+	const TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
+	bool changed = false;
+	for (int i = 0; i < materials.size(); i++) {
+		const Ref<Box3DSurfaceMaterial> surface_material = materials[i];
+		if (surface_material.is_null() || surface_material->get_gameplay().is_valid()) {
+			continue;
+		}
+		const Ref<Box3DSurfaceGameplayData> gameplay_data = _instantiate_gameplay_data();
+		if (gameplay_data.is_null()) {
+			// No class configured, or it no longer resolves. Leave the materials alone.
+			return;
+		}
+		surface_material->set_gameplay(gameplay_data);
+		changed = true;
+	}
+	if (changed) {
+		save_timer->start();
+	}
+}
+
+void Box3DPhysicsSettingsTab::_update_gameplay_class_button() {
+	const String gameplay_class = Box3DPhysics::get_surface_gameplay_data_class();
+	gameplay_class_clear_button->set_visible(!gameplay_class.is_empty());
+
+	if (gameplay_class.is_empty()) {
+		gameplay_class_button->set_text(TTR("<none>"));
+		gameplay_class_button->remove_theme_color_override(SNAME("font_color"));
+		gameplay_class_button->set_tooltip_text(TTR("Pick a Box3DSurfaceGameplayData subclass to attach project-specific data to every surface material."));
+		return;
+	}
+
+	const bool is_global = ScriptServer::is_global_class(gameplay_class);
+	// A path is long and mostly redundant in a narrow field, so show just the file name and
+	// keep the full value in the tooltip.
+	gameplay_class_button->set_text(is_global ? gameplay_class : gameplay_class.get_file());
+
+	const Ref<Script> script = _load_gameplay_script();
+	if (script.is_null()) {
+		// Deleting the script, or dropping the class_name the setting refers to, leaves this
+		// dangling. Show that rather than silently behaving as if unset.
+		gameplay_class_button->add_theme_color_override(SNAME("font_color"), get_theme_color(SNAME("error_color"), EditorStringName(Editor)));
+		gameplay_class_button->set_tooltip_text(vformat(TTR("'%s' could not be loaded. The script may have been deleted or moved, or lost its class_name."), gameplay_class));
+		return;
+	}
+	if (!ClassDB::is_parent_class(script->get_instance_base_type(), Box3DSurfaceGameplayData::get_class_static())) {
+		gameplay_class_button->add_theme_color_override(SNAME("font_color"), get_theme_color(SNAME("error_color"), EditorStringName(Editor)));
+		gameplay_class_button->set_tooltip_text(vformat(TTR("'%s' does not extend Box3DSurfaceGameplayData."), gameplay_class));
+		return;
+	}
+
+	gameplay_class_button->remove_theme_color_override(SNAME("font_color"));
+	if (is_global) {
+		gameplay_class_button->set_tooltip_text(vformat(TTR("New materials get a %s instance, and every material's Gameplay slot is limited to it."), gameplay_class));
+	} else {
+		// Hint narrowing needs a class name: PROPERTY_HINT_RESOURCE_TYPE resolves global
+		// classes only, and nothing maps a script path back to one.
+		gameplay_class_button->set_tooltip_text(vformat(TTR("New materials get an instance of %s.\nAdd a class_name to this script to also limit each material's Gameplay slot to it."), gameplay_class));
+	}
+}
+
+void Box3DPhysicsSettingsTab::_gameplay_class_pressed() {
+	gameplay_class_dialog->popup_create(false, true, Box3DPhysics::get_surface_gameplay_data_class());
+}
+
+void Box3DPhysicsSettingsTab::_gameplay_class_picked() {
+	_set_gameplay_class(gameplay_class_dialog->get_selected_type());
+}
+
+void Box3DPhysicsSettingsTab::_gameplay_class_cleared() {
+	// CreateDialog has no "none" entry, so without this the only way back to unset would be
+	// hand-editing project.godot.
+	_set_gameplay_class(String());
+}
+
+void Box3DPhysicsSettingsTab::_set_gameplay_class(const String &p_class) {
+	ProjectSettings::get_singleton()->set_setting("physics/box3d/surface_gameplay_data", p_class);
+	ProjectSettings::get_singleton()->save();
+	_update_gameplay_class_button();
+	_backfill_gameplay_data();
+
+	// The Gameplay hint is resolved while the property list is built, so the inspector has
+	// to be rebuilt from scratch to pick up the new class. Clearing the proxy makes
+	// _update_inspector() see a change instead of taking its early-out.
+	proxy->set_material(Ref<Box3DSurfaceMaterial>());
+	inspector->edit(nullptr);
+	_update_inspector();
+}
+
+void Box3DPhysicsSettingsTab::_undo_redo_inspector_callback(Object *p_undo_redo, Object *p_modified_object, const String &p_property, const Variant &p_value) {
+	// `gameplay` is edited through a nested inspector that EditorPropertyResource points
+	// straight at the sub-resource, so those edits never reach this tab's own
+	// `property_edited` connection and would be lost on save. This hook runs inside
+	// EditorInspector::_edit_set for every inspector, nested ones included.
+	const Ref<Box3DSurfaceMaterial> surface_material = proxy->get_material();
+	if (surface_material.is_null()) {
+		return;
+	}
+	// Only one level deep: a gameplay resource that itself nests further resources would
+	// need those tracked too, which is not worth the bookkeeping until someone wants it.
+	const Ref<Resource> gameplay = surface_material->get_gameplay();
+	if (gameplay.is_null() || p_modified_object != gameplay.ptr()) {
+		return;
+	}
+	save_timer->start();
+}
+
 void Box3DPhysicsSettingsTab::_flush_pending_save() {
 	if (save_timer->is_stopped()) {
 		return;
@@ -391,6 +704,19 @@ void Box3DPhysicsSettingsTab::_surface_materials_changed() {
 	_refresh();
 }
 
+void Box3DPhysicsSettingsTab::_scripts_reloaded() {
+	// Adding an @export to the gameplay script changes which rows this tab should show, and
+	// the flattened list is built once per edit() call, so it has to be rebuilt by hand.
+	if (!is_visible_in_tree()) {
+		return;
+	}
+	_update_gameplay_class_button();
+	_backfill_gameplay_data();
+	proxy->set_material(Ref<Box3DSurfaceMaterial>());
+	inspector->edit(nullptr);
+	_update_inspector();
+}
+
 void Box3DPhysicsSettingsTab::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
@@ -398,6 +724,9 @@ void Box3DPhysicsSettingsTab::_notification(int p_what) {
 			if (physics) {
 				physics->connect(SNAME("surface_materials_changed"), callable_mp(this, &Box3DPhysicsSettingsTab::_surface_materials_changed));
 			}
+			EditorNode::get_editor_data().add_undo_redo_inspector_hook_callback(callable_mp(this, &Box3DPhysicsSettingsTab::_undo_redo_inspector_callback));
+			EditorFileSystem::get_singleton()->connect("filesystem_changed", callable_mp(this, &Box3DPhysicsSettingsTab::_scripts_reloaded));
+			_update_gameplay_class_button();
 			_refresh();
 		} break;
 
@@ -407,6 +736,8 @@ void Box3DPhysicsSettingsTab::_notification(int p_what) {
 			if (physics) {
 				physics->disconnect(SNAME("surface_materials_changed"), callable_mp(this, &Box3DPhysicsSettingsTab::_surface_materials_changed));
 			}
+			EditorNode::get_editor_data().remove_undo_redo_inspector_hook_callback(callable_mp(this, &Box3DPhysicsSettingsTab::_undo_redo_inspector_callback));
+			EditorFileSystem::get_singleton()->disconnect("filesystem_changed", callable_mp(this, &Box3DPhysicsSettingsTab::_scripts_reloaded));
 		} break;
 
 		case NOTIFICATION_VISIBILITY_CHANGED: {
@@ -424,6 +755,19 @@ void Box3DPhysicsSettingsTab::_notification(int p_what) {
 			empty_add_button->set_button_icon(get_editor_theme_icon(SNAME("Add")));
 			duplicate_button->set_button_icon(get_editor_theme_icon(SNAME("Duplicate")));
 			delete_button->set_button_icon(get_editor_theme_icon(SNAME("Remove")));
+			gameplay_class_clear_button->set_button_icon(get_editor_theme_icon(SNAME("Clear")));
+
+			// Inline rename lays a LineEdit over the cell, and it insets its text by its own
+			// stylebox margin rather than by the tree's inner item margin, so the name visibly
+			// jumps when the editor opens. Match the cell to the editor. The gap differs by
+			// theme and spacing preset, hence reading it instead of hardcoding.
+			const Ref<StyleBox> rename_style = get_theme_stylebox(SNAME("normal"), SNAME("TreeLineEdit"));
+			if (rename_style.is_valid()) {
+				material_tree->add_theme_constant_override(SNAME("inner_item_margin_left"), Math::round(rename_style->get_margin(SIDE_LEFT)));
+				material_tree->add_theme_constant_override(SNAME("inner_item_margin_right"), Math::round(rename_style->get_margin(SIDE_RIGHT)));
+			}
+			// Carries the error color when the class is missing, so it has to be recolored.
+			_update_gameplay_class_button();
 
 			// The id column carries a theme color, so it has to be recolored in place.
 			const Color id_color = get_theme_color(SNAME("font_disabled_color"), EditorStringName(Editor));
@@ -442,6 +786,34 @@ void Box3DPhysicsSettingsTab::_notification(int p_what) {
 
 Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	set_name(TTRC("Physics"));
+
+	// Above the Surface Materials toolbar: it configures the whole tab, not the list.
+	HBoxContainer *gameplay_class_row = memnew(HBoxContainer);
+	add_child(gameplay_class_row);
+	// Right-aligned and only as wide as it needs to be: stretched across the full row it
+	// reads like a heading for the material list below it rather than a single setting.
+	gameplay_class_row->add_spacer();
+
+	Label *gameplay_class_label = memnew(Label(TTRC("Gameplay Data Class")));
+	gameplay_class_row->add_child(gameplay_class_label);
+
+	gameplay_class_button = memnew(Button);
+	gameplay_class_button->set_custom_minimum_size(Size2(200, 0) * EDSCALE);
+	gameplay_class_button->set_clip_text(true);
+	gameplay_class_button->set_text_alignment(HORIZONTAL_ALIGNMENT_LEFT);
+	gameplay_class_button->connect(SceneStringName(pressed), callable_mp(this, &Box3DPhysicsSettingsTab::_gameplay_class_pressed));
+	gameplay_class_row->add_child(gameplay_class_button);
+
+	gameplay_class_clear_button = memnew(Button);
+	gameplay_class_clear_button->set_flat(true);
+	gameplay_class_clear_button->set_tooltip_text(TTRC("Clear the gameplay data class."));
+	gameplay_class_clear_button->connect(SceneStringName(pressed), callable_mp(this, &Box3DPhysicsSettingsTab::_gameplay_class_cleared));
+	gameplay_class_row->add_child(gameplay_class_clear_button);
+
+	gameplay_class_dialog = memnew(CreateDialog);
+	gameplay_class_dialog->set_base_type(Box3DSurfaceGameplayData::get_class_static());
+	gameplay_class_dialog->connect("create", callable_mp(this, &Box3DPhysicsSettingsTab::_gameplay_class_picked));
+	add_child(gameplay_class_dialog);
 
 	HBoxContainer *toolbar = memnew(HBoxContainer);
 	add_child(toolbar);
@@ -478,6 +850,10 @@ Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	material_tree->set_hide_root(true);
 	material_tree->set_hide_folding(true);
 	material_tree->set_select_mode(Tree::SELECT_SINGLE);
+	// Without this the inline editor opens on the click that SELECTS a material, because Tree
+	// tests `c.selected` after the click rather than before it (tree.cpp:3331). Reselect mode
+	// tests `already_selected` too, giving click-to-switch and click-again-to-rename.
+	material_tree->set_allow_reselect(true);
 	material_tree->set_columns(2);
 	material_tree->set_column_titles_visible(false);
 	material_tree->set_column_expand(0, true);
@@ -499,7 +875,12 @@ Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	inspector->set_scroll_hint_mode(ScrollContainer::SCROLL_HINT_MODE_ALL);
 	// Pulls the property tooltips out of the XML class reference.
 	inspector->set_use_doc_hints(true);
-	inspector->set_object_class(Box3DSurfaceMaterial::get_class_static());
+	// Off by default, and without it the divider between the Box3D fields and the project's
+	// own gameplay fields is dropped silently.
+	inspector->set_show_categories(true, true);
+	// Deliberately no set_object_class(): it pins the doc class for every row, so the
+	// flattened gameplay properties would be looked up on Box3DSurfaceMaterial and find
+	// nothing. The category rows the proxy emits carry the doc class per section instead.
 	inspector->connect("property_edited", callable_mp(this, &Box3DPhysicsSettingsTab::_inspector_property_edited));
 	inspector_margin->add_child(inspector);
 

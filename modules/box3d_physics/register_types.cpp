@@ -54,6 +54,7 @@ void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
 	}
 	GDREGISTER_CLASS(Box3DCharacterMover);
 	GDREGISTER_ABSTRACT_CLASS(Box3DDirectSpaceState3D);
+	GDREGISTER_CLASS(Box3DSurfaceGameplayData);
 	GDREGISTER_CLASS(Box3DSurfaceMaterial);
 	GDREGISTER_CLASS(Box3DSurfaceMaterialLibrary);
 	GDREGISTER_CLASS(Box3DSurfaceMap);

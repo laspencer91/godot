@@ -11,6 +11,14 @@
 
 #include "box3d/box3d.h"
 
+// Base type for a project's own per-surface gameplay data. Empty on purpose: the engine
+// never reads it. Its only job is to be a designator, so the class picker in Project
+// Settings > Physics and the `gameplay` slot on every material can filter to the project's
+// own types instead of offering every Resource in the engine.
+class Box3DSurfaceGameplayData : public Resource {
+	GDCLASS(Box3DSurfaceGameplayData, Resource);
+};
+
 class Box3DSurfaceMaterial : public Resource {
 	GDCLASS(Box3DSurfaceMaterial, Resource);
 
@@ -21,11 +29,12 @@ class Box3DSurfaceMaterial : public Resource {
 	float rolling_resistance = 0.0f;
 	Vector3 tangent_velocity;
 	Color debug_color;
-	Dictionary custom;
+	Ref<Box3DSurfaceGameplayData> gameplay;
 	PackedStringArray texture_patterns;
 
 protected:
 	static void _bind_methods();
+	void _validate_property(PropertyInfo &p_property) const;
 
 public:
 	void set_material_name(const StringName &p_name) { material_name = p_name; }
@@ -42,8 +51,12 @@ public:
 	Vector3 get_tangent_velocity() const { return tangent_velocity; }
 	void set_debug_color(const Color &p_color) { debug_color = p_color; }
 	Color get_debug_color() const { return debug_color; }
-	void set_custom(const Dictionary &p_custom) { custom = p_custom; }
-	Dictionary get_custom() const { return custom; }
+	// Typed, project-defined gameplay data: the project declares a script class extending
+	// Box3DSurfaceGameplayData and gets real inspector widgets and statically typed script
+	// access. Narrowed further per project by _validate_property, which rewrites the hint to
+	// the configured class.
+	void set_gameplay(const Ref<Box3DSurfaceGameplayData> &p_gameplay) { gameplay = p_gameplay; }
+	Ref<Box3DSurfaceGameplayData> get_gameplay() const { return gameplay; }
 	void set_texture_patterns(const PackedStringArray &p_patterns) { texture_patterns = p_patterns; }
 	PackedStringArray get_texture_patterns() const { return texture_patterns; }
 
@@ -113,6 +126,10 @@ public:
 	static Box3DPhysics *get_singleton() { return singleton; }
 	static void register_project_settings();
 	static String get_surface_material_library_path();
+	// Global class name of the project's Box3DSurfaceGameplayData subclass, or empty when
+	// the project has not chosen one. Empty is the normal state for projects that do not
+	// use gameplay data at all.
+	static String get_surface_gameplay_data_class();
 
 	void reload_surface_material_library();
 	Ref<Box3DSurfaceMaterialLibrary> get_surface_material_library() const;
