@@ -271,11 +271,36 @@ Dictionary EditorDerivedData::describe(const String &p_artifact_path) {
 	return result;
 }
 
+PackedStringArray EditorDerivedData::get_roots() {
+	PackedStringArray roots;
+	if (!_ensure_registry()) {
+		return roots;
+	}
+	// Distinct paths, not one per storage class: two classes may legitimately share a root,
+	// and a caller that walks the result would otherwise visit that tree twice.
+	for (const KeyValue<Variant, Variant> &kv : registry_roots) {
+		const String root = kv.value;
+		if (!roots.has(root)) {
+			roots.push_back(root);
+		}
+	}
+	return roots;
+}
+
+Dictionary EditorDerivedData::get_slots() {
+	if (!_ensure_registry()) {
+		return Dictionary();
+	}
+	return registry_slots;
+}
+
 void EditorDerivedData::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("file_for", "owner", "slot", "ext"), &EditorDerivedData::file_for);
 	ClassDB::bind_method(D_METHOD("bundle_for", "owner", "slot"), &EditorDerivedData::bundle_for);
 	ClassDB::bind_method(D_METHOD("owns", "owner", "slot", "artifact_path"), &EditorDerivedData::owns);
 	ClassDB::bind_method(D_METHOD("describe", "artifact_path"), &EditorDerivedData::describe);
+	ClassDB::bind_method(D_METHOD("get_roots"), &EditorDerivedData::get_roots);
+	ClassDB::bind_method(D_METHOD("get_slots"), &EditorDerivedData::get_slots);
 }
 
 void EditorDerivedData::create() {

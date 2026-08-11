@@ -70,6 +70,7 @@ class AudioStreamImportSettingsDialog;
 class AudioStreamPreviewGenerator;
 class BackgroundProgress;
 class DependencyErrorDialog;
+class DerivedDataDialog;
 class DockSplitContainer;
 class DynamicFontImportSettingsDialog;
 class EditorAbout;
@@ -183,6 +184,7 @@ public:
 		PROJECT_QUIT_TO_PROJECT_MANAGER,
 
 		TOOLS_ORPHAN_RESOURCES,
+		TOOLS_DERIVED_DATA,
 		TOOLS_BUILD_PROFILE_MANAGER,
 		TOOLS_PROJECT_UPGRADE,
 		TOOLS_CUSTOM,
@@ -444,6 +446,7 @@ private:
 	DependencyErrorDialog *dependency_error = nullptr;
 	HashMap<String, HashSet<String>> dependency_errors;
 	OrphanResourcesDialog *orphan_resources = nullptr;
+	DerivedDataDialog *derived_data_dialog = nullptr;
 	ConfirmationDialog *open_imported = nullptr;
 	Button *new_inherited_button = nullptr;
 	String open_import_request;
@@ -880,6 +883,7 @@ public:
 	// EditorDockManager to focus FileSystem, which intentionally isn't registered there.
 	void open_file_drawer();
 	void close_file_drawer();
+	WorkspaceFileDrawer *get_workspace_file_drawer() const { return workspace_file_drawer; }
 
 	void trigger_menu_option(int p_option, bool p_confirmed);
 	bool has_previous_closed_scenes() const;

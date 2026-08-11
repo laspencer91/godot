@@ -73,6 +73,12 @@ public:
 	bool owns(Node *p_owner, const StringName &p_slot, const String &p_artifact_path);
 	Dictionary describe(const String &p_artifact_path);
 
+	// Read-only views of the project-side registry, for tools that have to walk the
+	// derived roots themselves (the Derived Data dialog). Handing the cached tables out
+	// keeps the registry-loading policy in one place instead of re-implemented per tool.
+	PackedStringArray get_roots();
+	Dictionary get_slots();
+
 	EditorDerivedData();
 	~EditorDerivedData() override;
 };

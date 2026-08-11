@@ -56,6 +56,8 @@
 #include "editor/debugger/debugger_editor_plugin.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/debugger/script_editor_debugger.h"
+#include "editor/derived_data/derived_data_dialog.h"
+#include "editor/derived_data/derived_data_inspector_plugin.h"
 #include "editor/doc/editor_help.h"
 #include "editor/docks/editor_dock_manager.h"
 #include "editor/docks/filesystem_dock.h"
@@ -4303,6 +4305,9 @@ void EditorNode::_tool_menu_option(int p_idx) {
 	switch (tool_menu->get_item_id(p_idx)) {
 		case TOOLS_ORPHAN_RESOURCES: {
 			orphan_resources->show();
+		} break;
+		case TOOLS_DERIVED_DATA: {
+			derived_data_dialog->show();
 		} break;
 		case TOOLS_BUILD_PROFILE_MANAGER: {
 			build_profile_manager->popup_centered_clamped(Size2(700, 800) * EDSCALE, 0.8);
@@ -8714,6 +8719,7 @@ void EditorNode::_build_project_menu(bool p_dark_mode) {
 		tool_menu = memnew(PopupMenu);
 		tool_menu->connect("index_pressed", callable_mp(this, &EditorNode::_tool_menu_option));
 		tool_menu->add_shortcut(ED_GET_SHORTCUT("editor/orphan_resource_explorer"), TOOLS_ORPHAN_RESOURCES);
+		tool_menu->add_shortcut(ED_GET_SHORTCUT("editor/derived_data_manager"), TOOLS_DERIVED_DATA);
 		tool_menu->add_shortcut(ED_GET_SHORTCUT("editor/engine_compilation_configuration_editor"), TOOLS_BUILD_PROFILE_MANAGER);
 		tool_menu->add_shortcut(ED_GET_SHORTCUT("editor/upgrade_project"), TOOLS_PROJECT_UPGRADE);
 	}
@@ -9252,6 +9258,12 @@ EditorNode::EditorNode() {
 		Ref<EditorInspectorParticleProcessMaterialPlugin> ppm;
 		ppm.instantiate();
 		EditorInspector::add_inspector_plugin(ppm);
+
+		// Registered unconditionally: it is inert on any project without a derived-data
+		// slot registry, since describe() then never resolves a bundle.
+		Ref<DerivedDataInspectorPlugin> ddip;
+		ddip.instantiate();
+		EditorInspector::add_inspector_plugin(ddip);
 	}
 
 	// G2 D2 (Model B): the global selection consumers hold is a stable retargeting proxy over the
@@ -9656,6 +9668,7 @@ EditorNode::EditorNode() {
 	ED_SHORTCUT_AND_COMMAND("editor/export", TTRC("Export..."), Key::NONE, TTRC("Export"));
 
 	ED_SHORTCUT_AND_COMMAND("editor/orphan_resource_explorer", TTRC("Orphan Resource Explorer..."));
+	ED_SHORTCUT_AND_COMMAND("editor/derived_data_manager", TTRC("Derived Data..."));
 	ED_SHORTCUT_AND_COMMAND("editor/engine_compilation_configuration_editor", TTRC("Engine Compilation Configuration Editor..."));
 	ED_SHORTCUT_AND_COMMAND("editor/upgrade_project", TTRC("Upgrade Project Files..."));
 
@@ -9990,6 +10003,9 @@ EditorNode::EditorNode() {
 
 	orphan_resources = memnew(OrphanResourcesDialog);
 	gui_base->add_child(orphan_resources);
+
+	derived_data_dialog = memnew(DerivedDataDialog);
+	gui_base->add_child(derived_data_dialog);
 
 	confirmation = memnew(ConfirmationDialog);
 	confirmation_button = confirmation->add_button(TTRC("Don't Save"), DisplayServer::get_singleton()->get_swap_cancel_ok(), "discard");
