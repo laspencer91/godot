@@ -59,7 +59,7 @@ Node *EditorSceneActionsMenu::_resolve_node(ObjectID p_node_id) {
 	return node;
 }
 
-void EditorSceneActionsMenu::_open_popup() {
+void EditorSceneActionsMenu::pressed() {
 	popup->set_position(get_screen_position() + Vector2(0, get_size().y));
 	popup->reset_size();
 	popup->popup();
@@ -234,8 +234,6 @@ EditorSceneActionsMenu::EditorSceneActionsMenu() {
 	set_text(TTRC("Actions"));
 	set_tooltip_text(TTRC("Run an action exposed by a node of the edited scene."));
 	set_accessibility_name(TTRC("Scene Actions"));
-	connect(SceneStringName(pressed), callable_mp(this, &EditorSceneActionsMenu::_open_popup));
-
 	popup = memnew(PopupPanel);
 	add_child(popup, false, INTERNAL_MODE_FRONT);
 	popup->connect(SNAME("about_to_popup"), callable_mp(this, &EditorSceneActionsMenu::_rebuild));

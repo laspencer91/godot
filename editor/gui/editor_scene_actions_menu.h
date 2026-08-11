@@ -58,7 +58,6 @@ class EditorSceneActionsMenu : public Button {
 	// Resolves an entry's node and verifies it is still part of the edited scene.
 	static Node *_resolve_node(ObjectID p_node_id);
 
-	void _open_popup();
 	void _rebuild();
 	void _activate(int p_index);
 	void _run(int p_index);
@@ -66,6 +65,9 @@ class EditorSceneActionsMenu : public Button {
 
 protected:
 	void _notification(int p_what);
+	// Overridden rather than connected to `pressed`: this class is not in ClassDB, so
+	// Object::connect cannot resolve a signal inherited from BaseButton by name.
+	virtual void pressed() override;
 
 public:
 	EditorSceneActionsMenu();
