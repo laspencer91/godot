@@ -42,6 +42,7 @@ class CanvasItemEditorViewport;
 class ConfirmationDialog;
 class EditorData;
 class EditorDocument;
+class EditorSceneActionsMenu;
 class EditorSelection;
 class EditorViewportChrome;
 class EditorZoomWidget;
@@ -365,6 +366,7 @@ private:
 	void _scene_view_button_pressed(bool p_2d);
 
 	MenuButton *view_menu = nullptr;
+	EditorSceneActionsMenu *scene_actions_menu = nullptr;
 	PopupMenu *grid_menu = nullptr;
 	PopupMenu *theme_menu = nullptr;
 	PopupMenu *gizmos_menu = nullptr;

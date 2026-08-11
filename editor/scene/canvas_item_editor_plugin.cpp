@@ -47,6 +47,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/gui/editor_scene_actions_menu.h"
 #include "editor/gui/editor_toaster.h"
 #include "editor/gui/editor_zoom_widget.h"
 #include "editor/gui/editor_viewport_chrome.h"
@@ -6333,6 +6334,16 @@ CanvasItemEditor::CanvasItemEditor() {
 	view_menu->set_switch_on_hover(true);
 	view_menu->set_shortcut_context(this);
 	main_menu_hbox->add_child(view_menu);
+
+	// Always present regardless of selection, so it belongs with the main menus
+	// rather than in the context toolbar (which it would pin open forever).
+	main_menu_hbox->add_child(memnew(VSeparator));
+	scene_actions_menu = memnew(EditorSceneActionsMenu);
+	// Unbound by default: the shortcut exists so users can assign one, and it
+	// reaches `pressed`, which is what opens the popup.
+	scene_actions_menu->set_shortcut(ED_SHORTCUT("canvas_item_editor/scene_actions", TTRC("Scene Actions")));
+	scene_actions_menu->set_shortcut_context(this);
+	main_menu_hbox->add_child(scene_actions_menu);
 
 	p = view_menu->get_popup();
 	p->connect(SceneStringName(id_pressed), callable_mp(this, &CanvasItemEditor::_popup_callback));
