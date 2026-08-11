@@ -165,10 +165,34 @@ void EditorSceneActionsMenu::_activate(int p_index) {
 		return;
 	}
 
-	// Actions pop EditorProgress dialogs and warning modals; running them
-	// synchronously underneath a closing popup is a focus/parenting hazard.
+	// Close the popup first: actions pop EditorProgress dialogs and warning modals,
+	// and those must not parent themselves under a window that is about to go away.
+	// hide() is synchronous -- it destroys the window and delivers
+	// NOTIFICATION_VISIBILITY_CHANGED before returning -- so the popup is fully torn
+	// down by the time the action starts. (Only Popup's own auto-close paths, ESC and
+	// focus loss, defer the hide; this is not one of them.)
 	popup->hide();
-	callable_mp(this, &EditorSceneActionsMenu::_run).call_deferred(p_index);
+
+	// Then run the action right here, in the row button's own `pressed` dispatch. That
+	// is the same context the per-node toolbar buttons this menu replaced ran in, and
+	// the same thing PopupMenu::activate_item() does: hide, then emit `id_pressed`
+	// synchronously.
+	//
+	// This must NOT be call_deferred(). Deferred calls execute inside
+	// MessageQueue::flush(), and ProgressDialog::add_task() explicitly refuses to open
+	// a task while the queue is flushing ("Do not use progress dialog (task) while
+	// flushing the message queue or using call_deferred!"). With no task registered,
+	// every EditorProgress::step() short-circuits too, so ProgressDialog::_update_ui()
+	// never runs its DisplayServer::process_events() + Main::iteration() pump: a long
+	// action (a lightmap bake takes minutes) would then block the main thread with no
+	// progress dialog and no event processing, and the OS replaces the editor with a
+	// "not responding" ghost window.
+	//
+	// A one-shot SceneTree `process_frame` hop would also land outside the flush, but
+	// it would run the action from inside SceneTree::process(), which every
+	// EditorProgress::step() then re-enters via Main::iteration(). Staying synchronous
+	// keeps that recursion at exactly the depth the old toolbar buttons had.
+	_run(p_index);
 }
 
 void EditorSceneActionsMenu::_run(int p_index) {
