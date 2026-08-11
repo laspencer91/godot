@@ -30,56 +30,64 @@
 
 #include "voxel_gi_editor_plugin.h"
 
-#include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/object/callable_mp.h"
-#include "editor/editor_interface.h"
+#include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
-#include "editor/gui/editor_file_dialog.h"
-#include "scene/main/scene_tree.h"
+#include "editor/editor_undo_redo_manager.h"
+#include "scene/gui/button.h"
 
 void VoxelGIEditorPlugin::_bake() {
-	if (voxel_gi) {
-		Ref<VoxelGIData> voxel_gi_data = voxel_gi->get_probe_data();
+	if (!voxel_gi) {
+		return;
+	}
 
-		if (voxel_gi_data.is_null()) {
-			String path = get_tree()->get_edited_scene_root()->get_scene_file_path();
-			if (path.is_empty()) {
-				path = "res://" + voxel_gi->get_name() + "_data.res";
-			} else {
-				path = path.get_basename() + "." + voxel_gi->get_name() + "_data.res";
-			}
-			probe_file->set_current_path(path);
-			probe_file->popup_file_dialog();
-			return;
-		} else {
-			String path = voxel_gi_data->get_path();
-			if (!path.is_resource_file()) {
-				int srpos = path.find("::");
-				if (srpos != -1) {
-					String base = path.substr(0, srpos);
-					if (ResourceLoader::get_resource_type(base) == "PackedScene") {
-						if (!get_tree()->get_edited_scene_root() || get_tree()->get_edited_scene_root()->get_scene_file_path() != base) {
-							EditorNode::get_singleton()->show_warning(TTR("Voxel GI data is not local to the scene."));
-							return;
-						}
-					} else {
-						if (FileAccess::exists(base + ".import")) {
-							EditorNode::get_singleton()->show_warning(TTR("Voxel GI data is part of an imported resource."));
-							return;
-						}
-					}
-				}
-			} else {
-				if (FileAccess::exists(path + ".import")) {
-					EditorNode::get_singleton()->show_warning(TTR("Voxel GI data is an imported resource."));
-					return;
-				}
-			}
+	// The editor owns the output location: it is allocated from the node's persistent identity, so
+	// renames and moves keep resolving to the same bundle.
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	const String out_path = edd->file_for(voxel_gi, SNAME("godot.voxel_gi"), "res");
+	if (out_path.is_empty()) {
+		return; // The allocator already pushed a precise error (unsaved owner, unset registry, ...).
+	}
+
+	// The core bake reuses whatever VoxelGIData is currently assigned. A pasted or duplicated node
+	// can still reference the source node's resource, so anything that does not already live at this
+	// node's allocated path is dropped and rebuilt -- that also covers the foreign/imported cases the
+	// old guards rejected.
+	const Ref<VoxelGIData> prev = voxel_gi->get_probe_data();
+	const bool dropped_prev = prev.is_valid() && prev->get_path() != out_path;
+	if (dropped_prev) {
+		voxel_gi->set_probe_data(Ref<VoxelGIData>());
+	}
+
+	voxel_gi->bake();
+
+	Ref<VoxelGIData> data = voxel_gi->get_probe_data();
+	if (data.is_null()) {
+		if (dropped_prev) {
+			voxel_gi->set_probe_data(prev); // Bake bailed out: don't silently drop the old reference.
 		}
+		ERR_FAIL_MSG("VoxelGI bake produced no data.");
+	}
 
-		voxel_gi->bake();
+	// Always write the data out. Keeping it external avoids bloating the scene file with large binary
+	// data, which a `.tscn` would serialize as Base64. Take-over form of set_path: on a rebake in
+	// place the resource cache already holds this path.
+	if (data->get_path() != out_path) {
+		data->set_path(out_path, true);
+	}
+	ResourceSaver::save(data, out_path, ResourceSaver::FLAG_CHANGE_PATH);
+
+	if (data != prev) {
+		// The bake assigned the property itself, so only record it -- committing without executing
+		// keeps the already-applied value and makes the repoint undoable.
+		EditorUndoRedoManager *undo_redo = get_undo_redo();
+		undo_redo->create_action(TTR("Bake VoxelGI"));
+		undo_redo->add_do_property(voxel_gi, "data", data);
+		undo_redo->add_undo_property(voxel_gi, "data", prev);
+		undo_redo->commit_action(false);
 	}
 }
 
@@ -166,20 +174,6 @@ void VoxelGIEditorPlugin::bake_func_end() {
 	tmp_progress = nullptr;
 }
 
-void VoxelGIEditorPlugin::_voxel_gi_save_path_and_bake(const String &p_path) {
-	probe_file->hide();
-	if (voxel_gi) {
-		voxel_gi->bake();
-		// Ensure the VoxelGIData is always saved to an external resource.
-		// This avoids bloating the scene file with large binary data,
-		// which would be serialized as Base64 if the scene is a `.tscn` file.
-		Ref<VoxelGIData> voxel_gi_data = voxel_gi->get_probe_data();
-		ERR_FAIL_COND(voxel_gi_data.is_null());
-		voxel_gi_data->set_path(p_path);
-		ResourceSaver::save(voxel_gi_data, p_path, ResourceSaver::FLAG_CHANGE_PATH);
-	}
-}
-
 VoxelGIEditorPlugin::VoxelGIEditorPlugin() {
 	bake_hb = memnew(HBoxContainer);
 	bake_hb->set_h_size_flags(Control::SIZE_EXPAND_FILL);
@@ -195,12 +189,6 @@ VoxelGIEditorPlugin::VoxelGIEditorPlugin() {
 
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake_hb);
 	voxel_gi = nullptr;
-	probe_file = memnew(EditorFileDialog);
-	probe_file->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
-	probe_file->add_filter("*.res");
-	probe_file->connect("file_selected", callable_mp(this, &VoxelGIEditorPlugin::_voxel_gi_save_path_and_bake));
-	EditorInterface::get_singleton()->get_base_control()->add_child(probe_file);
-	probe_file->set_title(TTR("Select path for VoxelGI Data File"));
 
 	VoxelGI::bake_begin_function = bake_func_begin;
 	VoxelGI::bake_step_function = bake_func_step;

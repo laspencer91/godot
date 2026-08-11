@@ -32,7 +32,6 @@
 
 #include "editor/plugins/editor_plugin.h"
 
-class EditorFileDialog;
 class OccluderInstance3D;
 
 class OccluderInstance3DEditorPlugin : public EditorPlugin {
@@ -42,9 +41,6 @@ class OccluderInstance3DEditorPlugin : public EditorPlugin {
 
 	Button *bake = nullptr;
 
-	EditorFileDialog *file_dialog = nullptr;
-
-	void _bake_select_file(const String &p_file);
 	void _bake();
 
 protected:

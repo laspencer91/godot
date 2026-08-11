@@ -30,111 +30,105 @@
 
 #include "lightmap_gi_editor_plugin.h"
 
-#include "core/io/resource_loader.h"
-#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
+#include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
-#include "editor/gui/editor_file_dialog.h"
+#include "editor/editor_undo_redo_manager.h"
 #include "scene/3d/lightmap_gi.h"
+#include "scene/gui/button.h"
 #include "scene/main/scene_tree.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
 #include "modules/modules_enabled.gen.h" // For lightmapper_rd.
 
-void LightmapGIEditorPlugin::_bake_select_file(const String &p_file) {
-	if (lightmap) {
-		LightmapGI::BakeError err = LightmapGI::BAKE_ERROR_OK;
-		const uint64_t time_started = OS::get_singleton()->get_ticks_msec();
-		if (get_tree()->get_edited_scene_root()) {
-			Ref<LightmapGIData> lightmapGIData = lightmap->get_light_data();
-
-			if (lightmapGIData.is_valid()) {
-				String path = lightmapGIData->get_path();
-				if (!path.is_resource_file()) {
-					int srpos = path.find("::");
-					if (srpos != -1) {
-						String base = path.substr(0, srpos);
-						if (ResourceLoader::get_resource_type(base) == "PackedScene") {
-							if (!get_tree()->get_edited_scene_root() || get_tree()->get_edited_scene_root()->get_scene_file_path() != base) {
-								err = LightmapGI::BAKE_ERROR_FOREIGN_DATA;
-							}
-						} else {
-							if (FileAccess::exists(base + ".import")) {
-								err = LightmapGI::BAKE_ERROR_FOREIGN_DATA;
-							}
-						}
-					}
-				} else {
-					if (FileAccess::exists(path + ".import")) {
-						err = LightmapGI::BAKE_ERROR_FOREIGN_DATA;
-					}
-				}
-			}
-
-			if (err == LightmapGI::BAKE_ERROR_OK) {
-				if (get_tree()->get_edited_scene_root() == lightmap) {
-					err = lightmap->bake(lightmap, p_file, bake_func_step);
-				} else {
-					err = lightmap->bake(lightmap->get_parent(), p_file, bake_func_step);
-				}
-			}
-		} else {
-			err = LightmapGI::BAKE_ERROR_NO_SCENE_ROOT;
-		}
-
-		bake_func_end(time_started);
-
-		switch (err) {
-			case LightmapGI::BAKE_ERROR_NO_SAVE_PATH: {
-				String scene_path = lightmap->get_scene_file_path();
-				if (scene_path.is_empty() && lightmap->get_owner()) {
-					scene_path = lightmap->get_owner()->get_scene_file_path();
-				}
-				if (scene_path.is_empty()) {
-					EditorNode::get_singleton()->show_warning(TTR("Can't determine a save path for lightmap images.\nSave your scene and try again."));
-					break;
-				}
-				scene_path = scene_path.get_basename() + ".lmbake";
-
-				file_dialog->set_current_path(scene_path);
-				file_dialog->popup_file_dialog();
-			} break;
-			case LightmapGI::BAKE_ERROR_NO_MESHES: {
-				EditorNode::get_singleton()->show_warning(
-						TTR("No meshes with lightmapping support to bake. Make sure they contain UV2 data and their Global Illumination property is set to Static.") +
-						String::utf8("\n\n•  ") + TTR("To import a scene with lightmapping support, set Meshes > Light Baking to Static Lightmaps in the Import dock.") +
-						String::utf8("\n•  ") + TTR("To enable lightmapping support on a primitive mesh, edit the PrimitiveMesh resource in the inspector and check Add UV2.") +
-						String::utf8("\n•  ") + TTR("To enable lightmapping support on a CSG mesh, select the root CSG node and choose CSG > Bake Mesh Instance at the top of the 3D editor viewport.\nSelect the generated MeshInstance3D node and choose Mesh > Unwrap UV2 for Lightmap/AO at the top of the 3D editor viewport."));
-			} break;
-			case LightmapGI::BAKE_ERROR_CANT_CREATE_IMAGE: {
-				EditorNode::get_singleton()->show_warning(TTR("Failed creating lightmap images. Make sure the lightmap destination path is writable."));
-			} break;
-			case LightmapGI::BAKE_ERROR_NO_SCENE_ROOT: {
-				EditorNode::get_singleton()->show_warning(TTR("No editor scene root found."));
-			} break;
-			case LightmapGI::BAKE_ERROR_FOREIGN_DATA: {
-				EditorNode::get_singleton()->show_warning(TTR("Lightmap data is not local to the scene."));
-			} break;
-			case LightmapGI::BAKE_ERROR_TEXTURE_SIZE_TOO_SMALL: {
-				EditorNode::get_singleton()->show_warning(TTR("Maximum texture size is too small for the lightmap images.\nWhile this can be fixed by increasing the maximum texture size, it is recommended you split the scene into more objects instead."));
-			} break;
-			case LightmapGI::BAKE_ERROR_LIGHTMAP_TOO_SMALL: {
-				EditorNode::get_singleton()->show_warning(TTR("Failed creating lightmap images. Make sure all meshes to bake have the Lightmap Size Hint property set high enough, and the LightmapGI's Texel Scale value is not too low."));
-			} break;
-			case LightmapGI::BAKE_ERROR_ATLAS_TOO_SMALL: {
-				EditorNode::get_singleton()->show_warning(TTR("Failed fitting a lightmap image into an atlas. This should never happen and should be reported."));
-			} break;
-			default: {
-			} break;
-		}
-	}
-}
-
 void LightmapGIEditorPlugin::_bake() {
-	_bake_select_file("");
+	if (!lightmap) {
+		return;
+	}
+
+	// The editor owns the output location: it is allocated from the node's persistent identity so
+	// renames and moves keep resolving to the same bundle. The atlas .exr / shadowmask .png files
+	// are derived from this basename inside the core bake, so they land in the bundle too.
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	const String out_path = edd->file_for(lightmap, SNAME("godot.lightmap"), "lmbake");
+	if (out_path.is_empty()) {
+		return; // The allocator already pushed a precise error (unsaved owner, unset registry, ...).
+	}
+
+	// The core bake reuses whatever LightmapGIData is currently assigned and re-paths it. A pasted or
+	// duplicated node can still reference the source node's resource, so anything that does not
+	// already live at this node's allocated path is dropped and rebuilt from scratch -- that also
+	// covers the foreign/imported cases the old pre-check rejected.
+	const Ref<LightmapGIData> prev = lightmap->get_light_data();
+	const bool dropped_prev = prev.is_valid() && prev->get_path() != out_path;
+	if (dropped_prev) {
+		lightmap->set_light_data(Ref<LightmapGIData>());
+	}
+
+	LightmapGI::BakeError err = LightmapGI::BAKE_ERROR_OK;
+	const uint64_t time_started = OS::get_singleton()->get_ticks_msec();
+	if (get_tree()->get_edited_scene_root()) {
+		if (get_tree()->get_edited_scene_root() == lightmap) {
+			err = lightmap->bake(lightmap, out_path, bake_func_step);
+		} else {
+			err = lightmap->bake(lightmap->get_parent(), out_path, bake_func_step);
+		}
+	} else {
+		err = LightmapGI::BAKE_ERROR_NO_SCENE_ROOT;
+	}
+
+	bake_func_end(time_started);
+
+	if (err == LightmapGI::BAKE_ERROR_OK) {
+		const Ref<LightmapGIData> current = lightmap->get_light_data();
+		if (current != prev) {
+			// The bake assigned the property itself, so only record it -- committing without
+			// executing keeps the already-applied value and makes the repoint undoable.
+			EditorUndoRedoManager *undo_redo = get_undo_redo();
+			undo_redo->create_action(TTR("Bake Lightmaps"));
+			undo_redo->add_do_property(lightmap, "light_data", current);
+			undo_redo->add_undo_property(lightmap, "light_data", prev);
+			undo_redo->commit_action(false);
+		}
+	} else if (dropped_prev && lightmap->get_light_data().is_null()) {
+		lightmap->set_light_data(prev); // Failed bake: don't silently drop the old reference.
+	}
+
+	switch (err) {
+		case LightmapGI::BAKE_ERROR_NO_SAVE_PATH: {
+			// Defensive: the allocator always hands out a res:// path, so the core can no longer
+			// reach this through the plugin.
+			EditorNode::get_singleton()->show_warning(TTR("Can't determine a save path for lightmap images.\nSave your scene and try again."));
+		} break;
+		case LightmapGI::BAKE_ERROR_NO_MESHES: {
+			EditorNode::get_singleton()->show_warning(
+					TTR("No meshes with lightmapping support to bake. Make sure they contain UV2 data and their Global Illumination property is set to Static.") +
+					String::utf8("\n\n•  ") + TTR("To import a scene with lightmapping support, set Meshes > Light Baking to Static Lightmaps in the Import dock.") +
+					String::utf8("\n•  ") + TTR("To enable lightmapping support on a primitive mesh, edit the PrimitiveMesh resource in the inspector and check Add UV2.") +
+					String::utf8("\n•  ") + TTR("To enable lightmapping support on a CSG mesh, select the root CSG node and choose CSG > Bake Mesh Instance at the top of the 3D editor viewport.\nSelect the generated MeshInstance3D node and choose Mesh > Unwrap UV2 for Lightmap/AO at the top of the 3D editor viewport."));
+		} break;
+		case LightmapGI::BAKE_ERROR_CANT_CREATE_IMAGE: {
+			EditorNode::get_singleton()->show_warning(TTR("Failed creating lightmap images. Make sure the lightmap destination path is writable."));
+		} break;
+		case LightmapGI::BAKE_ERROR_NO_SCENE_ROOT: {
+			EditorNode::get_singleton()->show_warning(TTR("No editor scene root found."));
+		} break;
+		case LightmapGI::BAKE_ERROR_TEXTURE_SIZE_TOO_SMALL: {
+			EditorNode::get_singleton()->show_warning(TTR("Maximum texture size is too small for the lightmap images.\nWhile this can be fixed by increasing the maximum texture size, it is recommended you split the scene into more objects instead."));
+		} break;
+		case LightmapGI::BAKE_ERROR_LIGHTMAP_TOO_SMALL: {
+			EditorNode::get_singleton()->show_warning(TTR("Failed creating lightmap images. Make sure all meshes to bake have the Lightmap Size Hint property set high enough, and the LightmapGI's Texel Scale value is not too low."));
+		} break;
+		case LightmapGI::BAKE_ERROR_ATLAS_TOO_SMALL: {
+			EditorNode::get_singleton()->show_warning(TTR("Failed fitting a lightmap image into an atlas. This should never happen and should be reported."));
+		} break;
+		default: {
+		} break;
+	}
 }
 
 void LightmapGIEditorPlugin::edit(Object *p_object) {
@@ -214,11 +208,4 @@ LightmapGIEditorPlugin::LightmapGIEditorPlugin() {
 	bake->connect(SceneStringName(pressed), Callable(this, "_bake"));
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake);
 	lightmap = nullptr;
-
-	file_dialog = memnew(EditorFileDialog);
-	file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
-	file_dialog->add_filter("*.lmbake", TTR("LightMap Bake"));
-	file_dialog->set_title(TTR("Select lightmap bake file:"));
-	file_dialog->connect("file_selected", callable_mp(this, &LightmapGIEditorPlugin::_bake_select_file));
-	bake->add_child(file_dialog);
 }

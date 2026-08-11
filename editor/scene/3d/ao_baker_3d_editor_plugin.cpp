@@ -34,16 +34,15 @@
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
+#include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
-#include "editor/gui/editor_file_dialog.h"
 #include "scene/3d/ao_baker_3d.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/gui/button.h"
 #include "scene/gui/dialogs.h"
-#include "scene/main/scene_tree.h"
 #include "scene/resources/3d/primitive_meshes.h"
 #include "scene/resources/mesh.h"
 #include "scene/resources/texture.h"
@@ -142,31 +141,16 @@ void AOBaker3DEditorPlugin::_bake() {
 		return;
 	}
 
-	// Reuse an existing external atlas path on rebake. Inline/foreign/imported resources are never
-	// overwritten: they go through the first-bake save dialog and become local external bake data.
-	Ref<TextureLayered> current_atlas = baker->get_ao_atlas();
-	if (current_atlas.is_valid()) {
-		const String current_path = current_atlas->get_path();
-		if (current_path.is_resource_file() && current_path.get_extension().to_lower() == "png") {
-			pending_atlas_path = current_path;
-			_prepare_bake();
-			return;
-		}
+	// The editor owns the output location: it is allocated from the node's persistent identity, so
+	// renames and moves keep resolving to the same bundle and a rebake overwrites in place.
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	const String out_path = edd->file_for(baker, SNAME("godot.ao_bake"), "png");
+	if (out_path.is_empty()) {
+		return; // The allocator already pushed a precise error (unsaved owner, unset registry, ...).
 	}
 
-	Node *scene_root = get_tree()->get_edited_scene_root();
-	const String scene_path = scene_root ? scene_root->get_scene_file_path() : String();
-	if (scene_path.is_empty()) {
-		EditorNode::get_singleton()->show_warning(TTR("Save the scene before choosing where to store its AO bake data."));
-		return;
-	}
-
-	atlas_file->set_current_path(scene_path.get_basename() + "_ao.png");
-	atlas_file->popup_file_dialog();
-}
-
-void AOBaker3DEditorPlugin::_atlas_path_selected(const String &p_path) {
-	pending_atlas_path = p_path;
+	pending_atlas_path = out_path;
 	_prepare_bake();
 }
 
@@ -261,6 +245,9 @@ void AOBaker3DEditorPlugin::_do_bake() {
 	if (!baker) {
 		return;
 	}
+	const Ref<TextureLayered> prev_atlas = baker->get_ao_atlas();
+	const Dictionary prev_transforms = baker->get_ao_transforms();
+
 	const uint64_t time_started = OS::get_singleton()->get_ticks_msec();
 	AOBaker3D::BakeError err = baker->bake(pending_atlas_path);
 	const int time_taken = OS::get_singleton()->get_ticks_msec() - time_started;
@@ -268,7 +255,17 @@ void AOBaker3DEditorPlugin::_do_bake() {
 	switch (err) {
 		case AOBaker3D::BAKE_ERROR_OK: {
 			// The atlas is an external resource; only its reference and the compact per-mesh transforms
-			// persist in the scene. Mark the scene dirty so Ctrl+S records both.
+			// persist in the scene. The bake assigned both properties itself, so only record them --
+			// committing without executing keeps the already-applied values and makes the bake undoable.
+			EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+			undo_redo->create_action(TTR("Bake AO"));
+			undo_redo->add_do_property(baker, "ao_atlas", baker->get_ao_atlas());
+			undo_redo->add_do_property(baker, "ao_transforms", baker->get_ao_transforms());
+			undo_redo->add_undo_property(baker, "ao_atlas", prev_atlas);
+			undo_redo->add_undo_property(baker, "ao_transforms", prev_transforms);
+			undo_redo->commit_action(false);
+
+			// Mark the scene dirty so Ctrl+S records both.
 			const int wired = baker->get_ao_transforms().size();
 			EditorInterface::get_singleton()->mark_scene_as_unsaved();
 			print_line(vformat("Done baking AO in %d ms (%d meshes into %s; AO_MAP wired via the per-instance channel).", time_taken, wired, pending_atlas_path));
@@ -312,13 +309,6 @@ void AOBaker3DEditorPlugin::_bind_methods() {
 }
 
 AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
-	atlas_file = memnew(EditorFileDialog);
-	atlas_file->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
-	atlas_file->add_filter("*.png", TTR("PNG Image"));
-	atlas_file->set_title(TTR("Select Path for AO Bake Data"));
-	atlas_file->connect("file_selected", callable_mp(this, &AOBaker3DEditorPlugin::_atlas_path_selected));
-	EditorInterface::get_singleton()->get_base_control()->add_child(atlas_file);
-
 	uv2_prompt = memnew(ConfirmationDialog);
 	uv2_prompt->set_title(TTR("Bake AO"));
 	uv2_prompt->get_ok_button()->set_text(TTR("Unwrap & Bake"));

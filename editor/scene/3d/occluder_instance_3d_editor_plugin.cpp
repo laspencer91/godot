@@ -30,55 +30,77 @@
 
 #include "occluder_instance_3d_editor_plugin.h"
 
-#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
-#include "editor/gui/editor_file_dialog.h"
+#include "editor/editor_undo_redo_manager.h"
 #include "scene/3d/occluder_instance_3d.h"
+#include "scene/gui/button.h"
 #include "scene/main/scene_tree.h"
 
-void OccluderInstance3DEditorPlugin::_bake_select_file(const String &p_file) {
-	if (occluder_instance) {
-		OccluderInstance3D::BakeError err;
-		if (get_tree()->get_edited_scene_root() && get_tree()->get_edited_scene_root() == occluder_instance) {
-			err = occluder_instance->bake_scene(occluder_instance, p_file);
-		} else {
-			err = occluder_instance->bake_scene(occluder_instance->get_parent(), p_file);
+void OccluderInstance3DEditorPlugin::_bake() {
+	if (!occluder_instance) {
+		return;
+	}
+
+	// The editor owns the output location: it is allocated from the node's persistent identity, so
+	// renames and moves keep resolving to the same bundle.
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	const String out_path = edd->file_for(occluder_instance, SNAME("godot.occluder"), "occ");
+	if (out_path.is_empty()) {
+		return; // The allocator already pushed a precise error (unsaved owner, unset registry, ...).
+	}
+
+	// The core bake reuses whatever Occluder3D is currently assigned and re-paths it. A pasted or
+	// duplicated node can still reference the source node's resource, so anything that does not
+	// already live at this node's allocated path is dropped and rebuilt from scratch.
+	const Ref<Occluder3D> prev = occluder_instance->get_occluder();
+	const bool dropped_prev = prev.is_valid() && prev->get_path() != out_path;
+	if (dropped_prev) {
+		occluder_instance->set_occluder(Ref<Occluder3D>());
+	}
+
+	OccluderInstance3D::BakeError err;
+	if (get_tree()->get_edited_scene_root() && get_tree()->get_edited_scene_root() == occluder_instance) {
+		err = occluder_instance->bake_scene(occluder_instance, out_path);
+	} else {
+		err = occluder_instance->bake_scene(occluder_instance->get_parent(), out_path);
+	}
+
+	if (err == OccluderInstance3D::BAKE_ERROR_OK) {
+		const Ref<Occluder3D> current = occluder_instance->get_occluder();
+		if (current != prev) {
+			// The bake assigned the property itself, so only record it -- committing without
+			// executing keeps the already-applied value and makes the repoint undoable.
+			EditorUndoRedoManager *undo_redo = get_undo_redo();
+			undo_redo->create_action(TTR("Bake Occluders"));
+			undo_redo->add_do_property(occluder_instance, "occluder", current);
+			undo_redo->add_undo_property(occluder_instance, "occluder", prev);
+			undo_redo->commit_action(false);
 		}
+	} else if (dropped_prev && occluder_instance->get_occluder().is_null()) {
+		occluder_instance->set_occluder(prev); // Failed bake: don't silently drop the old reference.
+	}
 
-		switch (err) {
-			case OccluderInstance3D::BAKE_ERROR_NO_SAVE_PATH: {
-				String scene_path = occluder_instance->get_scene_file_path();
-				if (scene_path.is_empty()) {
-					scene_path = occluder_instance->get_owner()->get_scene_file_path();
-				}
-				if (scene_path.is_empty()) {
-					EditorNode::get_singleton()->show_warning(TTR("Can't determine a save path for the occluder.\nSave your scene and try again."));
-					break;
-				}
-				scene_path = scene_path.get_basename() + ".occ";
-
-				file_dialog->set_current_path(scene_path);
-				file_dialog->popup_file_dialog();
-
-			} break;
-			case OccluderInstance3D::BAKE_ERROR_NO_MESHES: {
-				EditorNode::get_singleton()->show_warning(TTR("No meshes to bake.\nMake sure there is at least one MeshInstance3D node in the scene whose visual layers are part of the OccluderInstance3D's Bake Mask property."));
-				break;
-			}
-			case OccluderInstance3D::BAKE_ERROR_CANT_SAVE: {
-				EditorNode::get_singleton()->show_warning(TTR("Could not save the new occluder at the specified path:") + " " + p_file);
-				break;
-			}
-			default: {
-			}
+	switch (err) {
+		case OccluderInstance3D::BAKE_ERROR_NO_SAVE_PATH: {
+			// Defensive: the allocator always hands out a res:// path, so the core can no longer
+			// reach this through the plugin.
+			EditorNode::get_singleton()->show_warning(TTR("Can't determine a save path for the occluder.\nSave your scene and try again."));
+		} break;
+		case OccluderInstance3D::BAKE_ERROR_NO_MESHES: {
+			EditorNode::get_singleton()->show_warning(TTR("No meshes to bake.\nMake sure there is at least one MeshInstance3D node in the scene whose visual layers are part of the OccluderInstance3D's Bake Mask property."));
+			break;
+		}
+		case OccluderInstance3D::BAKE_ERROR_CANT_SAVE: {
+			EditorNode::get_singleton()->show_warning(TTR("Could not save the new occluder at the specified path:") + " " + out_path);
+			break;
+		}
+		default: {
 		}
 	}
-}
-
-void OccluderInstance3DEditorPlugin::_bake() {
-	_bake_select_file("");
 }
 
 void OccluderInstance3DEditorPlugin::edit(Object *p_object) {
@@ -115,11 +137,4 @@ OccluderInstance3DEditorPlugin::OccluderInstance3DEditorPlugin() {
 	bake->connect(SceneStringName(pressed), Callable(this, "_bake"));
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake);
 	occluder_instance = nullptr;
-
-	file_dialog = memnew(EditorFileDialog);
-	file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
-	file_dialog->add_filter("*.occ", "Occluder3D");
-	file_dialog->set_title(TTR("Select occluder bake file:"));
-	file_dialog->connect("file_selected", callable_mp(this, &OccluderInstance3DEditorPlugin::_bake_select_file));
-	bake->add_child(file_dialog);
 }

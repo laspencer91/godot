@@ -35,7 +35,6 @@
 class AOBaker3D;
 class Button;
 class ConfirmationDialog;
-class EditorFileDialog;
 class EditorUndoRedoManager;
 class Mesh;
 class MeshInstance3D;
@@ -50,11 +49,9 @@ class AOBaker3DEditorPlugin : public EditorPlugin {
 	// fixable ones before baking (OK button) or to bake only the ready meshes (custom button).
 	ConfirmationDialog *uv2_prompt = nullptr;
 	Button *bake_ready_button = nullptr;
-	EditorFileDialog *atlas_file = nullptr;
 	String pending_atlas_path;
 
-	void _bake(); // Entry point: resolve an external atlas path, then prepare the bake.
-	void _atlas_path_selected(const String &p_path); // First bake: remember the selected .png path.
+	void _bake(); // Entry point: allocate the derived-data atlas path, then prepare the bake.
 	void _prepare_bake(); // Classify meshes, then prompt or bake.
 	void _do_bake(); // Run the actual bake and report the result.
 	void _unwrap_and_bake(); // Prompt confirmed: batch-unwrap the fixable meshes (one undo step) then bake.
