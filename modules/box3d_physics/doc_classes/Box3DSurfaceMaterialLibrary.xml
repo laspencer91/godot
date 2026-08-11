@@ -8,9 +8,25 @@
 	</description>
 	<tutorials>
 	</tutorials>
+	<methods>
+		<method name="allocate_material_id" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns an unused material id, one past the highest id currently in the library. Ids are baked into shapes and recordings, so freed ids are never handed out again.
+			</description>
+		</method>
+		<method name="find_material" qualifiers="const">
+			<return type="Box3DSurfaceMaterial" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Returns the authored material named [param name], or [code]null[/code]. Unlike [method Box3DPhysics.get_material] this searches the raw array, so it also finds entries the registry rejected.
+			</description>
+		</method>
+	</methods>
 	<members>
 		<member name="materials" type="Array[Box3DSurfaceMaterial]" setter="set_materials" getter="get_materials">
-			Registered surface material resources.
+			The authored surface material resources, in Physics tab order. This is the raw array; [method Box3DPhysics.get_materials] returns only the entries that passed registration.
+			Names and ids are made unique on assignment: the first entry with a given name or id keeps it, and any later entry with a duplicate or empty name is renamed, while one with a duplicate or non-positive id is given a fresh id one past the highest in the array. Each fix is reported as a warning. An array that is already valid is stored unchanged.
 		</member>
 	</members>
 </class>

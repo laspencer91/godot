@@ -47,6 +47,18 @@
 				Returns the registered name for [param id], or an empty [StringName].
 			</description>
 		</method>
+		<method name="get_material_names" qualifiers="const">
+			<return type="PackedStringArray" />
+			<description>
+				Returns the names of every registered material, in library order.
+			</description>
+		</method>
+		<method name="get_materials" qualifiers="const">
+			<return type="Box3DSurfaceMaterial[]" />
+			<description>
+				Returns every registered material resource, in library order. Entries the registry rejected (missing name, duplicate name or id) are omitted, unlike [method Box3DSurfaceMaterialLibrary.get_materials] which returns the raw authored array.
+			</description>
+		</method>
 		<method name="get_shape_mesh_material_indices" qualifiers="const">
 			<return type="PackedByteArray" />
 			<param index="0" name="shape" type="RID" />
@@ -58,6 +70,13 @@
 			<return type="Box3DSurfaceMaterialLibrary" />
 			<description>
 				Returns the loaded project surface material library.
+			</description>
+		</method>
+		<method name="has_material" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Returns whether a material named [param name] is registered.
 			</description>
 		</method>
 		<method name="match_texture" qualifiers="const">
@@ -144,4 +163,11 @@
 			</description>
 		</method>
 	</methods>
+	<signals>
+		<signal name="surface_materials_changed">
+			<description>
+				Emitted after the surface material registry is rebuilt, including by [method reload_surface_material_library]. Inspector dropdowns and the Physics tab refresh from this instead of polling.
+			</description>
+		</signal>
+	</signals>
 </class>

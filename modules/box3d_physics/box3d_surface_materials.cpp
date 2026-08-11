@@ -91,7 +91,112 @@ b3SurfaceMaterial Box3DSurfaceMaterial::to_box3d() const {
 void Box3DSurfaceMaterialLibrary::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_materials", "materials"), &Box3DSurfaceMaterialLibrary::set_materials);
 	ClassDB::bind_method(D_METHOD("get_materials"), &Box3DSurfaceMaterialLibrary::get_materials);
+	ClassDB::bind_method(D_METHOD("find_material", "name"), &Box3DSurfaceMaterialLibrary::find_material);
+	ClassDB::bind_method(D_METHOD("allocate_material_id"), &Box3DSurfaceMaterialLibrary::allocate_material_id);
 	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "materials", PROPERTY_HINT_ARRAY_TYPE, "Box3DSurfaceMaterial"), "set_materials", "get_materials");
+}
+
+int Box3DSurfaceMaterialLibrary::find_material_index(const StringName &p_name) const {
+	for (int i = 0; i < materials.size(); i++) {
+		Ref<Box3DSurfaceMaterial> material = materials[i];
+		if (material.is_valid() && material->get_material_name() == p_name) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+Ref<Box3DSurfaceMaterial> Box3DSurfaceMaterialLibrary::find_material(const StringName &p_name) const {
+	const int index = find_material_index(p_name);
+	return index == -1 ? Ref<Box3DSurfaceMaterial>() : Ref<Box3DSurfaceMaterial>(materials[index]);
+}
+
+int Box3DSurfaceMaterialLibrary::_next_material_id(const TypedArray<Box3DSurfaceMaterial> &p_materials) {
+	// Ids are stable handles baked into shapes and recordings, so never reuse a
+	// freed id: hand out one past the current maximum.
+	int max_id = 0;
+	for (int i = 0; i < p_materials.size(); i++) {
+		const Ref<Box3DSurfaceMaterial> surface_material = p_materials[i];
+		if (surface_material.is_valid()) {
+			max_id = MAX(max_id, surface_material->get_material_id());
+		}
+	}
+	return max_id + 1;
+}
+
+int Box3DSurfaceMaterialLibrary::allocate_material_id() const {
+	return _next_material_id(materials);
+}
+
+StringName Box3DSurfaceMaterialLibrary::_unique_name(const TypedArray<Box3DSurfaceMaterial> &p_materials, const StringName &p_base, int p_ignore_index) {
+	HashSet<String> taken;
+	for (int i = 0; i < p_materials.size(); i++) {
+		// The entry being renamed must not count its own current name as taken.
+		if (i == p_ignore_index) {
+			continue;
+		}
+		const Ref<Box3DSurfaceMaterial> surface_material = p_materials[i];
+		if (surface_material.is_valid()) {
+			taken.insert(String(surface_material->get_material_name()));
+		}
+	}
+
+	const String base = String(p_base);
+	if (!taken.has(base)) {
+		return p_base;
+	}
+	// Candidates stay String until one is accepted: a StringName is interned in a global
+	// table for the life of the process, so rejected suffixes must never become one.
+	for (int suffix = 2;; suffix++) {
+		const String candidate = base + " " + itos(suffix);
+		if (!taken.has(candidate)) {
+			return candidate;
+		}
+	}
+}
+
+StringName Box3DSurfaceMaterialLibrary::make_unique_name(const StringName &p_base) const {
+	return _unique_name(materials, p_base, -1);
+}
+
+void Box3DSurfaceMaterialLibrary::set_materials(const TypedArray<Box3DSurfaceMaterial> &p_materials) {
+	// A duplicate name or id makes the later entry invisible to the registry, the Physics
+	// tab and every inspector dropdown while it still sits in the .tres, which reads as
+	// silent data loss. Heal it here: this is the one choke point every ingest path goes
+	// through (resource loading, the settings tab's undo/redo, scripts setting in bulk).
+	// First occurrence always wins, and a valid array is left completely untouched.
+	HashSet<StringName> seen_names;
+	HashSet<int> seen_ids;
+	for (int i = 0; i < p_materials.size(); i++) {
+		Ref<Box3DSurfaceMaterial> surface_material = p_materials[i];
+		if (surface_material.is_null()) {
+			continue;
+		}
+
+		const StringName material_name = surface_material->get_material_name();
+		if (material_name == StringName() || seen_names.has(material_name)) {
+			const StringName unique_name = _unique_name(p_materials, material_name == StringName() ? StringName("New Material") : material_name, i);
+			WARN_PRINT(vformat("Box3D: surface material name '%s' is empty or already used; renamed to '%s'.", String(material_name), String(unique_name)));
+			surface_material->set_material_name(unique_name);
+			seen_names.insert(unique_name);
+		} else {
+			seen_names.insert(material_name);
+		}
+
+		const int id = surface_material->get_material_id();
+		if (id <= 0 || seen_ids.has(id)) {
+			// One past the maximum id in the array, so the fresh id can collide with neither
+			// an earlier nor a later entry, and no retired id is ever handed out again.
+			const int unique_id = _next_material_id(p_materials);
+			WARN_PRINT(vformat("Box3D: surface material '%s' has an invalid or already used id %d; reassigned to %d.", String(surface_material->get_material_name()), id, unique_id));
+			surface_material->set_material_id(unique_id);
+			seen_ids.insert(unique_id);
+		} else {
+			seen_ids.insert(id);
+		}
+	}
+
+	materials = p_materials;
 }
 
 void Box3DSurfaceMap::_bind_methods() {
@@ -109,6 +214,9 @@ void Box3DPhysics::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_material_id", "name"), &Box3DPhysics::get_material_id);
 	ClassDB::bind_method(D_METHOD("get_material_name", "id"), &Box3DPhysics::get_material_name);
 	ClassDB::bind_method(D_METHOD("get_material", "id_or_name"), &Box3DPhysics::get_material);
+	ClassDB::bind_method(D_METHOD("has_material", "name"), &Box3DPhysics::has_material);
+	ClassDB::bind_method(D_METHOD("get_material_names"), &Box3DPhysics::get_material_names);
+	ClassDB::bind_method(D_METHOD("get_materials"), &Box3DPhysics::get_materials);
 	ClassDB::bind_method(D_METHOD("match_texture", "texture_name"), &Box3DPhysics::match_texture);
 	ClassDB::bind_method(D_METHOD("shape_set_surface_material", "shape", "material_id"), &Box3DPhysics::shape_set_surface_material);
 	ClassDB::bind_method(D_METHOD("shape_set_surface_map", "shape", "material_ids", "triangle_indices"), &Box3DPhysics::shape_set_surface_map);
@@ -128,6 +236,10 @@ void Box3DPhysics::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("recording_save", "space", "path"), &Box3DPhysics::recording_save);
 	ClassDB::bind_method(D_METHOD("recording_validate", "data", "worker_count"), &Box3DPhysics::recording_validate, DEFVAL(1));
 	ClassDB::bind_method(D_METHOD("recording_validate_file", "path", "worker_count"), &Box3DPhysics::recording_validate_file, DEFVAL(1));
+
+	// Emitted whenever the registry is rebuilt, so inspector dropdowns and the Physics
+	// tab can refresh without polling.
+	ADD_SIGNAL(MethodInfo("surface_materials_changed"));
 
 	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_HERTZ);
 	BIND_ENUM_CONSTANT(Box3DPhysicsServer3D::BOX3D_JOINT_CONSTRAINT_DAMPING_RATIO);
@@ -149,61 +261,105 @@ Box3DPhysics::~Box3DPhysics() {
 }
 
 void Box3DPhysics::register_project_settings() {
-	GLOBAL_DEF(PropertyInfo(Variant::STRING, "physics/box3d/surface_material_library", PROPERTY_HINT_FILE, "*.tres,*.res"), String());
+	// Defaulted like audio/buses/default_bus_layout: the Physics tab in Project Settings
+	// creates and owns this file, so the path is a conventional default rather than
+	// something the user is expected to pick in a file dialog.
+	GLOBAL_DEF(PropertyInfo(Variant::STRING, "physics/box3d/surface_material_library", PROPERTY_HINT_FILE, "*.tres,*.res"), "res://box3d_surface_materials.tres");
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_hertz", PROPERTY_HINT_RANGE, U"0,240,0.1,or_greater,suffix:Hz"), 60.0f);
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "physics/box3d/joints/constraint_damping_ratio", PROPERTY_HINT_RANGE, U"0,10,0.01,or_greater"), 2.0f);
 }
 
+String Box3DPhysics::get_surface_material_library_path() {
+	return GLOBAL_GET("physics/box3d/surface_material_library");
+}
+
 void Box3DPhysics::_ensure_surface_material_library() const {
-	if (library.is_valid()) {
+	if (library_resolved) {
 		return;
 	}
-	const String path = GLOBAL_GET("physics/box3d/surface_material_library");
-	if (!path.is_empty()) {
-		// Project libraries may subclass the native resource in GDScript or a GDExtension. Loading
-		// during module initialization is too early for those types, so resolve on first real use.
-		const_cast<Box3DPhysics *>(this)->reload_surface_material_library();
-	}
+	// Project libraries may subclass the native resource in GDScript or a GDExtension. Loading
+	// during module initialization is too early for those types, so resolve on first real use.
+	const_cast<Box3DPhysics *>(this)->reload_surface_material_library();
 }
 
 void Box3DPhysics::reload_surface_material_library() {
 	library.unref();
 	materials_by_name.clear();
 	materials_by_id.clear();
+	library_resolved = true;
 
-	const String path = GLOBAL_GET("physics/box3d/surface_material_library");
-	if (!path.is_empty()) {
+	const String path = get_surface_material_library_path();
+	// A project that has never opened the Physics tab simply has no library file yet.
+	// That is the empty-registry case, not an error.
+	if (!path.is_empty() && ResourceLoader::exists(path)) {
 		library = ResourceLoader::load(path);
-		ERR_FAIL_COND_MSG(library.is_null(), "Box3D: surface material library setting does not point to a Box3DSurfaceMaterialLibrary resource.");
+		if (library.is_null()) {
+			ERR_PRINT("Box3D: surface material library setting does not point to a Box3DSurfaceMaterialLibrary resource.");
+		}
 	}
 
-	if (library.is_null()) {
-		return;
+	if (library.is_valid()) {
+		TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
+		HashSet<StringName> seen_names;
+		HashSet<int> seen_ids;
+		for (int i = 0; i < materials.size(); i++) {
+			Ref<Box3DSurfaceMaterial> material = materials[i];
+			if (material.is_null()) {
+				continue;
+			}
+			const StringName name = material->get_material_name();
+			const int id = material->get_material_id();
+			if (name == StringName() || id <= 0) {
+				WARN_PRINT("Box3D: surface material entries need a non-empty name and id > 0.");
+				continue;
+			}
+			if (seen_names.has(name) || seen_ids.has(id)) {
+				// Box3DSurfaceMaterialLibrary::set_materials() uniquifies on ingest, so a collision
+				// here means the name or id was changed in place on an already-registered material.
+				WARN_PRINT(vformat("Box3D: surface material '%s' (id %d) collides with an earlier entry and was not registered. Its name or id was modified in place after the library was loaded.", String(name), id));
+				continue;
+			}
+			seen_names.insert(name);
+			seen_ids.insert(id);
+			materials_by_name[name] = material;
+			materials_by_id[id] = material;
+		}
 	}
 
-	TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
-	HashSet<StringName> seen_names;
-	HashSet<int> seen_ids;
+	emit_signal(SNAME("surface_materials_changed"));
+}
+
+bool Box3DPhysics::has_material(const StringName &p_name) const {
+	_ensure_surface_material_library();
+	return materials_by_name.has(p_name);
+}
+
+PackedStringArray Box3DPhysics::get_material_names() const {
+	const TypedArray<Box3DSurfaceMaterial> materials = get_materials();
+	PackedStringArray names;
+	names.resize(materials.size());
+	String *names_write = names.ptrw();
 	for (int i = 0; i < materials.size(); i++) {
-		Ref<Box3DSurfaceMaterial> material = materials[i];
-		if (material.is_null()) {
-			continue;
-		}
-		const StringName name = material->get_material_name();
-		const int id = material->get_material_id();
-		if (name == StringName() || id <= 0) {
-			WARN_PRINT("Box3D: surface material entries need a non-empty name and id > 0.");
-			continue;
-		}
-		if (seen_names.has(name) || seen_ids.has(id)) {
-			WARN_PRINT(vformat("Box3D: duplicate surface material name/id ignored: %s / %d.", name, id));
-			continue;
-		}
-		seen_names.insert(name);
-		seen_ids.insert(id);
-		materials_by_name[name] = material;
-		materials_by_id[id] = material;
+		names_write[i] = String(Ref<Box3DSurfaceMaterial>(materials[i])->get_material_name());
 	}
+	return names;
+}
+
+TypedArray<Box3DSurfaceMaterial> Box3DPhysics::get_materials() const {
+	_ensure_surface_material_library();
+	TypedArray<Box3DSurfaceMaterial> result;
+	if (library.is_null()) {
+		return result;
+	}
+	// Iterate the library rather than the hash map so the order matches the Physics tab.
+	TypedArray<Box3DSurfaceMaterial> library_materials = library->get_materials();
+	for (int i = 0; i < library_materials.size(); i++) {
+		Ref<Box3DSurfaceMaterial> material = library_materials[i];
+		if (material.is_valid() && materials_by_name.has(material->get_material_name())) {
+			result.push_back(material);
+		}
+	}
+	return result;
 }
 
 int Box3DPhysics::get_material_id(const StringName &p_name) const {
@@ -367,19 +523,7 @@ bool Box3DPhysics::recording_validate_file(const String &p_path, int p_worker_co
 }
 
 String Box3DPhysics::get_material_name_hint() const {
-	_ensure_surface_material_library();
-	if (library.is_null()) {
-		return String();
-	}
-	PackedStringArray names;
-	TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
-	for (int i = 0; i < materials.size(); i++) {
-		Ref<Box3DSurfaceMaterial> surface_material = materials[i];
-		if (surface_material.is_valid() && surface_material->get_material_name() != StringName()) {
-			names.push_back(String(surface_material->get_material_name()));
-		}
-	}
-	return String(",").join(names);
+	return String(",").join(get_material_names());
 }
 
 Ref<Box3DSurfaceMaterialLibrary> Box3DPhysics::get_surface_material_library() const {

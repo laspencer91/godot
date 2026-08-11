@@ -17,6 +17,7 @@
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
 #ifdef TOOLS_ENABLED
+#include "editor/box3d_physics_editor_plugin.h"
 #include "editor/box3d_ragdoll_editor_plugin.h"
 #endif
 
@@ -36,6 +37,7 @@ void initialize_box3d_physics_module(ModuleInitializationLevel p_level) {
 #ifdef TOOLS_ENABLED
 	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
 		EditorPlugins::add_by_type<Box3DRagdollEditorPlugin>();
+		EditorPlugins::add_by_type<Box3DPhysicsEditorPlugin>();
 		return;
 	}
 #endif

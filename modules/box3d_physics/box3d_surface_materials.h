@@ -55,12 +55,24 @@ class Box3DSurfaceMaterialLibrary : public Resource {
 
 	TypedArray<Box3DSurfaceMaterial> materials;
 
+	// Shared by the authoring helpers and by set_materials(), which has to uniquify against
+	// the array being ingested rather than against the already-assigned member.
+	static StringName _unique_name(const TypedArray<Box3DSurfaceMaterial> &p_materials, const StringName &p_base, int p_ignore_index);
+	static int _next_material_id(const TypedArray<Box3DSurfaceMaterial> &p_materials);
+
 protected:
 	static void _bind_methods();
 
 public:
-	void set_materials(const TypedArray<Box3DSurfaceMaterial> &p_materials) { materials = p_materials; }
+	void set_materials(const TypedArray<Box3DSurfaceMaterial> &p_materials);
 	TypedArray<Box3DSurfaceMaterial> get_materials() const { return materials; }
+
+	// Authoring helpers. The Physics tab in Project Settings owns this resource, so
+	// name/id bookkeeping lives here instead of being re-derived by every caller.
+	int find_material_index(const StringName &p_name) const;
+	Ref<Box3DSurfaceMaterial> find_material(const StringName &p_name) const;
+	int allocate_material_id() const;
+	StringName make_unique_name(const StringName &p_base) const;
 };
 
 class Box3DSurfaceMap : public Resource {
@@ -87,6 +99,7 @@ class Box3DPhysics : public Object {
 	Ref<Box3DSurfaceMaterialLibrary> library;
 	HashMap<StringName, Ref<Box3DSurfaceMaterial>> materials_by_name;
 	HashMap<int, Ref<Box3DSurfaceMaterial>> materials_by_id;
+	mutable bool library_resolved = false;
 
 	void _ensure_surface_material_library() const;
 
@@ -99,12 +112,16 @@ public:
 
 	static Box3DPhysics *get_singleton() { return singleton; }
 	static void register_project_settings();
+	static String get_surface_material_library_path();
 
 	void reload_surface_material_library();
 	Ref<Box3DSurfaceMaterialLibrary> get_surface_material_library() const;
 	int get_material_id(const StringName &p_name) const;
 	StringName get_material_name(int p_id) const;
 	Ref<Box3DSurfaceMaterial> get_material(const Variant &p_id_or_name) const;
+	bool has_material(const StringName &p_name) const;
+	PackedStringArray get_material_names() const;
+	TypedArray<Box3DSurfaceMaterial> get_materials() const;
 	int match_texture(const String &p_texture_name) const;
 	b3SurfaceMaterial get_box3d_material(int p_id) const;
 
