@@ -30,6 +30,7 @@
 
 #include "display_server_windows.h"
 
+#include "drag_source_windows.h"
 #include "drop_target_windows.h"
 #include "key_mapping_windows.h"
 #include "native_menu_windows.h"
@@ -191,6 +192,7 @@ bool DisplayServerWindows::has_feature(DisplayServerEnums::Feature p_feature) co
 		case DisplayServerEnums::FEATURE_WINDOW_EMBEDDING:
 		case DisplayServerEnums::FEATURE_WINDOW_DRAG:
 		case DisplayServerEnums::FEATURE_HDR_OUTPUT:
+		case DisplayServerEnums::FEATURE_FILE_DRAG_OUT:
 			return true;
 		case DisplayServerEnums::FEATURE_SCREEN_EXCLUDE_FROM_CAPTURE:
 			return (os_ver.dwBuildNumber >= 19041); // Fully supported on Windows 10 Vibranium R1 (2004)+ only, captured as black rect on older versions.
@@ -2115,6 +2117,10 @@ void DisplayServerWindows::window_set_drop_files_callback(const Callable &p_call
 	if (window_data.drop_target == nullptr) {
 		window_data.drop_target = memnew(DropTargetWindows(&window_data));
 		ERR_FAIL_COND(RegisterDragDrop(window_data.hWnd, window_data.drop_target) != S_OK);
+		// Handshake for the fork's own drag-out source: a drag source that sees
+		// this property knows the target understands the material drop format
+		// (and is a Godot editor even when the class name check cannot tell).
+		SetPropW(window_data.hWnd, L"GodotMaterialDropTarget", (HANDLE)1);
 	}
 }
 
@@ -4994,6 +5000,53 @@ void DisplayServerWindows::window_start_drag(DisplayServerEnums::WindowID p_wind
 	}
 }
 
+Error DisplayServerWindows::window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest, DisplayServerEnums::WindowID p_window) {
+	HWND hWnd = nullptr;
+	uint32_t timer_id = 0;
+	{
+		// The lock is deliberately NOT held across the drag: SHDoDragDrop is
+		// modal for several seconds and pumps Main::iteration() from inside.
+		_THREAD_SAFE_METHOD_
+
+		ERR_FAIL_COND_V(!windows.has(p_window), ERR_INVALID_PARAMETER);
+		WindowData &wd = windows[p_window];
+		ERR_FAIL_COND_V_MSG(wd.file_drag_timer_id != 0, ERR_BUSY, "A file drag is already in progress for this window.");
+		hWnd = wd.hWnd;
+
+		// GiveFeedback only fires on input; without this timer the app stops
+		// rendering the moment the mouse holds still (measured: 24 fps vs 75).
+		timer_id = SetTimer(wd.hWnd, TIMER_ID_FILE_DRAG_REDRAW, USER_TIMER_MINIMUM, (TIMERPROC) nullptr);
+		wd.file_drag_timer_id = timer_id;
+	}
+
+	Vector<DragSourceWindows::FileEntry> files;
+	files.resize(p_files.size());
+	for (int i = 0; i < p_files.size(); i++) {
+		Dictionary entry = p_files[i];
+		files.write[i].name = entry.get("name", String());
+		files.write[i].dir = entry.get("dir", String());
+	}
+
+	Error err = DragSourceWindows::start_drag(hWnd, files, p_provider, p_finished_callback, p_target_changed_callback, p_manifest);
+
+	{
+		_THREAD_SAFE_METHOD_
+
+		if (windows.has(p_window)) {
+			KillTimer(windows[p_window].hWnd, timer_id);
+			windows[p_window].file_drag_timer_id = 0;
+		}
+	}
+	return err;
+}
+
+String DisplayServerWindows::window_get_last_drop_manifest(DisplayServerEnums::WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND_V(!windows.has(p_window), String());
+	return windows[p_window].last_drop_manifest;
+}
+
 void DisplayServerWindows::window_start_resize(DisplayServerEnums::WindowResizeEdge p_edge, DisplayServerEnums::WindowID p_window) {
 	_THREAD_SAFE_METHOD_
 
@@ -6601,6 +6654,13 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 					Main::iteration();
 				}
 				_THREAD_SAFE_LOCK_
+			} else if (wParam == windows[window_id].file_drag_timer_id) {
+				// The load-bearing half of the drag-out pump: GiveFeedback only
+				// fires on input, so a motionless drag would otherwise stall
+				// rendering. Same shape as the move_timer_id pump above.
+				_THREAD_SAFE_UNLOCK_
+				DragSourceWindows::pump_engine();
+				_THREAD_SAFE_LOCK_
 			} else if (wParam == windows[window_id].activate_timer_id) {
 				_process_activate_event(window_id);
 				KillTimer(windows[window_id].hWnd, windows[window_id].activate_timer_id);
@@ -7288,6 +7348,7 @@ void DisplayServerWindows::_destroy_window(DisplayServerEnums::WindowID p_window
 
 	if (wd.drop_target != nullptr) {
 		RevokeDragDrop(wd.hWnd);
+		RemovePropW(wd.hWnd, L"GodotMaterialDropTarget");
 		wd.drop_target->Release();
 	}
 

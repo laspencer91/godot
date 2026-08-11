@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/variant/typed_array.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/theme.h"
 #include "servers/display/display_server_enums.h"
@@ -117,6 +118,9 @@ public:
 private:
 	DisplayServerEnums::WindowID window_id = DisplayServerEnums::INVALID_WINDOW_ID;
 	bool initialized = false;
+
+	void _file_drag_finished(int p_result, int p_target_kind);
+	void _file_drag_target_changed(int p_target_kind, const String &p_target_name);
 
 	String title;
 	String displayed_title;
@@ -450,6 +454,7 @@ public:
 	bool has_focus_or_active_popup() const;
 
 	void start_drag();
+	Error start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_content_provider, const String &p_manifest = String());
 	void start_resize(DisplayServerEnums::WindowResizeEdge p_edge);
 
 	Rect2i get_usable_parent_rect() const;

@@ -2218,6 +2218,15 @@
 				Returns the reference white luminance in nits (cd/m²) set for HDR output by the window specified by [param window_id]. Negative values indicate that the value is being automatically adjusted to match the operating system brightness. See also [method window_get_hdr_output_current_reference_luminance].
 			</description>
 		</method>
+		<method name="window_get_last_drop_manifest" qualifiers="const">
+			<return type="String" />
+			<param index="0" name="window_id" type="int" default="0" />
+			<description>
+				Returns the JSON manifest carried by the last file drop received by the window specified by [param window_id], if that drop used the [code]application/x-godot-material-drop-v1[/code] format. Returns an empty string for ordinary file drops.
+				Read it from a [signal Window.files_dropped] handler; it stays valid until the next drop arrives.
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
 		<method name="window_get_max_size" qualifiers="const">
 			<return type="Vector2i" />
 			<param index="0" name="window_id" type="int" default="0" />
@@ -2678,6 +2687,25 @@
 				[b]Note:[/b] This method is implemented on Linux (X11/Wayland), macOS, and Windows.
 			</description>
 		</method>
+		<method name="window_start_file_drag">
+			<return type="int" enum="Error" />
+			<param index="0" name="files" type="Dictionary[]" />
+			<param index="1" name="content_provider" type="Callable" />
+			<param index="2" name="finished_callback" type="Callable" default="Callable()" />
+			<param index="3" name="target_changed_callback" type="Callable" default="Callable()" />
+			<param index="4" name="manifest" type="String" default="&quot;&quot;" />
+			<param index="5" name="window_id" type="int" default="0" />
+			<description>
+				Starts an OS-level drag of virtual files [i]out[/i] of the application, so they can be dropped into a file manager or another application. Blocks until the drag ends, pumping the engine throughout so the application keeps rendering. Only available if the display server has the [constant FEATURE_FILE_DRAG_OUT] feature.
+				Each entry of [param files] describes one file with a [code]name[/code] (the file name, without any separator) and an optional [code]dir[/code] (a relative directory inside the drop, e.g. [code]"textures"[/code]). The names are final the moment the drag starts — the operating system asks for them repeatedly while the cursor hovers, and never asks again later.
+				No file content is produced up front. When (and only when) the drop target actually reads a file, [param content_provider] is called as [code]content_provider(index: int, path: String)[/code] and must return a [PackedByteArray] with that file's bytes. [b]It is called on a worker thread, not the main thread[/b] — it must not touch the scene tree, and anything it reads must be safe to read from another thread. It has roughly two seconds to answer before the file is dropped from the transfer, so generate expensive payloads speculatively while the cursor is still hovering (see [param target_changed_callback]).
+				[param finished_callback] is called deferred, as [code]finished_callback(result: int, target_kind: int)[/code], with a [enum FileDragResult] and a [enum FileDragTargetKind]. The result is advisory: drop targets are known to misreport what they did.
+				[param target_changed_callback] is called as [code]target_changed_callback(target_kind: int, target_name: String)[/code] whenever the kind of window under the cursor changes and stays changed for about 200 ms. This is the hook for showing a "drop here" hint and for starting speculative content generation.
+				[param manifest] is an optional JSON string offered under the [code]application/x-godot-material-drop-v1[/code] clipboard format, for drop targets that understand it (see [method window_get_last_drop_manifest]). Other targets ignore it and receive the plain virtual files.
+				Dragging onto a window of this same application aborts the drag, so an application can hand off to its own internal drag and drop.
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
 		<method name="window_start_resize">
 			<return type="void" />
 			<param index="0" name="edge" type="int" enum="DisplayServer.WindowResizeEdge" />
@@ -2807,6 +2835,33 @@
 		</constant>
 		<constant name="FEATURE_PIP_MODE" value="36" enum="Feature">
 			Display server supports putting the application in picture-in-picture mode. [b]Android[/b]
+		</constant>
+		<constant name="FEATURE_FILE_DRAG_OUT" value="37" enum="Feature">
+			Display server supports dragging virtual files out of the application. See [method window_start_file_drag]. [b]Windows[/b]
+		</constant>
+		<constant name="FILE_DRAG_TARGET_UNKNOWN" value="0" enum="FileDragTargetKind">
+			The window under the cursor during a file drag could not be identified.
+		</constant>
+		<constant name="FILE_DRAG_TARGET_SELF" value="1" enum="FileDragTargetKind">
+			The window under the cursor belongs to this application. The drag is aborted so internal drag and drop can take over.
+		</constant>
+		<constant name="FILE_DRAG_TARGET_EXPLORER" value="2" enum="FileDragTargetKind">
+			The window under the cursor is a file manager or the desktop.
+		</constant>
+		<constant name="FILE_DRAG_TARGET_EDITOR" value="3" enum="FileDragTargetKind">
+			The window under the cursor is a Godot editor.
+		</constant>
+		<constant name="FILE_DRAG_TARGET_EDITOR_FORK" value="4" enum="FileDragTargetKind">
+			The window under the cursor is a Godot editor that understands the [code]application/x-godot-material-drop-v1[/code] drop format.
+		</constant>
+		<constant name="FILE_DRAG_RESULT_CANCELLED" value="0" enum="FileDragResult">
+			The file drag was cancelled before anything was dropped.
+		</constant>
+		<constant name="FILE_DRAG_RESULT_DROPPED" value="1" enum="FileDragResult">
+			The files were dropped on a target. Advisory only: targets are known to misreport this.
+		</constant>
+		<constant name="FILE_DRAG_RESULT_FAILED" value="2" enum="FileDragResult">
+			The file drag failed.
 		</constant>
 		<constant name="ROLE_UNKNOWN" value="0" enum="AccessibilityRole" deprecated="Use [AccessibilityServer] instead.">
 			Unknown or custom role.

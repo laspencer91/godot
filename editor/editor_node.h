@@ -675,6 +675,9 @@ private:
 	void _dropped_files(const Vector<String> &p_files);
 	void _perform_default_external_file_drop(const Vector<String> &p_files, const String &p_destination_directory);
 	void _add_dropped_files_recursive(const Vector<String> &p_files, String to_path);
+	void _postprocess_material_drops(const String &p_manifest, const Vector<String> &p_files, const String &p_destination_directory);
+	void _rewrite_dropped_resource_paths(const String &p_abs_path, const String &p_res_base_dir);
+	void _write_dropped_import_hints(const String &p_abs_path, const String &p_res_path, const String &p_importer, const String &p_type, const Dictionary &p_params);
 
 	void _update_vsync_mode();
 	void _update_from_settings();

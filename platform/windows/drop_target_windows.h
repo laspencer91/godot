@@ -42,9 +42,14 @@ class DropTargetWindows : public IDropTarget {
 	DisplayServerWindows::WindowData *window_data = nullptr;
 	CLIPFORMAT cf_filedescriptor = 0;
 	CLIPFORMAT cf_filecontents = 0;
+	// Fork-specific: a material drop carries a JSON manifest alongside the
+	// virtual files, so the editor can fix up resource paths and import
+	// settings after the copy. Checked above CF_HDROP.
+	CLIPFORMAT cf_material_drop = 0;
 	String tmp_path;
 
 	bool is_valid_filedescriptor();
+	HRESULT read_material_manifest(IDataObject *pDataObj, String *r_manifest);
 	HRESULT handle_hdrop_format(Vector<String> *p_files, IDataObject *pDataObj);
 	HRESULT handle_filedescriptor_format(Vector<String> *p_files, IDataObject *pDataObj);
 	HRESULT save_as_file(const String &p_out_dir, FILEDESCRIPTORW *p_file_desc, IDataObject *pDataObj, int p_file_idx);

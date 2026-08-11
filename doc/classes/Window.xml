@@ -621,6 +621,18 @@
 				Starts an interactive drag operation on the window, using the current mouse position. Call this method when handling a mouse button being pressed to simulate a pressed event on the window's title bar. Using this method allows the window to participate in space switching, tiling, and other system features.
 			</description>
 		</method>
+		<method name="start_file_drag">
+			<return type="int" enum="Error" />
+			<param index="0" name="files" type="Dictionary[]" />
+			<param index="1" name="content_provider" type="Callable" />
+			<param index="2" name="manifest" type="String" default="&quot;&quot;" />
+			<description>
+				Starts an OS-level drag of virtual files [i]out[/i] of the application, so they can be dropped into a file manager or another application. Blocks until the drag ends; the application keeps rendering throughout. Emits [signal drag_target_changed] as the cursor moves between windows and [signal file_drag_finished] once it is over. Fails with [constant ERR_UNAVAILABLE] unless the display server has the [constant DisplayServer.FEATURE_FILE_DRAG_OUT] feature.
+				Each entry of [param files] describes one file with a [code]name[/code] and an optional relative [code]dir[/code] inside the drop. The names are final at drag start; the bytes are not requested until a target actually reads them, by calling [param content_provider] as [code]content_provider(index: int, path: String)[/code], which must return a [PackedByteArray].
+				[b]The content provider is called on a worker thread, not the main thread.[/b] It must not touch the scene tree or any main-thread-only server, and it has about two seconds to answer. Use [signal drag_target_changed] to start generating the payload speculatively while the cursor is still hovering.
+				See [method DisplayServer.window_start_file_drag] for the [param manifest] parameter and the full contract.
+			</description>
+		</method>
 		<method name="start_resize">
 			<return type="void" />
 			<param index="0" name="edge" type="int" enum="DisplayServer.WindowResizeEdge" />
@@ -825,6 +837,20 @@
 			<description>
 				Emitted when the [Window]'s DPI changes as a result of OS-level changes (e.g. moving the window from a Retina display to a lower resolution one).
 				[b]Note:[/b] Only implemented on macOS and Linux (Wayland).
+			</description>
+		</signal>
+		<signal name="drag_target_changed">
+			<param index="0" name="target_kind" type="int" />
+			<param index="1" name="target_name" type="String" />
+			<description>
+				Emitted during a drag started with [method start_file_drag], when the kind of window under the cursor changes and stays changed for about 200 ms. [param target_kind] is a [enum DisplayServer.FileDragTargetKind] and [param target_name] is the target window's title, where one could be read.
+			</description>
+		</signal>
+		<signal name="file_drag_finished">
+			<param index="0" name="result" type="int" />
+			<param index="1" name="target_kind" type="int" />
+			<description>
+				Emitted when a drag started with [method start_file_drag] ends. [param result] is a [enum DisplayServer.FileDragResult] and [param target_kind] a [enum DisplayServer.FileDragTargetKind]. Both are advisory: drop targets are known to misreport what they did with a drop.
 			</description>
 		</signal>
 		<signal name="files_dropped">

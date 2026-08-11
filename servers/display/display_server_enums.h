@@ -80,6 +80,27 @@ enum Feature {
 	FEATURE_ACCESSIBILITY_SCREEN_READER,
 	FEATURE_HDR_OUTPUT,
 	FEATURE_PIP_MODE,
+	FEATURE_FILE_DRAG_OUT,
+};
+
+/* FILE DRAG-OUT */
+
+// What the cursor is hovering while an OS file drag is under way. Reported
+// (debounced) through the drag_target_changed signal so the source can pick a
+// payload and start generating it before the drop lands.
+enum FileDragTargetKind {
+	FILE_DRAG_TARGET_UNKNOWN,
+	FILE_DRAG_TARGET_SELF,
+	FILE_DRAG_TARGET_EXPLORER,
+	FILE_DRAG_TARGET_EDITOR,
+	FILE_DRAG_TARGET_EDITOR_FORK,
+};
+
+// Advisory: drop targets are known to misreport what they did with a drop.
+enum FileDragResult {
+	FILE_DRAG_RESULT_CANCELLED,
+	FILE_DRAG_RESULT_DROPPED,
+	FILE_DRAG_RESULT_FAILED,
 };
 
 /* RENDERING DEVICE */

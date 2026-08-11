@@ -47,7 +47,9 @@ static String create_temp_dir() {
 		return "";
 	}
 
-	String tmp_dir = String::utf16((const char16_t *)buf.ptr());
+	// GetTempPathW keeps its trailing separator; path_join would add a second
+	// one and the doubled separator leaks all the way into files_dropped.
+	String tmp_dir = String::utf16((const char16_t *)buf.ptr()).replace("\\", "/").trim_suffix("/");
 	RandomPCG gen(Time::get_singleton()->get_ticks_usec());
 
 	const int attempts = 4;
@@ -135,6 +137,29 @@ cleanup:
 
 bool DropTargetWindows::is_valid_filedescriptor() {
 	return cf_filedescriptor != 0 && cf_filecontents != 0;
+}
+
+HRESULT DropTargetWindows::read_material_manifest(IDataObject *pDataObj, String *r_manifest) {
+	FORMATETC fmt = { cf_material_drop, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+	STGMEDIUM stg;
+
+	if (pDataObj->GetData(&fmt, &stg) != S_OK) {
+		return E_UNEXPECTED;
+	}
+
+	const char *json = (const char *)GlobalLock(stg.hGlobal);
+	if (!json) {
+		ReleaseStgMedium(&stg);
+		return E_UNEXPECTED;
+	}
+
+	// The source allocates one extra byte and zeroes it, so the payload is a
+	// UTF-8 C string.
+	*r_manifest = String::utf8(json);
+
+	GlobalUnlock(stg.hGlobal);
+	ReleaseStgMedium(&stg);
+	return S_OK;
 }
 
 HRESULT DropTargetWindows::handle_hdrop_format(Vector<String> *p_files, IDataObject *pDataObj) {
@@ -267,6 +292,7 @@ DropTargetWindows::DropTargetWindows(DisplayServerWindows::WindowData *p_window_
 		ref_count(1), window_data(p_window_data) {
 	cf_filedescriptor = RegisterClipboardFormat(CFSTR_FILEDESCRIPTORW);
 	cf_filecontents = RegisterClipboardFormat(CFSTR_FILECONTENTS);
+	cf_material_drop = RegisterClipboardFormat("application/x-godot-material-drop-v1");
 }
 
 HRESULT STDMETHODCALLTYPE DropTargetWindows::QueryInterface(REFIID riid, void **ppvObject) {
@@ -297,9 +323,14 @@ HRESULT STDMETHODCALLTYPE DropTargetWindows::DragEnter(IDataObject *pDataObj, DW
 
 	FORMATETC hdrop_fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
 	FORMATETC filedesc_fmt = { cf_filedescriptor, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+	FORMATETC material_fmt = { cf_material_drop, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
 
 	if (!window_data->drop_files_callback.is_valid()) {
 		*pdwEffect = DROPEFFECT_NONE;
+	} else if (pDataObj->QueryGetData(&material_fmt) == S_OK) {
+		// Checked above CF_HDROP: a source that offers both means the richer
+		// one for us.
+		*pdwEffect = DROPEFFECT_COPY;
 	} else if (pDataObj->QueryGetData(&hdrop_fmt) == S_OK) {
 		*pdwEffect = DROPEFFECT_COPY;
 	} else if (is_valid_filedescriptor() && pDataObj->QueryGetData(&filedesc_fmt) == S_OK) {
@@ -335,9 +366,21 @@ HRESULT STDMETHODCALLTYPE DropTargetWindows::Drop(IDataObject *pDataObj, DWORD g
 
 	FORMATETC hdrop_fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
 	FORMATETC filedesc_fmt = { cf_filedescriptor, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+	FORMATETC material_fmt = { cf_material_drop, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
 	Vector<String> files;
 
-	if (pDataObj->QueryGetData(&hdrop_fmt) == S_OK) {
+	// A material drop is a virtual-file drop plus a manifest; the manifest is
+	// parked on the window for whoever handles files_dropped (in the editor,
+	// EditorNode::_postprocess_material_drops).
+	window_data->last_drop_manifest = String();
+	if (pDataObj->QueryGetData(&material_fmt) == S_OK && is_valid_filedescriptor()) {
+		String manifest;
+		if (read_material_manifest(pDataObj, &manifest) == S_OK) {
+			window_data->last_drop_manifest = manifest;
+		}
+	}
+
+	if (pDataObj->QueryGetData(&hdrop_fmt) == S_OK && window_data->last_drop_manifest.is_empty()) {
 		HRESULT res = handle_hdrop_format(&files, pDataObj);
 		if (res != S_OK) {
 			return res;

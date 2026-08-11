@@ -2427,6 +2427,28 @@ void Window::start_drag() {
 	}
 }
 
+Error Window::start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_content_provider, const String &p_manifest) {
+	ERR_MAIN_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V_MSG(!DisplayServer::get_singleton()->has_feature(DisplayServerEnums::FEATURE_FILE_DRAG_OUT), ERR_UNAVAILABLE, "Dragging files out of the application is not supported by this display server.");
+	ERR_FAIL_COND_V_MSG(window_id == DisplayServerEnums::INVALID_WINDOW_ID, ERR_UNAVAILABLE, "Only a window with a native handle can start a file drag.");
+
+	return DisplayServer::get_singleton()->window_start_file_drag(
+			p_files,
+			p_content_provider,
+			callable_mp(this, &Window::_file_drag_finished),
+			callable_mp(this, &Window::_file_drag_target_changed),
+			p_manifest,
+			window_id);
+}
+
+void Window::_file_drag_finished(int p_result, int p_target_kind) {
+	emit_signal(SNAME("file_drag_finished"), p_result, p_target_kind);
+}
+
+void Window::_file_drag_target_changed(int p_target_kind, const String &p_target_name) {
+	emit_signal(SNAME("drag_target_changed"), p_target_kind, p_target_name);
+}
+
 void Window::start_resize(DisplayServerEnums::WindowResizeEdge p_edge) {
 	ERR_MAIN_THREAD_GUARD;
 	if (get_flag(FLAG_RESIZE_DISABLED)) {
@@ -3450,6 +3472,7 @@ void Window::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("grab_focus"), &Window::grab_focus);
 
 	ClassDB::bind_method(D_METHOD("start_drag"), &Window::start_drag);
+	ClassDB::bind_method(D_METHOD("start_file_drag", "files", "content_provider", "manifest"), &Window::start_file_drag, DEFVAL(String()));
 	ClassDB::bind_method(D_METHOD("start_resize", "edge"), &Window::start_resize);
 
 	ClassDB::bind_method(D_METHOD("set_ime_active", "active"), &Window::set_ime_active);
@@ -3637,6 +3660,8 @@ void Window::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("window_input", PropertyInfo(Variant::OBJECT, "event", PROPERTY_HINT_RESOURCE_TYPE, InputEvent::get_class_static())));
 	ADD_SIGNAL(MethodInfo("nonclient_window_input", PropertyInfo(Variant::OBJECT, "event", PROPERTY_HINT_RESOURCE_TYPE, InputEvent::get_class_static())));
 	ADD_SIGNAL(MethodInfo("files_dropped", PropertyInfo(Variant::PACKED_STRING_ARRAY, "files")));
+	ADD_SIGNAL(MethodInfo("file_drag_finished", PropertyInfo(Variant::INT, "result"), PropertyInfo(Variant::INT, "target_kind")));
+	ADD_SIGNAL(MethodInfo("drag_target_changed", PropertyInfo(Variant::INT, "target_kind"), PropertyInfo(Variant::STRING, "target_name")));
 	ADD_SIGNAL(MethodInfo("mouse_entered"));
 	ADD_SIGNAL(MethodInfo("mouse_exited"));
 	ADD_SIGNAL(MethodInfo("focus_entered"));

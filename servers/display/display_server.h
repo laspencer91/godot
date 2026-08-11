@@ -478,6 +478,18 @@ public:
 
 	virtual void window_start_drag(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) {}
 
+	/* FILE DRAG-OUT (FEATURE_FILE_DRAG_OUT) */
+
+	// Starts an OS-level drag of virtual files out of the application. The file
+	// names are final immediately; the bytes are produced lazily by p_provider,
+	// WHICH IS CALLED ON A WORKER THREAD, only if and when the drop target
+	// actually reads them.
+	virtual Error window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest = String(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) { return ERR_UNAVAILABLE; }
+
+	// JSON manifest carried by the last drop that arrived in this window using
+	// the fork's own material drop format, or "" for any other drop.
+	virtual String window_get_last_drop_manifest(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const { return String(); }
+
 	virtual void window_set_color(const Color &p_color) {}
 
 	virtual void window_start_resize(DisplayServerEnums::WindowResizeEdge p_edge, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) {}
@@ -654,6 +666,8 @@ VARIANT_ENUM_CAST_EXT(DisplayServerEnums::WindowResizeEdge, DisplayServer::Windo
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::VSyncMode, DisplayServer::VSyncMode)
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::ProgressState, DisplayServer::ProgressState)
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::FileDialogMode, DisplayServer::FileDialogMode)
+VARIANT_ENUM_CAST_EXT(DisplayServerEnums::FileDragTargetKind, DisplayServer::FileDragTargetKind)
+VARIANT_ENUM_CAST_EXT(DisplayServerEnums::FileDragResult, DisplayServer::FileDragResult)
 
 #ifndef DISABLE_DEPRECATED
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::AccessibilityRole, DisplayServer::AccessibilityRole)

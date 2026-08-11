@@ -37,6 +37,7 @@
 #include "core/io/config_file.h"
 #include "core/io/file_access.h"
 #include "core/io/image.h"
+#include "core/io/json.h"
 #include "core/io/missing_resource.h"
 #include "core/io/resource_importer.h"
 #include "core/io/resource_loader.h"
@@ -48,6 +49,7 @@
 #include "core/os/time.h"
 #include "core/string/print_string.h"
 #include "core/string/translation_server.h"
+#include "core/variant/variant_parser.h"
 #include "core/version.h"
 #include "editor/animation/animation_player_editor_plugin.h"
 #include "editor/asset_library/asset_library_editor_plugin.h"
@@ -7682,7 +7684,151 @@ void EditorNode::_perform_default_external_file_drop(const Vector<String> &p_fil
 
 	_add_dropped_files_recursive(p_files, to_path);
 
+	// Fork: a drop coming from the material library carries a JSON manifest
+	// describing what just landed. Everything it fixes up has to happen before
+	// the filesystem scan, or the first import runs against the wrong settings.
+	const String manifest = DisplayServer::get_singleton()->window_get_last_drop_manifest();
+	if (!manifest.is_empty()) {
+		_postprocess_material_drops(manifest, p_files, p_destination_directory);
+	}
+
 	EditorFileSystem::get_singleton()->scan_changes();
+}
+
+// Rewrites the relative ExtResource paths a dropped .tres ships with into
+// res:// paths, and writes the .import hints the manifest asks for. The
+// manifest schema is "application/x-godot-material-drop-v1":
+//
+//   { "format": "application/x-godot-material-drop-v1",
+//     "files": [ { "path": "StoneWall01/textures/a_normal.png",  // drop-relative
+//                  "importer": "texture",                        // optional
+//                  "type": "CompressedTexture2D",                // optional
+//                  "import": { "compress/mode": 2, ... } } ] }   // optional
+//
+// Upgrade path: this is deliberately a built-in special case. Once more than
+// one producer needs post-drop fixups it should become a built-in participant
+// in the EditorPlugin::_intercept_external_file_drop dispatcher instead of a
+// branch inside the default handler.
+void EditorNode::_postprocess_material_drops(const String &p_manifest, const Vector<String> &p_files, const String &p_destination_directory) {
+	Ref<JSON> json;
+	json.instantiate();
+	if (json->parse(p_manifest) != OK) {
+		WARN_PRINT(vformat("Ignoring a material drop with an unparsable manifest: %s", json->get_error_message()));
+		return;
+	}
+	Dictionary root = json->get_data();
+	if (String(root.get("format", String())) != "application/x-godot-material-drop-v1") {
+		return;
+	}
+
+	// Only touch things that actually arrived in this drop.
+	HashSet<String> dropped_roots;
+	for (const String &dropped : p_files) {
+		dropped_roots.insert(dropped.get_file());
+	}
+
+	Array files = root.get("files", Array());
+	for (int i = 0; i < files.size(); i++) {
+		Dictionary entry = files[i];
+		String rel = entry.get("path", String()).operator String().simplify_path();
+		if (rel.is_empty() || rel.begins_with("..") || rel.begins_with("/")) {
+			continue;
+		}
+		if (!dropped_roots.has(rel.split("/")[0])) {
+			continue;
+		}
+
+		const String res_path = p_destination_directory.path_join(rel);
+		const String abs_path = ProjectSettings::get_singleton()->globalize_path(res_path);
+		if (!FileAccess::exists(abs_path)) {
+			continue;
+		}
+
+		if (rel.get_extension().to_lower() == "tres") {
+			_rewrite_dropped_resource_paths(abs_path, res_path.get_base_dir());
+		}
+
+		Dictionary import_params = entry.get("import", Dictionary());
+		if (!import_params.is_empty() && !FileAccess::exists(abs_path + ".import")) {
+			_write_dropped_import_hints(abs_path, res_path, entry.get("importer", "texture"), entry.get("type", "CompressedTexture2D"), import_params);
+		}
+	}
+}
+
+// The library writes .tres files with ExtResource paths relative to the .tres
+// itself, so the folder is droppable anywhere. The editor resolves those, but
+// only until the file is re-saved from somewhere else; normalizing to res://
+// right after the copy makes the material independent of where it landed.
+void EditorNode::_rewrite_dropped_resource_paths(const String &p_abs_path, const String &p_res_base_dir) {
+	Error err = OK;
+	String text = FileAccess::get_file_as_string(p_abs_path, &err);
+	if (err != OK || text.is_empty()) {
+		return;
+	}
+
+	Vector<String> lines = text.split("\n");
+	bool changed = false;
+	for (int i = 0; i < lines.size(); i++) {
+		if (!lines[i].begins_with("[ext_resource ")) {
+			continue;
+		}
+		int path_at = lines[i].find("path=\"");
+		if (path_at < 0) {
+			continue;
+		}
+		int from = path_at + 6;
+		int to = lines[i].find_char('"', from);
+		if (to < 0) {
+			continue;
+		}
+		String path = lines[i].substr(from, to - from);
+		if (path.is_empty() || path.contains("://")) {
+			continue;
+		}
+		String absolute = p_res_base_dir.path_join(path).simplify_path();
+		lines.write[i] = lines[i].substr(0, from) + absolute + lines[i].substr(to);
+		changed = true;
+	}
+	if (!changed) {
+		return;
+	}
+
+	Ref<FileAccess> out = FileAccess::open(p_abs_path, FileAccess::WRITE, &err);
+	if (err != OK) {
+		WARN_PRINT(vformat("Could not rewrite the resource paths of the dropped material '%s'.", p_abs_path));
+		return;
+	}
+	out->store_string(String("\n").join(lines));
+}
+
+// A dropped .import sidecar always wins over project defaults, so the manifest
+// can pin per-map settings (VRAM compression, mipmaps, normal-map handling)
+// that auto-detection would only ever apply once the material is opened.
+void EditorNode::_write_dropped_import_hints(const String &p_abs_path, const String &p_res_path, const String &p_importer, const String &p_type, const Dictionary &p_params) {
+	Error err = OK;
+	Ref<FileAccess> out = FileAccess::open(p_abs_path + ".import", FileAccess::WRITE, &err);
+	if (err != OK) {
+		WARN_PRINT(vformat("Could not write import hints for the dropped file '%s'.", p_res_path));
+		return;
+	}
+
+	out->store_line("[remap]");
+	out->store_line("");
+	out->store_line(vformat("importer=\"%s\"", p_importer));
+	out->store_line(vformat("type=\"%s\"", p_type));
+	out->store_line("");
+	out->store_line("[deps]");
+	out->store_line("");
+	out->store_line(vformat("source_file=\"%s\"", p_res_path));
+	out->store_line("");
+	out->store_line("[params]");
+	out->store_line("");
+
+	for (const Variant &key : p_params.get_key_list()) {
+		String value;
+		VariantWriter::write_to_string(p_params[key], value);
+		out->store_line(vformat("%s=%s", String(key), value));
+	}
 }
 
 void EditorNode::_add_dropped_files_recursive(const Vector<String> &p_files, String to_path) {

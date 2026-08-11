@@ -1575,6 +1575,9 @@ void DisplayServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("window_start_drag", "window_id"), &DisplayServer::window_start_drag, DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
 	ClassDB::bind_method(D_METHOD("window_start_resize", "edge", "window_id"), &DisplayServer::window_start_resize, DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
 
+	ClassDB::bind_method(D_METHOD("window_start_file_drag", "files", "content_provider", "finished_callback", "target_changed_callback", "manifest", "window_id"), &DisplayServer::window_start_file_drag, DEFVAL(Callable()), DEFVAL(Callable()), DEFVAL(String()), DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
+	ClassDB::bind_method(D_METHOD("window_get_last_drop_manifest", "window_id"), &DisplayServer::window_get_last_drop_manifest, DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
+
 	ClassDB::bind_method(D_METHOD("window_set_color", "color"), &DisplayServer::window_set_color);
 
 	ClassDB::bind_method(D_METHOD("accessibility_should_increase_contrast"), &DisplayServer::accessibility_should_increase_contrast);
@@ -1767,6 +1770,17 @@ void DisplayServer::_bind_methods() {
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_ACCESSIBILITY_SCREEN_READER);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_HDR_OUTPUT);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_PIP_MODE);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_FILE_DRAG_OUT);
+
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_UNKNOWN);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_SELF);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_EXPLORER);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_EDITOR);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_EDITOR_FORK);
+
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_RESULT_CANCELLED);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_RESULT_DROPPED);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_RESULT_FAILED);
 
 #ifndef DISABLE_DEPRECATED
 	BIND_ENUM_CONSTANT(DisplayServerEnums::ROLE_UNKNOWN);
