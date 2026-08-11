@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  gpu_particles_collision_sdf_editor_plugin.h                           */
+/*  editor_scene_actions_menu.h                                           */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -31,37 +31,42 @@
 #pragma once
 
 #include "editor/gui/editor_scene_actions.h"
-#include "editor/plugins/editor_plugin.h"
+#include "scene/gui/button.h"
 
-struct EditorProgress;
-class EditorFileDialog;
-class GPUParticlesCollisionSDF3D;
+class Label;
+class PopupPanel;
+class ScrollContainer;
+class VBoxContainer;
 
-class GPUParticlesCollisionSDF3DEditorPlugin : public EditorPlugin {
-	GDCLASS(GPUParticlesCollisionSDF3DEditorPlugin, EditorPlugin);
+// Always-present toolbar dropdown listing every action exposed by the edited
+// scene. The list is a pure function of `get_edited_scene()` at open time: the
+// rows are rebuilt from scratch in `about_to_popup`, so there is no bookkeeping
+// to keep in sync with scene loads, node additions, renames or tab switches.
+class EditorSceneActionsMenu : public Button {
+	GDCLASS(EditorSceneActionsMenu, Button);
 
-	// The node the pending bake targets. The save-path dialog is asynchronous, so the bake target
-	// outlives the invoking call; bake_node() is what sets it.
-	GPUParticlesCollisionSDF3D *col_sdf = nullptr;
+	PopupPanel *popup = nullptr;
+	Label *empty_label = nullptr;
+	ScrollContainer *scroll = nullptr;
+	VBoxContainer *rows = nullptr;
 
-	// The Scene Actions menu owns the entry point; dropping the Ref unregisters it.
-	Ref<EditorSceneActionRegistration> bake_action;
+	// Rebuilt per open; indices into it are bound into the row callbacks and are
+	// only ever valid until the next rebuild (which frees those rows first).
+	LocalVector<EditorSceneActionEntry> entries;
+	Button *first_enabled_button = nullptr;
 
-	EditorFileDialog *probe_file = nullptr;
+	// Resolves an entry's node and verifies it is still part of the edited scene.
+	static Node *_resolve_node(ObjectID p_node_id);
 
-	static EditorProgress *tmp_progress;
-	static void bake_func_begin(int p_steps);
-	static void bake_func_step(int p_step, const String &p_description);
-	static void bake_func_end();
+	void _open_popup();
+	void _rebuild();
+	void _activate(int p_index);
+	void _run(int p_index);
+	void _select_node(ObjectID p_node_id);
 
-	void _sdf_save_path_and_bake(const String &p_path);
+protected:
+	void _notification(int p_what);
 
 public:
-	virtual String get_plugin_name() const override { return "GPUParticlesCollisionSDF3D"; }
-
-	void bake_node(Node *p_node);
-	// Computed lazily when the Actions menu opens (it used to be recomputed every frame).
-	String get_bake_tooltip(Node *p_node) const;
-
-	GPUParticlesCollisionSDF3DEditorPlugin();
+	EditorSceneActionsMenu();
 };

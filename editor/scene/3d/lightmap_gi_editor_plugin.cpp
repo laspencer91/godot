@@ -30,24 +30,22 @@
 
 #include "lightmap_gi_editor_plugin.h"
 
-#include "core/object/class_db.h"
+#include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_node.h"
-#include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "scene/3d/lightmap_gi.h"
-#include "scene/gui/button.h"
 #include "scene/main/scene_tree.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
 #include "modules/modules_enabled.gen.h" // For lightmapper_rd.
 
-void LightmapGIEditorPlugin::_bake() {
-	if (!lightmap) {
-		return;
-	}
+void LightmapGIEditorPlugin::bake_node(Node *p_node) {
+	// The registry's invoke path does not re-check the class match, so this cast is the guard.
+	LightmapGI *lightmap = Object::cast_to<LightmapGI>(p_node);
+	ERR_FAIL_NULL(lightmap);
 
 	// The editor owns the output location: it is allocated from the node's persistent identity so
 	// renames and moves keep resolving to the same bundle. The atlas .exr / shadowmask .png files
@@ -131,27 +129,6 @@ void LightmapGIEditorPlugin::_bake() {
 	}
 }
 
-void LightmapGIEditorPlugin::edit(Object *p_object) {
-	LightmapGI *s = Object::cast_to<LightmapGI>(p_object);
-	if (!s) {
-		return;
-	}
-
-	lightmap = s;
-}
-
-bool LightmapGIEditorPlugin::handles(Object *p_object) const {
-	return p_object->is_class("LightmapGI");
-}
-
-void LightmapGIEditorPlugin::make_visible(bool p_visible) {
-	if (p_visible) {
-		bake->show();
-	} else {
-		bake->hide();
-	}
-}
-
 EditorProgress *LightmapGIEditorPlugin::tmp_progress = nullptr;
 
 bool LightmapGIEditorPlugin::bake_func_step(float p_progress, const String &p_description, void *, bool p_refresh) {
@@ -176,36 +153,23 @@ void LightmapGIEditorPlugin::bake_func_end(uint64_t p_time_started) {
 	DisplayServer::get_singleton()->window_request_attention();
 }
 
-void LightmapGIEditorPlugin::_bind_methods() {
-	ClassDB::bind_method("_bake", &LightmapGIEditorPlugin::_bake);
-}
-
 LightmapGIEditorPlugin::LightmapGIEditorPlugin() {
-	bake = memnew(Button);
-	bake->set_theme_type_variation(SceneStringName(FlatButton));
-	// TODO: Rework this as a dedicated toolbar control so we can hook into theme changes and update it
-	// when the editor theme updates.
-	bake->set_button_icon(EditorNode::get_singleton()->get_editor_theme()->get_icon(SNAME("Bake"), EditorStringName(EditorIcons)));
-	bake->set_text(TTR("Bake Lightmaps"));
+	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
+			SNAME("lightmap_gi"), SNAME("bake"), SNAME("LightmapGI"),
+			TTR("Bake Lightmaps"), SNAME("Bake"),
+			callable_mp(this, &LightmapGIEditorPlugin::bake_node));
 
 #ifdef MODULE_LIGHTMAPPER_RD_ENABLED
 	// Disable lightmap baking if not supported on the current GPU.
 	if (!DisplayServer::get_singleton()->can_create_rendering_device()) {
-		bake->set_disabled(true);
-		bake->set_tooltip_text(vformat(TTR("Lightmap baking is not supported on this GPU (%s)."), RenderingServer::get_singleton()->get_video_adapter_name()));
+		bake_action->set_disabled(true, vformat(TTR("Lightmap baking is not supported on this GPU (%s)."), RenderingServer::get_singleton()->get_video_adapter_name()));
 	}
 #else
 	// Disable lightmap baking if the module is disabled at compile-time.
-	bake->set_disabled(true);
 #if defined(ANDROID_ENABLED) || defined(APPLE_EMBEDDED_ENABLED)
-	bake->set_tooltip_text(vformat(TTR("Lightmaps cannot be baked on %s."), OS::get_singleton()->get_name()));
+	bake_action->set_disabled(true, vformat(TTR("Lightmaps cannot be baked on %s."), OS::get_singleton()->get_name()));
 #else
-	bake->set_tooltip_text(TTR("Lightmaps cannot be baked, as the `lightmapper_rd` module was disabled at compile-time."));
+	bake_action->set_disabled(true, TTR("Lightmaps cannot be baked, as the `lightmapper_rd` module was disabled at compile-time."));
 #endif
 #endif // MODULE_LIGHTMAPPER_RD_ENABLED
-
-	bake->hide();
-	bake->connect(SceneStringName(pressed), Callable(this, "_bake"));
-	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake);
-	lightmap = nullptr;
 }

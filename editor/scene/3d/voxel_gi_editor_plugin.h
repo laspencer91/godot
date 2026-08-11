@@ -30,35 +30,28 @@
 
 #pragma once
 
+#include "editor/gui/editor_scene_actions.h"
 #include "editor/plugins/editor_plugin.h"
-#include "scene/3d/voxel_gi.h"
 
 struct EditorProgress;
-class HBoxContainer;
 
 class VoxelGIEditorPlugin : public EditorPlugin {
 	GDCLASS(VoxelGIEditorPlugin, EditorPlugin);
 
-	VoxelGI *voxel_gi = nullptr;
-
-	HBoxContainer *bake_hb = nullptr;
-	Button *bake = nullptr;
+	// The Scene Actions menu owns the entry point; dropping the Ref unregisters it.
+	Ref<EditorSceneActionRegistration> bake_action;
 
 	static EditorProgress *tmp_progress;
 	static void bake_func_begin();
 	static bool bake_func_step(int p_progress, const String &p_description);
 	static void bake_func_end();
 
-	void _bake();
-
-protected:
-	void _notification(int p_what);
-
 public:
 	virtual String get_plugin_name() const override { return "VoxelGI"; }
-	virtual void edit(Object *p_object) override;
-	virtual bool handles(Object *p_object) const override;
-	virtual void make_visible(bool p_visible) override;
+
+	void bake_node(Node *p_node);
+	// Computed lazily when the Actions menu opens (it used to be recomputed every frame).
+	String get_bake_tooltip(Node *p_node) const;
 
 	VoxelGIEditorPlugin();
 };

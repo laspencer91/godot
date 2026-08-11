@@ -37,7 +37,6 @@
 #include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
-#include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "scene/3d/ao_baker_3d.h"
 #include "scene/3d/mesh_instance_3d.h"
@@ -136,10 +135,12 @@ Error AOBaker3DEditorPlugin::_unwrap_mesh_instance(MeshInstance3D *p_mi, EditorU
 	return OK;
 }
 
-void AOBaker3DEditorPlugin::_bake() {
-	if (!baker) {
-		return;
-	}
+void AOBaker3DEditorPlugin::bake_node(Node *p_node) {
+	// The registry's invoke path does not re-check the class match, so this cast is the guard.
+	AOBaker3D *b = Object::cast_to<AOBaker3D>(p_node);
+	ERR_FAIL_NULL(b);
+	// The uv2_prompt flow reads `baker`, so the target is stored rather than kept local.
+	baker = b;
 
 	// The editor owns the output location: it is allocated from the node's persistent identity, so
 	// renames and moves keep resolving to the same bundle and a rebake overwrites in place.
@@ -286,28 +287,6 @@ void AOBaker3DEditorPlugin::_do_bake() {
 	}
 }
 
-void AOBaker3DEditorPlugin::edit(Object *p_object) {
-	AOBaker3D *b = Object::cast_to<AOBaker3D>(p_object);
-	if (b) {
-		baker = b;
-	}
-}
-
-bool AOBaker3DEditorPlugin::handles(Object *p_object) const {
-	return p_object->is_class("AOBaker3D");
-}
-
-void AOBaker3DEditorPlugin::make_visible(bool p_visible) {
-	if (p_visible) {
-		bake->show();
-	} else {
-		bake->hide();
-	}
-}
-
-void AOBaker3DEditorPlugin::_bind_methods() {
-}
-
 AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
 	uv2_prompt = memnew(ConfirmationDialog);
 	uv2_prompt->set_title(TTR("Bake AO"));
@@ -317,22 +296,16 @@ AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
 	uv2_prompt->connect("custom_action", callable_mp(this, &AOBaker3DEditorPlugin::_prompt_custom_action));
 	EditorNode::get_singleton()->get_gui_base()->add_child(uv2_prompt);
 
-	bake = memnew(Button);
-	bake->set_theme_type_variation(SceneStringName(FlatButton));
-	bake->set_button_icon(EditorNode::get_singleton()->get_editor_theme()->get_icon(SNAME("Bake"), EditorStringName(EditorIcons)));
-	bake->set_text(TTR("Bake AO"));
+	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
+			SNAME("ao_baker_3d"), SNAME("bake"), SNAME("AOBaker3D"),
+			TTR("Bake AO"), SNAME("Bake"),
+			callable_mp(this, &AOBaker3DEditorPlugin::bake_node));
 
 #ifdef MODULE_LIGHTMAPPER_RD_ENABLED
 	if (!DisplayServer::get_singleton()->can_create_rendering_device()) {
-		bake->set_disabled(true);
-		bake->set_tooltip_text(vformat(TTR("AO baking is not supported on this GPU (%s)."), RenderingServer::get_singleton()->get_video_adapter_name()));
+		bake_action->set_disabled(true, vformat(TTR("AO baking is not supported on this GPU (%s)."), RenderingServer::get_singleton()->get_video_adapter_name()));
 	}
 #else
-	bake->set_disabled(true);
-	bake->set_tooltip_text(TTR("AO cannot be baked, as the `lightmapper_rd` module was disabled at compile-time."));
+	bake_action->set_disabled(true, TTR("AO cannot be baked, as the `lightmapper_rd` module was disabled at compile-time."));
 #endif
-
-	bake->hide();
-	bake->connect(SceneStringName(pressed), callable_mp(this, &AOBaker3DEditorPlugin::_bake));
-	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake);
 }

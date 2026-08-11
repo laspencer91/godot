@@ -30,27 +30,19 @@
 
 #pragma once
 
+#include "editor/gui/editor_scene_actions.h"
 #include "editor/plugins/editor_plugin.h"
-
-class OccluderInstance3D;
 
 class OccluderInstance3DEditorPlugin : public EditorPlugin {
 	GDCLASS(OccluderInstance3DEditorPlugin, EditorPlugin);
 
-	OccluderInstance3D *occluder_instance = nullptr;
-
-	Button *bake = nullptr;
-
-	void _bake();
-
-protected:
-	static void _bind_methods();
+	// The Scene Actions menu owns the entry point; dropping the Ref unregisters it.
+	Ref<EditorSceneActionRegistration> bake_action;
 
 public:
 	virtual String get_plugin_name() const override { return "OccluderInstance3D"; }
-	virtual void edit(Object *p_object) override;
-	virtual bool handles(Object *p_object) const override;
-	virtual void make_visible(bool p_visible) override;
+
+	void bake_node(Node *p_node);
 
 	OccluderInstance3DEditorPlugin();
 };

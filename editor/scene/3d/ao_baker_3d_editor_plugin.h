@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "editor/gui/editor_scene_actions.h"
 #include "editor/plugins/editor_plugin.h"
 
 class AOBaker3D;
@@ -42,8 +43,12 @@ class MeshInstance3D;
 class AOBaker3DEditorPlugin : public EditorPlugin {
 	GDCLASS(AOBaker3DEditorPlugin, EditorPlugin);
 
+	// The node the pending bake targets. The uv2_prompt flow is asynchronous, so the bake target
+	// outlives the invoking call; bake_node() is what sets it.
 	AOBaker3D *baker = nullptr;
-	Button *bake = nullptr;
+
+	// The Scene Actions menu owns the entry point; dropping the Ref unregisters it.
+	Ref<EditorSceneActionRegistration> bake_action;
 
 	// Pre-bake prompt shown when some static meshes are missing UV2: offers to auto-unwrap the
 	// fixable ones before baking (OK button) or to bake only the ready meshes (custom button).
@@ -51,7 +56,6 @@ class AOBaker3DEditorPlugin : public EditorPlugin {
 	Button *bake_ready_button = nullptr;
 	String pending_atlas_path;
 
-	void _bake(); // Entry point: allocate the derived-data atlas path, then prepare the bake.
 	void _prepare_bake(); // Classify meshes, then prompt or bake.
 	void _do_bake(); // Run the actual bake and report the result.
 	void _unwrap_and_bake(); // Prompt confirmed: batch-unwrap the fixable meshes (one undo step) then bake.
@@ -63,14 +67,11 @@ class AOBaker3DEditorPlugin : public EditorPlugin {
 	// Queue the do/undo for unwrapping one mesh onto p_ur (does not commit). Returns OK or fills r_error.
 	Error _unwrap_mesh_instance(MeshInstance3D *p_mi, EditorUndoRedoManager *p_ur, String &r_error);
 
-protected:
-	static void _bind_methods();
-
 public:
 	virtual String get_plugin_name() const override { return "AOBaker3D"; }
-	virtual void edit(Object *p_object) override;
-	virtual bool handles(Object *p_object) const override;
-	virtual void make_visible(bool p_visible) override;
+
+	// Entry point: retarget the baker, allocate the derived-data atlas path, then prepare the bake.
+	void bake_node(Node *p_node);
 
 	AOBaker3DEditorPlugin();
 };

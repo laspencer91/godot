@@ -30,32 +30,25 @@
 
 #pragma once
 
+#include "editor/gui/editor_scene_actions.h"
 #include "editor/plugins/editor_plugin.h"
 
 struct EditorProgress;
-class LightmapGI;
 
 class LightmapGIEditorPlugin : public EditorPlugin {
 	GDCLASS(LightmapGIEditorPlugin, EditorPlugin);
 
-	LightmapGI *lightmap = nullptr;
-
-	Button *bake = nullptr;
+	// The Scene Actions menu owns the entry point; dropping the Ref unregisters it.
+	Ref<EditorSceneActionRegistration> bake_action;
 
 	static EditorProgress *tmp_progress;
 	static bool bake_func_step(float p_progress, const String &p_description, void *, bool p_refresh);
 	static void bake_func_end(uint64_t p_time_started);
 
-	void _bake();
-
-protected:
-	static void _bind_methods();
-
 public:
 	virtual String get_plugin_name() const override { return "LightmapGI"; }
-	virtual void edit(Object *p_object) override;
-	virtual bool handles(Object *p_object) const override;
-	virtual void make_visible(bool p_visible) override;
+
+	void bake_node(Node *p_node);
 
 	LightmapGIEditorPlugin();
 };

@@ -30,19 +30,17 @@
 
 #include "occluder_instance_3d_editor_plugin.h"
 
-#include "core/object/class_db.h"
+#include "core/object/callable_mp.h"
 #include "editor/derived_data/editor_derived_data.h"
 #include "editor/editor_node.h"
-#include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "scene/3d/occluder_instance_3d.h"
-#include "scene/gui/button.h"
 #include "scene/main/scene_tree.h"
 
-void OccluderInstance3DEditorPlugin::_bake() {
-	if (!occluder_instance) {
-		return;
-	}
+void OccluderInstance3DEditorPlugin::bake_node(Node *p_node) {
+	// The registry's invoke path does not re-check the class match, so this cast is the guard.
+	OccluderInstance3D *occluder_instance = Object::cast_to<OccluderInstance3D>(p_node);
+	ERR_FAIL_NULL(occluder_instance);
 
 	// The editor owns the output location: it is allocated from the node's persistent identity, so
 	// renames and moves keep resolving to the same bundle.
@@ -103,38 +101,9 @@ void OccluderInstance3DEditorPlugin::_bake() {
 	}
 }
 
-void OccluderInstance3DEditorPlugin::edit(Object *p_object) {
-	OccluderInstance3D *s = Object::cast_to<OccluderInstance3D>(p_object);
-	if (!s) {
-		return;
-	}
-
-	occluder_instance = s;
-}
-
-bool OccluderInstance3DEditorPlugin::handles(Object *p_object) const {
-	return p_object->is_class("OccluderInstance3D");
-}
-
-void OccluderInstance3DEditorPlugin::make_visible(bool p_visible) {
-	if (p_visible) {
-		bake->show();
-	} else {
-		bake->hide();
-	}
-}
-
-void OccluderInstance3DEditorPlugin::_bind_methods() {
-	ClassDB::bind_method("_bake", &OccluderInstance3DEditorPlugin::_bake);
-}
-
 OccluderInstance3DEditorPlugin::OccluderInstance3DEditorPlugin() {
-	bake = memnew(Button);
-	bake->set_theme_type_variation(SceneStringName(FlatButton));
-	bake->set_button_icon(EditorNode::get_singleton()->get_editor_theme()->get_icon(SNAME("Bake"), EditorStringName(EditorIcons)));
-	bake->set_text(TTR("Bake Occluders"));
-	bake->hide();
-	bake->connect(SceneStringName(pressed), Callable(this, "_bake"));
-	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake);
-	occluder_instance = nullptr;
+	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
+			SNAME("occluder_instance_3d"), SNAME("bake"), SNAME("OccluderInstance3D"),
+			TTR("Bake Occluders"), SNAME("Bake"),
+			callable_mp(this, &OccluderInstance3DEditorPlugin::bake_node));
 }

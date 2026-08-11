@@ -34,91 +34,62 @@
 #include "core/object/callable_mp.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
-#include "editor/editor_string_names.h"
 #include "editor/gui/editor_file_dialog.h"
 #include "scene/3d/gpu_particles_collision_3d.h"
 #include "scene/main/scene_tree.h"
 
-void GPUParticlesCollisionSDF3DEditorPlugin::_bake() {
-	if (col_sdf) {
-		if (col_sdf->get_texture().is_null() || !col_sdf->get_texture()->get_path().is_resource_file()) {
-			String path = get_tree()->get_edited_scene_root()->get_scene_file_path();
-			if (path.is_empty()) {
-				path = "res://" + col_sdf->get_name() + "_data.exr";
-			} else {
-				path = path.get_basename() + "." + col_sdf->get_name() + "_data.exr";
-			}
-			probe_file->set_current_path(path);
-			probe_file->popup_file_dialog();
-			return;
+void GPUParticlesCollisionSDF3DEditorPlugin::bake_node(Node *p_node) {
+	// The registry's invoke path does not re-check the class match, so this cast is the guard.
+	GPUParticlesCollisionSDF3D *s = Object::cast_to<GPUParticlesCollisionSDF3D>(p_node);
+	ERR_FAIL_NULL(s);
+	// The save-path dialog flow reads `col_sdf`, so the target is stored rather than kept local.
+	col_sdf = s;
+
+	if (col_sdf->get_texture().is_null() || !col_sdf->get_texture()->get_path().is_resource_file()) {
+		String path = get_tree()->get_edited_scene_root()->get_scene_file_path();
+		if (path.is_empty()) {
+			path = "res://" + col_sdf->get_name() + "_data.exr";
+		} else {
+			path = path.get_basename() + "." + col_sdf->get_name() + "_data.exr";
 		}
-
-		_sdf_save_path_and_bake(col_sdf->get_texture()->get_path());
-	}
-}
-
-void GPUParticlesCollisionSDF3DEditorPlugin::edit(Object *p_object) {
-	GPUParticlesCollisionSDF3D *s = Object::cast_to<GPUParticlesCollisionSDF3D>(p_object);
-	if (!s) {
+		probe_file->set_current_path(path);
+		probe_file->popup_file_dialog();
 		return;
 	}
 
-	col_sdf = s;
+	_sdf_save_path_and_bake(col_sdf->get_texture()->get_path());
 }
 
-bool GPUParticlesCollisionSDF3DEditorPlugin::handles(Object *p_object) const {
-	return p_object->is_class("GPUParticlesCollisionSDF3D");
-}
-
-void GPUParticlesCollisionSDF3DEditorPlugin::_notification(int p_what) {
-	switch (p_what) {
-		case NOTIFICATION_PROCESS: {
-			if (!col_sdf) {
-				return;
-			}
-
-			// Set information tooltip on the Bake button. This information is useful
-			// to optimize performance (video RAM size) and reduce collision tunneling (individual cell size).
-
-			const Vector3i size = col_sdf->get_estimated_cell_size();
-
-			const Vector3 extents = col_sdf->get_size() / 2;
-
-			int data_size = 2;
-			const double size_mb = size.x * size.y * size.z * data_size / (1024.0 * 1024.0);
-			// Add a qualitative measurement to help the user assess whether a GPUParticlesCollisionSDF3D node is using a lot of VRAM.
-			String size_quality;
-			if (size_mb < 8.0) {
-				size_quality = TTR("Low");
-			} else if (size_mb < 32.0) {
-				size_quality = TTR("Moderate");
-			} else {
-				size_quality = TTR("High");
-			}
-
-			String text;
-			text += vformat(TTR("Subdivisions: %s"), vformat(U"%d × %d × %d", size.x, size.y, size.z)) + "\n";
-			text += vformat(TTR("Cell size: %s"), vformat(U"%.3f × %.3f × %.3f", extents.x / size.x, extents.y / size.y, extents.z / size.z)) + "\n";
-			text += vformat(TTR("Video RAM size: %s MB (%s)"), String::num(size_mb, 2), size_quality);
-
-			// Only update the tooltip when needed to avoid constant redrawing.
-			if (bake->get_tooltip(Point2()) == text) {
-				return;
-			}
-
-			bake->set_tooltip_text(text);
-		} break;
+String GPUParticlesCollisionSDF3DEditorPlugin::get_bake_tooltip(Node *p_node) const {
+	GPUParticlesCollisionSDF3D *sdf = Object::cast_to<GPUParticlesCollisionSDF3D>(p_node);
+	if (!sdf) {
+		return String();
 	}
-}
 
-void GPUParticlesCollisionSDF3DEditorPlugin::make_visible(bool p_visible) {
-	if (p_visible) {
-		bake_hb->show();
-		set_process(true);
+	// Information tooltip for the bake action. This information is useful to optimize performance
+	// (video RAM size) and reduce collision tunneling (individual cell size).
+
+	const Vector3i size = sdf->get_estimated_cell_size();
+
+	const Vector3 extents = sdf->get_size() / 2;
+
+	int data_size = 2;
+	const double size_mb = size.x * size.y * size.z * data_size / (1024.0 * 1024.0);
+	// Add a qualitative measurement to help the user assess whether a GPUParticlesCollisionSDF3D node is using a lot of VRAM.
+	String size_quality;
+	if (size_mb < 8.0) {
+		size_quality = TTR("Low");
+	} else if (size_mb < 32.0) {
+		size_quality = TTR("Moderate");
 	} else {
-		bake_hb->hide();
-		set_process(false);
+		size_quality = TTR("High");
 	}
+
+	String text;
+	text += vformat(TTR("Subdivisions: %s"), vformat(U"%d × %d × %d", size.x, size.y, size.z)) + "\n";
+	text += vformat(TTR("Cell size: %s"), vformat(U"%.3f × %.3f × %.3f", extents.x / size.x, extents.y / size.y, extents.z / size.z)) + "\n";
+	text += vformat(TTR("Video RAM size: %s MB (%s)"), String::num(size_mb, 2), size_quality);
+	return text;
 }
 
 EditorProgress *GPUParticlesCollisionSDF3DEditorPlugin::tmp_progress = nullptr;
@@ -179,18 +150,12 @@ void GPUParticlesCollisionSDF3DEditorPlugin::_sdf_save_path_and_bake(const Strin
 }
 
 GPUParticlesCollisionSDF3DEditorPlugin::GPUParticlesCollisionSDF3DEditorPlugin() {
-	bake_hb = memnew(HBoxContainer);
-	bake_hb->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-	bake_hb->hide();
-	bake = memnew(Button);
-	bake->set_theme_type_variation(SceneStringName(FlatButton));
-	bake->set_button_icon(EditorNode::get_singleton()->get_editor_theme()->get_icon(SNAME("Bake"), EditorStringName(EditorIcons)));
-	bake->set_text(TTR("Bake SDF"));
-	bake->connect(SceneStringName(pressed), callable_mp(this, &GPUParticlesCollisionSDF3DEditorPlugin::_bake));
-	bake_hb->add_child(bake);
+	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
+			SNAME("gpu_particles_collision_sdf_3d"), SNAME("bake"), SNAME("GPUParticlesCollisionSDF3D"),
+			TTR("Bake SDF"), SNAME("Bake"),
+			callable_mp(this, &GPUParticlesCollisionSDF3DEditorPlugin::bake_node));
+	bake_action->set_tooltip_provider(callable_mp(this, &GPUParticlesCollisionSDF3DEditorPlugin::get_bake_tooltip));
 
-	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, bake_hb);
-	col_sdf = nullptr;
 	probe_file = memnew(EditorFileDialog);
 	probe_file->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
 	probe_file->add_filter("*.exr");

@@ -48,6 +48,7 @@ class ConfirmationDialog;
 class DirectionalLight3D;
 class EditorDocument;
 class EditorEditDomainHost;
+class EditorSceneActionsMenu;
 class EditorSelection;
 class EditorSpinSlider;
 class EditorViewportChrome;
@@ -272,6 +273,7 @@ private:
 	MenuButton *transform_menu = nullptr;
 	PopupMenu *gizmos_menu = nullptr;
 	MenuButton *view_layout_menu = nullptr;
+	EditorSceneActionsMenu *scene_actions_menu = nullptr;
 	Button *grid_visibility_button = nullptr;
 	MenuButton *grid_step_menu = nullptr;
 	ObjectID toolbar_viewport_id;

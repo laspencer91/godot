@@ -72,6 +72,7 @@
 #include "editor/gui/editor_edit_domain.h"
 #include "editor/gui/editor_file_dialog.h"
 #include "editor/gui/editor_responsive_row.h"
+#include "editor/gui/editor_scene_actions.h"
 #include "editor/gui/editor_spin_slider.h"
 #include "editor/gui/editor_toaster.h"
 #include "editor/gui/editor_viewport_chrome.h"
@@ -175,6 +176,7 @@ void register_editor_types() {
 	register_editor_document_surface_providers();
 	EditorViewportChromeRegistry::create();
 	EditorEditDomainRegistry::create();
+	EditorSceneActionRegistry::create();
 #ifdef DEV_ENABLED
 	register_editor_edit_domain_dev_providers();
 #endif
@@ -184,6 +186,7 @@ void register_editor_types() {
 	GDREGISTER_ABSTRACT_CLASS(EditorExternalFileDropRequest);
 	GDREGISTER_VIRTUAL_CLASS(EditorPlugin);
 	GDREGISTER_ABSTRACT_CLASS(EditorViewportChromeRegistration);
+	GDREGISTER_ABSTRACT_CLASS(EditorSceneActionRegistration);
 	GDREGISTER_CLASS(EditorTranslationParserPlugin);
 	GDREGISTER_CLASS(EditorImportPlugin);
 	GDREGISTER_CLASS(EditorScript);
@@ -406,6 +409,9 @@ void unregister_editor_types() {
 	unregister_editor_edit_domain_dev_providers();
 #endif
 	EditorEditDomainRegistry::free();
+	// Must run after `EditorNode::cleanup()` so plugins have released their
+	// registration Refs.
+	EditorSceneActionRegistry::free();
 	EditorViewportChromeRegistry::free();
 	EditorDerivedData::free();
 	EditorInterface::free();
