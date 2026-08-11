@@ -1,0 +1,2 @@
+GDTEST_ANALYZER_ERROR
+>> ERROR at line 5: Metadata key "scene_action" is already defined for this variable; remove either the "@field_meta" annotation or the "@export_tool_button" scene action flag.

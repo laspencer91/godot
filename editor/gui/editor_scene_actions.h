@@ -134,6 +134,7 @@ class EditorSceneActionRegistry {
 	static bool _is_node_included(Node *p_scene_root, Node *p_node);
 	static void _fill_entry_address(Node *p_scene_root, Node *p_node, EditorSceneActionEntry &r_entry);
 	static bool _script_chain_has_global_name(const Ref<Script> &p_script, const StringName &p_class);
+	static bool _tool_button_opts_in(const Ref<Script> &p_script, const StringName &p_property);
 	static Error _invoke_tool_button(Node *p_node, const StringName &p_property);
 
 	void _build_match_cache(ClassMatchCache &r_cache) const;
@@ -152,6 +153,11 @@ public:
 	static EditorSceneActionRegistry *get_singleton() { return singleton; }
 
 	static StringName get_tool_button_provider_id() { return SNAME("tool_button"); }
+
+	// Script member metadata key a tool button must set to appear in the menu.
+	// `@export_tool_button("Label", "Icon", true)` writes it; the equivalent
+	// `@field_meta("scene_action")` on the same variable works too.
+	static StringName get_scene_action_metadata_key() { return SNAME("scene_action"); }
 
 	// Explicit side (C++ plugins).
 	Ref<EditorSceneActionRegistration> register_class_action(

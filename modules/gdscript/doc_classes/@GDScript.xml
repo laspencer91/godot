@@ -731,9 +731,11 @@
 			<return type="void" />
 			<param index="0" name="text" type="String" />
 			<param index="1" name="icon" type="String" default="&quot;&quot;" />
+			<param index="2" name="scene_action" type="bool" default="false" />
 			<description>
 				Export a [Callable] property as a clickable button with the label [param text]. When the button is pressed, the callable is called.
 				If [param icon] is specified, it is used to fetch an icon for the button via [method Control.get_theme_icon], from the [code]"EditorIcons"[/code] theme type. If [param icon] is omitted, the default [code]"Callable"[/code] icon is used instead.
+				If [param scene_action] is [code]true[/code], the button also appears in the editor's [b]Actions[/b] menu in the 2D and 3D viewport toolbars, which lists the actions of every node in the edited scene. Buttons are inspector-only by default so that the menu stays limited to the few actions worth reaching without selecting their node. The flag is stored as the member metadata key [code]"scene_action"[/code] (see [annotation @GDScript.@field_meta]) and does not change how the button is rendered in the inspector.
 				Consider using the [EditorUndoRedoManager] to allow the action to be reverted safely.
 				See also [constant PROPERTY_HINT_TOOL_BUTTON].
 				[codeblock]

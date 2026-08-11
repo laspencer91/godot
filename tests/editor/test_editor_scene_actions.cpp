@@ -35,6 +35,7 @@ TEST_FORCE_LINK(test_editor_scene_actions)
 #ifdef TOOLS_ENABLED
 
 #include "core/object/callable_mp.h"
+#include "core/object/class_db.h"
 #include "core/object/script_language.h"
 #include "editor/gui/editor_scene_actions.h"
 #include "scene/3d/node_3d.h"
@@ -52,12 +53,27 @@ namespace TestEditorSceneActions {
 class TestSceneActionScript : public Script {
 	GDCLASS(TestSceneActionScript, Script);
 
+protected:
+	static void _bind_methods() {
+		// The registry reads the Scene Actions opt-in by name, so the stub has
+		// to expose the same bound method GDScript does.
+		ClassDB::bind_method(D_METHOD("get_member_metadata", "member"), &TestSceneActionScript::get_member_metadata);
+	}
+
 public:
 	StringName global_name;
 	Ref<Script> base;
 	bool tool_script = true;
 	List<PropertyInfo> fake_properties;
 	HashMap<StringName, Variant> fake_values;
+	HashMap<StringName, Dictionary> fake_member_metadata;
+
+	// Mirrors `GDScript::get_member_metadata()`, the per-member script metadata
+	// surface `@field_meta` / `@export_tool_button`'s opt-in flag write to.
+	Dictionary get_member_metadata(const StringName &p_member) const {
+		const Dictionary *metadata = fake_member_metadata.getptr(p_member);
+		return metadata ? *metadata : Dictionary();
+	}
 
 	PlaceHolderScriptInstance *make_instance(Object *p_this) {
 		PlaceHolderScriptInstance *placeholder = memnew(PlaceHolderScriptInstance(nullptr, Ref<Script>(this), p_this));
@@ -153,6 +169,11 @@ public:
 };
 
 static Ref<TestSceneActionScript> _make_script(const StringName &p_global_name, bool p_tool = true) {
+	// `get_member_metadata()` is only reachable once the class is in ClassDB.
+	if (!ClassDB::class_exists(TestSceneActionScript::get_class_static())) {
+		GDREGISTER_CLASS(TestSceneActionScript);
+	}
+
 	Ref<TestSceneActionScript> script;
 	script.instantiate();
 	script->global_name = p_global_name;
@@ -160,11 +181,26 @@ static Ref<TestSceneActionScript> _make_script(const StringName &p_global_name, 
 	return script;
 }
 
-// Mirrors what `@export_tool_button("Ping", "Bake")` produces.
-static void _add_tool_button(const Ref<TestSceneActionScript> &p_script, const StringName &p_name, const String &p_hint_string, const Variant &p_value, uint32_t p_extra_usage = 0) {
+// Mirrors what `@export_tool_button("Ping", "Bake", <scene_action>)` produces:
+// the PropertyInfo is identical either way, and the opt-in flag only shows up
+// as member metadata. `p_scene_action == OPT_OUT` writes no metadata at all,
+// like a two-argument annotation.
+enum ToolButtonOptIn {
+	OPT_OUT,
+	OPT_IN,
+	OPT_OUT_EXPLICIT, // `@field_meta("scene_action", false)`.
+};
+
+static void _add_tool_button(const Ref<TestSceneActionScript> &p_script, const StringName &p_name, const String &p_hint_string, const Variant &p_value, ToolButtonOptIn p_scene_action = OPT_IN, uint32_t p_extra_usage = 0) {
 	PropertyInfo pi(Variant::CALLABLE, p_name, PROPERTY_HINT_TOOL_BUTTON, p_hint_string, PROPERTY_USAGE_EDITOR | p_extra_usage);
 	p_script->fake_properties.push_back(pi);
 	p_script->fake_values[p_name] = p_value;
+
+	if (p_scene_action != OPT_OUT) {
+		Dictionary metadata;
+		metadata[EditorSceneActionRegistry::get_scene_action_metadata_key()] = p_scene_action == OPT_IN;
+		p_script->fake_member_metadata[p_name] = metadata;
+	}
 }
 
 // Root -> [Owned, Instance -> InnerChild]. `Instance` is an instanced sub-scene
@@ -217,6 +253,7 @@ static bool _has_path(const LocalVector<EditorSceneActionEntry> &p_entries, cons
 TEST_CASE("[Editor][SceneActions] Registry singleton is created with the editor types") {
 	CHECK(EditorSceneActionRegistry::get_singleton() != nullptr);
 	CHECK(EditorSceneActionRegistry::get_tool_button_provider_id() == StringName("tool_button"));
+	CHECK(EditorSceneActionRegistry::get_scene_action_metadata_key() == StringName("scene_action"));
 }
 
 TEST_CASE("[Editor][SceneActions] node_matches_class resolves engine classes") {
@@ -435,6 +472,30 @@ TEST_CASE("[Editor][SceneActions] Tool buttons are harvested from @tool scripts 
 		node->set_script(Variant());
 	}
 
+	SUBCASE("Only tool buttons that opt in are collected") {
+		Ref<TestSceneActionScript> script = _make_script(SNAME("TestSceneActionToolClass"));
+		// `@export_tool_button("Bake", "Bake", true)`.
+		_add_tool_button(script, SNAME("test_opted_in_button"), "Bake,Bake", callable_mp(node, &TestSceneActionNode::ping), OPT_IN);
+		// `@export_tool_button("Clear", "Remove")` -- the backward-compatible
+		// two-argument form stays inspector-only.
+		_add_tool_button(script, SNAME("test_inspector_only_button"), "Clear,Remove", callable_mp(node, &TestSceneActionNode::ping), OPT_OUT);
+		// `@field_meta("scene_action", false)` opts out just as loudly.
+		_add_tool_button(script, SNAME("test_explicitly_excluded_button"), "Rebuild,Reload", callable_mp(node, &TestSceneActionNode::ping), OPT_OUT_EXPLICIT);
+		node->set_script(script);
+
+		LocalVector<EditorSceneActionEntry> entries;
+		registry.collect(root, entries);
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0].action_id == StringName("test_opted_in_button"));
+		CHECK(entries[0].label == "Bake");
+
+		// The opted-in entry still invokes like any other tool button.
+		CHECK(registry.invoke(entries[0]) == OK);
+		CHECK(node->invoke_count == 1);
+
+		node->set_script(Variant());
+	}
+
 	SUBCASE("A hint string without an icon falls back to Callable") {
 		Ref<TestSceneActionScript> script = _make_script(SNAME("TestSceneActionToolClass"));
 		_add_tool_button(script, SNAME("test_tool_button"), "Ping", callable_mp(node, &TestSceneActionNode::ping));
@@ -451,7 +512,7 @@ TEST_CASE("[Editor][SceneActions] Tool buttons are harvested from @tool scripts 
 
 	SUBCASE("PROPERTY_USAGE_READ_ONLY disables the entry") {
 		Ref<TestSceneActionScript> script = _make_script(SNAME("TestSceneActionToolClass"));
-		_add_tool_button(script, SNAME("test_tool_button"), "Ping,Bake", callable_mp(node, &TestSceneActionNode::ping), PROPERTY_USAGE_READ_ONLY);
+		_add_tool_button(script, SNAME("test_tool_button"), "Ping,Bake", callable_mp(node, &TestSceneActionNode::ping), OPT_IN, PROPERTY_USAGE_READ_ONLY);
 		node->set_script(script);
 
 		LocalVector<EditorSceneActionEntry> entries;

@@ -32,6 +32,7 @@
 
 #include "core/object/class_db.h"
 #include "core/object/script_language.h"
+#include "core/variant/dictionary.h"
 #include "scene/main/node.h"
 
 void EditorSceneActionRegistration::_bind_methods() {
@@ -207,6 +208,27 @@ void EditorSceneActionRegistry::_build_match_cache(ClassMatchCache &r_cache) con
 	}
 }
 
+bool EditorSceneActionRegistry::_tool_button_opts_in(const Ref<Script> &p_script, const StringName &p_property) {
+	// The opt-in flag cannot ride on the PropertyInfo: the inspector splits the
+	// tool button hint with `rsplit(",", true, 1)`, so a third hint token would
+	// render as the icon. It rides on the script's per-member metadata instead
+	// (`@export_tool_button`'s third argument, or `@field_meta("scene_action")`),
+	// read here by name so the editor keeps no dependency on a language module.
+	// A script language that exposes no such method never opts in.
+	ERR_FAIL_COND_V(p_script.is_null(), false);
+
+	const Variant member = p_property;
+	const Variant *argument = &member;
+	Callable::CallError ce;
+	const Variant metadata = p_script->callp(SNAME("get_member_metadata"), &argument, 1, ce);
+	if (ce.error != Callable::CallError::CALL_OK || metadata.get_type() != Variant::DICTIONARY) {
+		return false;
+	}
+
+	const Dictionary metadata_dict = metadata;
+	return metadata_dict.get(get_scene_action_metadata_key(), false).booleanize();
+}
+
 void EditorSceneActionRegistry::_collect_tool_buttons(Node *p_scene_root, Node *p_node, LocalVector<EditorSceneActionEntry> &r_out) const {
 	// The `is_tool()` pre-filter is the whole performance story: only `@tool`
 	// scripted nodes pay for `get_property_list()`.
@@ -219,6 +241,13 @@ void EditorSceneActionRegistry::_collect_tool_buttons(Node *p_scene_root, Node *
 	p_node->get_property_list(&plist);
 	for (const PropertyInfo &pi : plist) {
 		if (pi.type != Variant::CALLABLE || pi.hint != PROPERTY_HINT_TOOL_BUTTON || !(pi.usage & PROPERTY_USAGE_EDITOR)) {
+			continue;
+		}
+
+		// Tool buttons are opt-in: a scene carries far more of them than are
+		// worth reaching without selecting their node, so only the ones that
+		// ask for it surface here. Everything else stays inspector-only.
+		if (!_tool_button_opts_in(script, pi.name)) {
 			continue;
 		}
 

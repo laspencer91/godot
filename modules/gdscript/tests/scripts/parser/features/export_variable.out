@@ -79,3 +79,5 @@ var test_tool_button_1: Callable = Callable()
   hint=TOOL_BUTTON hint_string="Click me!" usage=EDITOR|SCRIPT_VARIABLE class_name=&""
 var test_tool_button_2: Callable = Callable()
   hint=TOOL_BUTTON hint_string="Click me!,ColorRect" usage=EDITOR|SCRIPT_VARIABLE class_name=&""
+var test_tool_button_3: Callable = Callable()
+  hint=TOOL_BUTTON hint_string="Click me!,ColorRect" usage=EDITOR|SCRIPT_VARIABLE class_name=&""

@@ -66,6 +66,8 @@ var test_custom_enum_hard_no_export: CustomEnum
 # `@export_tool_button`.
 @export_tool_button("Click me!") var test_tool_button_1: Callable
 @export_tool_button("Click me!", "ColorRect") var test_tool_button_2: Callable
+# The scene action flag is member metadata, so the exported property is identical.
+@export_tool_button("Click me!", "ColorRect", true) var test_tool_button_3: Callable
 
 func test():
 	for property in get_property_list():

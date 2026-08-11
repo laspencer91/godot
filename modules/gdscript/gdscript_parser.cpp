@@ -176,7 +176,7 @@ GDScriptParser::GDScriptParser() {
 		register_annotation(MethodInfo("@export_flags_avoidance"), AnnotationInfo::VARIABLE, &GDScriptParser::export_annotations<PROPERTY_HINT_LAYERS_AVOIDANCE, Variant::INT>);
 		register_annotation(MethodInfo("@export_storage"), AnnotationInfo::VARIABLE, &GDScriptParser::export_storage_annotation);
 		register_annotation(MethodInfo("@export_custom", PropertyInfo(Variant::INT, "hint", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CLASS_IS_ENUM, "PropertyHint"), PropertyInfo(Variant::STRING, "hint_string"), PropertyInfo(Variant::INT, "usage", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CLASS_IS_BITFIELD, "PropertyUsageFlags")), AnnotationInfo::VARIABLE, &GDScriptParser::export_custom_annotation, varray(PROPERTY_USAGE_DEFAULT));
-		register_annotation(MethodInfo("@export_tool_button", PropertyInfo(Variant::STRING, "text"), PropertyInfo(Variant::STRING, "icon")), AnnotationInfo::VARIABLE, &GDScriptParser::export_tool_button_annotation, varray(""));
+		register_annotation(MethodInfo("@export_tool_button", PropertyInfo(Variant::STRING, "text"), PropertyInfo(Variant::STRING, "icon"), PropertyInfo(Variant::BOOL, "scene_action")), AnnotationInfo::VARIABLE, &GDScriptParser::export_tool_button_annotation, varray("", false));
 		// Export grouping annotations.
 		register_annotation(MethodInfo("@export_category", PropertyInfo(Variant::STRING, "name")), AnnotationInfo::STANDALONE, &GDScriptParser::export_group_annotations<PROPERTY_USAGE_CATEGORY>);
 		register_annotation(MethodInfo("@export_group", PropertyInfo(Variant::STRING, "name"), PropertyInfo(Variant::STRING, "prefix")), AnnotationInfo::STANDALONE, &GDScriptParser::export_group_annotations<PROPERTY_USAGE_GROUP>, varray(""));
@@ -5315,6 +5315,20 @@ bool GDScriptParser::export_tool_button_annotation(AnnotationNode *p_annotation,
 	variable->export_info.hint = PROPERTY_HINT_TOOL_BUTTON;
 	variable->export_info.hint_string = hint_string;
 	variable->export_info.usage = PROPERTY_USAGE_EDITOR;
+
+	// Opt-in flag for the editor's Scene Actions menu. It rides on the member
+	// metadata (`@field_meta`) rather than the hint string, because the
+	// inspector splits the hint with `rsplit(",", true, 1)` and would read a
+	// third token as the icon. The editor reads the key back through
+	// `GDScript.get_member_metadata()`.
+	if (p_annotation->resolved_arguments.size() > 2 && p_annotation->resolved_arguments[2].operator bool()) {
+		const StringName scene_action_key = SNAME("scene_action");
+		if (variable->member_metadata.has(scene_action_key)) {
+			push_error(vformat(R"(Metadata key "%s" is already defined for this variable; remove either the "@field_meta" annotation or the "@export_tool_button" scene action flag.)", scene_action_key), p_annotation);
+			return false;
+		}
+		variable->member_metadata[scene_action_key] = true;
+	}
 #endif // TOOLS_ENABLED
 
 	return true; // Only available in editor.
