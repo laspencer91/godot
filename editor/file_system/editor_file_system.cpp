@@ -2112,7 +2112,11 @@ bool EditorFileSystem::_find_file(const String &p_file, EditorFileSystemDirector
 	const String file_lower = file.to_lower();
 	path.resize(path.size() - 1);
 
-	Ref<DirAccess> dir = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+	// ACCESS_RESOURCES: the paths probed below are res://-rooted, and only the
+	// resources access type globalizes them. A filesystem-access handle would ask
+	// the OS about a literal "res://..." path, so the create-missing-directory
+	// fallback below would refuse every directory minted during the session.
+	Ref<DirAccess> dir = DirAccess::create(DirAccess::ACCESS_RESOURCES);
 	EditorFileSystemDirectory *fs = filesystem;
 
 	for (const String &path_bit : path) {

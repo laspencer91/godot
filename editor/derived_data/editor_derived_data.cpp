@@ -40,6 +40,7 @@
 #include "core/object/script_language.h"
 #include "core/os/time.h"
 #include "core/templates/hashfuncs.h"
+#include "editor/file_system/editor_file_system.h"
 #include "scene/main/node.h"
 
 static const char *MANIFEST_FILE_NAME = "manifest.cfg";
@@ -195,6 +196,15 @@ String EditorDerivedData::bundle_for(Node *p_owner, const StringName &p_slot) {
 
 	const Error err = _write_manifest(bundle_dir, p_slot, slot_info, key, fresh);
 	ERR_FAIL_COND_V_MSG(err != OK, String(), vformat("EditorDerivedData: cannot write the manifest in \"%s\" (error %d).", bundle_dir, err));
+
+	// Materialize the freshly minted directory chain in the editor's filesystem
+	// cache right away. Producers that save imported formats (.exr/.png) into the
+	// bundle reimport synchronously mid-bake, long before any focus-triggered
+	// rescan would discover the new directories; without this the reimport cannot
+	// resolve the path. Also makes the bundle show up in the FileSystem dock.
+	if (EditorFileSystem::get_singleton()) {
+		EditorFileSystem::get_singleton()->update_file(bundle_dir.path_join(MANIFEST_FILE_NAME));
+	}
 	return bundle_dir;
 }
 
