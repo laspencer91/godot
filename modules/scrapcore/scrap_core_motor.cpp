@@ -397,46 +397,25 @@ double ScrapCoreMotor::consume_collision_step_delta_y() {
 	return body.consume_step_delta_y();
 }
 
-Array ScrapCoreMotor::drain_events() {
-	Array out;
-	for (const scrap::MovementEvent &event : pending_events) {
-		Dictionary entry;
-		entry["kind"] = event.kind;
-		entry["tick"] = event.tick;
-		entry["input_seq"] = event.input_seq;
-		// data keyed exactly like player_movement_event.gd's per-kind payloads,
-		// rebuilt from the typed EventData slots. WALL_JUMPED/LADDER_JUMPED
-		// carry impulse (and position) in the GDScript dictionary that the
-		// typed envelope has no slots for; the keys the envelope CAN carry are
-		// emitted, nothing is fabricated.
-		Dictionary data;
-		switch (scrap::EventKind(event.kind)) {
-			case scrap::EventKind::LANDED:
-				data["impact_velocity"] = event.data.scalar_a;
-				break;
-			case scrap::EventKind::FOOTSTEP:
-				data["position"] = Vector3(event.data.vec.x, event.data.vec.y, event.data.vec.z);
-				break;
-			case scrap::EventKind::POSE_CHANGED:
-				data["pose"] = event.data.int_a;
-				break;
-			case scrap::EventKind::MANTLE_STARTED:
-				data["target_pitch"] = event.data.scalar_a;
-				data["duration"] = event.data.scalar_b;
-				data["climb_weight"] = double(event.data.vec.x);
-				break;
-			case scrap::EventKind::WALL_JUMPED:
-			case scrap::EventKind::LADDER_JUMPED:
-				data["normal"] = Vector3(event.data.vec.x, event.data.vec.y, event.data.vec.z);
-				break;
-			default:
-				break;
-		}
-		entry["data"] = data;
-		out.push_back(entry);
+PackedByteArray ScrapCoreMotor::drain_events() {
+	const std::vector<uint8_t> packed = scrap::movement_events::pack_bridge(pending_events);
+	ERR_FAIL_COND_V_MSG(!pending_events.empty() && packed.empty(), PackedByteArray(),
+			"ScrapCoreMotor.drain_events: generated MovementEvents bridge refused a non-empty event batch.");
+	PackedByteArray out;
+	out.resize(packed.size());
+	if (!packed.empty()) {
+		memcpy(out.ptrw(), packed.data(), packed.size());
 	}
 	pending_events.clear();
 	return out;
+}
+
+String ScrapCoreMotor::movement_events_contract_sha256() const {
+	return scrap::movement_events::CONTRACT_SHA256;
+}
+
+int ScrapCoreMotor::movement_events_bridge_format_version() const {
+	return scrap::movement_events::BRIDGE_FORMAT_VERSION;
 }
 
 int ScrapCoreMotor::pack_version() const {
@@ -475,6 +454,8 @@ void ScrapCoreMotor::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("reset_state", "packed", "refresh_ground_contact"), &ScrapCoreMotor::reset_state, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("consume_collision_step_delta_y"), &ScrapCoreMotor::consume_collision_step_delta_y);
 	ClassDB::bind_method(D_METHOD("drain_events"), &ScrapCoreMotor::drain_events);
+	ClassDB::bind_method(D_METHOD("movement_events_contract_sha256"), &ScrapCoreMotor::movement_events_contract_sha256);
+	ClassDB::bind_method(D_METHOD("movement_events_bridge_format_version"), &ScrapCoreMotor::movement_events_bridge_format_version);
 	ClassDB::bind_method(D_METHOD("pack_version"), &ScrapCoreMotor::pack_version);
 	ClassDB::bind_method(D_METHOD("motor_smoke"), &ScrapCoreMotor::motor_smoke);
 }

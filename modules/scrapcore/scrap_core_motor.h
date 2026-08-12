@@ -17,8 +17,8 @@
 // MovementState/MovementParams live native-side; per tick GDScript hands in the
 // 32-byte packed InputCommand (Phase-1 codec) and reads back only what script
 // needs. Snapshots cross as the 197-byte v19 packed form. No per-field
-// Dictionary traffic in the tick path (setup()'s params Dictionary and
-// drain_events() are the deliberate cold-path exceptions).
+// Dictionary traffic in the tick path. setup()'s params Dictionary is a
+// deliberate cold-path exception; events cross through the generated bridge.
 class ScrapCoreMotor : public RefCounted {
 	GDCLASS(ScrapCoreMotor, RefCounted);
 
@@ -28,7 +28,7 @@ class ScrapCoreMotor : public RefCounted {
 	scrap::MovementResult result;
 	Box3DPawnBody body;
 	LocalVector<ScrapLadderVolume> ladders;
-	LocalVector<scrap::MovementEvent> pending_events;
+	std::vector<scrap::MovementEvent> pending_events;
 	bool ready = false;
 	// STICKY injection input (not state): the last value set_ads_move_speed_mult
 	// stored. Re-applied to state at the top of every simulate() and after every
@@ -119,10 +119,11 @@ public:
 	// (PlayerPawn.consume_collision_step_delta_y; never simulation state).
 	double consume_collision_step_delta_y();
 
-	// Rare; empty most ticks. Drains every event since the last call, each as
-	// {kind, tick, input_seq, data}, converted into generated MovementEvents
-	// variants by the game-side prediction runner.
-	Array drain_events();
+	// Rare; empty most ticks. The generated, lossless bridge returns an empty
+	// PackedByteArray for the canonical zero-event batch.
+	PackedByteArray drain_events();
+	String movement_events_contract_sha256() const;
+	int movement_events_bridge_format_version() const;
 
 	// scrap::MovementState::PACK_VERSION from the compiled core (19).
 	int pack_version() const;

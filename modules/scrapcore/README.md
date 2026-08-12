@@ -29,3 +29,9 @@ solo-dev, and the alternative (two copies) is how contract drift happens.
 - **Gate B:** the `Box3DPawnBody` adapter (IPawnBody over Box3DCharacterMover /
   PhysicsServer3D) + the D2 packed-command tick surface + shadow parity harness.
 - **Gate C/D:** flag-gated game integration, measurement, soak.
+
+Movement events cross back to the game through the bridge generated from
+`schemas/events/movement_events.schema`: `drain_events()` returns a `PackedByteArray`, never
+dictionaries, and the generated GDScript decoder constructs the production typed variants. The
+module also exposes the compiled contract SHA-256 and bridge-format version so a stale editor build
+is refused before native simulation starts.
