@@ -144,6 +144,7 @@ const ScalarParamEntry SCALAR_PARAMS[] = {
 	{ "jump_land_min_speed_mult", &MP::jump_land_min_speed_mult },
 	{ "landing_hop_takeoff_pull", &MP::landing_hop_takeoff_pull },
 	{ "landing_hop_sprint_excess_carry", &MP::landing_hop_sprint_excess_carry },
+	{ "landing_hop_fatigue_per_hop", &MP::landing_hop_fatigue_per_hop },
 	{ "min_mantle_height", &MP::min_mantle_height },
 	{ "max_mantle_height", &MP::max_mantle_height },
 	{ "mantle_detect_distance", &MP::mantle_detect_distance },
@@ -432,8 +433,6 @@ Array ScrapCoreMotor::drain_events() {
 				break;
 		}
 		entry["data"] = data;
-		entry["replay_safe"] = event.replay_safe;
-		entry["network_relevant"] = event.network_relevant;
 		out.push_back(entry);
 	}
 	pending_events.clear();
