@@ -196,7 +196,7 @@ TypedArray<Box3DSurfaceMaterial> Box3DPhysicsSettingsTab::_current_materials() c
 	return library->get_materials().duplicate();
 }
 
-void Box3DPhysicsSettingsTab::_commit(const String &p_action_name, const TypedArray<Box3DSurfaceMaterial> &p_materials, const StringName &p_select) {
+void Box3DPhysicsSettingsTab::_commit(const String &p_action_name, const TypedArray<Box3DSurfaceMaterial> &p_materials, int p_select_slot) {
 	ERR_FAIL_COND(library.is_null());
 	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
 	ERR_FAIL_NULL(undo_redo);
@@ -204,13 +204,13 @@ void Box3DPhysicsSettingsTab::_commit(const String &p_action_name, const TypedAr
 	undo_redo->create_action(p_action_name);
 	undo_redo->add_do_method(library.ptr(), "set_materials", p_materials);
 	undo_redo->add_undo_method(library.ptr(), "set_materials", _current_materials());
-	undo_redo->add_do_method(this, "_materials_committed", p_select);
-	undo_redo->add_undo_method(this, "_materials_committed", selected_name);
+	undo_redo->add_do_method(this, "_materials_committed", p_select_slot);
+	undo_redo->add_undo_method(this, "_materials_committed", selected_slot);
 	undo_redo->commit_action();
 }
 
-void Box3DPhysicsSettingsTab::_materials_committed(const StringName &p_select) {
-	selected_name = p_select;
+void Box3DPhysicsSettingsTab::_materials_committed(int p_select_slot) {
+	selected_slot = CLAMP(p_select_slot, 0, Box3DSurfaceMaterialLibrary::get_material_slot_count() - 1);
 	// This save supersedes anything the debounce was still holding.
 	save_timer->stop();
 	_save_library();
@@ -224,6 +224,7 @@ void Box3DPhysicsSettingsTab::_save_library() {
 	}
 	const String path = Box3DPhysics::get_surface_material_library_path();
 	ERR_FAIL_COND_MSG(path.is_empty(), "Box3D: 'physics/box3d/surface_material_library' is empty, so surface materials cannot be saved.");
+	ERR_FAIL_COND_MSG(!library->is_slot_layout_valid(), vformat("Box3D: the surface material library has more than %d configured materials and cannot be saved as a fixed-slot library.", Box3DSurfaceMaterialLibrary::get_material_slot_count()));
 
 	committing = true;
 	// ResourceSaver's save callback is what tells EditorFileSystem about the new file,
@@ -252,19 +253,22 @@ void Box3DPhysicsSettingsTab::_refresh() {
 			library = current;
 		}
 	}
+	if (library.is_null()) {
+		// Materialize the in-memory 15-slot layout for a new project. The library remains
+		// unsaved until the first slot is configured.
+		_ensure_library();
+	}
 	_backfill_gameplay_data();
 
 	updating = true;
 	material_tree->clear();
 	TreeItem *root = material_tree->create_item();
 	TreeItem *select_item = nullptr;
-	TreeItem *first_item = nullptr;
-	int item_count = 0;
 
 	const Color id_color = get_theme_color(SNAME("font_disabled_color"), EditorStringName(Editor));
 	if (library.is_valid()) {
 		const TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
-		for (int i = 0; i < materials.size(); i++) {
+		for (int i = 0; i < MIN(materials.size(), Box3DSurfaceMaterialLibrary::get_material_slot_count()); i++) {
 			const Ref<Box3DSurfaceMaterial> surface_material = materials[i];
 			if (surface_material.is_null()) {
 				continue;
@@ -272,10 +276,10 @@ void Box3DPhysicsSettingsTab::_refresh() {
 			const StringName name = surface_material->get_material_name();
 
 			TreeItem *item = material_tree->create_item(root);
-			item->set_text(0, String(name));
+			item->set_text(0, name == StringName() ? TTR("<Unconfigured>") : String(name));
 			item->set_editable(0, true);
-			item->set_metadata(0, name);
-			item->set_tooltip_text(0, TTR("Double-click to rename."));
+			item->set_metadata(0, i);
+			item->set_tooltip_text(0, name == StringName() ? TTR("Double-click to configure this slot.") : TTR("Double-click to rename."));
 
 			item->set_text(1, itos(surface_material->get_material_id()));
 			item->set_text_alignment(1, HORIZONTAL_ALIGNMENT_RIGHT);
@@ -283,33 +287,29 @@ void Box3DPhysicsSettingsTab::_refresh() {
 			item->set_selectable(1, false);
 			item->set_tooltip_text(1, TTR("Engine-assigned material id, baked into shapes and recordings."));
 
-			item_count++;
-			if (first_item == nullptr) {
-				first_item = item;
-			}
-			if (name == selected_name) {
+			if (i == selected_slot) {
 				select_item = item;
 			}
 		}
 	}
 
 	if (select_item == nullptr) {
-		select_item = first_item;
+		select_item = root->get_first_child();
 	}
-	if (select_item == nullptr) {
-		selected_name = StringName();
-	} else {
+	if (select_item != nullptr) {
 		select_item->select(0);
-		selected_name = select_item->get_metadata(0);
+		selected_slot = select_item->get_metadata(0);
 	}
 	updating = false;
 
-	split->set_visible(item_count > 0);
-	empty_state->set_visible(item_count == 0);
+	split->show();
+	empty_state->hide();
 
-	const bool has_selection = selected_name != StringName();
-	duplicate_button->set_disabled(!has_selection);
-	delete_button->set_disabled(!has_selection);
+	const Ref<Box3DSurfaceMaterial> selected = library.is_valid() ? library->get_material_slot(selected_slot) : Ref<Box3DSurfaceMaterial>();
+	const bool configured = selected.is_valid() && selected->get_material_name() != StringName();
+	add_button->set_disabled(_find_empty_slot() == -1);
+	duplicate_button->set_disabled(!configured || _find_empty_slot() == -1);
+	delete_button->set_disabled(!configured);
 
 	_update_inspector();
 }
@@ -372,7 +372,7 @@ void Box3DPhysicsSettingsTab::_update_inspector() {
 
 	Ref<Box3DSurfaceMaterial> surface_material;
 	if (library.is_valid()) {
-		surface_material = library->find_material(selected_name);
+		surface_material = library->get_material_slot(selected_slot);
 	}
 	if (proxy->get_material() == surface_material) {
 		return;
@@ -397,9 +397,11 @@ void Box3DPhysicsSettingsTab::_item_selected() {
 		return;
 	}
 	_flush_pending_save();
-	selected_name = item->get_metadata(0);
-	duplicate_button->set_disabled(false);
-	delete_button->set_disabled(false);
+	selected_slot = item->get_metadata(0);
+	const Ref<Box3DSurfaceMaterial> selected = library.is_valid() ? library->get_material_slot(selected_slot) : Ref<Box3DSurfaceMaterial>();
+	const bool configured = selected.is_valid() && selected->get_material_name() != StringName();
+	duplicate_button->set_disabled(!configured || _find_empty_slot() == -1);
+	delete_button->set_disabled(!configured);
 	_update_inspector();
 }
 
@@ -412,8 +414,16 @@ void Box3DPhysicsSettingsTab::_item_renamed() {
 		return;
 	}
 
-	const StringName old_name = item->get_metadata(0);
+	const int slot = item->get_metadata(0);
+	const Ref<Box3DSurfaceMaterial> surface_material = library->get_material_slot(slot);
+	if (surface_material.is_null()) {
+		return;
+	}
+	const StringName old_name = surface_material->get_material_name();
 	const String new_name = item->get_text(0).strip_edges();
+	if (old_name == StringName() && new_name == TTR("<Unconfigured>")) {
+		return;
+	}
 	if (StringName(new_name) == old_name) {
 		// Still reset the cell, in case only surrounding whitespace was typed.
 		updating = true;
@@ -436,9 +446,8 @@ void Box3DPhysicsSettingsTab::_item_renamed() {
 		EditorNode::get_singleton()->show_warning(vformat(TTR("A surface material named \"%s\" already exists."), new_name));
 		return;
 	}
-
-	const Ref<Box3DSurfaceMaterial> surface_material = library->find_material(old_name);
-	if (surface_material.is_null()) {
+	if (old_name == StringName()) {
+		_configure_slot(slot, Ref<Box3DSurfaceMaterial>(), StringName(new_name), TTR("Configure Surface Material Slot"));
 		return;
 	}
 
@@ -447,25 +456,38 @@ void Box3DPhysicsSettingsTab::_item_renamed() {
 	undo_redo->create_action(TTR("Rename Surface Material"));
 	undo_redo->add_do_property(surface_material.ptr(), "material_name", StringName(new_name));
 	undo_redo->add_undo_property(surface_material.ptr(), "material_name", old_name);
-	undo_redo->add_do_method(this, "_materials_committed", StringName(new_name));
-	undo_redo->add_undo_method(this, "_materials_committed", old_name);
+	undo_redo->add_do_method(this, "_materials_committed", slot);
+	undo_redo->add_undo_method(this, "_materials_committed", slot);
 	undo_redo->commit_action();
 }
 
-void Box3DPhysicsSettingsTab::_append_material(const Ref<Box3DSurfaceMaterial> &p_source, const StringName &p_name_base, const String &p_action_name) {
+int Box3DPhysicsSettingsTab::_find_empty_slot() const {
+	if (library.is_null() || !library->is_slot_layout_valid()) {
+		return -1;
+	}
+	for (int i = 0; i < Box3DSurfaceMaterialLibrary::get_material_slot_count(); i++) {
+		const Ref<Box3DSurfaceMaterial> slot_material = library->get_material_slot(i);
+		if (slot_material.is_valid() && slot_material->get_material_name() == StringName()) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void Box3DPhysicsSettingsTab::_configure_slot(int p_slot, const Ref<Box3DSurfaceMaterial> &p_source, const StringName &p_name_base, const String &p_action_name) {
 	const Ref<Box3DSurfaceMaterialLibrary> lib = _ensure_library();
-	if (lib.is_null()) {
+	if (lib.is_null() || p_slot < 0 || p_slot >= Box3DSurfaceMaterialLibrary::get_material_slot_count()) {
 		return;
 	}
 
 	Ref<Box3DSurfaceMaterial> surface_material;
 	if (p_source.is_valid()) {
-		surface_material = p_source->duplicate();
+		surface_material = p_source->duplicate(true);
 	} else {
 		surface_material.instantiate();
 	}
 	surface_material->set_material_name(lib->make_unique_name(p_name_base));
-	surface_material->set_material_id(lib->allocate_material_id());
+	surface_material->set_material_id(p_slot + 1);
 	// A duplicate already carries the source's data, so only a fresh material needs one.
 	// Without this every new material would start with an empty slot the user has to fill
 	// by hand, which is the chore this setting exists to remove.
@@ -474,12 +496,12 @@ void Box3DPhysicsSettingsTab::_append_material(const Ref<Box3DSurfaceMaterial> &
 	}
 
 	TypedArray<Box3DSurfaceMaterial> materials = _current_materials();
-	materials.push_back(surface_material);
-	_commit(p_action_name, materials, surface_material->get_material_name());
+	materials[p_slot] = surface_material;
+	_commit(p_action_name, materials, p_slot);
 }
 
 void Box3DPhysicsSettingsTab::_add_pressed() {
-	_append_material(Ref<Box3DSurfaceMaterial>(), "New Material", TTR("Add Surface Material"));
+	_configure_slot(_find_empty_slot(), Ref<Box3DSurfaceMaterial>(), "New Material", TTR("Configure Surface Material Slot"));
 }
 
 void Box3DPhysicsSettingsTab::_duplicate_pressed() {
@@ -487,18 +509,19 @@ void Box3DPhysicsSettingsTab::_duplicate_pressed() {
 	if (lib.is_null()) {
 		return;
 	}
-	const Ref<Box3DSurfaceMaterial> source = lib->find_material(selected_name);
+	const Ref<Box3DSurfaceMaterial> source = lib->get_material_slot(selected_slot);
 	if (source.is_null()) {
 		return;
 	}
-	_append_material(source, selected_name, TTR("Duplicate Surface Material"));
+	_configure_slot(_find_empty_slot(), source, source->get_material_name(), TTR("Duplicate Surface Material"));
 }
 
 void Box3DPhysicsSettingsTab::_delete_pressed() {
-	if (selected_name == StringName()) {
+	const Ref<Box3DSurfaceMaterial> slot_material = library.is_valid() ? library->get_material_slot(selected_slot) : Ref<Box3DSurfaceMaterial>();
+	if (slot_material.is_null() || slot_material->get_material_name() == StringName()) {
 		return;
 	}
-	delete_dialog->set_text(vformat(TTR("Remove the surface material \"%s\"?\n\nShapes and Box3DSurfaceOverride3D nodes that still reference this name will fall back to the default material."), String(selected_name)));
+	delete_dialog->set_text(vformat(TTR("Clear surface material slot %d (\"%s\")?\n\nThe slot and its numeric id remain reserved. Shapes and Box3DSurfaceOverride3D nodes that reference it will fall back to the default material."), selected_slot + 1, String(slot_material->get_material_name())));
 	delete_dialog->popup_centered(Size2(460, 0) * EDSCALE);
 }
 
@@ -506,22 +529,16 @@ void Box3DPhysicsSettingsTab::_delete_confirmed() {
 	if (library.is_null()) {
 		return;
 	}
-	const int index = library->find_material_index(selected_name);
-	if (index == -1) {
+	if (selected_slot < 0 || selected_slot >= Box3DSurfaceMaterialLibrary::get_material_slot_count()) {
 		return;
 	}
 
 	TypedArray<Box3DSurfaceMaterial> materials = _current_materials();
-	materials.remove_at(index);
-
-	StringName next_selection;
-	if (materials.size() > 0) {
-		const Ref<Box3DSurfaceMaterial> neighbor = materials[MIN(index, (int)materials.size() - 1)];
-		if (neighbor.is_valid()) {
-			next_selection = neighbor->get_material_name();
-		}
-	}
-	_commit(TTR("Remove Surface Material"), materials, next_selection);
+	Ref<Box3DSurfaceMaterial> empty;
+	empty.instantiate();
+	empty->set_material_id(selected_slot + 1);
+	materials[selected_slot] = empty;
+	_commit(TTR("Clear Surface Material Slot"), materials, selected_slot);
 }
 
 void Box3DPhysicsSettingsTab::_inspector_property_edited(const String &p_property) {
@@ -585,7 +602,7 @@ void Box3DPhysicsSettingsTab::_backfill_gameplay_data() {
 	bool changed = false;
 	for (int i = 0; i < materials.size(); i++) {
 		const Ref<Box3DSurfaceMaterial> surface_material = materials[i];
-		if (surface_material.is_null() || surface_material->get_gameplay().is_valid()) {
+		if (surface_material.is_null() || surface_material->get_material_name() == StringName() || surface_material->get_gameplay().is_valid()) {
 			continue;
 		}
 		const Ref<Box3DSurfaceGameplayData> gameplay_data = _instantiate_gameplay_data();
@@ -824,7 +841,7 @@ Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	toolbar->add_spacer();
 
 	add_button = memnew(Button);
-	add_button->set_text(TTRC("Add"));
+	add_button->set_text(TTRC("Configure Next"));
 	add_button->connect(SceneStringName(pressed), callable_mp(this, &Box3DPhysicsSettingsTab::_add_pressed));
 	toolbar->add_child(add_button);
 
@@ -835,7 +852,7 @@ Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	toolbar->add_child(duplicate_button);
 
 	delete_button = memnew(Button);
-	delete_button->set_text(TTRC("Delete"));
+	delete_button->set_text(TTRC("Clear"));
 	delete_button->set_disabled(true);
 	delete_button->connect(SceneStringName(pressed), callable_mp(this, &Box3DPhysicsSettingsTab::_delete_pressed));
 	toolbar->add_child(delete_button);
@@ -889,7 +906,7 @@ Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	empty_state->set_v_size_flags(SIZE_EXPAND_FILL);
 	add_child(empty_state);
 
-	Label *empty_title = memnew(Label(TTRC("No surface materials yet.")));
+	Label *empty_title = memnew(Label(TTRC("Surface material slots are unavailable.")));
 	empty_title->set_theme_type_variation("HeaderMedium");
 	empty_title->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
 	empty_state->add_child(empty_title);
@@ -904,14 +921,14 @@ Box3DPhysicsSettingsTab::Box3DPhysicsSettingsTab() {
 	empty_state->add_child(memnew(HSeparator));
 
 	empty_add_button = memnew(Button);
-	empty_add_button->set_text(TTRC("Add Surface Material"));
+	empty_add_button->set_text(TTRC("Configure Surface Material"));
 	empty_add_button->set_h_size_flags(SIZE_SHRINK_CENTER);
 	empty_add_button->connect(SceneStringName(pressed), callable_mp(this, &Box3DPhysicsSettingsTab::_add_pressed));
 	empty_state->add_child(empty_add_button);
 
 	delete_dialog = memnew(ConfirmationDialog);
-	delete_dialog->set_title(TTRC("Remove Surface Material"));
-	delete_dialog->set_ok_button_text(TTRC("Remove"));
+	delete_dialog->set_title(TTRC("Clear Surface Material Slot"));
+	delete_dialog->set_ok_button_text(TTRC("Clear"));
 	delete_dialog->connect(SceneStringName(confirmed), callable_mp(this, &Box3DPhysicsSettingsTab::_delete_confirmed));
 	add_child(delete_dialog);
 

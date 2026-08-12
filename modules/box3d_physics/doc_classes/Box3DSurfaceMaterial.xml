@@ -33,10 +33,10 @@
 			Box3D surface friction.
 		</member>
 		<member name="material_id" type="int" setter="set_material_id" getter="get_material_id" default="0">
-			Stable material id. [code]0[/code] is reserved for the default material.
+			Permanent material slot id in the range [code]1[/code] through [code]15[/code]. [code]0[/code] is reserved for the default material. The library derives this value from the slot position.
 		</member>
 		<member name="material_name" type="StringName" setter="set_material_name" getter="get_material_name">
-			Stable material name used by authoring tools and scripts.
+			Stable material name used by authoring tools and scripts. An empty name marks an unconfigured slot, which is omitted from queries and pickers.
 		</member>
 		<member name="restitution" type="float" setter="set_restitution" getter="get_restitution" default="0.0">
 			Box3D restitution.

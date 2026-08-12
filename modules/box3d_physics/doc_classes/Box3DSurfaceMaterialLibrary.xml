@@ -4,17 +4,11 @@
 		Project-wide Box3D surface material library.
 	</brief_description>
 	<description>
-		[Box3DSurfaceMaterialLibrary] is loaded from the [code]physics/box3d/surface_material_library[/code] project setting and indexed by [Box3DPhysics].
+		[Box3DSurfaceMaterialLibrary] is loaded from the [code]physics/box3d/surface_material_library[/code] project setting and indexed by [Box3DPhysics]. It contains 15 permanent numbered slots. A slot with an empty material name is unconfigured and does not appear in runtime queries or editor material pickers.
 	</description>
 	<tutorials>
 	</tutorials>
 	<methods>
-		<method name="allocate_material_id" qualifiers="const">
-			<return type="int" />
-			<description>
-				Returns an unused material id, one past the highest id currently in the library. Ids are baked into shapes and recordings, so freed ids are never handed out again.
-			</description>
-		</method>
 		<method name="find_material" qualifiers="const">
 			<return type="Box3DSurfaceMaterial" />
 			<param index="0" name="name" type="StringName" />
@@ -25,8 +19,8 @@
 	</methods>
 	<members>
 		<member name="materials" type="Array[Box3DSurfaceMaterial]" setter="set_materials" getter="get_materials">
-			The authored surface material resources, in Physics tab order. This is the raw array; [method Box3DPhysics.get_materials] returns only the entries that passed registration.
-			Names and ids are made unique on assignment: the first entry with a given name or id keeps it, and any later entry with a duplicate or empty name is renamed, while one with a duplicate or non-positive id is given a fresh id one past the highest in the array. Each fix is reported as a warning. An array that is already valid is stored unchanged.
+			The 15 surface material slot resources in permanent numeric-id order. Array index [code]0[/code] is id [code]1[/code], through index [code]14[/code] as id [code]15[/code]. Empty names mark unconfigured slots. [method Box3DPhysics.get_materials] returns configured slots only.
+			Legacy variable-length arrays are normalized by retaining valid ids and moving colliding or out-of-range entries into free slots. More than 15 configured entries is rejected without truncating the source array.
 		</member>
 	</members>
 </class>

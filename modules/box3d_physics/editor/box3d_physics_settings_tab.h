@@ -46,7 +46,7 @@ class Box3DPhysicsSettingsTab : public VBoxContainer {
 	Timer *save_timer = nullptr;
 
 	Ref<Box3DSurfaceMaterialLibrary> library;
-	StringName selected_name;
+	int selected_slot = 0;
 	// Set while this tab is the one writing the library, so the registry rebuild it
 	// triggers does not bounce back in as an external change.
 	bool committing = false;
@@ -56,8 +56,8 @@ class Box3DPhysicsSettingsTab : public VBoxContainer {
 
 	Ref<Box3DSurfaceMaterialLibrary> _ensure_library();
 	TypedArray<Box3DSurfaceMaterial> _current_materials() const;
-	void _commit(const String &p_action_name, const TypedArray<Box3DSurfaceMaterial> &p_materials, const StringName &p_select);
-	void _materials_committed(const StringName &p_select);
+	void _commit(const String &p_action_name, const TypedArray<Box3DSurfaceMaterial> &p_materials, int p_select_slot);
+	void _materials_committed(int p_select_slot);
 	void _save_library();
 	void _flush_pending_save();
 
@@ -67,7 +67,8 @@ class Box3DPhysicsSettingsTab : public VBoxContainer {
 	void _item_selected();
 	void _item_renamed();
 
-	void _append_material(const Ref<Box3DSurfaceMaterial> &p_source, const StringName &p_name_base, const String &p_action_name);
+	int _find_empty_slot() const;
+	void _configure_slot(int p_slot, const Ref<Box3DSurfaceMaterial> &p_source, const StringName &p_name_base, const String &p_action_name);
 	void _add_pressed();
 	void _duplicate_pressed();
 	void _delete_pressed();
