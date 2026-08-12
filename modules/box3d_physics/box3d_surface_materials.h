@@ -66,12 +66,14 @@ public:
 class Box3DSurfaceMaterialLibrary : public Resource {
 	GDCLASS(Box3DSurfaceMaterialLibrary, Resource);
 
+	static constexpr int MATERIAL_SLOT_COUNT = 15;
 	TypedArray<Box3DSurfaceMaterial> materials;
+	bool slot_layout_valid = true;
 
 	// Shared by the authoring helpers and by set_materials(), which has to uniquify against
 	// the array being ingested rather than against the already-assigned member.
 	static StringName _unique_name(const TypedArray<Box3DSurfaceMaterial> &p_materials, const StringName &p_base, int p_ignore_index);
-	static int _next_material_id(const TypedArray<Box3DSurfaceMaterial> &p_materials);
+	void _initialize_empty_slots();
 
 protected:
 	static void _bind_methods();
@@ -79,13 +81,17 @@ protected:
 public:
 	void set_materials(const TypedArray<Box3DSurfaceMaterial> &p_materials);
 	TypedArray<Box3DSurfaceMaterial> get_materials() const { return materials; }
+	Ref<Box3DSurfaceMaterial> get_material_slot(int p_slot) const;
+	bool is_slot_layout_valid() const { return slot_layout_valid; }
+	static int get_material_slot_count() { return MATERIAL_SLOT_COUNT; }
 
 	// Authoring helpers. The Physics tab in Project Settings owns this resource, so
 	// name/id bookkeeping lives here instead of being re-derived by every caller.
 	int find_material_index(const StringName &p_name) const;
 	Ref<Box3DSurfaceMaterial> find_material(const StringName &p_name) const;
-	int allocate_material_id() const;
 	StringName make_unique_name(const StringName &p_base) const;
+
+	Box3DSurfaceMaterialLibrary();
 };
 
 class Box3DSurfaceMap : public Resource {

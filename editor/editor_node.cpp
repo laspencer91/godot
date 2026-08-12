@@ -2745,6 +2745,10 @@ void EditorNode::save_all_scenes() {
 	_save_all_scenes();
 }
 
+void EditorNode::save_all_resources() {
+	_save_external_resources(true);
+}
+
 void EditorNode::save_scene_if_open(const String &p_scene_path) {
 	int idx = editor_data.get_edited_scene_from_path(p_scene_path);
 	if (idx >= 0) {

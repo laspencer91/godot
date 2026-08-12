@@ -109,11 +109,29 @@ void Box3DSurfaceMaterialLibrary::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_materials", "materials"), &Box3DSurfaceMaterialLibrary::set_materials);
 	ClassDB::bind_method(D_METHOD("get_materials"), &Box3DSurfaceMaterialLibrary::get_materials);
 	ClassDB::bind_method(D_METHOD("find_material", "name"), &Box3DSurfaceMaterialLibrary::find_material);
-	ClassDB::bind_method(D_METHOD("allocate_material_id"), &Box3DSurfaceMaterialLibrary::allocate_material_id);
 	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "materials", PROPERTY_HINT_ARRAY_TYPE, "Box3DSurfaceMaterial"), "set_materials", "get_materials");
 }
 
+Box3DSurfaceMaterialLibrary::Box3DSurfaceMaterialLibrary() {
+	_initialize_empty_slots();
+}
+
+void Box3DSurfaceMaterialLibrary::_initialize_empty_slots() {
+	materials.clear();
+	materials.resize(MATERIAL_SLOT_COUNT);
+	for (int i = 0; i < MATERIAL_SLOT_COUNT; i++) {
+		Ref<Box3DSurfaceMaterial> material;
+		material.instantiate();
+		material->set_material_id(i + 1);
+		materials[i] = material;
+	}
+	slot_layout_valid = true;
+}
+
 int Box3DSurfaceMaterialLibrary::find_material_index(const StringName &p_name) const {
+	if (p_name == StringName()) {
+		return -1;
+	}
 	for (int i = 0; i < materials.size(); i++) {
 		Ref<Box3DSurfaceMaterial> material = materials[i];
 		if (material.is_valid() && material->get_material_name() == p_name) {
@@ -128,21 +146,9 @@ Ref<Box3DSurfaceMaterial> Box3DSurfaceMaterialLibrary::find_material(const Strin
 	return index == -1 ? Ref<Box3DSurfaceMaterial>() : Ref<Box3DSurfaceMaterial>(materials[index]);
 }
 
-int Box3DSurfaceMaterialLibrary::_next_material_id(const TypedArray<Box3DSurfaceMaterial> &p_materials) {
-	// Ids are stable handles baked into shapes and recordings, so never reuse a
-	// freed id: hand out one past the current maximum.
-	int max_id = 0;
-	for (int i = 0; i < p_materials.size(); i++) {
-		const Ref<Box3DSurfaceMaterial> surface_material = p_materials[i];
-		if (surface_material.is_valid()) {
-			max_id = MAX(max_id, surface_material->get_material_id());
-		}
-	}
-	return max_id + 1;
-}
-
-int Box3DSurfaceMaterialLibrary::allocate_material_id() const {
-	return _next_material_id(materials);
+Ref<Box3DSurfaceMaterial> Box3DSurfaceMaterialLibrary::get_material_slot(int p_slot) const {
+	ERR_FAIL_INDEX_V(p_slot, materials.size(), Ref<Box3DSurfaceMaterial>());
+	return materials[p_slot];
 }
 
 StringName Box3DSurfaceMaterialLibrary::_unique_name(const TypedArray<Box3DSurfaceMaterial> &p_materials, const StringName &p_base, int p_ignore_index) {
@@ -153,7 +159,7 @@ StringName Box3DSurfaceMaterialLibrary::_unique_name(const TypedArray<Box3DSurfa
 			continue;
 		}
 		const Ref<Box3DSurfaceMaterial> surface_material = p_materials[i];
-		if (surface_material.is_valid()) {
+		if (surface_material.is_valid() && surface_material->get_material_name() != StringName()) {
 			taken.insert(String(surface_material->get_material_name()));
 		}
 	}
@@ -177,43 +183,88 @@ StringName Box3DSurfaceMaterialLibrary::make_unique_name(const StringName &p_bas
 }
 
 void Box3DSurfaceMaterialLibrary::set_materials(const TypedArray<Box3DSurfaceMaterial> &p_materials) {
-	// A duplicate name or id makes the later entry invisible to the registry, the Physics
-	// tab and every inspector dropdown while it still sits in the .tres, which reads as
-	// silent data loss. Heal it here: this is the one choke point every ingest path goes
-	// through (resource loading, the settings tab's undo/redo, scripts setting in bulk).
-	// First occurrence always wins, and a valid array is left completely untouched.
-	HashSet<StringName> seen_names;
-	HashSet<int> seen_ids;
+	int configured_count = 0;
 	for (int i = 0; i < p_materials.size(); i++) {
-		Ref<Box3DSurfaceMaterial> surface_material = p_materials[i];
-		if (surface_material.is_null()) {
+		const Ref<Box3DSurfaceMaterial> material = p_materials[i];
+		if (material.is_valid() && material->get_material_name() != StringName()) {
+			configured_count++;
+		}
+	}
+	if (configured_count > MATERIAL_SLOT_COUNT) {
+		// Keep the source array intact so loading an old oversized library never silently
+		// drops authored data. The editor refuses to save this invalid layout until the
+		// project has reduced it to the supported slot count.
+		materials = p_materials;
+		slot_layout_valid = false;
+		ERR_PRINT(vformat("Box3D: the surface material library contains %d configured materials, but only %d fixed slots are supported.", configured_count, MATERIAL_SLOT_COUNT));
+		return;
+	}
+
+	TypedArray<Box3DSurfaceMaterial> normalized;
+	normalized.resize(MATERIAL_SLOT_COUNT);
+	Vector<Ref<Box3DSurfaceMaterial>> unplaced;
+	for (int i = 0; i < p_materials.size(); i++) {
+		Ref<Box3DSurfaceMaterial> material = p_materials[i];
+		if (material.is_null() || material->get_material_name() == StringName()) {
 			continue;
 		}
+		const int slot = material->get_material_id() - 1;
+		if (slot >= 0 && slot < MATERIAL_SLOT_COUNT && Ref<Box3DSurfaceMaterial>(normalized[slot]).is_null()) {
+			normalized[slot] = material;
+		} else {
+			unplaced.push_back(material);
+		}
+	}
+	int unplaced_index = 0;
+	for (int i = 0; i < MATERIAL_SLOT_COUNT && unplaced_index < unplaced.size(); i++) {
+		if (Ref<Box3DSurfaceMaterial>(normalized[i]).is_null()) {
+			normalized[i] = unplaced[unplaced_index++];
+		}
+	}
 
+	// Preserve already-normalized empty slot resources (and any data authored on them)
+	// after every configured material has claimed a slot.
+	for (int i = 0; i < p_materials.size(); i++) {
+		Ref<Box3DSurfaceMaterial> material = p_materials[i];
+		if (material.is_null() || material->get_material_name() != StringName()) {
+			continue;
+		}
+		const int slot = material->get_material_id() - 1;
+		if (slot >= 0 && slot < MATERIAL_SLOT_COUNT && Ref<Box3DSurfaceMaterial>(normalized[slot]).is_null()) {
+			normalized[slot] = material;
+		}
+	}
+
+	for (int i = 0; i < MATERIAL_SLOT_COUNT; i++) {
+		Ref<Box3DSurfaceMaterial> material = normalized[i];
+		if (material.is_null()) {
+			material.instantiate();
+		}
+		material->set_material_id(i + 1);
+		normalized[i] = material;
+	}
+
+	// Configured names remain the script/editor-facing handles, so repair collisions while
+	// preserving empty names as the intentional marker for unconfigured slots.
+	HashSet<StringName> seen_names;
+	for (int i = 0; i < normalized.size(); i++) {
+		Ref<Box3DSurfaceMaterial> surface_material = normalized[i];
 		const StringName material_name = surface_material->get_material_name();
-		if (material_name == StringName() || seen_names.has(material_name)) {
-			const StringName unique_name = _unique_name(p_materials, material_name == StringName() ? StringName("New Material") : material_name, i);
-			WARN_PRINT(vformat("Box3D: surface material name '%s' is empty or already used; renamed to '%s'.", String(material_name), String(unique_name)));
+		if (material_name == StringName()) {
+			continue;
+		}
+		if (seen_names.has(material_name)) {
+			const StringName unique_name = _unique_name(normalized, material_name, i);
+			WARN_PRINT(vformat("Box3D: surface material name '%s' is already used; renamed to '%s'.", String(material_name), String(unique_name)));
 			surface_material->set_material_name(unique_name);
 			seen_names.insert(unique_name);
 		} else {
 			seen_names.insert(material_name);
 		}
-
-		const int id = surface_material->get_material_id();
-		if (id <= 0 || seen_ids.has(id)) {
-			// One past the maximum id in the array, so the fresh id can collide with neither
-			// an earlier nor a later entry, and no retired id is ever handed out again.
-			const int unique_id = _next_material_id(p_materials);
-			WARN_PRINT(vformat("Box3D: surface material '%s' has an invalid or already used id %d; reassigned to %d.", String(surface_material->get_material_name()), id, unique_id));
-			surface_material->set_material_id(unique_id);
-			seen_ids.insert(unique_id);
-		} else {
-			seen_ids.insert(id);
-		}
 	}
 
-	materials = p_materials;
+	materials = normalized;
+	slot_layout_valid = true;
 }
 
 void Box3DSurfaceMap::_bind_methods() {
@@ -322,10 +373,9 @@ void Box3DPhysics::reload_surface_material_library() {
 		}
 	}
 
-	if (library.is_valid()) {
+	if (library.is_valid() && library->is_slot_layout_valid()) {
 		TypedArray<Box3DSurfaceMaterial> materials = library->get_materials();
 		HashSet<StringName> seen_names;
-		HashSet<int> seen_ids;
 		for (int i = 0; i < materials.size(); i++) {
 			Ref<Box3DSurfaceMaterial> material = materials[i];
 			if (material.is_null()) {
@@ -333,21 +383,25 @@ void Box3DPhysics::reload_surface_material_library() {
 			}
 			const StringName name = material->get_material_name();
 			const int id = material->get_material_id();
-			if (name == StringName() || id <= 0) {
-				WARN_PRINT("Box3D: surface material entries need a non-empty name and id > 0.");
+			// Every numeric slot exists permanently, but an empty name keeps it out of all
+			// runtime and editor-facing query results.
+			if (name == StringName()) {
 				continue;
 			}
-			if (seen_names.has(name) || seen_ids.has(id)) {
-				// Box3DSurfaceMaterialLibrary::set_materials() uniquifies on ingest, so a collision
-				// here means the name or id was changed in place on an already-registered material.
-				WARN_PRINT(vformat("Box3D: surface material '%s' (id %d) collides with an earlier entry and was not registered. Its name or id was modified in place after the library was loaded.", String(name), id));
+			if (id != i + 1) {
+				WARN_PRINT(vformat("Box3D: surface material slot %d carried id %d; restoring its permanent slot id.", i + 1, id));
+				material->set_material_id(i + 1);
+			}
+			if (seen_names.has(name)) {
+				WARN_PRINT(vformat("Box3D: surface material '%s' collides with an earlier entry and was not registered.", String(name)));
 				continue;
 			}
 			seen_names.insert(name);
-			seen_ids.insert(id);
 			materials_by_name[name] = material;
-			materials_by_id[id] = material;
+			materials_by_id[i + 1] = material;
 		}
+	} else if (library.is_valid()) {
+		ERR_PRINT(vformat("Box3D: the surface material library is not a valid %d-slot layout; no materials were registered.", Box3DSurfaceMaterialLibrary::get_material_slot_count()));
 	}
 
 	emit_signal(SNAME("surface_materials_changed"));

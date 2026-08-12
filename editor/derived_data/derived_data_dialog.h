@@ -45,6 +45,8 @@ class MarginContainer;
 class Tree;
 class TreeItem;
 
+struct TestDerivedDataDialogAccess;
+
 // Size report and cleanup UI for the bundles allocated by EditorDerivedData.
 //
 // The unit of everything here is the bundle directory, never the individual file: a
@@ -54,6 +56,8 @@ class TreeItem;
 // this megabyte doing here, and who asked for it?") is readable off the tree.
 class DerivedDataDialog : public ConfirmationDialog {
 	GDCLASS(DerivedDataDialog, ConfirmationDialog);
+
+	friend struct TestDerivedDataDialogAccess;
 
 	enum Column {
 		COL_BUNDLE,
@@ -70,6 +74,7 @@ class DerivedDataDialog : public ConfirmationDialog {
 		STATE_UNREFERENCED,
 		STATE_LEGACY,
 		STATE_ORPHAN,
+		STATE_UNKNOWN,
 		STATE_MAX,
 	};
 
@@ -85,8 +90,11 @@ class DerivedDataDialog : public ConfirmationDialog {
 		String slot;
 		String manifest_scene_path; // Decoration recorded at bake time; may be stale.
 		String scene_uid;
+		PackedInt32Array id_chain;
 		String node_path;
 		String owner_scene; // scene_uid resolved against the UID cache; empty when it does not resolve.
+		String resolved_node_path;
+		bool manifest_valid = false;
 		uint64_t size = 0;
 		BundleState state = STATE_LEGACY;
 		Vector<String> referrers;
@@ -147,9 +155,13 @@ class DerivedDataDialog : public ConfirmationDialog {
 	// Resource path -> the files that reference it. Populated from the whole
 	// EditorFileSystem tree, normalized through ResourceUID (see _record_dependency).
 	HashMap<String, HashSet<String>> refs;
-	// Scene path -> every node path the on-disk scene declares. Cached because the same
-	// scene owns many bundles and re-parsing it per bundle would dominate the scan.
-	HashMap<String, HashSet<String>> scene_nodes;
+	// Scene path -> stable node-id chains and their current display paths. Cached because
+	// the same scene owns many bundles and re-parsing it per bundle would dominate the scan.
+	struct SceneNodeIdentity {
+		PackedInt32Array id_path;
+		String node_path;
+	};
+	HashMap<String, Vector<SceneNodeIdentity>> scene_nodes;
 
 	bool sort_descending = true;
 
@@ -167,15 +179,16 @@ class DerivedDataDialog : public ConfirmationDialog {
 	AcceptDialog *dependents_dialog = nullptr;
 	ItemList *dependents_list = nullptr;
 
-	LocalVector<int> pending_delete;
+	Vector<String> pending_delete;
 
 	void _record_dependency(const String &p_referrer, const String &p_dep);
 	void _record_referrer(const String &p_path, const String &p_referrer);
+	void _collect_script_literal_references(const String &p_referrer);
 	void _collect_references(EditorFileSystemDirectory *p_dir);
 	void _scan_root(const String &p_root);
 	void _scan_unmanaged(const String &p_dir);
 	static void _walk_bundle(const String &p_dir, Vector<String> &r_files, uint64_t &r_size);
-	bool _scene_declares_node(const String &p_scene_path, const String &p_node_path);
+	String _resolve_node_by_identity(const String &p_scene_path, const PackedInt32Array &p_id_chain);
 	void _classify(Entry &p_entry);
 	String _slot_icon_class(const String &p_slot) const;
 
@@ -186,6 +199,8 @@ class DerivedDataDialog : public ConfirmationDialog {
 	void _update_tree();
 	void _update_unsaved_banner();
 	int _unsaved_scene_count() const;
+	bool _has_unsaved_external_data() const;
+	bool _has_unsaved_data() const;
 
 	void _filter_changed(const String &p_text);
 	void _problems_toggled(bool p_pressed);
@@ -198,7 +213,7 @@ class DerivedDataDialog : public ConfirmationDialog {
 	static String _state_text(BundleState p_state);
 	static StringName _state_icon(BundleState p_state);
 	static String _state_tooltip(BundleState p_state);
-	static bool _state_deletable(BundleState p_state);
+	static bool _entry_deletable(const Entry &p_entry);
 	static String _short_slot(const String &p_slot);
 
 	void ok_pressed() override;

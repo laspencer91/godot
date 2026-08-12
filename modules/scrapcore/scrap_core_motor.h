@@ -16,7 +16,7 @@
 // D2 -- ONE boundary crossing per tick, byte-exact where it crosses:
 // MovementState/MovementParams live native-side; per tick GDScript hands in the
 // 32-byte packed InputCommand (Phase-1 codec) and reads back only what script
-// needs. Snapshots cross as the 196-byte v18 packed form. No per-field
+// needs. Snapshots cross as the 197-byte v19 packed form. No per-field
 // Dictionary traffic in the tick path (setup()'s params Dictionary and
 // drain_events() are the deliberate cold-path exceptions).
 class ScrapCoreMotor : public RefCounted {
@@ -120,11 +120,11 @@ public:
 	double consume_collision_step_delta_y();
 
 	// Rare; empty most ticks. Drains every event since the last call, each as
-	// {kind, tick, input_seq, data, replay_safe, network_relevant} with data
-	// keyed like player_movement_event.gd's per-kind payloads.
+	// {kind, tick, input_seq, data}, converted into generated MovementEvents
+	// variants by the game-side prediction runner.
 	Array drain_events();
 
-	// scrap::MovementState::PACK_VERSION from the compiled core (18).
+	// scrap::MovementState::PACK_VERSION from the compiled core (19).
 	int pack_version() const;
 	// One simulate() tick against a local no-op stub; true if state stays
 	// finite. Gate-A leftover, kept as a link-level self-test.

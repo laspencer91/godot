@@ -33,6 +33,7 @@
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
+#include "core/io/resource.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_uid.h"
 #include "core/object/callable_mp.h"
@@ -43,7 +44,9 @@
 #include "editor/docks/filesystem_dock.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/editor_undo_redo_manager.h"
 #include "editor/file_system/editor_file_system.h"
+#include "editor/plugins/editor_plugin.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
@@ -122,6 +125,37 @@ void DerivedDataDialog::_record_referrer(const String &p_path, const String &p_r
 	}
 }
 
+void DerivedDataDialog::_collect_script_literal_references(const String &p_referrer) {
+	const String source = FileAccess::get_file_as_string(p_referrer);
+	for (int i = 0; i < source.length(); i++) {
+		const char32_t quote = source[i];
+		if (quote != '\'' && quote != '"') {
+			continue;
+		}
+		const int literal_start = i + 1;
+		int literal_end = literal_start;
+		for (; literal_end < source.length(); literal_end++) {
+			if (source[literal_end] == '\\') {
+				literal_end++;
+				continue;
+			}
+			if (source[literal_end] == quote) {
+				break;
+			}
+		}
+		if (literal_end >= source.length()) {
+			break;
+		}
+		const String literal = source.substr(literal_start, literal_end - literal_start);
+		if (literal.begins_with("res://") || literal.begins_with("uid://")) {
+			// False positives from comments or unrelated string constants only make cleanup
+			// more conservative, which is the safe failure mode for a deletion tool.
+			_record_dependency(p_referrer, literal);
+		}
+		i = literal_end;
+	}
+}
+
 void DerivedDataDialog::_collect_references(EditorFileSystemDirectory *p_dir) {
 	if (!p_dir) {
 		return;
@@ -152,6 +186,11 @@ void DerivedDataDialog::_collect_references(EditorFileSystemDirectory *p_dir) {
 			for (const String &dep : raw_deps) {
 				_record_dependency(referrer, dep);
 			}
+		} else if (ext == "gd") {
+			// GDScript's resource loader currently reports no dependencies. Record exact
+			// resource/UID string literals so preload() and load() calls cannot make a live
+			// derived artifact look unreferenced.
+			_collect_script_literal_references(referrer);
 		}
 	}
 }
@@ -187,11 +226,16 @@ void DerivedDataDialog::_walk_bundle(const String &p_dir, Vector<String> &r_file
 
 void DerivedDataDialog::_scan_unmanaged(const String &p_dir) {
 	// Anything under a derived root that is not inside a bundle predates the allocator
-	// (Phase 5 conversions) or was left behind by hand. It has no identity to replay, so it
-	// is always deletable and is listed per file rather than pretending to be a bundle.
+	// (Phase 5 conversions) or was left behind by hand. It has no identity to replay and is
+	// listed per file, but a known external reference still makes it non-deletable.
 	for (const String &file : DirAccess::get_files_at(p_dir)) {
 		Entry entry;
 		entry.path = p_dir.path_join(file);
+		if (const HashSet<String> *referrers = refs.getptr(entry.path)) {
+			for (const String &referrer : *referrers) {
+				entry.referrers.push_back(referrer);
+			}
+		}
 		const int64_t file_size = FileAccess::get_size(entry.path);
 		entry.size = file_size > 0 ? (uint64_t)file_size : 0;
 		entries.push_back(entry);
@@ -217,7 +261,9 @@ void DerivedDataDialog::_scan_root(const String &p_dir) {
 		entry.slot = manifest.get("slot", "");
 		entry.manifest_scene_path = manifest.get("scene_path", "");
 		entry.scene_uid = manifest.get("scene_uid", "");
+		entry.id_chain = manifest.get("id_chain", PackedInt32Array());
 		entry.node_path = manifest.get("node_path", "");
+		entry.manifest_valid = !entry.slot.is_empty() && !entry.scene_uid.is_empty() && !entry.id_chain.is_empty();
 
 		Vector<String> files;
 		_walk_bundle(p_dir, files, entry.size);
@@ -256,43 +302,44 @@ void DerivedDataDialog::_scan_root(const String &p_dir) {
 
 // Classification ///////////////////////////////////////////////////////////
 
-// The two sides of the node-path comparison are produced by different APIs that disagree
-// about the leading element. A manifest records Node::get_path_to(), which yields a bare
-// "VoxelGI"; SceneState::get_node_path() prepends the "." for the root it is relative to
-// and yields "./VoxelGI" for the same node. Only the root itself ("." from both) matched,
-// so every non-root bundle read as an Orphan. Normalizing both sides is the fix; comparing
-// NodePath objects instead would not be, because NodePath keeps that "." as a real element.
-static String normalized_node_path(const String &p_node_path) {
-	String path = p_node_path;
-	while (path.begins_with("./")) {
-		path = path.substr(2);
-	}
-	return path.is_empty() ? "." : path;
-}
-
-bool DerivedDataDialog::_scene_declares_node(const String &p_scene_path, const String &p_node_path) {
-	HashMap<String, HashSet<String>>::Iterator cached = scene_nodes.find(p_scene_path);
+String DerivedDataDialog::_resolve_node_by_identity(const String &p_scene_path, const PackedInt32Array &p_id_chain) {
+	HashMap<String, Vector<SceneNodeIdentity>>::Iterator cached = scene_nodes.find(p_scene_path);
 	if (!cached) {
-		cached = scene_nodes.insert(p_scene_path, HashSet<String>());
+		cached = scene_nodes.insert(p_scene_path, Vector<SceneNodeIdentity>());
 		Ref<PackedScene> scene = ResourceLoader::load(p_scene_path, "PackedScene");
 		const Ref<SceneState> state = scene.is_valid() ? scene->get_state() : Ref<SceneState>();
 		if (state.is_valid()) {
 			for (int i = 0; i < state->get_node_count(); i++) {
-				cached->value.insert(normalized_node_path(String(state->get_node_path(i))));
+				const PackedInt32Array id_path = state->get_node_id_path(i);
+				if (!id_path.is_empty()) {
+					SceneNodeIdentity identity;
+					identity.id_path = id_path;
+					identity.node_path = String(state->get_node_path(i));
+					cached->value.push_back(identity);
+				}
 			}
 		}
 	}
-	return cached->value.has(normalized_node_path(p_node_path));
+	for (const SceneNodeIdentity &identity : cached->value) {
+		if (identity.id_path == p_id_chain) {
+			return identity.node_path;
+		}
+	}
+	return String();
 }
 
 void DerivedDataDialog::_classify(Entry &p_entry) {
 	if (!p_entry.is_bundle) {
-		p_entry.state = STATE_LEGACY;
+		p_entry.state = p_entry.referrers.is_empty() ? STATE_LEGACY : STATE_SHARED;
+		return;
+	}
+	if (!p_entry.manifest_valid) {
+		p_entry.state = STATE_UNKNOWN;
 		return;
 	}
 
-	// Identity first: a bundle whose owner cannot be found is orphaned no matter who still
-	// links to it, because nothing can ever rebake into it again.
+	// Resolve the stable manifest identity. Paths are labels only and may be stale after a
+	// scene move or node rename.
 	if (!p_entry.scene_uid.is_empty()) {
 		// Same contract as ResourceUID::ensure_path(), minus the ERR_PRINT it emits for a
 		// UID it cannot resolve — which is the normal, expected case for an orphan.
@@ -301,24 +348,27 @@ void DerivedDataDialog::_classify(Entry &p_entry) {
 			p_entry.owner_scene = resolved;
 		}
 	}
-	if (p_entry.owner_scene.is_empty() || !_scene_declares_node(p_entry.owner_scene, p_entry.node_path)) {
-		p_entry.state = STATE_ORPHAN;
-		return;
+	if (!p_entry.owner_scene.is_empty()) {
+		p_entry.resolved_node_path = _resolve_node_by_identity(p_entry.owner_scene, p_entry.id_chain);
 	}
 
-	if (p_entry.referrers.is_empty()) {
-		p_entry.state = STATE_UNREFERENCED;
+	// Reference safety is authoritative for deletion. Ownership only determines whether
+	// an unreferenced bundle is stale or can be regenerated by its original producer.
+	if (!p_entry.referrers.is_empty()) {
+		if (!p_entry.resolved_node_path.is_empty()) {
+			for (const String &referrer : p_entry.referrers) {
+				if (referrer == p_entry.owner_scene) {
+					p_entry.state = STATE_OK;
+					return;
+				}
+			}
+		}
+		p_entry.state = STATE_SHARED;
 		return;
 	}
-	for (const String &referrer : p_entry.referrers) {
-		if (referrer == p_entry.owner_scene) {
-			p_entry.state = STATE_OK;
-			return;
-		}
-	}
-	// Referenced, but not by the scene the manifest says owns it — deleting it would break
-	// somebody else's link, so it is never offered.
-	p_entry.state = STATE_SHARED;
+	// With no referrers, ownership decides whether the entry is merely unreferenced or has
+	// lost the node that could regenerate it.
+	p_entry.state = p_entry.resolved_node_path.is_empty() ? STATE_ORPHAN : STATE_UNREFERENCED;
 }
 
 String DerivedDataDialog::_slot_icon_class(const String &p_slot) const {
@@ -396,11 +446,9 @@ void DerivedDataDialog::_build_groups() {
 			const String scene = entry.owner_scene.is_empty() ? entry.manifest_scene_path : entry.owner_scene;
 			group_key = scene.is_empty() ? String("?") : scene;
 			group_display = scene.is_empty() ? TTR("(unknown scene)") : scene.get_file().get_basename();
-			node_key = entry.node_path;
-			// _classify() already asked exactly this question: a bundle is an Orphan iff its
-			// owner scene is missing or no longer declares the node.
-			owner_resolved = entry.state != STATE_ORPHAN;
-			node_display = owner_resolved ? entry.node_path : TTR("(owner not found)");
+			owner_resolved = !entry.resolved_node_path.is_empty();
+			node_key = owner_resolved ? entry.resolved_node_path : entry.node_path;
+			node_display = owner_resolved ? entry.resolved_node_path : TTR("(owner not found)");
 			node_icon = _slot_icon_class(entry.slot);
 		}
 
@@ -480,7 +528,7 @@ void DerivedDataDialog::_update_summary() {
 		if (entry.state != STATE_OK) {
 			problem_count++;
 		}
-		if (_state_deletable(entry.state)) {
+		if (_entry_deletable(entry)) {
 			deletable_size += entry.size;
 		}
 	}
@@ -503,6 +551,8 @@ String DerivedDataDialog::_state_text(BundleState p_state) {
 			return TTR("Legacy");
 		case STATE_ORPHAN:
 			return TTR("Orphan");
+		case STATE_UNKNOWN:
+			return TTR("Invalid Manifest");
 		default:
 			return String();
 	}
@@ -518,6 +568,7 @@ StringName DerivedDataDialog::_state_icon(BundleState p_state) {
 		case STATE_LEGACY:
 			return SNAME("NodeWarning");
 		case STATE_ORPHAN:
+		case STATE_UNKNOWN:
 			return SNAME("StatusError");
 		default:
 			return SNAME("StatusWarning");
@@ -536,13 +587,18 @@ String DerivedDataDialog::_state_tooltip(BundleState p_state) {
 			return TTR("No bundle manifest — a pre-allocator leftover. Safe to reclaim.");
 		case STATE_ORPHAN:
 			return TTR("The owning scene or node recorded in the manifest no longer exists. Nothing can ever rebake into this bundle.");
+		case STATE_UNKNOWN:
+			return TTR("The bundle manifest is missing required identity fields or could not be read. It cannot be deleted automatically.");
 		default:
 			return String();
 	}
 }
 
-bool DerivedDataDialog::_state_deletable(BundleState p_state) {
-	return p_state != STATE_OK && p_state != STATE_SHARED;
+bool DerivedDataDialog::_entry_deletable(const Entry &p_entry) {
+	if (!p_entry.referrers.is_empty()) {
+		return false;
+	}
+	return p_entry.state == STATE_UNREFERENCED || p_entry.state == STATE_LEGACY || p_entry.state == STATE_ORPHAN;
 }
 
 String DerivedDataDialog::_short_slot(const String &p_slot) {
@@ -561,17 +617,48 @@ int DerivedDataDialog::_unsaved_scene_count() const {
 	return count;
 }
 
+bool DerivedDataDialog::_has_unsaved_external_data() const {
+	if (EditorUndoRedoManager::get_singleton()->is_history_unsaved(EditorUndoRedoManager::GLOBAL_HISTORY)) {
+		return true;
+	}
+
+	List<Ref<Resource>> cached;
+	ResourceCache::get_cached_resources(&cached);
+	for (const Ref<Resource> &resource : cached) {
+		if (resource.is_valid() && resource->is_edited() && resource->get_path().begins_with("res://")) {
+			return true;
+		}
+	}
+
+	EditorData &editor_data = EditorNode::get_editor_data();
+	for (int i = 0; i < editor_data.get_editor_plugin_count(); i++) {
+		if (!editor_data.get_editor_plugin(i)->get_unsaved_status().is_empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool DerivedDataDialog::_has_unsaved_data() const {
+	return _unsaved_scene_count() > 0 || _has_unsaved_external_data();
+}
+
 void DerivedDataDialog::_update_unsaved_banner() {
 	const int unsaved = _unsaved_scene_count();
+	const bool external_unsaved = _has_unsaved_external_data();
 	// The scan reads the project off disk, so a reference that only exists in an unsaved
 	// buffer is invisible to it and the bundle it points at would look Unreferenced.
 	// Reading the size report is still harmless, so the report stays live and only the
 	// destructive half is withheld.
-	unsaved_box->set_visible(unsaved > 0);
-	if (unsaved > 0) {
-		unsaved_label->set_text(vformat(TTR("%d scene(s) have unsaved changes — deletion disabled."), unsaved));
+	unsaved_box->set_visible(unsaved > 0 || external_unsaved);
+	if (unsaved > 0 || external_unsaved) {
+		if (external_unsaved) {
+			unsaved_label->set_text(TTR("Scenes, resources, or scripts have unsaved changes — deletion disabled."));
+		} else {
+			unsaved_label->set_text(vformat(TTR("%d scene(s) have unsaved changes — deletion disabled."), unsaved));
+		}
 	}
-	get_ok_button()->set_disabled(unsaved > 0);
+	get_ok_button()->set_disabled(unsaved > 0 || external_unsaved);
 }
 
 void DerivedDataDialog::_update_tree() {
@@ -679,7 +766,7 @@ void DerivedDataDialog::_update_tree() {
 
 				// Non-deletable rows keep their checkbox and render it greyed out: the control
 				// is the explanation, and silently omitting it would read as a missing feature.
-				const bool deletable = _state_deletable(entry.state);
+				const bool deletable = _entry_deletable(entry);
 				item->set_editable(COL_BUNDLE, deletable);
 				if (!deletable) {
 					item->set_tooltip_text(COL_BUNDLE, entry.path + "\n\n" + state_tooltips[entry.state]);
@@ -724,6 +811,7 @@ void DerivedDataDialog::_column_title_clicked(int p_column, int p_mouse_button) 
 
 void DerivedDataDialog::_save_all_pressed() {
 	EditorNode::get_singleton()->save_all_scenes();
+	EditorNode::get_singleton()->save_all_resources();
 	_rescan();
 }
 
@@ -785,8 +873,8 @@ void DerivedDataDialog::_collect_checked(TreeItem *p_item) {
 				const int index = meta;
 				// Belt and braces: a disabled row can never reach here, but the delete path
 				// re-checks the classification rather than trusting the widget state.
-				if (index >= 0 && index < (int)entries.size() && _state_deletable(entries[index].state)) {
-					pending_delete.push_back(index);
+				if (index >= 0 && index < (int)entries.size() && _entry_deletable(entries[index])) {
+					pending_delete.push_back(entries[index].path);
 				}
 			}
 		}
@@ -799,7 +887,7 @@ void DerivedDataDialog::_collect_checked(TreeItem *p_item) {
 
 void DerivedDataDialog::ok_pressed() {
 	pending_delete.clear();
-	if (_unsaved_scene_count() > 0) {
+	if (_has_unsaved_data()) {
 		return;
 	}
 	_collect_checked(tree->get_root());
@@ -810,10 +898,15 @@ void DerivedDataDialog::ok_pressed() {
 	uint64_t reclaimed = 0;
 	String list;
 	for (uint32_t i = 0; i < pending_delete.size(); i++) {
-		const Entry &entry = entries[pending_delete[i]];
-		reclaimed += entry.size;
+		const String &path = pending_delete[i];
+		for (const Entry &entry : entries) {
+			if (entry.path == path) {
+				reclaimed += entry.size;
+				break;
+			}
+		}
 		if (i < 20) {
-			list += "\n" + entry.path;
+			list += "\n" + path;
 		} else if (i == 20) {
 			list += "\n" + vformat(TTR("...and %d more."), (int)pending_delete.size() - 20);
 		}
@@ -826,18 +919,35 @@ void DerivedDataDialog::ok_pressed() {
 }
 
 void DerivedDataDialog::_delete_confirmed() {
-	for (const int index : pending_delete) {
-		if (index < 0 || index >= (int)entries.size()) {
+	if (_has_unsaved_data()) {
+		pending_delete.clear();
+		_update_unsaved_banner();
+		return;
+	}
+
+	const Vector<String> requested_paths = pending_delete;
+	pending_delete.clear();
+	// Files or references may have changed while the confirmation dialog was open. Rebuild
+	// the classification and require every requested path to still be independently safe.
+	_rescan();
+	for (const String &path : requested_paths) {
+		const Entry *validated = nullptr;
+		for (const Entry &entry : entries) {
+			if (entry.path == path) {
+				validated = &entry;
+				break;
+			}
+		}
+		if (validated == nullptr || !_entry_deletable(*validated)) {
+			EditorNode::get_singleton()->add_io_error(TTR("Cannot remove because its references or classification changed:") + "\n" + path + "\n");
 			continue;
 		}
-		const Entry &entry = entries[index];
-		const String absolute = ProjectSettings::get_singleton()->globalize_path(entry.path);
+		const String absolute = ProjectSettings::get_singleton()->globalize_path(path);
 		print_verbose("Moving to trash: " + absolute);
 		if (OS::get_singleton()->move_to_trash(absolute) != OK) {
-			EditorNode::get_singleton()->add_io_error(TTR("Cannot remove:") + "\n" + entry.path + "\n");
+			EditorNode::get_singleton()->add_io_error(TTR("Cannot remove:") + "\n" + path + "\n");
 		}
 	}
-	pending_delete.clear();
 
 	if (EditorFileSystem::get_singleton()) {
 		EditorFileSystem::get_singleton()->scan_changes();
