@@ -14,7 +14,8 @@
 			<return type="Dictionary" />
 			<param index="0" name="parameters" type="PhysicsRayQueryParameters3D" />
 			<description>
-				Runs the same ray query as [method PhysicsDirectSpaceState3D.intersect_ray], and returns the stock hit keys plus [code]material_id[/code], [code]material_name[/code], and [code]material[/code]. Returns an empty dictionary on a miss.
+				Runs the same ray query as [method PhysicsDirectSpaceState3D.intersect_ray], and returns the stock hit keys plus [code]material_id[/code] and [code]material[/code]. Returns an empty dictionary on a miss.
+				[code]material_id[/code] is the durable handle: store that, not the name, and resolve it with [method Box3DPhysics.surface]. [code]material[/code] is the same resource already resolved, so [code]material.material_name[/code] reads the name without a second lookup.
 			</description>
 		</method>
 	</methods>

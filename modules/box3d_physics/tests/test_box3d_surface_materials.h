@@ -36,12 +36,13 @@
 
 namespace TestBox3DSurfaceMaterials {
 
-TEST_CASE("[Box3D][SurfaceMaterials] Library always owns fifteen permanent slots") {
+// The slot count is deliberately raisable, so assert against it rather than against a literal.
+TEST_CASE("[Box3D][SurfaceMaterials] Library always owns a full bank of permanent slots") {
 	Ref<Box3DSurfaceMaterialLibrary> library;
 	library.instantiate();
 
 	const TypedArray<Box3DSurfaceMaterial> slots = library->get_materials();
-	CHECK(slots.size() == 15);
+	CHECK(slots.size() == Box3DSurfaceMaterialLibrary::get_material_slot_count());
 	for (int i = 0; i < slots.size(); i++) {
 		const Ref<Box3DSurfaceMaterial> material = slots[i];
 		REQUIRE(material.is_valid());
@@ -69,14 +70,18 @@ TEST_CASE("[Box3D][SurfaceMaterials] Legacy ids migrate into fixed slots") {
 
 	Ref<Box3DSurfaceMaterialLibrary> library;
 	library.instantiate();
+	// "Metal" carries an id past the bank, so it cannot keep it. Being moved is the expected
+	// outcome, and it is reported rather than silent — hence the warning suppressed here.
+	ERR_PRINT_OFF;
 	library->set_materials(legacy);
+	ERR_PRINT_ON;
 
-	CHECK(library->get_materials().size() == 15);
+	CHECK(library->get_materials().size() == Box3DSurfaceMaterialLibrary::get_material_slot_count());
 	CHECK(library->get_material_slot(7) == retained);
 	CHECK(retained->get_material_id() == 8);
 	CHECK(library->find_material("Metal") == moved);
 	CHECK(moved->get_material_id() >= 1);
-	CHECK(moved->get_material_id() <= 15);
+	CHECK(moved->get_material_id() <= Box3DSurfaceMaterialLibrary::get_material_slot_count());
 }
 
 TEST_CASE("[Box3D][SurfaceMaterials] Deep duplicate owns independent gameplay data") {
@@ -95,8 +100,12 @@ TEST_CASE("[Box3D][SurfaceMaterials] Deep duplicate owns independent gameplay da
 }
 
 TEST_CASE("[Box3D][SurfaceMaterials] Oversized libraries preserve authored data") {
+	// One past the bank, whatever the bank currently is.
+	const int oversized_count = Box3DSurfaceMaterialLibrary::get_material_slot_count() + 1;
+	const StringName last_name = StringName("Material " + itos(oversized_count));
+
 	TypedArray<Box3DSurfaceMaterial> authored;
-	for (int i = 0; i < 16; i++) {
+	for (int i = 0; i < oversized_count; i++) {
 		Ref<Box3DSurfaceMaterial> material;
 		material.instantiate();
 		material->set_material_name(StringName("Material " + itos(i + 1)));
@@ -111,8 +120,40 @@ TEST_CASE("[Box3D][SurfaceMaterials] Oversized libraries preserve authored data"
 	ERR_PRINT_ON;
 
 	CHECK_FALSE(library->is_slot_layout_valid());
-	CHECK(library->get_materials().size() == 16);
-	CHECK(library->find_material("Material 16").is_valid());
+	CHECK(library->get_materials().size() == oversized_count);
+	CHECK(library->find_material(last_name).is_valid());
+}
+
+TEST_CASE("[Box3D][SurfaceMaterials] Surface maps store ids") {
+	Ref<Box3DSurfaceMap> map;
+	map.instantiate();
+
+	PackedInt32Array ids;
+	ids.push_back(4);
+	ids.push_back(0);
+	map->set_material_ids(ids);
+
+	CHECK(map->get_material_ids() == ids);
+}
+
+TEST_CASE("[Box3D][SurfaceMaterials] Legacy name maps convert to ids on first read") {
+	Ref<Box3DSurfaceMap> map;
+	map.instantiate();
+
+	PackedStringArray names;
+	names.push_back("NoSuchMaterial");
+	// Assigning names is the load path for a pre-id resource. Reading ids back converts, and
+	// the unresolvable entry degrades to the default material rather than staying a name.
+	map->set_material_names(names);
+
+	ERR_PRINT_OFF;
+	const PackedInt32Array ids = map->get_material_ids();
+	ERR_PRINT_ON;
+
+	REQUIRE(ids.size() == 1);
+	CHECK(ids[0] == 0);
+	// Converted in place: a second read no longer has names to migrate.
+	CHECK(map->get_material_ids() == ids);
 }
 
 } // namespace TestBox3DSurfaceMaterials

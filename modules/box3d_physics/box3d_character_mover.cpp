@@ -54,14 +54,14 @@ static void _add_floor_material_fields(Dictionary &r_result, int p_material_id) 
 	r_result["floor_material_id"] = p_material_id;
 
 	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	// `floor_material_id` is the durable handle and `floor_material` carries every field,
+	// including the name, so no separate name key. See _box3d_add_material_fields.
 	if (box3d_physics == nullptr || p_material_id <= 0) {
-		r_result["floor_material_name"] = StringName();
 		r_result["floor_material"] = Ref<Box3DSurfaceMaterial>();
 		return;
 	}
 
-	r_result["floor_material_name"] = box3d_physics->get_material_name(p_material_id);
-	r_result["floor_material"] = box3d_physics->get_material(p_material_id);
+	r_result["floor_material"] = box3d_physics->surface(p_material_id);
 }
 
 static Dictionary _plane_to_dictionary(b3ShapeId p_shape_id, const b3PlaneResult &p_plane, const Vector3 &p_origin) {

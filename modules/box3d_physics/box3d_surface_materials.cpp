@@ -19,14 +19,15 @@ static PackedInt64Array _resolve_surface_map_material_ids(Box3DPhysics *p_box3d_
 	PackedInt64Array material_ids;
 	ERR_FAIL_COND_V(p_surface_map.is_null(), material_ids);
 
-	const PackedStringArray material_names = p_surface_map->get_material_names();
-	material_ids.resize(material_names.size());
+	// The map already stores ids; this only widens them for the Box3D call. Ids that name no
+	// configured slot are reported, since the shape will silently take the default material.
+	const PackedInt32Array authored_ids = p_surface_map->get_material_ids();
+	material_ids.resize(authored_ids.size());
 	int64_t *write = material_ids.ptrw();
-	for (int i = 0; i < material_names.size(); i++) {
-		const StringName name = material_names[i];
-		const int material_id = p_box3d_physics->get_material_id(name);
-		if (name != StringName() && material_id == 0) {
-			WARN_PRINT(vformat("Box3D: unknown surface material '%s' in Box3DSurfaceMap.", String(name)));
+	for (int i = 0; i < authored_ids.size(); i++) {
+		const int material_id = authored_ids[i];
+		if (material_id != 0 && p_box3d_physics->surface(material_id).is_null()) {
+			WARN_PRINT(vformat("Box3D: Box3DSurfaceMap references surface material id %d, which is not a configured slot.", material_id));
 		}
 		write[i] = material_id;
 	}
@@ -68,7 +69,11 @@ void Box3DSurfaceMaterial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_texture_patterns"), &Box3DSurfaceMaterial::get_texture_patterns);
 
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "material_name"), "set_material_name", "get_material_name");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "material_id", PROPERTY_HINT_RANGE, "0,2147483647,1"), "set_material_id", "get_material_id");
+	// Derived from the owning library's slot position and rewritten on every ingest, so it is
+	// shown but not editable: a value typed here would be silently reverted. The setter stays
+	// permissive on purpose — migrating a pre-slot library has to read back ids above the slot
+	// count in order to report them.
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "material_id", PROPERTY_HINT_RANGE, vformat("0,%d,1", Box3DSurfaceMaterialLibrary::get_material_slot_count()), PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_READ_ONLY), "set_material_id", "get_material_id");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "friction", PROPERTY_HINT_RANGE, "0,10,0.001,or_greater"), "set_friction", "get_friction");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "restitution", PROPERTY_HINT_RANGE, "0,1,0.001"), "set_restitution", "get_restitution");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rolling_resistance", PROPERTY_HINT_RANGE, "0,1,0.001"), "set_rolling_resistance", "get_rolling_resistance");
@@ -147,6 +152,10 @@ Ref<Box3DSurfaceMaterial> Box3DSurfaceMaterialLibrary::find_material(const Strin
 }
 
 Ref<Box3DSurfaceMaterial> Box3DSurfaceMaterialLibrary::get_material_slot(int p_slot) const {
+	// A rejected layout keeps the oversized source array, whose entries are in authored order
+	// and carry their original ids. Indexing it would return a material whose id is not
+	// p_slot + 1, which is the one thing a slot accessor must never do.
+	ERR_FAIL_COND_V_MSG(!slot_layout_valid, Ref<Box3DSurfaceMaterial>(), "Box3D: the surface material library has no valid slot layout.");
 	ERR_FAIL_INDEX_V(p_slot, materials.size(), Ref<Box3DSurfaceMaterial>());
 	return materials[p_slot];
 }
@@ -215,10 +224,18 @@ void Box3DSurfaceMaterialLibrary::set_materials(const TypedArray<Box3DSurfaceMat
 			unplaced.push_back(material);
 		}
 	}
+	// Anything that could not claim its own id lands in the first free slot, which CHANGES its
+	// id. That is the one operation this layout otherwise rules out, so it is never silent: a
+	// library written before the slot bank existed can hold ids well above MATERIAL_SLOT_COUNT,
+	// because the previous allocator handed out one past the highest id in use and never reused
+	// a freed one. Report each move so a project can tell the difference between a migration and
+	// a material quietly changing address.
 	int unplaced_index = 0;
 	for (int i = 0; i < MATERIAL_SLOT_COUNT && unplaced_index < unplaced.size(); i++) {
 		if (Ref<Box3DSurfaceMaterial>(normalized[i]).is_null()) {
-			normalized[i] = unplaced[unplaced_index++];
+			const Ref<Box3DSurfaceMaterial> moved = unplaced[unplaced_index++];
+			WARN_PRINT(vformat("Box3D: surface material '%s' could not keep id %d and was moved to slot %d.", String(moved->get_material_name()), moved->get_material_id(), i + 1));
+			normalized[i] = moved;
 		}
 	}
 
@@ -267,18 +284,78 @@ void Box3DSurfaceMaterialLibrary::set_materials(const TypedArray<Box3DSurfaceMat
 	slot_layout_valid = true;
 }
 
+void Box3DSurfaceMap::_migrate_legacy_names() const {
+	if (legacy_material_names.is_empty()) {
+		return;
+	}
+	// Take the names first: resolution needs the material library, and loading that can
+	// re-enter here. An empty legacy array makes the re-entrant call a no-op.
+	const PackedStringArray names = legacy_material_names;
+	legacy_material_names.clear();
+
+	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	PackedInt32Array ids;
+	ids.resize(names.size());
+	int32_t *write = ids.ptrw();
+	for (int i = 0; i < names.size(); i++) {
+		const StringName material_name = names[i];
+		const int id = box3d_physics != nullptr ? box3d_physics->get_material_id(material_name) : 0;
+		if (material_name != StringName() && id == 0) {
+			// The name no longer resolves, so this entry cannot be migrated and falls back to
+			// the default material. Renaming the material after the map was authored is the
+			// usual cause, and is exactly what storing ids prevents from here on.
+			WARN_PRINT(vformat("Box3D: Box3DSurfaceMap references unknown surface material '%s'; that entry now uses the default material. Re-author the map to store ids.", String(material_name)));
+		}
+		write[i] = id;
+	}
+	material_ids = ids;
+}
+
+void Box3DSurfaceMap::set_material_ids(const PackedInt32Array &p_ids) {
+	legacy_material_names.clear();
+	material_ids = p_ids;
+}
+
+PackedInt32Array Box3DSurfaceMap::get_material_ids() const {
+	_migrate_legacy_names();
+	return material_ids;
+}
+
+void Box3DSurfaceMap::set_material_names(const PackedStringArray &p_names) {
+	legacy_material_names = p_names;
+	material_ids.clear();
+}
+
+PackedStringArray Box3DSurfaceMap::get_material_names() const {
+	_migrate_legacy_names();
+	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	PackedStringArray names;
+	names.resize(material_ids.size());
+	String *write = names.ptrw();
+	for (int i = 0; i < material_ids.size(); i++) {
+		write[i] = box3d_physics != nullptr ? String(box3d_physics->get_material_name(material_ids[i])) : String();
+	}
+	return names;
+}
+
 void Box3DSurfaceMap::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_material_ids", "ids"), &Box3DSurfaceMap::set_material_ids);
+	ClassDB::bind_method(D_METHOD("get_material_ids"), &Box3DSurfaceMap::get_material_ids);
 	ClassDB::bind_method(D_METHOD("set_material_names", "names"), &Box3DSurfaceMap::set_material_names);
 	ClassDB::bind_method(D_METHOD("get_material_names"), &Box3DSurfaceMap::get_material_names);
 	ClassDB::bind_method(D_METHOD("set_triangle_indices", "indices"), &Box3DSurfaceMap::set_triangle_indices);
 	ClassDB::bind_method(D_METHOD("get_triangle_indices"), &Box3DSurfaceMap::get_triangle_indices);
-	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "material_names"), "set_material_names", "get_material_names");
+	ADD_PROPERTY(PropertyInfo(Variant::PACKED_INT32_ARRAY, "material_ids"), "set_material_ids", "get_material_ids");
+	// Registered so pre-id resources still deserialize, but carries no usage flags: it is
+	// absent from the inspector and never written back, so saving a migrated map drops it.
+	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "material_names", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_material_names", "get_material_names");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_BYTE_ARRAY, "triangle_indices"), "set_triangle_indices", "get_triangle_indices");
 }
 
 void Box3DPhysics::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("reload_surface_material_library"), &Box3DPhysics::reload_surface_material_library);
 	ClassDB::bind_method(D_METHOD("get_surface_material_library"), &Box3DPhysics::get_surface_material_library);
+	ClassDB::bind_method(D_METHOD("surface", "id"), &Box3DPhysics::surface);
 	ClassDB::bind_method(D_METHOD("get_material_id", "name"), &Box3DPhysics::get_material_id);
 	ClassDB::bind_method(D_METHOD("get_material_name", "id"), &Box3DPhysics::get_material_name);
 	ClassDB::bind_method(D_METHOD("get_material", "id_or_name"), &Box3DPhysics::get_material);
@@ -452,6 +529,12 @@ StringName Box3DPhysics::get_material_name(int p_id) const {
 	return material && material->is_valid() ? (*material)->get_material_name() : StringName();
 }
 
+Ref<Box3DSurfaceMaterial> Box3DPhysics::surface(int p_id) const {
+	_ensure_surface_material_library();
+	const Ref<Box3DSurfaceMaterial> *material = materials_by_id.getptr(p_id);
+	return material ? *material : Ref<Box3DSurfaceMaterial>();
+}
+
 Ref<Box3DSurfaceMaterial> Box3DPhysics::get_material(const Variant &p_id_or_name) const {
 	_ensure_surface_material_library();
 	if (p_id_or_name.get_type() == Variant::INT) {
@@ -604,12 +687,29 @@ String Box3DPhysics::get_material_name_hint() const {
 	return String(",").join(get_material_names());
 }
 
+String Box3DPhysics::get_material_id_hint() const {
+	// "Label:value" pairs, so the inspector shows the name while the scene stores the id. The
+	// leading entry is the sentinel every id-typed surface reference uses for "unset".
+	Vector<String> entries;
+	entries.push_back("Default:0");
+	const TypedArray<Box3DSurfaceMaterial> configured = get_materials();
+	for (int i = 0; i < configured.size(); i++) {
+		const Ref<Box3DSurfaceMaterial> material = configured[i];
+		if (material.is_valid()) {
+			entries.push_back(vformat("%s:%d", String(material->get_material_name()), material->get_material_id()));
+		}
+	}
+	return String(",").join(entries);
+}
+
 Ref<Box3DSurfaceMaterialLibrary> Box3DPhysics::get_surface_material_library() const {
 	_ensure_surface_material_library();
 	return library;
 }
 
 void Box3DSurfaceOverride3D::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_material_id", "material_id"), &Box3DSurfaceOverride3D::set_material_id);
+	ClassDB::bind_method(D_METHOD("get_material_id"), &Box3DSurfaceOverride3D::get_material_id);
 	ClassDB::bind_method(D_METHOD("set_material", "material"), &Box3DSurfaceOverride3D::set_material);
 	ClassDB::bind_method(D_METHOD("get_material"), &Box3DSurfaceOverride3D::get_material);
 	ClassDB::bind_method(D_METHOD("set_surface_map", "surface_map"), &Box3DSurfaceOverride3D::set_surface_map);
@@ -618,17 +718,20 @@ void Box3DSurfaceOverride3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_shape_owner"), &Box3DSurfaceOverride3D::get_shape_owner);
 	ClassDB::bind_method(D_METHOD("apply"), &Box3DSurfaceOverride3D::apply);
 
-	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "material", PROPERTY_HINT_ENUM, ""), "set_material", "get_material");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "material_id", PROPERTY_HINT_ENUM, ""), "set_material_id", "get_material_id");
+	// Registered so pre-id scenes still deserialize, but carries no usage flags: it is absent
+	// from the inspector and never written back, so re-saving the scene drops it.
+	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "material", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_material", "get_material");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "surface_map", PROPERTY_HINT_RESOURCE_TYPE, "Box3DSurfaceMap"), "set_surface_map", "get_surface_map");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shape_owner"), "set_shape_owner", "get_shape_owner");
 }
 
 void Box3DSurfaceOverride3D::_validate_property(PropertyInfo &p_property) const {
-	if (p_property.name == StringName("material")) {
+	if (p_property.name == StringName("material_id")) {
 		Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
 		if (box3d_physics != nullptr) {
 			p_property.hint = PROPERTY_HINT_ENUM;
-			p_property.hint_string = box3d_physics->get_material_name_hint();
+			p_property.hint_string = box3d_physics->get_material_id_hint();
 		}
 	}
 }
@@ -639,11 +742,25 @@ void Box3DSurfaceOverride3D::_notification(int p_what) {
 	}
 }
 
-void Box3DSurfaceOverride3D::set_material(const StringName &p_material) {
-	material = p_material;
+void Box3DSurfaceOverride3D::set_material_id(int p_material_id) {
+	material_id = p_material_id;
+	legacy_material = StringName();
 	if (is_inside_tree()) {
 		apply();
 	}
+}
+
+void Box3DSurfaceOverride3D::set_material(const StringName &p_material) {
+	legacy_material = p_material;
+	material_id = 0;
+	if (is_inside_tree()) {
+		apply();
+	}
+}
+
+StringName Box3DSurfaceOverride3D::get_material() const {
+	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	return box3d_physics != nullptr ? box3d_physics->get_material_name(material_id) : StringName();
 }
 
 void Box3DSurfaceOverride3D::set_surface_map(const Ref<Box3DSurfaceMap> &p_surface_map) {
@@ -667,9 +784,17 @@ void Box3DSurfaceOverride3D::apply() {
 	CollisionObject3D *parent_body = Object::cast_to<CollisionObject3D>(get_parent());
 	ERR_FAIL_NULL_MSG(parent_body, "Box3DSurfaceOverride3D must be a child of a CollisionObject3D.");
 
-	const int material_id = box3d_physics->get_material_id(material);
-	if (material != StringName() && material_id == 0) {
-		WARN_PRINT(vformat("Box3D: unknown surface material '%s' on Box3DSurfaceOverride3D.", String(material)));
+	// A scene authored before ids resolves its name once, here, where the library is available.
+	if (legacy_material != StringName()) {
+		const StringName name = legacy_material;
+		legacy_material = StringName();
+		material_id = box3d_physics->get_material_id(name);
+		if (material_id == 0) {
+			WARN_PRINT(vformat("Box3D: Box3DSurfaceOverride3D references unknown surface material '%s'; it now uses the default material. Re-assign it to store an id.", String(name)));
+		}
+	}
+	if (material_id != 0 && box3d_physics->surface(material_id).is_null()) {
+		WARN_PRINT(vformat("Box3D: Box3DSurfaceOverride3D references surface material id %d, which is not a configured slot.", material_id));
 	}
 	box3d_physics->body_set_surface_material(parent_body->get_rid(), shape_owner, material_id);
 

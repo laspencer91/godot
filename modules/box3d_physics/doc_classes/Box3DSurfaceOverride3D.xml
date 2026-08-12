@@ -4,7 +4,7 @@
 		Assigns Box3D surface materials from the scene tree.
 	</brief_description>
 	<description>
-		Add [Box3DSurfaceOverride3D] as a child of a [CollisionObject3D] to assign a named material or per-triangle map to that object's shapes.
+		Add [Box3DSurfaceOverride3D] as a child of a [CollisionObject3D] to assign a surface material or per-triangle map to that object's shapes.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -17,8 +17,9 @@
 		</method>
 	</methods>
 	<members>
-		<member name="material" type="StringName" setter="set_material" getter="get_material">
-			Named material assigned to the parent body shape or shapes. Empty clears the body-level override.
+		<member name="material_id" type="int" setter="set_material_id" getter="get_material_id" default="0">
+			Surface material assigned to the parent body shape or shapes, stored as its permanent slot id and shown in the inspector as a name. [code]0[/code] clears the body-level override.
+			An id rather than a name so that renaming the material in Project Settings does not detach every scene referencing it. Scenes authored before this change still load: their material name is resolved to an id the first time [method apply] runs, and re-saving the scene stores the id.
 		</member>
 		<member name="shape_owner" type="int" setter="set_shape_owner" getter="get_shape_owner" default="-1">
 			Body shape index to target, or [code]-1[/code] for all shapes.

@@ -26,11 +26,25 @@
 				Returns the baked surface material for [param face_index] on a shared mesh shape, or [code]null[/code] if none is assigned.
 			</description>
 		</method>
+		<method name="surface" qualifiers="const">
+			<return type="Box3DSurfaceMaterial" />
+			<param index="0" name="id" type="int" />
+			<description>
+				Returns the surface material occupying slot [param id], or [code]null[/code] if that slot is unconfigured.
+				This is the canonical way to reach a surface. Ids are the durable handle every baked reference stores — hit results, [Box3DSurfaceMap], [Box3DSurfaceOverride3D] — so a caller holding one reads whatever it needs off the returned resource rather than through a per-field accessor:
+				[codeblock]
+				var surface = Box3DPhysics.surface(hit.material_id)
+				if surface:
+				    print(surface.material_name)
+				    var data = surface.gameplay
+				[/codeblock]
+			</description>
+		</method>
 		<method name="get_material" qualifiers="const">
 			<return type="Box3DSurfaceMaterial" />
 			<param index="0" name="id_or_name" type="Variant" />
 			<description>
-				Returns the material resource registered by integer id or [StringName], or [code]null[/code].
+				Returns the material resource registered by integer id or [StringName], or [code]null[/code]. Prefer [method surface] when you have an id.
 			</description>
 		</method>
 		<method name="get_material_id" qualifiers="const">
@@ -38,13 +52,14 @@
 			<param index="0" name="name" type="StringName" />
 			<description>
 				Returns the registered id for [param name], or [code]0[/code].
+				For authoring and migration only. Names are editable labels, so nothing durable should store one — resolve a name to an id once and store that.
 			</description>
 		</method>
 		<method name="get_material_name" qualifiers="const">
 			<return type="StringName" />
 			<param index="0" name="id" type="int" />
 			<description>
-				Returns the registered name for [param id], or an empty [StringName].
+				Returns the registered name for [param id], or an empty [StringName]. Equivalent to [code]surface(id).material_name[/code], but safe when the slot is unconfigured.
 			</description>
 		</method>
 		<method name="get_material_names" qualifiers="const">

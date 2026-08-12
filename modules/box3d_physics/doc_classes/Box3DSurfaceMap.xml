@@ -4,16 +4,17 @@
 		Per-triangle Box3D surface material map.
 	</brief_description>
 	<description>
-		[Box3DSurfaceMap] stores a material-name palette and per-triangle byte indices for mesh collision shapes.
+		[Box3DSurfaceMap] stores a small palette of surface material ids plus one byte per mesh triangle indexing into it, for mesh collision shapes.
+		The palette holds ids rather than names because this is baked data that outlives authoring. A material's name is an editable label, so a map that stored names lost its references the moment a material was renamed; slot ids are permanent and survive a rename. Use [method Box3DPhysics.surface] to reach a material from an id.
 	</description>
 	<tutorials>
 	</tutorials>
 	<members>
-		<member name="material_names" type="PackedStringArray" setter="set_material_names" getter="get_material_names">
-			Material names indexed by [member triangle_indices].
+		<member name="material_ids" type="PackedInt32Array" setter="set_material_ids" getter="get_material_ids">
+			Surface material ids indexed by [member triangle_indices]. [code]0[/code] means the default material.
 		</member>
 		<member name="triangle_indices" type="PackedByteArray" setter="set_triangle_indices" getter="get_triangle_indices">
-			One byte per mesh triangle, indexing [member material_names].
+			One byte per mesh triangle, indexing [member material_ids].
 		</member>
 	</members>
 </class>

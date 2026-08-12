@@ -4,7 +4,7 @@
 		Project-wide Box3D surface material library.
 	</brief_description>
 	<description>
-		[Box3DSurfaceMaterialLibrary] is loaded from the [code]physics/box3d/surface_material_library[/code] project setting and indexed by [Box3DPhysics]. It contains 15 permanent numbered slots. A slot with an empty material name is unconfigured and does not appear in runtime queries or editor material pickers.
+		[Box3DSurfaceMaterialLibrary] is loaded from the [code]physics/box3d/surface_material_library[/code] project setting and indexed by [Box3DPhysics]. It contains 20 permanently numbered slots, the way a project numbers layers. A slot with an empty material name is unconfigured and does not appear in runtime queries or editor material pickers.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -19,8 +19,8 @@
 	</methods>
 	<members>
 		<member name="materials" type="Array[Box3DSurfaceMaterial]" setter="set_materials" getter="get_materials">
-			The 15 surface material slot resources in permanent numeric-id order. Array index [code]0[/code] is id [code]1[/code], through index [code]14[/code] as id [code]15[/code]. Empty names mark unconfigured slots. [method Box3DPhysics.get_materials] returns configured slots only.
-			Legacy variable-length arrays are normalized by retaining valid ids and moving colliding or out-of-range entries into free slots. More than 15 configured entries is rejected without truncating the source array.
+			The 20 surface material slot resources in permanent numeric-id order. Array index [code]0[/code] is id [code]1[/code], through index [code]19[/code] as id [code]20[/code]. Empty names mark unconfigured slots. [method Box3DPhysics.get_materials] returns configured slots only.
+			Legacy variable-length arrays are normalized by retaining valid ids and moving colliding or out-of-range entries into free slots. Every move changes that material's id and is reported as a warning. More than 20 configured entries is rejected without truncating the source array.
 		</member>
 	</members>
 </class>

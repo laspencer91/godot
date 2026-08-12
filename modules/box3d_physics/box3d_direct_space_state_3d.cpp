@@ -37,14 +37,15 @@ static void _box3d_add_material_fields(Dictionary &r_result, int p_material_id) 
 	r_result["material_id"] = p_material_id;
 
 	Box3DPhysics *box3d_physics = Box3DPhysics::get_singleton();
+	// `material_id` is the durable handle and `material` carries every field, including the
+	// name, so no separate name key: `result.material.material_name` reads it, and
+	// `Box3DPhysics.surface(result.material_id)` reaches the same resource from a stored id.
 	if (box3d_physics == nullptr || p_material_id <= 0) {
-		r_result["material_name"] = StringName();
 		r_result["material"] = Ref<Box3DSurfaceMaterial>();
 		return;
 	}
 
-	r_result["material_name"] = box3d_physics->get_material_name(p_material_id);
-	r_result["material"] = box3d_physics->get_material(p_material_id);
+	r_result["material"] = box3d_physics->surface(p_material_id);
 }
 
 void Box3DDirectSpaceState3D::_bind_methods() {
