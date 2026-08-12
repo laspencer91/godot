@@ -256,6 +256,20 @@ void DerivedDataDialog::_scan_root(const String &p_dir) {
 
 // Classification ///////////////////////////////////////////////////////////
 
+// The two sides of the node-path comparison are produced by different APIs that disagree
+// about the leading element. A manifest records Node::get_path_to(), which yields a bare
+// "VoxelGI"; SceneState::get_node_path() prepends the "." for the root it is relative to
+// and yields "./VoxelGI" for the same node. Only the root itself ("." from both) matched,
+// so every non-root bundle read as an Orphan. Normalizing both sides is the fix; comparing
+// NodePath objects instead would not be, because NodePath keeps that "." as a real element.
+static String normalized_node_path(const String &p_node_path) {
+	String path = p_node_path;
+	while (path.begins_with("./")) {
+		path = path.substr(2);
+	}
+	return path.is_empty() ? "." : path;
+}
+
 bool DerivedDataDialog::_scene_declares_node(const String &p_scene_path, const String &p_node_path) {
 	HashMap<String, HashSet<String>>::Iterator cached = scene_nodes.find(p_scene_path);
 	if (!cached) {
@@ -264,12 +278,11 @@ bool DerivedDataDialog::_scene_declares_node(const String &p_scene_path, const S
 		const Ref<SceneState> state = scene.is_valid() ? scene->get_state() : Ref<SceneState>();
 		if (state.is_valid()) {
 			for (int i = 0; i < state->get_node_count(); i++) {
-				cached->value.insert(String(state->get_node_path(i)));
+				cached->value.insert(normalized_node_path(String(state->get_node_path(i))));
 			}
 		}
 	}
-	// The root node's path relative to itself is "." on both sides of this comparison.
-	return cached->value.has(p_node_path);
+	return cached->value.has(normalized_node_path(p_node_path));
 }
 
 void DerivedDataDialog::_classify(Entry &p_entry) {
