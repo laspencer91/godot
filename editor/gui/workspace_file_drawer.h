@@ -115,6 +115,9 @@ public:
 
 	void set_open(bool p_open, bool p_animate = true);
 	bool is_open() const { return drawer_open; }
+	// The drawer's visible screen rectangle. Empty while fully closed. Native embedded game
+	// windows use this to avoid covering the drawer, since CanvasItems cannot draw above child windows.
+	Rect2 get_occlusion_rect() const;
 
 	// Feature-profile gate. A disabled drawer force-closes and refuses to reopen, so no shortcut or
 	// button path can surface a profile-hidden FileSystem dock. Owned here as the single source of truth.

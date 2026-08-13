@@ -42,6 +42,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/gui/editor_bottom_panel.h"
+#include "editor/gui/workspace_file_drawer.h"
 #include "editor/gui/window_wrapper.h"
 #include "editor/run/editor_run_bar.h"
 #include "editor/run/embedded_process.h"
@@ -499,8 +500,7 @@ bool GameView::_instance_rq_screenshot(const Callable &p_callback) {
 	if (debugger.is_null() || window_wrapper->get_window_enabled() || !embedded_process || !embedded_process->is_embedding_completed()) {
 		return false;
 	}
-	Rect2 r = embedded_process->get_adjusted_embedded_window_rect(embedded_process->get_rect());
-	r.position += embedded_process->get_global_position();
+	Rect2 r = embedded_process->get_screen_embedded_window_rect();
 #ifndef MACOS_ENABLED
 	r.position -= embedded_process->get_window()->get_position();
 #endif
@@ -630,6 +630,10 @@ void GameView::_embedded_process_focused() {
 		// G4: reveal (not select) — the Game screen has no permanent strip button to select otherwise.
 		EditorNode::get_singleton()->get_editor_main_screen()->reveal_main_plugin(EditorMainScreen::EDITOR_GAME);
 	}
+}
+
+void GameView::_file_drawer_occlusion_changed(const Rect2 &p_rect) {
+	embedded_process->set_embedding_occlusion_rect(Rect2i(p_rect));
 }
 
 void GameView::_editor_or_project_settings_changed() {
@@ -1228,6 +1232,10 @@ void GameView::_notification(int p_what) {
 				run_bar->connect("game_embed_mode_changed", callable_mp(this, &GameView::_game_embed_mode_pressed));
 				run_bar->connect("play_pressed", callable_mp(this, &GameView::_play_pressed));
 				run_bar->connect("stop_pressed", callable_mp(this, &GameView::_stop_pressed));
+				if (WorkspaceFileDrawer *drawer = EditorNode::get_singleton()->get_workspace_file_drawer()) {
+					drawer->connect("occlusion_changed", callable_mp(this, &GameView::_file_drawer_occlusion_changed));
+					_file_drawer_occlusion_changed(drawer->get_occlusion_rect());
+				}
 				EditorRun::instance_starting_callback = _instance_starting_static;
 				EditorRun::instance_rq_screenshot_callback = _instance_rq_screenshot_static;
 

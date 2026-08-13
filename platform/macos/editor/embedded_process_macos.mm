@@ -56,7 +56,9 @@ void EmbeddedProcessMacOS::_notification(int p_what) {
 }
 
 void EmbeddedProcessMacOS::update_embedded_process() {
-	layer_host->set_rect(get_adjusted_embedded_window_rect(get_rect()));
+	Rect2i local_rect = get_screen_embedded_window_rect();
+	local_rect.position -= Vector2i(get_global_position());
+	layer_host->set_rect(local_rect);
 	if (is_embedding_completed()) {
 		ds->embed_process_update(window->get_window_id(), this);
 		Rect2i rect = get_screen_embedded_window_rect();
@@ -153,7 +155,9 @@ void EmbeddedProcessMacOS::_try_embed_process() {
 	DisplayServerEnums::WindowID wid = window->get_window_id();
 	Error err = ds->embed_process_update(wid, this);
 	if (err == OK) {
-		layer_host->set_rect(get_adjusted_embedded_window_rect(get_rect()));
+		Rect2i local_rect = get_screen_embedded_window_rect();
+		local_rect.position -= Vector2i(get_global_position());
+		layer_host->set_rect(local_rect);
 
 		// Replicate important DisplayServer state.
 		display_state_changed();

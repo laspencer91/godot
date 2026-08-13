@@ -52,8 +52,10 @@ protected:
 	bool transp_enabled = false;
 	Color clear_color;
 	Ref<Texture2D> checkerboard;
+	Rect2i embedding_occlusion_rect;
 
 	void _project_settings_changed();
+	Rect2i _fit_rect_around_occlusion(const Rect2i &p_rect) const;
 
 	static void _bind_methods();
 	void _notification(int p_what);
@@ -73,6 +75,7 @@ public:
 
 	void set_window_size(const Size2i &p_window_size);
 	void set_keep_aspect(bool p_keep_aspect);
+	void set_embedding_occlusion_rect(const Rect2i &p_rect);
 	virtual Rect2i get_adjusted_embedded_window_rect(const Rect2i &p_rect) const = 0;
 	Rect2i get_screen_embedded_window_rect() const;
 	int get_margin_size(Side p_side) const;

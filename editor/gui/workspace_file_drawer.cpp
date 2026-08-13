@@ -41,6 +41,7 @@
 #include "scene/gui/label.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/tab_container.h"
+#include "scene/main/window.h"
 #include "scene/resources/style_box_flat.h"
 #include "scene/scene_string_names.h"
 
@@ -186,6 +187,7 @@ void WorkspaceFileDrawer::_relayout() {
 	const float y = Math::lerp(closed_y, open_y, shown_amount);
 	set_size(Size2(w, h));
 	set_position(Point2(x, y));
+	emit_signal(SNAME("occlusion_changed"), get_occlusion_rect());
 }
 
 void WorkspaceFileDrawer::_set_shown_amount(float p_amount) {
@@ -234,6 +236,19 @@ void WorkspaceFileDrawer::set_open(bool p_open, bool p_animate) {
 	if (was_open != drawer_open) {
 		emit_signal(SNAME("open_toggled"), drawer_open);
 	}
+}
+
+Rect2 WorkspaceFileDrawer::get_occlusion_rect() const {
+	if (!is_visible() || shown_amount <= 0.0f) {
+		return Rect2();
+	}
+	Rect2 rect = get_global_rect();
+#ifndef MACOS_ENABLED
+	if (Window *current_window = get_window()) {
+		rect.position += current_window->get_position();
+	}
+#endif
+	return rect;
 }
 
 void WorkspaceFileDrawer::set_enabled(bool p_enabled) {
@@ -309,6 +324,7 @@ void WorkspaceFileDrawer::_notification(int p_what) {
 
 void WorkspaceFileDrawer::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("open_toggled", PropertyInfo(Variant::BOOL, "open")));
+	ADD_SIGNAL(MethodInfo("occlusion_changed", PropertyInfo(Variant::RECT2, "rect")));
 }
 
 WorkspaceFileDrawer::WorkspaceFileDrawer() {

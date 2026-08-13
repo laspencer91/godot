@@ -119,8 +119,53 @@ void EmbeddedProcessBase::set_keep_aspect(bool p_keep_aspect) {
 	}
 }
 
+void EmbeddedProcessBase::set_embedding_occlusion_rect(const Rect2i &p_rect) {
+	if (embedding_occlusion_rect == p_rect) {
+		return;
+	}
+	embedding_occlusion_rect = p_rect;
+	queue_update_embedded_process();
+	queue_redraw();
+}
+
+Rect2i EmbeddedProcessBase::_fit_rect_around_occlusion(const Rect2i &p_rect) const {
+	const Rect2i overlap = p_rect.intersection(embedding_occlusion_rect);
+	if (!overlap.has_area()) {
+		return p_rect;
+	}
+
+	const Point2i rect_end = p_rect.get_end();
+	const Point2i overlap_end = overlap.get_end();
+	const Rect2i candidates[] = {
+		Rect2i(p_rect.position, Size2i(p_rect.size.x, overlap.position.y - p_rect.position.y)),
+		Rect2i(Point2i(p_rect.position.x, overlap_end.y), Size2i(p_rect.size.x, rect_end.y - overlap_end.y)),
+		Rect2i(p_rect.position, Size2i(overlap.position.x - p_rect.position.x, p_rect.size.y)),
+		Rect2i(Point2i(overlap_end.x, p_rect.position.y), Size2i(rect_end.x - overlap_end.x, p_rect.size.y)),
+	};
+
+	Rect2i best;
+	int64_t best_area = 0;
+	for (const Rect2i &candidate : candidates) {
+		const int64_t area = (int64_t)MAX(candidate.size.x, 0) * MAX(candidate.size.y, 0);
+		if (area > best_area) {
+			best = candidate;
+			best_area = area;
+		}
+	}
+
+	// Fixed-size and keep-aspect games are already fitted to p_rect. If an occluder
+	// reduces that rectangle, scale it down uniformly instead of distorting it.
+	if (best_area > 0 && window_size != Size2i()) {
+		const float scale = MIN(1.0f, MIN((float)best.size.x / p_rect.size.x, (float)best.size.y / p_rect.size.y));
+		const Size2i fitted_size = Size2i(Vector2(p_rect.size) * scale).maxi(1);
+		best.position += (best.size - fitted_size) / 2;
+		best.size = fitted_size;
+	}
+	return best;
+}
+
 Rect2i EmbeddedProcessBase::get_screen_embedded_window_rect() const {
-	return get_adjusted_embedded_window_rect(get_global_rect());
+	return _fit_rect_around_occlusion(get_adjusted_embedded_window_rect(get_global_rect()));
 }
 
 int EmbeddedProcessBase::get_margin_size(Side p_side) const {

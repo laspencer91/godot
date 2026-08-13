@@ -243,6 +243,7 @@ class GameView : public VBoxContainer {
 	void _embedding_completed();
 	void _embedding_failed();
 	void _embedded_process_focused();
+	void _file_drawer_occlusion_changed(const Rect2 &p_rect);
 	void _editor_or_project_settings_changed();
 
 	EmbedAvailability _get_embed_available();
