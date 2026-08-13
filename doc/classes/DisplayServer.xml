@@ -700,6 +700,24 @@
 				[b]Note:[/b] This method is only implemented on Linux (X11/Wayland).
 			</description>
 		</method>
+		<method name="create_progress_dialog">
+			<return type="int" />
+			<param index="0" name="title" type="String" />
+			<param index="1" name="line1" type="String" />
+			<param index="2" name="line2" type="String" />
+			<param index="3" name="flags" type="int" enum="DisplayServer.ProgressDialogFlags" is_bitfield="true" default="0" />
+			<param index="4" name="cancelled_callback" type="Callable" default="Callable()" />
+			<param index="5" name="window_id" type="int" default="0" />
+			<description>
+				Creates a native, OS-owned progress dialog with the given [param title] and two status lines, owned by the window with the given [param window_id], and returns its id (or [code]0[/code] if the dialog could not be created). Only available if the display server has the [constant FEATURE_NATIVE_PROGRESS_DIALOG] feature; without it this returns [code]0[/code], and because [code]0[/code] is the universal "no dialog" id, the other [code]progress_dialog_*[/code] methods can then still be called unconditionally as no-ops.
+				The dialog is hosted on a thread the operating system owns, so [b]it keeps painting and updating even while the engine's main loop is blocked[/b] — for example during the streaming phase of [method window_start_file_drag]. That is the reason to use it over an in-app dialog.
+				[b]This method and every [code]progress_dialog_*[/code] method are safe to call from any thread[/b], including a [WorkerThreadPool] task and the file-drag content provider thread. The updates that matter typically happen while the main thread cannot run.
+				[param cancelled_callback], if valid, is called at most once as [code]cancelled_callback(dialog_id: int)[/code] when the user clicks the dialog's Cancel button. It is delivered deferred through the engine's message queue, so while the main loop is blocked it may arrive tens of seconds late, or after the job has already finished — poll [method progress_dialog_is_cancelled] from the working thread instead; the callback is advisory.
+				[param flags] is a combination of [enum ProgressDialogFlags] values. [constant PROGRESS_DIALOG_FLAG_AUTO_TIME] is recommended: it adds the shell's free "time remaining" estimate, fed by regular [method progress_dialog_set_progress] calls. [constant PROGRESS_DIALOG_FLAG_MODAL] is recommended against: it disables a parent window that is likely already unresponsive.
+				Delete the dialog with [method delete_progress_dialog] when the job ends.
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
 		<method name="create_status_indicator">
 			<return type="int" />
 			<param index="0" name="icon" type="Texture2D" />
@@ -732,6 +750,14 @@
 			<param index="0" name="shape" type="int" enum="DisplayServer.CursorShape" />
 			<description>
 				Sets the default mouse cursor shape. The cursor's appearance will vary depending on the user's operating system and mouse cursor theme. See also [method cursor_get_shape] and [method cursor_set_custom_image].
+			</description>
+		</method>
+		<method name="delete_progress_dialog">
+			<return type="void" />
+			<param index="0" name="dialog_id" type="int" />
+			<description>
+				Closes and frees a progress dialog created with [method create_progress_dialog], joining its worker thread. Idempotent and safe to call from any thread — [param dialog_id] values that no longer (or never did) exist are ignored, so racing a delete-on-finish path against a delete-on-cancel path is harmless. Do not call it from inside the dialog's own [code]cancelled_callback[/code] stack (deferred delivery normally already prevents this).
+				[b]Note:[/b] This method is implemented only on Windows.
 			</description>
 		</method>
 		<method name="delete_status_indicator">
@@ -1742,6 +1768,35 @@
 				Perform window manager processing, including input flushing. See also [method force_process_and_drop_events], [method Input.flush_buffered_events] and [member Input.use_accumulated_input].
 			</description>
 		</method>
+		<method name="progress_dialog_is_cancelled" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="dialog_id" type="int" />
+			<description>
+				Returns [code]true[/code] if the user has clicked the Cancel button of the progress dialog with the given [param dialog_id]. [b]This is a poll, not a signal, and it is the mechanism that works while the engine's main loop is blocked[/b]: it is a free atomic read of a flag the dialog's own thread refreshes about every 100 ms, so the thread doing the actual work should check it before each expensive step and wind the job down when it flips. The [code]cancelled_callback[/code] passed to [method create_progress_dialog] is only a deferred convenience on top of this.
+				Safe to call from any thread. Returns [code]false[/code] for ids that do not exist, and always returns [code]false[/code] on display servers without the [constant FEATURE_NATIVE_PROGRESS_DIALOG] feature — a job on a headless or stock binary must run to completion, not silently self-cancel.
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
+		<method name="progress_dialog_set_lines">
+			<return type="void" />
+			<param index="0" name="dialog_id" type="int" />
+			<param index="1" name="line1" type="String" />
+			<param index="2" name="line2" type="String" />
+			<description>
+				Replaces both status lines of the progress dialog with the given [param dialog_id]. [b]Safe to call from any thread[/b] — the call only records the desired text and returns; the dialog's own thread applies it, so it lands even while the engine's main loop is blocked. Ids that do not exist are ignored.
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
+		<method name="progress_dialog_set_progress">
+			<return type="void" />
+			<param index="0" name="dialog_id" type="int" />
+			<param index="1" name="completed" type="int" />
+			<param index="2" name="total" type="int" />
+			<description>
+				Updates the progress bar of the dialog with the given [param dialog_id] to [param completed] of [param total] units. [b]Safe to call from any thread[/b] — the call only records the desired values and returns; the dialog's own thread applies them, so progress keeps advancing even while the engine's main loop is blocked. [param total] is clamped to at least [code]1[/code] and [param completed] to at most [param total]. Call it regularly to feed the [constant PROGRESS_DIALOG_FLAG_AUTO_TIME] "time remaining" estimate. Ids that do not exist are ignored.
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
 		<method name="register_additional_output">
 			<return type="void" />
 			<param index="0" name="object" type="Object" />
@@ -2695,10 +2750,11 @@
 			<param index="3" name="target_changed_callback" type="Callable" default="Callable()" />
 			<param index="4" name="manifest" type="String" default="&quot;&quot;" />
 			<param index="5" name="window_id" type="int" default="0" />
+			<param index="6" name="provider_timeout_ms" type="int" default="10000" />
 			<description>
 				Starts an OS-level drag of virtual files [i]out[/i] of the application, so they can be dropped into a file manager or another application. Blocks until the drag ends, pumping the engine throughout so the application keeps rendering. Only available if the display server has the [constant FEATURE_FILE_DRAG_OUT] feature.
 				Each entry of [param files] describes one file with a [code]name[/code] (the file name, without any separator) and an optional [code]dir[/code] (a relative directory inside the drop, e.g. [code]"textures"[/code]). The names are final the moment the drag starts — the operating system asks for them repeatedly while the cursor hovers, and never asks again later.
-				No file content is produced up front. When (and only when) the drop target actually reads a file, [param content_provider] is called as [code]content_provider(index: int, path: String)[/code] and must return a [PackedByteArray] with that file's bytes. [b]It is called on a worker thread, not the main thread[/b] — it must not touch the scene tree, and anything it reads must be safe to read from another thread. It has roughly two seconds to answer before the file is dropped from the transfer, so generate expensive payloads speculatively while the cursor is still hovering (see [param target_changed_callback]).
+				No file content is produced up front. When (and only when) the drop target actually reads a file, [param content_provider] is called as [code]content_provider(index: int, path: String)[/code] and must return a [PackedByteArray] with that file's bytes. [b]It is called on a worker thread, not the main thread[/b] — it must not touch the scene tree, and anything it reads must be safe to read from another thread. It has [param provider_timeout_ms] milliseconds (clamped to [code]500[/code]–[code]60000[/code]) to answer, counted per file from the moment the target first reads that file; exceeding the deadline for one file makes most targets abort the whole transfer, so raise it when expensive on-demand work (like renormalizing a large texture) is in the plan, and consider pairing a long deadline with [method create_progress_dialog] so the user can see something happening.
 				[param finished_callback] is called deferred, as [code]finished_callback(result: int, target_kind: int)[/code], with a [enum FileDragResult] and a [enum FileDragTargetKind]. The result is advisory: drop targets are known to misreport what they did.
 				[param target_changed_callback] is called as [code]target_changed_callback(target_kind: int, target_name: String)[/code] whenever the kind of window under the cursor changes and stays changed for about 200 ms. This is the hook for showing a "drop here" hint and for starting speculative content generation.
 				[param manifest] is an optional JSON string offered under the [code]application/x-godot-material-drop-v1[/code] clipboard format, for drop targets that understand it (see [method window_get_last_drop_manifest]). Other targets ignore it and receive the plain virtual files.
@@ -2839,6 +2895,9 @@
 		<constant name="FEATURE_FILE_DRAG_OUT" value="37" enum="Feature">
 			Display server supports dragging virtual files out of the application. See [method window_start_file_drag]. [b]Windows[/b]
 		</constant>
+		<constant name="FEATURE_NATIVE_PROGRESS_DIALOG" value="38" enum="Feature">
+			Display server supports OS-owned progress dialogs that keep painting while the engine's main loop is blocked. See [method create_progress_dialog]. [b]Windows[/b]
+		</constant>
 		<constant name="FILE_DRAG_TARGET_UNKNOWN" value="0" enum="FileDragTargetKind">
 			The window under the cursor during a file drag could not be identified.
 		</constant>
@@ -2862,6 +2921,30 @@
 		</constant>
 		<constant name="FILE_DRAG_RESULT_FAILED" value="2" enum="FileDragResult">
 			The file drag failed.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_NORMAL" value="0" enum="ProgressDialogFlags" is_bitfield="true">
+			Default progress dialog behavior: a determinate progress bar, a Cancel button, and a minimize button.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_MODAL" value="1" enum="ProgressDialogFlags" is_bitfield="true">
+			The dialog disables its owner window. Recommended against: while the main loop is blocked the owner cannot repaint anyway, and disabling it makes the application feel broken. The dialog stays on top regardless.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_MARQUEE" value="2" enum="ProgressDialogFlags" is_bitfield="true">
+			The progress bar animates without a position — the honest mode when the total is not known. The mode cannot be changed after creation; switching from marquee to determinate means deleting the dialog and creating a new one.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_NO_TIME" value="4" enum="ProgressDialogFlags" is_bitfield="true">
+			Never show a "time remaining" line.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_NO_MINIMIZE" value="8" enum="ProgressDialogFlags" is_bitfield="true">
+			Remove the dialog's minimize button. Recommended against when the application's own window cannot repaint: letting the user minimize is kind.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_NO_CANCEL" value="16" enum="ProgressDialogFlags" is_bitfield="true">
+			Remove the Cancel button. [method progress_dialog_is_cancelled] then always returns [code]false[/code] for the dialog.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_NO_PROGRESS_BAR" value="32" enum="ProgressDialogFlags" is_bitfield="true">
+			Do not show a progress bar; only the title and status lines.
+		</constant>
+		<constant name="PROGRESS_DIALOG_FLAG_AUTO_TIME" value="64" enum="ProgressDialogFlags" is_bitfield="true">
+			Show an automatic "About N seconds remaining" estimate, fed by regular [method progress_dialog_set_progress] calls. Recommended: the single biggest perceived-quality win, and it costs nothing.
 		</constant>
 		<constant name="ROLE_UNKNOWN" value="0" enum="AccessibilityRole" deprecated="Use [AccessibilityServer] instead.">
 			Unknown or custom role.

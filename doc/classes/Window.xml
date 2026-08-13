@@ -90,6 +90,18 @@
 				Requests an update of the [Window] size to fit underlying [Control] nodes.
 			</description>
 		</method>
+		<method name="create_progress_dialog">
+			<return type="int" />
+			<param index="0" name="title" type="String" />
+			<param index="1" name="line1" type="String" />
+			<param index="2" name="line2" type="String" />
+			<param index="3" name="flags" type="int" enum="DisplayServer.ProgressDialogFlags" is_bitfield="true" default="0" />
+			<description>
+				Creates a native, OS-owned progress dialog owned by this window and returns its id (or [code]0[/code] on failure or when the display server lacks the [constant DisplayServer.FEATURE_NATIVE_PROGRESS_DIALOG] feature). The dialog keeps painting even while the engine's main loop is blocked, and emits [signal progress_dialog_cancelled] when the user clicks its Cancel button.
+				Only creation is wrapped here, so the cancel notification can arrive as a signal. [b]The update methods live on [DisplayServer] on purpose[/b] — their entire value is being callable from worker threads, which [Window] methods are not: drive the dialog with [method DisplayServer.progress_dialog_set_progress] and [method DisplayServer.progress_dialog_set_lines], poll [method DisplayServer.progress_dialog_is_cancelled] from the thread doing the work, and free it with [method DisplayServer.delete_progress_dialog].
+				[b]Note:[/b] This method is implemented only on Windows.
+			</description>
+		</method>
 		<method name="end_bulk_theme_override">
 			<return type="void" />
 			<description>
@@ -626,10 +638,11 @@
 			<param index="0" name="files" type="Dictionary[]" />
 			<param index="1" name="content_provider" type="Callable" />
 			<param index="2" name="manifest" type="String" default="&quot;&quot;" />
+			<param index="3" name="provider_timeout_ms" type="int" default="10000" />
 			<description>
 				Starts an OS-level drag of virtual files [i]out[/i] of the application, so they can be dropped into a file manager or another application. Blocks until the drag ends; the application keeps rendering throughout. Emits [signal drag_target_changed] as the cursor moves between windows and [signal file_drag_finished] once it is over. Fails with [constant ERR_UNAVAILABLE] unless the display server has the [constant DisplayServer.FEATURE_FILE_DRAG_OUT] feature.
 				Each entry of [param files] describes one file with a [code]name[/code] and an optional relative [code]dir[/code] inside the drop. The names are final at drag start; the bytes are not requested until a target actually reads them, by calling [param content_provider] as [code]content_provider(index: int, path: String)[/code], which must return a [PackedByteArray].
-				[b]The content provider is called on a worker thread, not the main thread.[/b] It must not touch the scene tree or any main-thread-only server, and it has about two seconds to answer. Use [signal drag_target_changed] to start generating the payload speculatively while the cursor is still hovering.
+				[b]The content provider is called on a worker thread, not the main thread.[/b] It must not touch the scene tree or any main-thread-only server, and it has [param provider_timeout_ms] milliseconds (clamped to [code]500[/code]–[code]60000[/code]) to answer, per file. Use [signal drag_target_changed] to start generating the payload speculatively while the cursor is still hovering, and raise the deadline when expensive on-demand work is in the plan.
 				See [method DisplayServer.window_start_file_drag] for the [param manifest] parameter and the full contract.
 			</description>
 		</method>
@@ -902,6 +915,12 @@
 			<param index="0" name="output_max_linear_value" type="float" />
 			<description>
 				Emitted when the output max linear value returned by [method Window.get_output_max_linear_value] has changed. This occurs when HDR output is enabled or disabled and when any HDR output luminance values of the window have changed, such as when the player adjusts their screen brightness setting or moves the window to a different screen. [param output_max_linear_value] is the new value.
+			</description>
+		</signal>
+		<signal name="progress_dialog_cancelled">
+			<param index="0" name="dialog_id" type="int" />
+			<description>
+				Emitted when the user clicks the Cancel button of a progress dialog created with [method create_progress_dialog]. Delivered deferred through the engine's message queue, so [b]while the main loop is blocked it may arrive tens of seconds late, or after the job has already finished[/b] — a worker doing the actual job should poll [method DisplayServer.progress_dialog_is_cancelled] instead and treat this signal as a convenience for jobs run while the main loop is alive.
 			</description>
 		</signal>
 		<signal name="theme_changed">

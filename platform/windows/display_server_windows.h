@@ -735,8 +735,14 @@ public:
 	virtual float window_get_output_max_linear_value(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override;
 
 	virtual void window_start_drag(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override;
-	virtual Error window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest = String(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override;
+	virtual Error window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest = String(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID, int p_provider_timeout_ms = 10000) override;
 	virtual String window_get_last_drop_manifest(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override;
+
+	virtual DisplayServerEnums::ProgressDialogID create_progress_dialog(const String &p_title, const String &p_line1, const String &p_line2, BitField<DisplayServerEnums::ProgressDialogFlags> p_flags = 0, const Callable &p_cancelled_callback = Callable(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override;
+	virtual void progress_dialog_set_progress(DisplayServerEnums::ProgressDialogID p_id, uint64_t p_completed, uint64_t p_total) override;
+	virtual void progress_dialog_set_lines(DisplayServerEnums::ProgressDialogID p_id, const String &p_line1, const String &p_line2) override;
+	virtual bool progress_dialog_is_cancelled(DisplayServerEnums::ProgressDialogID p_id) const override;
+	virtual void delete_progress_dialog(DisplayServerEnums::ProgressDialogID p_id) override;
 	virtual void window_start_resize(DisplayServerEnums::WindowResizeEdge p_edge, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override;
 
 	virtual void cursor_set_shape(DisplayServerEnums::CursorShape p_shape) override;

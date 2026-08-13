@@ -32,6 +32,7 @@
 
 #include "drag_source_windows.h"
 #include "drop_target_windows.h"
+#include "progress_dialog_windows.h"
 #include "key_mapping_windows.h"
 #include "native_menu_windows.h"
 #include "os_windows.h"
@@ -193,6 +194,7 @@ bool DisplayServerWindows::has_feature(DisplayServerEnums::Feature p_feature) co
 		case DisplayServerEnums::FEATURE_WINDOW_DRAG:
 		case DisplayServerEnums::FEATURE_HDR_OUTPUT:
 		case DisplayServerEnums::FEATURE_FILE_DRAG_OUT:
+		case DisplayServerEnums::FEATURE_NATIVE_PROGRESS_DIALOG:
 			return true;
 		case DisplayServerEnums::FEATURE_SCREEN_EXCLUDE_FROM_CAPTURE:
 			return (os_ver.dwBuildNumber >= 19041); // Fully supported on Windows 10 Vibranium R1 (2004)+ only, captured as black rect on older versions.
@@ -5000,7 +5002,7 @@ void DisplayServerWindows::window_start_drag(DisplayServerEnums::WindowID p_wind
 	}
 }
 
-Error DisplayServerWindows::window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest, DisplayServerEnums::WindowID p_window) {
+Error DisplayServerWindows::window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest, DisplayServerEnums::WindowID p_window, int p_provider_timeout_ms) {
 	HWND hWnd = nullptr;
 	uint32_t timer_id = 0;
 	{
@@ -5027,7 +5029,7 @@ Error DisplayServerWindows::window_start_file_drag(const TypedArray<Dictionary> 
 		files.write[i].dir = entry.get("dir", String());
 	}
 
-	Error err = DragSourceWindows::start_drag(hWnd, files, p_provider, p_finished_callback, p_target_changed_callback, p_manifest);
+	Error err = DragSourceWindows::start_drag(hWnd, files, p_provider, p_finished_callback, p_target_changed_callback, p_manifest, p_provider_timeout_ms);
 
 	{
 		_THREAD_SAFE_METHOD_
@@ -5045,6 +5047,56 @@ String DisplayServerWindows::window_get_last_drop_manifest(DisplayServerEnums::W
 
 	ERR_FAIL_COND_V(!windows.has(p_window), String());
 	return windows[p_window].last_drop_manifest;
+}
+
+DisplayServerEnums::ProgressDialogID DisplayServerWindows::create_progress_dialog(const String &p_title, const String &p_line1, const String &p_line2, BitField<DisplayServerEnums::ProgressDialogFlags> p_flags, const Callable &p_cancelled_callback, DisplayServerEnums::WindowID p_window) {
+	HWND owner = nullptr;
+	{
+		// Resolve the owner HWND under the lock, then call out WITHOUT it (the
+		// discipline window_start_file_drag documents above).
+		_THREAD_SAFE_METHOD_
+		if (windows.has(p_window) && !windows[p_window].is_popup) {
+			owner = windows[p_window].hWnd;
+		}
+	}
+
+	ProgressDialogWindows::Params params;
+	params.title = p_title;
+	params.line1 = p_line1;
+	params.line2 = p_line2;
+	params.flags = (uint32_t)p_flags;
+	params.owner = owner;
+	return ProgressDialogWindows::create(params, p_cancelled_callback);
+}
+
+// The four calls below deliberately take NO _THREAD_SAFE_METHOD_:
+// ProgressDialogWindows guards its own state, these are called from worker
+// threads (that is their whole point), and taking the display-server lock from
+// a worker while the main thread sits inside SHDoDragDrop holding it is a
+// deadlock invitation.
+
+void DisplayServerWindows::progress_dialog_set_progress(DisplayServerEnums::ProgressDialogID p_id, uint64_t p_completed, uint64_t p_total) {
+	// SetProgress64 with total == 0 is undefined-ish; clamp here so the worker
+	// never sees a degenerate pair.
+	if (p_total < 1) {
+		p_total = 1;
+	}
+	if (p_completed > p_total) {
+		p_completed = p_total;
+	}
+	ProgressDialogWindows::set_progress(p_id, p_completed, p_total);
+}
+
+void DisplayServerWindows::progress_dialog_set_lines(DisplayServerEnums::ProgressDialogID p_id, const String &p_line1, const String &p_line2) {
+	ProgressDialogWindows::set_lines(p_id, p_line1, p_line2);
+}
+
+bool DisplayServerWindows::progress_dialog_is_cancelled(DisplayServerEnums::ProgressDialogID p_id) const {
+	return ProgressDialogWindows::is_cancelled(p_id);
+}
+
+void DisplayServerWindows::delete_progress_dialog(DisplayServerEnums::ProgressDialogID p_id) {
+	ProgressDialogWindows::destroy(p_id);
 }
 
 void DisplayServerWindows::window_start_resize(DisplayServerEnums::WindowResizeEdge p_edge, DisplayServerEnums::WindowID p_window) {
@@ -8464,6 +8516,10 @@ DisplayServerWindows::~DisplayServerWindows() {
 	if (tts) {
 		memdelete(tts);
 	}
+
+	// Join every progress-dialog worker BEFORE the apartment below is torn
+	// down; a worker still inside COM past OleUninitialize is undefined.
+	ProgressDialogWindows::shutdown_all();
 
 	OleUninitialize();
 }

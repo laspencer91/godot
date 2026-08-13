@@ -1575,8 +1575,14 @@ void DisplayServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("window_start_drag", "window_id"), &DisplayServer::window_start_drag, DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
 	ClassDB::bind_method(D_METHOD("window_start_resize", "edge", "window_id"), &DisplayServer::window_start_resize, DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
 
-	ClassDB::bind_method(D_METHOD("window_start_file_drag", "files", "content_provider", "finished_callback", "target_changed_callback", "manifest", "window_id"), &DisplayServer::window_start_file_drag, DEFVAL(Callable()), DEFVAL(Callable()), DEFVAL(String()), DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
+	ClassDB::bind_method(D_METHOD("window_start_file_drag", "files", "content_provider", "finished_callback", "target_changed_callback", "manifest", "window_id", "provider_timeout_ms"), &DisplayServer::window_start_file_drag, DEFVAL(Callable()), DEFVAL(Callable()), DEFVAL(String()), DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID), DEFVAL(10000));
 	ClassDB::bind_method(D_METHOD("window_get_last_drop_manifest", "window_id"), &DisplayServer::window_get_last_drop_manifest, DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
+
+	ClassDB::bind_method(D_METHOD("create_progress_dialog", "title", "line1", "line2", "flags", "cancelled_callback", "window_id"), &DisplayServer::create_progress_dialog, DEFVAL(0), DEFVAL(Callable()), DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
+	ClassDB::bind_method(D_METHOD("progress_dialog_set_progress", "dialog_id", "completed", "total"), &DisplayServer::progress_dialog_set_progress);
+	ClassDB::bind_method(D_METHOD("progress_dialog_set_lines", "dialog_id", "line1", "line2"), &DisplayServer::progress_dialog_set_lines);
+	ClassDB::bind_method(D_METHOD("progress_dialog_is_cancelled", "dialog_id"), &DisplayServer::progress_dialog_is_cancelled);
+	ClassDB::bind_method(D_METHOD("delete_progress_dialog", "dialog_id"), &DisplayServer::delete_progress_dialog);
 
 	ClassDB::bind_method(D_METHOD("window_set_color", "color"), &DisplayServer::window_set_color);
 
@@ -1771,6 +1777,7 @@ void DisplayServer::_bind_methods() {
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_HDR_OUTPUT);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_PIP_MODE);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_FILE_DRAG_OUT);
+	BIND_ENUM_CONSTANT(DisplayServerEnums::FEATURE_NATIVE_PROGRESS_DIALOG);
 
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_UNKNOWN);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_TARGET_SELF);
@@ -1781,6 +1788,15 @@ void DisplayServer::_bind_methods() {
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_RESULT_CANCELLED);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_RESULT_DROPPED);
 	BIND_ENUM_CONSTANT(DisplayServerEnums::FILE_DRAG_RESULT_FAILED);
+
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_NORMAL);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_MODAL);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_MARQUEE);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_NO_TIME);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_NO_MINIMIZE);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_NO_CANCEL);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_NO_PROGRESS_BAR);
+	BIND_BITFIELD_FLAG(DisplayServerEnums::PROGRESS_DIALOG_FLAG_AUTO_TIME);
 
 #ifndef DISABLE_DEPRECATED
 	BIND_ENUM_CONSTANT(DisplayServerEnums::ROLE_UNKNOWN);

@@ -484,11 +484,38 @@ public:
 	// names are final immediately; the bytes are produced lazily by p_provider,
 	// WHICH IS CALLED ON A WORKER THREAD, only if and when the drop target
 	// actually reads them.
-	virtual Error window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest = String(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) { return ERR_UNAVAILABLE; }
+	// p_provider_timeout_ms is the PER-SLOT deadline the provider gets to hand
+	// bytes over once a target first reads a given file's stream, clamped to
+	// [500, 60000]. Exceeding it for one slot makes shell targets abort the
+	// whole transfer, so callers that plan expensive on-demand work (e.g. a 4K
+	// renormalize) should raise it.
+	virtual Error window_start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest = String(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID, int p_provider_timeout_ms = 10000) { return ERR_UNAVAILABLE; }
 
 	// JSON manifest carried by the last drop that arrived in this window using
 	// the fork's own material drop format, or "" for any other drop.
 	virtual String window_get_last_drop_manifest(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const { return String(); }
+
+	/* NATIVE PROGRESS DIALOG (FEATURE_NATIVE_PROGRESS_DIALOG) */
+
+	// An OS-owned modeless progress window. It is hosted on a thread the platform
+	// owns, so it keeps painting even while the engine's main loop is blocked (for
+	// example during the streaming phase of window_start_file_drag).
+	//
+	// EVERY method below is safe to call from ANY thread, including a
+	// WorkerThreadPool task and the file-drag content provider thread. That is the
+	// whole point: the updates that matter happen while the main thread cannot run.
+	//
+	// p_cancelled_callback, if valid, is invoked at most once with the dialog id,
+	// deferred through the MessageQueue — so it cannot arrive while the main loop
+	// is blocked. progress_dialog_is_cancelled is the poll that works during the
+	// freeze; check it from the worker doing the job.
+	virtual DisplayServerEnums::ProgressDialogID create_progress_dialog(const String &p_title, const String &p_line1, const String &p_line2, BitField<DisplayServerEnums::ProgressDialogFlags> p_flags = 0, const Callable &p_cancelled_callback = Callable(), DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) { return DisplayServerEnums::INVALID_PROGRESS_DIALOG_ID; }
+	virtual void progress_dialog_set_progress(DisplayServerEnums::ProgressDialogID p_id, uint64_t p_completed, uint64_t p_total) {}
+	virtual void progress_dialog_set_lines(DisplayServerEnums::ProgressDialogID p_id, const String &p_line1, const String &p_line2) {}
+	// Stub returns false, not true: on a stock/headless binary the job must run
+	// to completion, not silently self-cancel.
+	virtual bool progress_dialog_is_cancelled(DisplayServerEnums::ProgressDialogID p_id) const { return false; }
+	virtual void delete_progress_dialog(DisplayServerEnums::ProgressDialogID p_id) {}
 
 	virtual void window_set_color(const Color &p_color) {}
 
@@ -668,6 +695,7 @@ VARIANT_ENUM_CAST_EXT(DisplayServerEnums::ProgressState, DisplayServer::Progress
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::FileDialogMode, DisplayServer::FileDialogMode)
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::FileDragTargetKind, DisplayServer::FileDragTargetKind)
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::FileDragResult, DisplayServer::FileDragResult)
+VARIANT_BITFIELD_CAST_EXT(DisplayServerEnums::ProgressDialogFlags, DisplayServer::ProgressDialogFlags)
 
 #ifndef DISABLE_DEPRECATED
 VARIANT_ENUM_CAST_EXT(DisplayServerEnums::AccessibilityRole, DisplayServer::AccessibilityRole)

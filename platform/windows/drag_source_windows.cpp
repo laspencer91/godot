@@ -46,7 +46,13 @@
 GODOT_GCC_WARNING_PUSH_AND_IGNORE("-Wnon-virtual-dtor") // Silence warning due to a COM API weirdness.
 
 #define DRAG_OUT_MAX_FILES 512
-#define DRAG_OUT_PROVIDER_TIMEOUT_MS 2000
+// Default PER-SLOT provider deadline. 2000 was a spike-era guess; a 4K
+// normal-map renormalize computed on demand blows through it and shell targets
+// then abort the WHOLE transfer, so the floor was raised. Callers can override
+// per drag (clamped below).
+#define DRAG_OUT_PROVIDER_TIMEOUT_MS 10000
+#define DRAG_OUT_PROVIDER_TIMEOUT_MIN_MS 500
+#define DRAG_OUT_PROVIDER_TIMEOUT_MAX_MS 60000
 #define DRAG_OUT_TARGET_DEBOUNCE_MS 200
 #define DRAG_OUT_TARGET_PROP L"GodotMaterialDropTarget"
 #define DRAG_OUT_EDITOR_APPID_PREFIX L"Godot.GodotEditor."
@@ -77,6 +83,9 @@ struct DragOutSlot {
 struct DragOutState {
 	DragOutSlot slots[DRAG_OUT_MAX_FILES];
 	int32_t file_count = 0;
+	// Per-slot provider deadline, snapshotted at drag start exactly like
+	// file_count — _require_slot must never do a live read of a Godot type.
+	int32_t provider_timeout_ms = DRAG_OUT_PROVIDER_TIMEOUT_MS;
 
 	unsigned char *manifest = nullptr;
 	uint64_t manifest_size = 0;
@@ -224,7 +233,7 @@ static bool _require_slot(int p_index) {
 		SetEvent(g_request_event);
 	}
 
-	const ULONGLONG deadline = GetTickCount64() + DRAG_OUT_PROVIDER_TIMEOUT_MS;
+	const ULONGLONG deadline = GetTickCount64() + (ULONGLONG)g_drag.provider_timeout_ms;
 	while (true) {
 		LONG current = InterlockedCompareExchange(&slot.state, 0, 0);
 		if (current == SLOT_READY) {
@@ -1051,7 +1060,7 @@ static void _release_snapshot() {
 	g_drag.file_count = 0;
 }
 
-Error DragSourceWindows::start_drag(HWND p_owner, const Vector<FileEntry> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest) {
+Error DragSourceWindows::start_drag(HWND p_owner, const Vector<FileEntry> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest, int p_provider_timeout_ms) {
 	ERR_FAIL_COND_V_MSG(is_dragging(), ERR_BUSY, "A file drag is already in progress.");
 	ERR_FAIL_COND_V_MSG(p_files.is_empty(), ERR_INVALID_PARAMETER, "No files to drag.");
 	ERR_FAIL_COND_V_MSG(p_files.size() > DRAG_OUT_MAX_FILES, ERR_INVALID_PARAMETER, vformat("Too many files in one drag (max %d).", DRAG_OUT_MAX_FILES));
@@ -1076,6 +1085,7 @@ Error DragSourceWindows::start_drag(HWND p_owner, const Vector<FileEntry> &p_fil
 		g_drag.slots[i].state = SLOT_IDLE;
 	}
 	g_drag.file_count = p_files.size();
+	g_drag.provider_timeout_ms = CLAMP(p_provider_timeout_ms, DRAG_OUT_PROVIDER_TIMEOUT_MIN_MS, DRAG_OUT_PROVIDER_TIMEOUT_MAX_MS);
 
 	if (!p_manifest.is_empty()) {
 		CharString utf8 = p_manifest.utf8();

@@ -63,7 +63,10 @@ public:
 	// Starts a modal OS drag. Returns only once the drag has finished (or was
 	// cancelled); the completion callback is invoked deferred, through the
 	// MessageQueue, so receivers run on a clean stack.
-	static Error start_drag(HWND p_owner, const Vector<FileEntry> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest);
+	// p_provider_timeout_ms is the PER-SLOT deadline (from the moment a target
+	// first reads that slot) the provider gets before the slot is failed,
+	// clamped to [500, 60000]. Snapshotted at drag start like file_count.
+	static Error start_drag(HWND p_owner, const Vector<FileEntry> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest, int p_provider_timeout_ms = 10000);
 
 	static bool is_dragging();
 

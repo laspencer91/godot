@@ -121,6 +121,7 @@ private:
 
 	void _file_drag_finished(int p_result, int p_target_kind);
 	void _file_drag_target_changed(int p_target_kind, const String &p_target_name);
+	void _progress_dialog_cancelled(int p_dialog_id);
 
 	String title;
 	String displayed_title;
@@ -454,8 +455,15 @@ public:
 	bool has_focus_or_active_popup() const;
 
 	void start_drag();
-	Error start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_content_provider, const String &p_manifest = String());
+	Error start_file_drag(const TypedArray<Dictionary> &p_files, const Callable &p_content_provider, const String &p_manifest = String(), int p_provider_timeout_ms = 10000);
 	void start_resize(DisplayServerEnums::WindowResizeEdge p_edge);
+
+	// Only the create wrapper lives on Window (so the cancel notification can
+	// arrive as the progress_dialog_cancelled signal). The mutators are NOT
+	// wrapped here: Window methods carry ERR_MAIN_THREAD_GUARD and the
+	// mutators' entire value is being callable off the main thread — use
+	// DisplayServer directly for those.
+	int create_progress_dialog(const String &p_title, const String &p_line1, const String &p_line2, BitField<DisplayServerEnums::ProgressDialogFlags> p_flags = 0);
 
 	Rect2i get_usable_parent_rect() const;
 
