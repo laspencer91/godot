@@ -69,6 +69,10 @@ public:
 	static Error start_drag(HWND p_owner, const Vector<FileEntry> &p_files, const Callable &p_provider, const Callable &p_finished_callback, const Callable &p_target_changed_callback, const String &p_manifest, int p_provider_timeout_ms = 10000);
 
 	static bool is_dragging();
+	// The HWND snapshotted for the active drag. Safe to read from the byte
+	// provider thread; lets other drag-time native UI avoid the display-server
+	// mutex while the main thread is parked in SHDoDragDrop.
+	static HWND active_owner();
 
 	// True while the calling thread is inside GetData / IStream::Read. The pump
 	// checks it: re-entering the engine from a content path is the one thing

@@ -109,6 +109,7 @@ struct DragOutState {
 
 	volatile LONG engine_free_depth = 0;
 	volatile LONG drag_active = 0;
+	HWND owner = nullptr;
 	// Cleared before the snapshot is freed. A target that hangs on to one of
 	// our streams past the end of the drag gets an error, not freed memory.
 	volatile LONG snapshot_valid = 0;
@@ -140,6 +141,13 @@ bool DragSourceWindows::is_engine_free_zone() {
 
 bool DragSourceWindows::is_dragging() {
 	return InterlockedCompareExchange(&g_drag.drag_active, 0, 0) != 0;
+}
+
+HWND DragSourceWindows::active_owner() {
+	if (!is_dragging()) {
+		return nullptr;
+	}
+	return (HWND)InterlockedCompareExchangePointer((PVOID volatile *)&g_drag.owner, nullptr, nullptr);
 }
 
 void DragSourceWindows::pump_engine() {
@@ -1130,6 +1138,7 @@ Error DragSourceWindows::start_drag(HWND p_owner, const Vector<FileEntry> &p_fil
 	Input::get_singleton()->release_pressed_events();
 	ReleaseCapture();
 
+	InterlockedExchangePointer((PVOID volatile *)&g_drag.owner, p_owner);
 	InterlockedExchange(&g_drag.drag_active, 1);
 
 	DragOutDataObject *data_object = new DragOutDataObject();
@@ -1141,6 +1150,7 @@ Error DragSourceWindows::start_drag(HWND p_owner, const Vector<FileEntry> &p_fil
 	HRESULT hr = SHDoDragDrop(p_owner, data_object, drop_source, DROPEFFECT_COPY, &effect);
 
 	InterlockedExchange(&g_drag.drag_active, 0);
+	InterlockedExchangePointer((PVOID volatile *)&g_drag.owner, nullptr);
 
 	data_object->Release();
 	drop_source->Release();

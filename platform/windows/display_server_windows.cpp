@@ -5050,8 +5050,13 @@ String DisplayServerWindows::window_get_last_drop_manifest(DisplayServerEnums::W
 }
 
 DisplayServerEnums::ProgressDialogID DisplayServerWindows::create_progress_dialog(const String &p_title, const String &p_line1, const String &p_line2, BitField<DisplayServerEnums::ProgressDialogFlags> p_flags, const Callable &p_cancelled_callback, DisplayServerEnums::WindowID p_window) {
-	HWND owner = nullptr;
-	{
+	// A file-content provider may reach this while the main thread is inside
+	// SHDoDragDrop from Control::_get_drag_data. That outer UI path can retain
+	// the display-server mutex for the modal call, so reacquiring it here would
+	// deadlock the provider against the shell's pending IStream::Read. The drag
+	// source already owns an immutable HWND snapshot for exactly this lifetime.
+	HWND owner = DragSourceWindows::active_owner();
+	if (!owner) {
 		// Resolve the owner HWND under the lock, then call out WITHOUT it (the
 		// discipline window_start_file_drag documents above).
 		_THREAD_SAFE_METHOD_
