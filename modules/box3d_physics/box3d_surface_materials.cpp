@@ -547,11 +547,19 @@ Ref<Box3DSurfaceMaterial> Box3DPhysics::get_material(const Variant &p_id_or_name
 
 int Box3DPhysics::match_texture(const String &p_texture_name) const {
 	_ensure_surface_material_library();
-	for (const KeyValue<StringName, Ref<Box3DSurfaceMaterial>> &kv : materials_by_name) {
-		PackedStringArray patterns = kv.value->get_texture_patterns();
+	// Match in the fixed authoring-slot order. `materials_by_name` is a HashMap, so iterating it
+	// made overlapping patterns choose a different material across processes. Texture matching can
+	// feed authoritative gameplay through per-face surface maps and therefore must be deterministic.
+	const TypedArray<Box3DSurfaceMaterial> ordered_materials = get_materials();
+	for (int material_index = 0; material_index < ordered_materials.size(); material_index++) {
+		Ref<Box3DSurfaceMaterial> material = ordered_materials[material_index];
+		if (material.is_null()) {
+			continue;
+		}
+		PackedStringArray patterns = material->get_texture_patterns();
 		for (int i = 0; i < patterns.size(); i++) {
 			if (p_texture_name.matchn(patterns[i])) {
-				return kv.value->get_material_id();
+				return material->get_material_id();
 			}
 		}
 	}
