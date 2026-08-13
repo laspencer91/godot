@@ -5055,6 +5055,8 @@ DisplayServerEnums::ProgressDialogID DisplayServerWindows::create_progress_dialo
 	// the display-server mutex for the modal call, so reacquiring it here would
 	// deadlock the provider against the shell's pending IStream::Read. The drag
 	// source already owns an immutable HWND snapshot for exactly this lifetime.
+	// While a drag is active this intentionally ignores p_window: resolving that
+	// window would require the lock this snapshot exists to avoid.
 	HWND owner = DragSourceWindows::active_owner();
 	if (!owner) {
 		// Resolve the owner HWND under the lock, then call out WITHOUT it (the
