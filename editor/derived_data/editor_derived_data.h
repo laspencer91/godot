@@ -31,6 +31,8 @@
 #pragma once
 
 #include "core/object/object.h"
+#include "core/templates/hash_set.h"
+#include "core/variant/type_info.h"
 
 class Node;
 
@@ -39,18 +41,19 @@ class Node;
 // node's persistent identity (scene UID + unique-scene-ID chain + slot name), so
 // renames and moves re-resolve to the same bundle while true duplication forks.
 //
-// The slot table itself lives project-side (the script named by the
-// "editor/derived_data/slot_registry" project setting, expected to expose SLOTS
-// and ROOTS constants) — the engine holds the mechanism, the project holds the
-// policy, and there is exactly one source of truth for both.
+// Each producer registers its own slot. Retained artifacts default to
+// res://__derived/ and regenerated artifacts to res://.godot/derived/, so built-in
+// bakes work in every project without setup. A project-side registry script remains
+// available as an optional compatibility/extension layer.
 class EditorDerivedData : public Object {
 	GDCLASS(EditorDerivedData, Object);
 
 	static EditorDerivedData *singleton;
 
-	// Cached from the project-side registry script for the editor session.
+	// Producer registrations plus optional project-side extension metadata.
 	Dictionary registry_slots; // slot name -> property row.
 	Dictionary registry_roots; // storage class int -> "res://..." root.
+	HashSet<StringName> producer_registered_slots;
 	bool registry_loaded = false;
 
 	bool _ensure_registry();
@@ -64,21 +67,31 @@ protected:
 	static void _bind_methods();
 
 public:
+	enum StorageClass {
+		STORAGE_RETAINED,
+		STORAGE_REGENERATED,
+	};
+
 	static EditorDerivedData *get_singleton() { return singleton; }
 	static void create();
 	static void free();
+
+	Error register_slot(const StringName &p_slot, const StringName &p_producer, const PackedStringArray &p_extensions, int p_storage = STORAGE_RETAINED, int p_schema = 1);
+	void unregister_slot(const StringName &p_slot);
+	bool has_slot(const StringName &p_slot);
 
 	String bundle_for(Node *p_owner, const StringName &p_slot);
 	String file_for(Node *p_owner, const StringName &p_slot, const String &p_ext);
 	bool owns(Node *p_owner, const StringName &p_slot, const String &p_artifact_path);
 	Dictionary describe(const String &p_artifact_path);
 
-	// Read-only views of the project-side registry, for tools that have to walk the
-	// derived roots themselves (the Derived Data dialog). Handing the cached tables out
-	// keeps the registry-loading policy in one place instead of re-implemented per tool.
+	// Read-only views of all producer registrations and optional project extensions,
+	// for tools that have to walk the derived roots themselves.
 	PackedStringArray get_roots();
 	Dictionary get_slots();
 
 	EditorDerivedData();
 	~EditorDerivedData() override;
 };
+
+VARIANT_ENUM_CAST(EditorDerivedData::StorageClass);

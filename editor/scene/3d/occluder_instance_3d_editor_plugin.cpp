@@ -102,6 +102,12 @@ void OccluderInstance3DEditorPlugin::bake_node(Node *p_node) {
 }
 
 OccluderInstance3DEditorPlugin::OccluderInstance3DEditorPlugin() {
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	PackedStringArray extensions;
+	extensions.push_back("occ");
+	ERR_FAIL_COND(edd->register_slot(SNAME("godot.occluder"), SNAME("occluder_instance_3d_editor_plugin"), extensions) != OK);
+
 	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
 			SNAME("occluder_instance_3d"), SNAME("bake"), SNAME("OccluderInstance3D"),
 			TTR("Bake Occluders"), SNAME("Bake"),

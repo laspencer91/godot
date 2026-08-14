@@ -154,6 +154,14 @@ void LightmapGIEditorPlugin::bake_func_end(uint64_t p_time_started) {
 }
 
 LightmapGIEditorPlugin::LightmapGIEditorPlugin() {
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	PackedStringArray extensions;
+	extensions.push_back("lmbake");
+	extensions.push_back("exr");
+	extensions.push_back("png");
+	ERR_FAIL_COND(edd->register_slot(SNAME("godot.lightmap"), SNAME("lightmap_gi_editor_plugin"), extensions) != OK);
+
 	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
 			SNAME("lightmap_gi"), SNAME("bake"), SNAME("LightmapGI"),
 			TTR("Bake Lightmaps"), SNAME("Bake"),

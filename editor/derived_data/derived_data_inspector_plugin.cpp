@@ -241,11 +241,6 @@ bool DerivedDataInspectorPlugin::can_handle(Object *p_object) {
 	if (!EditorDerivedData::get_singleton() || !node) {
 		return false;
 	}
-	// A project with no slot registry has no bundles, and asking the allocator
-	// anyway would make it complain about the unset setting once per property.
-	if (String(GLOBAL_GET("editor/derived_data/slot_registry")).is_empty()) {
-		return false;
-	}
 	// Per-node, so it belongs on the once-per-object gate rather than in parse_property,
 	// where every candidate property would pay a manifest read only to discard it.
 	return _identity_settled(node);

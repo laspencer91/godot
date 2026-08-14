@@ -45,6 +45,8 @@
 
 static const char *MANIFEST_FILE_NAME = "manifest.cfg";
 static const char *MANIFEST_SECTION = "bundle";
+static const char *DEFAULT_RETAINED_ROOT = "res://__derived/";
+static const char *DEFAULT_REGENERATED_ROOT = "res://.godot/derived/";
 
 EditorDerivedData *EditorDerivedData::singleton = nullptr;
 
@@ -52,21 +54,92 @@ bool EditorDerivedData::_ensure_registry() {
 	if (registry_loaded) {
 		return true;
 	}
+	registry_loaded = true;
 
-	const String registry_path = GLOBAL_GET("editor/derived_data/slot_registry");
-	ERR_FAIL_COND_V_MSG(registry_path.is_empty(), false, "EditorDerivedData: the \"editor/derived_data/slot_registry\" project setting is not set; point it at the project's slot registry script.");
+	const String registry_path = ProjectSettings::get_singleton()->get_setting("editor/derived_data/slot_registry", "");
+	if (registry_path.is_empty()) {
+		return true;
+	}
 
 	Ref<Script> registry = ResourceLoader::load(registry_path);
-	ERR_FAIL_COND_V_MSG(registry.is_null(), false, vformat("EditorDerivedData: cannot load the slot registry script at \"%s\".", registry_path));
+	if (registry.is_null()) {
+		ERR_PRINT(vformat("EditorDerivedData: cannot load the optional slot registry script at \"%s\"; producer-registered slots remain available.", registry_path));
+		return true;
+	}
 
 	HashMap<StringName, Variant> constants;
 	registry->get_constants(&constants);
-	ERR_FAIL_COND_V_MSG(!constants.has("SLOTS") || !constants.has("ROOTS"), false, vformat("EditorDerivedData: the slot registry at \"%s\" must expose SLOTS and ROOTS constants.", registry_path));
+	if (!constants.has("SLOTS")) {
+		ERR_PRINT(vformat("EditorDerivedData: the optional slot registry at \"%s\" does not expose a SLOTS constant; producer-registered slots remain available.", registry_path));
+		return true;
+	}
 
-	registry_slots = constants["SLOTS"];
-	registry_roots = constants["ROOTS"];
-	registry_loaded = true;
+	// Preserve the standard engine roots. Extension registries may add storage
+	// classes, but cannot silently redirect built-in output.
+	if (constants.has("ROOTS")) {
+		const Dictionary project_roots = constants["ROOTS"];
+		for (const KeyValue<Variant, Variant> &kv : project_roots) {
+			if (!registry_roots.has(kv.key)) {
+				registry_roots[kv.key] = kv.value;
+			}
+		}
+	}
+
+	// Legacy project registries remain useful for project-defined producers and
+	// metadata. Producer-owned structural fields win when both define a slot.
+	const Dictionary project_slots = constants["SLOTS"];
+	for (const KeyValue<Variant, Variant> &kv : project_slots) {
+		const StringName slot = StringName(kv.key);
+		const Dictionary project_info = kv.value;
+		if (!registry_slots.has(slot)) {
+			registry_slots[slot] = project_info;
+			continue;
+		}
+		Dictionary merged = project_info.duplicate();
+		const Dictionary producer_info = registry_slots[slot];
+		for (const KeyValue<Variant, Variant> &producer_kv : producer_info) {
+			merged[producer_kv.key] = producer_kv.value;
+		}
+		registry_slots[slot] = merged;
+	}
 	return true;
+}
+
+Error EditorDerivedData::register_slot(const StringName &p_slot, const StringName &p_producer, const PackedStringArray &p_extensions, int p_storage, int p_schema) {
+	ERR_FAIL_COND_V_MSG(p_slot.is_empty(), ERR_INVALID_PARAMETER, "EditorDerivedData: cannot register an empty slot name.");
+	ERR_FAIL_COND_V_MSG(p_producer.is_empty(), ERR_INVALID_PARAMETER, vformat("EditorDerivedData: slot \"%s\" has no producer name.", p_slot));
+	ERR_FAIL_COND_V_MSG(p_extensions.is_empty(), ERR_INVALID_PARAMETER, vformat("EditorDerivedData: slot \"%s\" has no file extensions.", p_slot));
+	if (!_ensure_registry()) {
+		return ERR_CANT_CREATE;
+	}
+	ERR_FAIL_COND_V_MSG(!registry_roots.has(p_storage), ERR_INVALID_PARAMETER, vformat("EditorDerivedData: slot \"%s\" names unknown storage class %d.", p_slot, p_storage));
+
+	if (producer_registered_slots.has(p_slot)) {
+		const Dictionary existing = registry_slots[p_slot];
+		return StringName(existing.get("producer", StringName())) == p_producer ? OK : ERR_ALREADY_EXISTS;
+	}
+
+	Dictionary info = registry_slots.get(p_slot, Dictionary());
+	info["producer"] = p_producer;
+	info["schema"] = p_schema;
+	info["exts"] = p_extensions;
+	info["storage"] = p_storage;
+	registry_slots[p_slot] = info;
+	producer_registered_slots.insert(p_slot);
+	return OK;
+}
+
+void EditorDerivedData::unregister_slot(const StringName &p_slot) {
+	if (producer_registered_slots.erase(p_slot)) {
+		registry_slots.erase(p_slot);
+	}
+}
+
+bool EditorDerivedData::has_slot(const StringName &p_slot) {
+	if (!_ensure_registry()) {
+		return false;
+	}
+	return registry_slots.has(p_slot);
 }
 
 Error EditorDerivedData::_key_for(Node *p_owner, Dictionary &r_key) const {
@@ -295,12 +368,18 @@ Dictionary EditorDerivedData::get_slots() {
 }
 
 void EditorDerivedData::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("register_slot", "slot", "producer", "extensions", "storage", "schema"), &EditorDerivedData::register_slot, DEFVAL(STORAGE_RETAINED), DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("unregister_slot", "slot"), &EditorDerivedData::unregister_slot);
+	ClassDB::bind_method(D_METHOD("has_slot", "slot"), &EditorDerivedData::has_slot);
 	ClassDB::bind_method(D_METHOD("file_for", "owner", "slot", "ext"), &EditorDerivedData::file_for);
 	ClassDB::bind_method(D_METHOD("bundle_for", "owner", "slot"), &EditorDerivedData::bundle_for);
 	ClassDB::bind_method(D_METHOD("owns", "owner", "slot", "artifact_path"), &EditorDerivedData::owns);
 	ClassDB::bind_method(D_METHOD("describe", "artifact_path"), &EditorDerivedData::describe);
 	ClassDB::bind_method(D_METHOD("get_roots"), &EditorDerivedData::get_roots);
 	ClassDB::bind_method(D_METHOD("get_slots"), &EditorDerivedData::get_slots);
+
+	BIND_ENUM_CONSTANT(STORAGE_RETAINED);
+	BIND_ENUM_CONSTANT(STORAGE_REGENERATED);
 }
 
 void EditorDerivedData::create() {
@@ -315,6 +394,8 @@ void EditorDerivedData::free() {
 EditorDerivedData::EditorDerivedData() {
 	ERR_FAIL_COND(singleton != nullptr);
 	singleton = this;
+	registry_roots[STORAGE_RETAINED] = DEFAULT_RETAINED_ROOT;
+	registry_roots[STORAGE_REGENERATED] = DEFAULT_REGENERATED_ROOT;
 }
 
 EditorDerivedData::~EditorDerivedData() {

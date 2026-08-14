@@ -5,7 +5,7 @@
 	</brief_description>
 	<description>
 		[EditorDerivedData] allocates on-disk locations for machine-generated artifacts (lightmaps, GI data, procedural bakes) keyed by the owning node's persistent identity: the containing scene's resource UID plus the node's unique-scene-ID chain (see [method Node.get_unique_scene_id_path]) plus a producer slot name. Producers ask for a path instead of choosing one, so renaming or moving a scene or node keeps resolving to the same bundle, while duplicating a node or scene allocates a fresh one on its next bake.
-		The available slots and their storage roots are defined project-side by the script named in the [code]editor/derived_data/slot_registry[/code] project setting, which must expose [code]SLOTS[/code] and [code]ROOTS[/code] constants. Each allocated bundle directory carries a [code]manifest.cfg[/code] recording its identity; read it through [method describe], never directly.
+		Each producer registers its slot with [method register_slot]. Retained artifacts are stored under [code]res://__derived/[/code] and regenerated artifacts under [code]res://.godot/derived/[/code] by default, so built-in bakes require no project configuration. The legacy [code]editor/derived_data/slot_registry[/code] project setting is still read for backward compatibility. Each allocated bundle directory carries a [code]manifest.cfg[/code] recording its identity; read it through [method describe], never directly.
 		A node must have been saved at least once before allocation so its unique IDs are settled — allocation fails with an error for unsaved (new or freshly duplicated) nodes.
 		[b]Note:[/b] This class shouldn't be instantiated directly. Instead, access the singleton directly by its name.
 	</description>
@@ -36,6 +36,13 @@
 				Single-file convenience over [method bundle_for]: returns [code]data.[param ext][/code] inside the owner's bundle for [param slot], allocating the bundle if needed. [param ext] is a bare extension without a dot. Returns an empty string on failure.
 			</description>
 		</method>
+		<method name="has_slot">
+			<return type="bool" />
+			<param index="0" name="slot" type="StringName" />
+			<description>
+				Returns [code]true[/code] if a producer or optional project extension has registered [param slot].
+			</description>
+		</method>
 		<method name="owns">
 			<return type="bool" />
 			<param index="0" name="owner" type="Node" />
@@ -45,5 +52,31 @@
 				Returns [code]true[/code] if the bundle containing [param artifact_path] is owned by [param owner] for [param slot]: its manifest identity matches the node's current key. A [code]false[/code] result on a referenced artifact means the node is living off another node's bake (for example after a paste) and its next bake will fork into a fresh bundle that the caller must repoint to.
 			</description>
 		</method>
+		<method name="register_slot">
+			<return type="int" enum="Error" />
+			<param index="0" name="slot" type="StringName" />
+			<param index="1" name="producer" type="StringName" />
+			<param index="2" name="extensions" type="PackedStringArray" />
+			<param index="3" name="storage" type="int" default="0" />
+			<param index="4" name="schema" type="int" default="1" />
+			<description>
+				Registers a derived-data slot owned by a producer. Editor plugins should call this during initialization instead of requiring users to configure a central slot table. Re-registering the same slot from the same producer is allowed.
+			</description>
+		</method>
+		<method name="unregister_slot">
+			<return type="void" />
+			<param index="0" name="slot" type="StringName" />
+			<description>
+				Unregisters a producer-owned slot.
+			</description>
+		</method>
 	</methods>
+	<constants>
+		<constant name="STORAGE_RETAINED" value="0" enum="StorageClass">
+			Stores runtime-consumed derived artifacts under [code]res://__derived/[/code].
+		</constant>
+		<constant name="STORAGE_REGENERATED" value="1" enum="StorageClass">
+			Stores editor-only, reproducible artifacts under [code]res://.godot/derived/[/code].
+		</constant>
+	</constants>
 </class>

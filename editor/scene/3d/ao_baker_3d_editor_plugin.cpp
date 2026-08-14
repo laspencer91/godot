@@ -288,6 +288,12 @@ void AOBaker3DEditorPlugin::_do_bake() {
 }
 
 AOBaker3DEditorPlugin::AOBaker3DEditorPlugin() {
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	PackedStringArray extensions;
+	extensions.push_back("png");
+	ERR_FAIL_COND(edd->register_slot(SNAME("godot.ao_bake"), SNAME("ao_baker_3d_editor_plugin"), extensions) != OK);
+
 	uv2_prompt = memnew(ConfirmationDialog);
 	uv2_prompt->set_title(TTR("Bake AO"));
 	uv2_prompt->get_ok_button()->set_text(TTR("Unwrap & Bake"));

@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "editor/derived_data/derived_data_dialog.h"
+#include "editor/derived_data/editor_derived_data.h"
 
 #include "tests/test_macros.h"
 
@@ -63,6 +64,26 @@ struct TestDerivedDataDialogAccess {
 };
 
 namespace TestDerivedDataDialog {
+
+TEST_CASE("[Editor][DerivedData] Producers register slots without project configuration") {
+	EditorDerivedData *derived_data = EditorDerivedData::get_singleton();
+	REQUIRE(derived_data != nullptr);
+
+	PackedStringArray extensions;
+	extensions.push_back("bin");
+	const StringName slot = SNAME("test.zero_configuration");
+	CHECK(derived_data->register_slot(slot, SNAME("test_producer"), extensions) == OK);
+	CHECK(derived_data->has_slot(slot));
+	CHECK(derived_data->register_slot(slot, SNAME("test_producer"), extensions) == OK);
+	CHECK(derived_data->register_slot(slot, SNAME("other_producer"), extensions) == ERR_ALREADY_EXISTS);
+
+	const PackedStringArray roots = derived_data->get_roots();
+	CHECK(roots.has("res://__derived/"));
+	CHECK(roots.has("res://.godot/derived/"));
+
+	derived_data->unregister_slot(slot);
+	CHECK_FALSE(derived_data->has_slot(slot));
+}
 
 TEST_CASE("[Editor][DerivedData] References always prevent automatic deletion") {
 	CHECK_FALSE(TestDerivedDataDialogAccess::referenced_orphan_is_deletable());

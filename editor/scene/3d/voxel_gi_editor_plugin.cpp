@@ -142,6 +142,12 @@ void VoxelGIEditorPlugin::bake_func_end() {
 }
 
 VoxelGIEditorPlugin::VoxelGIEditorPlugin() {
+	EditorDerivedData *edd = EditorDerivedData::get_singleton();
+	ERR_FAIL_NULL(edd);
+	PackedStringArray extensions;
+	extensions.push_back("res");
+	ERR_FAIL_COND(edd->register_slot(SNAME("godot.voxel_gi"), SNAME("voxel_gi_editor_plugin"), extensions) != OK);
+
 	bake_action = EditorSceneActionRegistry::get_singleton()->register_class_action(
 			SNAME("voxel_gi"), SNAME("bake"), SNAME("VoxelGI"),
 			TTR("Bake VoxelGI"), SNAME("Bake"),

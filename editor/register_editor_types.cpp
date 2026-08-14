@@ -371,9 +371,6 @@ void register_editor_types() {
 	ei_singleton.editor_only = true;
 	Engine::get_singleton()->add_singleton(ei_singleton);
 
-	// The derived data allocator's slot table is project code — one source of truth
-	// shared with project-side tooling (audit, size report).
-	GLOBAL_DEF(PropertyInfo(Variant::STRING, "editor/derived_data/slot_registry", PROPERTY_HINT_FILE, "*.gd"), "");
 	EditorDerivedData::create();
 	// Deliberately NOT editor_only: the project's gate/audit scripts run in project
 	// mode under the editor binary and read bundles through this singleton. Editor
