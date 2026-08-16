@@ -142,6 +142,25 @@ func _find_background_tab_bar(scene_tree: Tree) -> TabBar:
 	return null
 
 
+func _find_legacy_scene_tab_bar() -> TabBar:
+	for candidate in EditorInterface.get_base_control().find_children("*", "TabBar", true, false):
+		var tabs := candidate as TabBar
+		var ancestor: Node = tabs
+		while ancestor:
+			if ancestor.get_class() == "EditorSceneTabs":
+				return tabs
+			ancestor = ancestor.get_parent()
+	return null
+
+
+func _find_scene_tab(tabs: TabBar, scene_root: Node) -> int:
+	var scene_name := scene_root.scene_file_path.get_file().get_basename()
+	for index in tabs.tab_count:
+		if tabs.get_tab_title(index).contains(scene_name):
+			return index
+	return -1
+
+
 func _find_visible_code_edit(node: Node) -> CodeEdit:
 	if node is CodeEdit and node.is_visible_in_tree():
 		return node
@@ -153,15 +172,20 @@ func _find_visible_code_edit(node: Node) -> CodeEdit:
 
 
 func _run_test() -> void:
-	await _frames(35)
-
 	var left_root: Node
 	var right_root: Node
-	for root in EditorInterface.get_open_scene_roots():
-		if root.scene_file_path == "res://test_2d.tscn":
-			left_root = root
-		elif root.scene_file_path == "res://test_3d.tscn":
-			right_root = root
+	# On a first import, plugins enter before workspace session restoration finishes. Poll instead of
+	# assuming a fixed frame reaches the two pane-hosted scenes; this keeps the GUI assertion itself
+	# deterministic across warm and cold editor caches.
+	for frame in 120:
+		for root in EditorInterface.get_open_scene_roots():
+			if root.scene_file_path == "res://test_2d.tscn":
+				left_root = root
+			elif root.scene_file_path == "res://test_3d.tscn":
+				right_root = root
+		if left_root and right_root:
+			break
+		await get_tree().process_frame
 	if left_root == null or right_root == null:
 		push_error("The shortcut routing fixture requires both visible scene documents.")
 		return
@@ -171,10 +195,37 @@ func _run_test() -> void:
 	if left_target == null or right_target == null:
 		push_error("Could not resolve both scene target nodes.")
 		return
-	var left_tree := _find_scene_tree(left_target)
-	var right_tree := _find_scene_tree(right_target)
+	var left_tree: Tree
+	var right_tree: Tree
+	for frame in 120:
+		left_tree = _find_scene_tree(left_target)
+		right_tree = _find_scene_tree(right_target)
+		if left_tree and right_tree:
+			break
+		await get_tree().process_frame
 	if left_tree == null or right_tree == null:
 		push_error("Could not resolve both pane-hosted Scene Trees.")
+		return
+
+	# Reproduce the stale-focus seam directly. Keep the left workspace pane focused, switch the
+	# model's active scene through the legacy strip (which intentionally does not move pane focus),
+	# then click the already-focused left pane's Scene Tree. Re-selecting the same WorkspacePane must
+	# reconcile its current document context instead of returning early.
+	if not await _focus_scene_tree_node(left_tree, left_target):
+		push_error("Could not establish left-pane focus for the stale-context probe.")
+		return
+	var legacy_tabs := _find_legacy_scene_tab_bar()
+	var right_scene_tab := _find_scene_tab(legacy_tabs, right_root) if legacy_tabs else -1
+	if legacy_tabs == null or right_scene_tab < 0:
+		push_error("Could not resolve the legacy scene tab used by the stale-context probe.")
+		return
+	legacy_tabs.current_tab = right_scene_tab
+	await _frames(3)
+	if EditorInterface.get_edited_scene_root() != right_root:
+		push_error("Legacy scene-tab switch did not establish the stale right-scene context.")
+		return
+	if not await _focus_scene_tree_node(left_tree, left_target) or EditorInterface.get_edited_scene_root() != left_root:
+		push_error("Clicking the already-focused pane's Scene Tree did not reactivate its document.")
 		return
 
 	# Focus each visible pane and prove Ctrl+A mutates only the selected document. Undo immediately

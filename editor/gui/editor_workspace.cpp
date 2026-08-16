@@ -279,6 +279,15 @@ void EditorWorkspace::set_focused_pane(WorkspacePane *p_pane) {
 
 	WorkspacePane *old_focused = focused_pane;
 	if (old_focused == p_pane) {
+		// The model's active document can change without moving workspace focus (for example through
+		// the legacy scene-tab strip or a document-bound viewport's click-promotion path). A later
+		// click inside this pane must therefore reconcile its current tab even when the pane marker
+		// itself did not change. This also makes embedded Scene Tree clicks activate the tab's document
+		// before the Tree mutates that document's local selection.
+		if (TabbedDocumentHost *host = Object::cast_to<TabbedDocumentHost>(p_pane->get_content())) {
+			last_tabbed_pane = p_pane;
+			host->activate_current_context();
+		}
 		return;
 	}
 	if (old_focused) {
