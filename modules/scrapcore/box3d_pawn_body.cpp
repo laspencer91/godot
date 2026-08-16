@@ -216,6 +216,7 @@ void Box3DPawnBody::_sync_mover_settings(const scrap::MovementParams &p_params) 
 	mover->set_collision_mask(pawn->get_collision_mask());
 	mover->set_floor_max_angle(p_params.floor_max_angle);
 	mover->set_step_height(p_params.step_height);
+	mover->set_body_footprint_radius(p_params.body_footprint_radius);
 	mover->set_push_strength(0.0);
 }
 
@@ -496,8 +497,8 @@ scrap::Vec3 Box3DPawnBody::get_floor_normal() const {
 
 bool Box3DPawnBody::can_stand_up(scrap::Scalar p_current_height, const scrap::MovementParams &p_params) const {
 	// Backend.can_stand: collide a STAND capsule at the feet and reject on any
-	// ceiling-ish plane. (current_height deliberately unused, like the GDScript.)
-	(void)p_current_height;
+	// ceiling-ish plane, then sweep the matched flat head footprint through the
+	// rounded-cap blind region from the live height to full standing height.
 	Box3DPawnBody *self = const_cast<Box3DPawnBody *>(this);
 	self->_sync_mover_settings(p_params);
 	self->_update_exclusions();
@@ -512,6 +513,9 @@ bool Box3DPawnBody::can_stand_up(scrap::Scalar p_current_height, const scrap::Mo
 			clear = false;
 			break;
 		}
+	}
+	if (clear) {
+		clear = mover->has_head_clearance(feet, p_current_height, p_params.stand_height);
 	}
 	mover->set_capsule(mover_height, capsule_radius);
 	return clear;

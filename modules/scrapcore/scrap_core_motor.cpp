@@ -61,6 +61,7 @@ using MP = scrap::MovementParams;
 const ScalarParamEntry SCALAR_PARAMS[] = {
 	{ "step_height", &MP::step_height },
 	{ "floor_snap_length", &MP::floor_snap_length },
+	{ "body_footprint_radius", &MP::body_footprint_radius },
 	{ "walk_speed", &MP::walk_speed },
 	{ "sprint_speed", &MP::sprint_speed },
 	{ "crouch_speed", &MP::crouch_speed },

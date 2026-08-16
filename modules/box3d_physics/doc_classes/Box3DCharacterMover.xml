@@ -8,6 +8,7 @@
 		The mover origin is at the character's feet. [method set_capsule] takes Godot-style total capsule height and radius, but [method move], [method cast_motion], and [method collide] expect [param position] to be the feet position, not the capsule center.
 		[method move] runs the Box3D mover loop using 5 iterations. After at least one contact-gathering pass, motion below 0.1 mm is treated as converged. The returned [code]cast_fraction[/code] is the last iteration's cast fraction and is intended for diagnostics.
 		When [member step_height] is greater than zero, [method move] also performs capsule-safe stair stepping. A grounded lateral move that encounters an obstruction and loses horizontal progress is compared with an up/forward/down sweep in the same call. This catches the partial upward roll of a round capsule at a stair lip instead of waiting for the mover to stop. The landing is classified by downward ray probes (under the capsule axis, then just past the support contact) instead of the capsule contact normal — a capsule resting on a step lip reports a tilted hemisphere normal that would otherwise fail the [member floor_max_angle] test. When [param was_grounded] is [code]true[/code], the same call follows walkable lower treads no more than [member step_height] below the previous tread, keeping [code]on_floor[/code] true while the capsule clears the rounded edge. Upward motion never follows the floor, so jumps are not recaptured. Surfaces steeper than [member floor_max_angle], over-height rises and drops, and thin lips (fence rails) are still rejected.
+		When [member body_footprint_radius] is greater than zero, a previously grounded mover also uses a matched virtual flat foot/head footprint. The foot probe can retain support on narrow wall tops after the capsule axis crosses an edge, without changing the capsule used for lateral movement and stairs. [method has_head_clearance] sweeps the same footprint upward for pose changes. Upward movement never receives footprint support.
 		Plane dictionaries returned by [method collide] contain [code]normal[/code], [code]offset[/code], and [code]local_point[/code] in the frame of the position passed to [method collide]. [code]point[/code] is world-space. Feed planes back to [method solve_planes] and [method clip_velocity] unchanged for the same position.
 	</description>
 	<tutorials>
@@ -23,6 +24,15 @@
 			<return type="float" />
 			<description>
 				Returns the floor angle limit in radians.
+			</description>
+		</method>
+		<method name="has_head_clearance" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="position" type="Vector3" />
+			<param index="1" name="current_height" type="float" />
+			<param index="2" name="target_height" type="float" />
+			<description>
+				Returns whether the matched virtual head footprint can sweep from [param current_height] to [param target_height] at feet [param position]. Lateral contacts do not block the sweep.
 			</description>
 		</method>
 		<method name="cast_motion" qualifiers="const">
@@ -55,7 +65,7 @@
 			<param index="2" name="delta" type="float" />
 			<param index="3" name="was_grounded" type="bool" default="false" />
 			<description>
-				Moves from feet [param position] by [param velocity] over [param delta]. Pass [code]true[/code] for [param was_grounded] only when the caller began this move grounded; this enables downward ground following without pulling airborne movement onto nearby floors. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]floor_material_id[/code], [code]floor_material[/code], [code]planes[/code], [code]cast_fraction[/code], [code]iterations[/code], [code]stepped[/code], [code]stepped_down[/code], [code]ground_followed[/code], and [code]step_delta_y[/code]. [code]stepped[/code] and [code]stepped_down[/code] identify explicit upward and downward stair displacement; [code]ground_followed[/code] also covers retaining exact-boundary floor contact without displacement. Floor material fields are probe-derived.
+				Moves from feet [param position] by [param velocity] over [param delta]. Pass [code]true[/code] for [param was_grounded] only when the caller began this move grounded; this enables downward ground following and flat-foot continuation without pulling airborne movement onto nearby floors. Returns a dictionary with [code]position[/code], [code]velocity[/code], [code]on_floor[/code], [code]on_wall[/code], [code]on_ceiling[/code], [code]floor_normal[/code], [code]floor_material_id[/code], [code]floor_material[/code], [code]planes[/code], [code]cast_fraction[/code], [code]iterations[/code], [code]stepped[/code], [code]stepped_down[/code], [code]ground_followed[/code], [code]footprint_supported[/code], and [code]step_delta_y[/code]. [code]stepped[/code] and [code]stepped_down[/code] identify explicit upward and downward stair displacement; [code]ground_followed[/code] also covers retaining exact-boundary floor contact without displacement; [code]footprint_supported[/code] identifies support supplied by the virtual flat foot. Floor material fields are probe-derived.
 			</description>
 		</method>
 		<method name="set_capsule">
@@ -104,6 +114,9 @@
 		</method>
 	</methods>
 	<members>
+		<member name="body_footprint_radius" type="float" setter="set_body_footprint_radius" getter="get_body_footprint_radius" default="0.0">
+			Shared radius of the virtual flat foot and head footprints, in meters. The effective radius is clamped to the active capsule radius. [code]0.0[/code] disables the feature.
+		</member>
 		<member name="collision_mask" type="int" setter="set_collision_mask" getter="get_collision_mask" default="1">
 			Physics layers the mover queries.
 		</member>
