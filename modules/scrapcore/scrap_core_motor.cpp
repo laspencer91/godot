@@ -30,6 +30,7 @@ public:
 	// Flat floor, matching is_grounded() above (contract_smoke.cpp's stub).
 	scrap::Vec3 get_floor_normal() const override { return scrap::Vec3::up(); }
 	bool can_stand_up(scrap::Scalar, const scrap::MovementParams &) const override { return true; }
+	bool can_fit_pose(scrap::Scalar, int32_t, const scrap::MovementParams &) const override { return true; }
 	void set_capsule_for_pose(scrap::Scalar, int32_t, const scrap::MovementParams &) override {}
 	bool raycast_blocked(const scrap::Vec3 &, const scrap::Vec3 &, uint32_t) const override { return false; }
 	scrap::MantleProbe check_mantle_opportunity(const scrap::Vec2 &, const scrap::MovementState &, const scrap::MovementParams &) const override { return {}; }

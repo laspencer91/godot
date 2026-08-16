@@ -496,26 +496,47 @@ scrap::Vec3 Box3DPawnBody::get_floor_normal() const {
 }
 
 bool Box3DPawnBody::can_stand_up(scrap::Scalar p_current_height, const scrap::MovementParams &p_params) const {
-	// Backend.can_stand: collide a STAND capsule at the feet and reject on any
-	// ceiling-ish plane, then sweep the matched flat head footprint through the
-	// rounded-cap blind region from the live height to full standing height.
+	return can_fit_pose(p_current_height, int32_t(scrap::Pose::STAND), p_params);
+}
+
+bool Box3DPawnBody::can_fit_pose(scrap::Scalar p_current_height, int32_t p_target_pose, const scrap::MovementParams &p_params) const {
+	double target_height = p_params.stand_height;
+	double target_radius = p_params.capsule_radius;
+	if (p_target_pose == int32_t(scrap::Pose::CROUCH)) {
+		target_height = p_params.crouch_height;
+	} else if (p_target_pose == int32_t(scrap::Pose::PRONE)) {
+		target_height = p_params.prone_height;
+		target_radius = p_params.prone_radius;
+	}
+
+	const bool radius_expands = target_radius > capsule_radius + 0.0001;
+	const bool height_expands = target_height > p_current_height + 0.0001;
+	if (!radius_expands && !height_expands) {
+		return true;
+	}
+
+	// Collide the requested pose at planted feet. Walkable support is expected. A
+	// ceiling blocks height growth, and any non-floor plane blocks radius growth;
+	// otherwise prone's narrow body could expand through a wall and be ejected by
+	// the next movement query's depenetration pass.
 	Box3DPawnBody *self = const_cast<Box3DPawnBody *>(this);
 	self->_sync_mover_settings(p_params);
 	self->_update_exclusions();
 	const Vector3 feet = _node_position_to_feet(pawn->get_global_position());
-	mover->set_capsule(p_params.stand_height, p_params.capsule_radius);
+	mover->set_capsule(target_height, target_radius);
 	const Array planes = mover->collide(feet);
 	bool clear = true;
+	const double floor_threshold = Math::cos(p_params.floor_max_angle);
 	for (int i = 0; i < planes.size(); i++) {
 		const Dictionary plane = planes[i];
 		const Vector3 normal = plane.get("normal", Vector3(0, 1, 0));
-		if (double(normal.y) < -0.1) {
+		if (double(normal.y) < -0.1 || (radius_expands && double(normal.y) <= floor_threshold)) {
 			clear = false;
 			break;
 		}
 	}
-	if (clear) {
-		clear = mover->has_head_clearance(feet, p_current_height, p_params.stand_height);
+	if (clear && height_expands) {
+		clear = mover->has_head_clearance(feet, p_current_height, target_height);
 	}
 	mover->set_capsule(mover_height, capsule_radius);
 	return clear;

@@ -150,6 +150,7 @@ public:
 	scrap::Vec3 get_wall_normal() const override;
 	scrap::Vec3 get_floor_normal() const override;
 	bool can_stand_up(scrap::Scalar p_current_height, const scrap::MovementParams &p_params) const override;
+	bool can_fit_pose(scrap::Scalar p_current_height, int32_t p_target_pose, const scrap::MovementParams &p_params) const override;
 	void set_capsule_for_pose(scrap::Scalar p_height, int32_t p_pose, const scrap::MovementParams &p_params) override;
 	bool raycast_blocked(const scrap::Vec3 &p_from, const scrap::Vec3 &p_to, uint32_t p_mask) const override;
 	scrap::MantleProbe check_mantle_opportunity(const scrap::Vec2 &p_input, const scrap::MovementState &p_state, const scrap::MovementParams &p_params) const override;
