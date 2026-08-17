@@ -495,19 +495,24 @@ scrap::Vec3 Box3DPawnBody::get_floor_normal() const {
 	return to_scrap(last_result.floor_normal);
 }
 
+// Prone shrinks the radius so the capsule can sit genuinely low. Shared between fit-checking and
+// applying a pose so the two can never validate different capsules.
+static double _pose_capsule_radius(int32_t p_pose, const scrap::MovementParams &p_params) {
+	return p_pose == int32_t(scrap::Pose::PRONE) ? p_params.prone_radius : p_params.capsule_radius;
+}
+
 bool Box3DPawnBody::can_stand_up(scrap::Scalar p_current_height, const scrap::MovementParams &p_params) const {
 	return can_fit_pose(p_current_height, int32_t(scrap::Pose::STAND), p_params);
 }
 
 bool Box3DPawnBody::can_fit_pose(scrap::Scalar p_current_height, int32_t p_target_pose, const scrap::MovementParams &p_params) const {
 	double target_height = p_params.stand_height;
-	double target_radius = p_params.capsule_radius;
 	if (p_target_pose == int32_t(scrap::Pose::CROUCH)) {
 		target_height = p_params.crouch_height;
 	} else if (p_target_pose == int32_t(scrap::Pose::PRONE)) {
 		target_height = p_params.prone_height;
-		target_radius = p_params.prone_radius;
 	}
+	const double target_radius = _pose_capsule_radius(p_target_pose, p_params);
 
 	const bool radius_expands = target_radius > capsule_radius + 0.0001;
 	const bool height_expands = target_height > p_current_height + 0.0001;
@@ -543,9 +548,7 @@ bool Box3DPawnBody::can_fit_pose(scrap::Scalar p_current_height, int32_t p_targe
 }
 
 void Box3DPawnBody::set_capsule_for_pose(scrap::Scalar p_height, int32_t p_pose, const scrap::MovementParams &p_params) {
-	// Prone shrinks the radius so the capsule can sit genuinely low.
-	const double radius = p_pose == int32_t(scrap::Pose::PRONE) ? p_params.prone_radius : p_params.capsule_radius;
-	_set_capsule_height(p_height, radius);
+	_set_capsule_height(p_height, _pose_capsule_radius(p_pose, p_params));
 }
 
 bool Box3DPawnBody::raycast_blocked(const scrap::Vec3 &p_from, const scrap::Vec3 &p_to, uint32_t p_mask) const {

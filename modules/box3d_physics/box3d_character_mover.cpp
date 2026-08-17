@@ -23,6 +23,12 @@ static constexpr int BOX3D_MOVER_FOOTPRINT_POINT_COUNT = BOX3D_MOVER_FOOTPRINT_S
 static constexpr real_t BOX3D_MOVER_FOOTPRINT_PROBE_UP = 0.02;
 static constexpr real_t BOX3D_MOVER_FOOTPRINT_PROBE_LENGTH = 0.04;
 
+// Step probing tolerances shared by _try_step_down and the footprint step-down veto: the veto must
+// probe the same envelope _try_step_down accepts, or the two disagree about the same drop.
+static constexpr real_t BOX3D_MOVER_STEP_PROBE_UP = 0.05;
+static constexpr real_t BOX3D_MOVER_STEP_HEIGHT_TOLERANCE = 0.01;
+static constexpr real_t BOX3D_MOVER_STEP_EDGE_ROLL_ALLOWANCE = 0.10;
+
 // Minimum upward normal component for a contact to count as (partial) support — e.g. a capsule
 // hemisphere riding a step lip — as opposed to a pure wall.
 static constexpr real_t BOX3D_MOVER_SUPPORT_MIN_NY = 0.05;
@@ -125,11 +131,23 @@ struct Box3DMoverDirectionalShapeProbeContext {
 };
 
 static void _make_footprint_proxy(real_t p_radius, b3Vec3 *r_points, b3ShapeProxy &r_proxy) {
+	struct UnitCircle {
+		real_t x[BOX3D_MOVER_FOOTPRINT_SIDES];
+		real_t z[BOX3D_MOVER_FOOTPRINT_SIDES];
+		UnitCircle() {
+			for (int i = 0; i < BOX3D_MOVER_FOOTPRINT_SIDES; i++) {
+				const real_t angle = Math::TAU * (real_t)i / (real_t)BOX3D_MOVER_FOOTPRINT_SIDES;
+				x[i] = Math::cos(angle);
+				z[i] = Math::sin(angle);
+			}
+		}
+	};
+	static const UnitCircle circle;
+
 	const real_t half_thickness = (real_t)B3_LINEAR_SLOP * 0.5;
 	for (int i = 0; i < BOX3D_MOVER_FOOTPRINT_SIDES; i++) {
-		const real_t angle = Math::TAU * (real_t)i / (real_t)BOX3D_MOVER_FOOTPRINT_SIDES;
-		const real_t x = Math::cos(angle) * p_radius;
-		const real_t z = Math::sin(angle) * p_radius;
+		const real_t x = circle.x[i] * p_radius;
+		const real_t z = circle.z[i] * p_radius;
 		r_points[i] = to_box3d(Vector3(x, -half_thickness, z));
 		r_points[i + BOX3D_MOVER_FOOTPRINT_SIDES] = to_box3d(Vector3(x, half_thickness, z));
 	}
@@ -338,28 +356,14 @@ bool Box3DCharacterMover::has_head_clearance(const Vector3 &p_position, real_t p
 		return true;
 	}
 
-	const real_t radius = MIN(body_footprint_radius, (real_t)capsule.radius);
-	if (radius <= 0.0) {
-		return true;
-	}
-
 	// Start one footprint radius below the current apex. Geometry below that is already covered by
 	// the live capsule's full-width body; beginning here also makes an overhang already cutting through
 	// the rounded shoulder visible to the upward cast rather than relying on an initial-overlap report.
-	const real_t start_height = MAX((real_t)0.0, p_current_height - radius);
-	b3Vec3 points[BOX3D_MOVER_FOOTPRINT_POINT_COUNT];
-	b3ShapeProxy proxy = {};
-	_make_footprint_proxy(radius, points, proxy);
-
-	Box3DMoverDirectionalShapeProbeContext ctx;
-	ctx.exclusions = &exclusions;
-	ctx.max_normal_y = -0.1;
-
-	Box3DSpace3D *query_space = _get_space();
-	b3World_CastShape(query_space->get_world(), to_box3d(p_position + Vector3(0.0, start_height, 0.0)), &proxy,
-			to_box3d(Vector3(0.0, p_target_height - start_height, 0.0)), _make_filter(),
-			_mover_directional_shape_probe_callback, &ctx);
-	return !ctx.hit;
+	const real_t start_height = MAX((real_t)0.0, p_current_height - MIN(body_footprint_radius, (real_t)capsule.radius));
+	Vector3 normal;
+	int material_id = 0;
+	return !_cast_footprint(p_position + Vector3(0.0, start_height, 0.0),
+			Vector3(0.0, p_target_height - start_height, 0.0), -FLT_MAX, -0.1, normal, material_id);
 }
 
 Dictionary Box3DCharacterMover::solve_planes(const Vector3 &p_target_delta, const Array &p_planes) const {
@@ -411,7 +415,9 @@ bool Box3DCharacterMover::_probe_walkable(const Vector3 &p_from, real_t p_length
 	return true;
 }
 
-bool Box3DCharacterMover::_probe_body_footprint(const Vector3 &p_feet, Vector3 &r_normal, int &r_material_id) const {
+// Sweep the matched flat footprint disc, reporting only hits whose normal.y lies inside
+// [p_min_normal_y, p_max_normal_y].
+bool Box3DCharacterMover::_cast_footprint(const Vector3 &p_from, const Vector3 &p_translation, real_t p_min_normal_y, real_t p_max_normal_y, Vector3 &r_normal, int &r_material_id) const {
 	Box3DSpace3D *query_space = _get_space();
 	const real_t radius = MIN(body_footprint_radius, (real_t)capsule.radius);
 	if (query_space == nullptr || radius <= 0.0) {
@@ -424,10 +430,10 @@ bool Box3DCharacterMover::_probe_body_footprint(const Vector3 &p_feet, Vector3 &
 
 	Box3DMoverDirectionalShapeProbeContext ctx;
 	ctx.exclusions = &exclusions;
-	ctx.min_normal_y = Math::cos(floor_max_angle);
-	b3World_CastShape(query_space->get_world(), to_box3d(p_feet + Vector3(0.0, BOX3D_MOVER_FOOTPRINT_PROBE_UP, 0.0)), &proxy,
-			to_box3d(Vector3(0.0, -BOX3D_MOVER_FOOTPRINT_PROBE_LENGTH, 0.0)), _make_filter(),
-			_mover_directional_shape_probe_callback, &ctx);
+	ctx.min_normal_y = p_min_normal_y;
+	ctx.max_normal_y = p_max_normal_y;
+	b3World_CastShape(query_space->get_world(), to_box3d(p_from), &proxy, to_box3d(p_translation),
+			_make_filter(), _mover_directional_shape_probe_callback, &ctx);
 	if (!ctx.hit) {
 		return false;
 	}
@@ -435,6 +441,12 @@ bool Box3DCharacterMover::_probe_body_footprint(const Vector3 &p_feet, Vector3 &
 	r_normal = ctx.normal;
 	r_material_id = ctx.material_id;
 	return true;
+}
+
+bool Box3DCharacterMover::_probe_body_footprint(const Vector3 &p_feet, Vector3 &r_normal, int &r_material_id) const {
+	return _cast_footprint(p_feet + Vector3(0.0, BOX3D_MOVER_FOOTPRINT_PROBE_UP, 0.0),
+			Vector3(0.0, -BOX3D_MOVER_FOOTPRINT_PROBE_LENGTH, 0.0),
+			Math::cos(floor_max_angle), FLT_MAX, r_normal, r_material_id);
 }
 
 // Capsule-safe ground classification. A capsule climbing a step rides the lip on its bottom
@@ -625,9 +637,9 @@ bool Box3DCharacterMover::_try_step_up(const Vector3 &p_start, const Vector3 &p_
 // Returning grounded even for a temporarily zero-length cast lets the next horizontal tick clear the
 // lip and continue the descent instead of switching permanently to ballistic movement.
 bool Box3DCharacterMover::_try_step_down(const Vector3 &p_start, const Vector3 &p_horizontal, const Array &p_planes, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id, real_t &r_step_delta_y) const {
-	const real_t PROBE_UP = 0.05;
-	const real_t HEIGHT_TOLERANCE = 0.01;
-	const real_t EDGE_ROLL_ALLOWANCE = 0.10;
+	const real_t PROBE_UP = BOX3D_MOVER_STEP_PROBE_UP;
+	const real_t HEIGHT_TOLERANCE = BOX3D_MOVER_STEP_HEIGHT_TOLERANCE;
+	const real_t EDGE_ROLL_ALLOWANCE = BOX3D_MOVER_STEP_EDGE_ROLL_ALLOWANCE;
 	const real_t TREAD_BEHIND = 0.05;
 	const real_t CAST_OVERRUN = 0.01;
 	const real_t floor_threshold = Math::cos(floor_max_angle);
@@ -684,12 +696,25 @@ bool Box3DCharacterMover::_try_step_down(const Vector3 &p_start, const Vector3 &
 	return true;
 }
 
+// The flat footprint can hold support right up to an edge whose adjacent drop is taller than a
+// step. Veto step-down there, probing the same envelope _try_step_down accepts so short descents
+// stay eligible and only over-height drops are blocked.
+bool Box3DCharacterMover::_footprint_blocks_step_down(const Vector3 &p_position) const {
+	Vector3 floor_normal;
+	real_t floor_y = 0.0;
+	int material_id = 0;
+	if (!_probe_walkable(p_position + Vector3(0.0, BOX3D_MOVER_STEP_PROBE_UP, 0.0),
+			BOX3D_MOVER_STEP_PROBE_UP + step_height + BOX3D_MOVER_STEP_EDGE_ROLL_ALLOWANCE + BOX3D_MOVER_STEP_HEIGHT_TOLERANCE,
+			floor_normal, floor_y, material_id)) {
+		return false;
+	}
+	return p_position.y - floor_y > step_height + BOX3D_MOVER_STEP_HEIGHT_TOLERANCE;
+}
+
 Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p_velocity, float p_delta, bool p_was_grounded) const {
 	ERR_FAIL_COND_V_MSG(!_can_query(), Dictionary(), "Box3DCharacterMover cannot query the space right now.");
 
-	Vector3 motion_velocity = p_velocity;
-	const Vector3 requested_motion = p_velocity * p_delta;
-	Vector3 requested_horizontal = requested_motion;
+	Vector3 requested_horizontal = p_velocity * p_delta;
 	requested_horizontal.y = 0.0;
 	const real_t floor_threshold = Math::cos(floor_max_angle);
 	Vector3 position = p_position;
@@ -717,14 +742,12 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 		}
 	}
 
-	Vector3 start_footprint_normal;
-	int start_footprint_material_id = 0;
+	Vector3 footprint_probe_normal;
+	int footprint_probe_material_id = 0;
 	const bool footprint_supported_at_start = footprint_eligible && !starting_regular_floor &&
-			_probe_body_footprint(p_position, start_footprint_normal, start_footprint_material_id);
+			_probe_body_footprint(p_position, footprint_probe_normal, footprint_probe_material_id);
 	bool footprint_supported_at_target = false;
-	Vector3 target_footprint_normal;
-	int target_footprint_material_id = 0;
-	if (footprint_eligible && requested_horizontal.length_squared() > 1e-8) {
+	if (!footprint_supported_at_start && footprint_eligible && requested_horizontal.length_squared() > 1e-8) {
 		const Vector3 projected_feet = p_position + requested_horizontal;
 		Vector3 center_normal;
 		real_t center_hit_y = 0.0;
@@ -735,16 +758,17 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 				center_normal.y > floor_threshold;
 		if (!center_supported) {
 			footprint_supported_at_target = _probe_body_footprint(
-					projected_feet, target_footprint_normal, target_footprint_material_id);
+					projected_feet, footprint_probe_normal, footprint_probe_material_id);
 		}
 	}
-	if (motion_velocity.y < 0.0 && (footprint_supported_at_start || footprint_supported_at_target)) {
+	const bool footprint_supported_for_move = footprint_supported_at_start || footprint_supported_at_target;
+	Vector3 target_position = p_position + p_velocity * p_delta;
+	if (p_velocity.y < 0.0 && footprint_supported_for_move) {
 		// The motor's grounded -1 m/s stick is vertical intent, not gameplay momentum. A capsule resolves
 		// that intent down its rounded cap and manufactures outward drift; a flat bottom resolves it straight
 		// up. Removing it only while the matched footprint proves support reproduces the latter response.
-		motion_velocity.y = 0.0;
+		target_position.y = p_position.y;
 	}
-	const Vector3 target_position = p_position + motion_velocity * p_delta;
 
 	// Stepping only assists lateral motion that began on walkable support. Testing support at
 	// the start prevents an airborne capsule brushing a ledge from being pulled up onto it.
@@ -842,20 +866,9 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 			break;
 		}
 	}
-	bool footprint_blocks_step_down = false;
-	if (footprint_supported_at_start || footprint_supported_at_target) {
-		Vector3 next_floor_normal;
-		real_t next_floor_y = 0.0;
-		int next_floor_material_id = 0;
-		const real_t probe_up = 0.05;
-		const real_t probe_length = probe_up + step_height + 0.11;
-		if (_probe_walkable(position + Vector3(0.0, probe_up, 0.0), probe_length,
-				next_floor_normal, next_floor_y, next_floor_material_id)) {
-			footprint_blocks_step_down = position.y - next_floor_y > step_height + 0.01;
-		}
-	}
-	if (!stepped && !step_obstruction && !regular_on_floor && !footprint_blocks_step_down && p_was_grounded &&
-			step_height > 0.0 && p_velocity.y <= 0.05) {
+	if (!stepped && !step_obstruction && !regular_on_floor && p_was_grounded &&
+			step_height > 0.0 && p_velocity.y <= 0.05 &&
+			!(footprint_supported_for_move && _footprint_blocks_step_down(position))) {
 		Vector3 followed_position;
 		Array followed_planes;
 		Vector3 followed_normal;
@@ -953,7 +966,7 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 			}
 		}
 	}
-	if (!on_floor && footprint_eligible && !stepped && !ground_followed) {
+	if (!on_floor && footprint_eligible) {
 		Vector3 footprint_normal;
 		int footprint_material_id = 0;
 		if (_probe_body_footprint(position, footprint_normal, footprint_material_id)) {
@@ -969,14 +982,13 @@ Dictionary Box3DCharacterMover::move(const Vector3 &p_position, const Vector3 &p
 	// grounded glide. Once the shallow footprint no longer reaches the old surface, a walkable
 	// capsule contact more than step_height below the previous feet position is a real drop. Short
 	// descents remain eligible for the normal step-down behavior.
-	if (on_floor && !probe_grounded && footprint_eligible &&
-			!stepped && !ground_followed && floor_plane.has("point")) {
+	if (on_floor && !probe_grounded && footprint_eligible && floor_plane.has("point")) {
 		Vector3 final_footprint_normal;
 		int final_footprint_material_id = 0;
 		const bool final_footprint_supported = _probe_body_footprint(
 				position, final_footprint_normal, final_footprint_material_id);
 		const real_t floor_drop = p_position.y - ((Vector3)floor_plane["point"]).y;
-		if (!final_footprint_supported && floor_drop > step_height + 0.01) {
+		if (!final_footprint_supported && floor_drop > step_height + BOX3D_MOVER_STEP_HEIGHT_TOLERANCE) {
 			on_floor = false;
 			floor_normal = Vector3();
 			floor_plane = Dictionary();

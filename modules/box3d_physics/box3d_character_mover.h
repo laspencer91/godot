@@ -31,7 +31,9 @@ class Box3DCharacterMover : public RefCounted {
 	bool _can_query() const;
 	Array _collide_internal(const Vector3 &p_position) const;
 	bool _probe_walkable(const Vector3 &p_from, real_t p_length, Vector3 &r_normal, real_t &r_hit_y, int &r_material_id) const;
+	bool _cast_footprint(const Vector3 &p_from, const Vector3 &p_translation, real_t p_min_normal_y, real_t p_max_normal_y, Vector3 &r_normal, int &r_material_id) const;
 	bool _probe_body_footprint(const Vector3 &p_feet, Vector3 &r_normal, int &r_material_id) const;
+	bool _footprint_blocks_step_down(const Vector3 &p_position) const;
 	bool _ground_probe(const Vector3 &p_feet, const Array &p_planes, Vector3 &r_normal, int &r_material_id) const;
 	bool _has_step_obstruction(const Vector3 &p_start, const Vector3 &p_horizontal) const;
 	bool _try_step_up(const Vector3 &p_start, const Vector3 &p_target, Vector3 &r_position, Array &r_planes, Vector3 &r_floor_normal, int &r_material_id) const;
