@@ -135,6 +135,7 @@ const ScalarParamEntry SCALAR_PARAMS[] = {
 	{ "sprint_drain_per_sec", &MP::sprint_drain_per_sec },
 	{ "regen_per_sec", &MP::regen_per_sec },
 	{ "regen_delay", &MP::regen_delay },
+	{ "air_regen_mult", &MP::air_regen_mult },
 	{ "sprint_min_start_stamina", &MP::sprint_min_start_stamina },
 	{ "sprint_min_continue_stamina", &MP::sprint_min_continue_stamina },
 	{ "ads_air_land_slow_duration", &MP::ads_air_land_slow_duration },
